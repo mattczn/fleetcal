@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { joinEventLoadToApp } from "@fleetcal/types";
 import type { Accessorial, Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType } from "./types";
 
 interface DbAssetRow {
@@ -61,8 +62,23 @@ interface DbEventRow {
 }
 
 const STOP_COLS = "id,event_id,sequence,type,facility_name,address,city,timezone,appt_start,appt_end,lat,lng,instructions,arrived_at,arrived_lat,arrived_lng";
+
+// Legacy column lists — used by paths not yet converted to the loads/events
+// split. These pull load-level fields from the deprecated event columns and
+// will return empty/null after Phase 2.5c drops those columns.
 const EVENT_LIST_COLS = "id,internal_load_id,asset_id,driver_id,driver_name,load_num,title,start,end,status,broker,trailer_type,driver_pay,notes,special_instructions,deleted_at";
 const EVENT_FULL_COLS = "id,internal_load_id,asset_id,driver_id,driver_name,load_num,title,start,end,status,broker,trailer_type,trailer_id,driver_pay,load_price,notes,special_instructions,ref_nums,dispatcher,accessorials,rate_con_pdf,relay_group_id,relay_role,created_by_name,deleted_at";
+
+// Phase 2.5b column lists — for joined fetches against the new schema.
+// Event-level fields only (no load-level denormalization). Load-level fields
+// come back via the nested `load:loads(...)` select.
+const EVENT_COLS_NEW =
+  "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
+  "notes,driver_pay,relay_role,event_kind,non_revenue_type,trailer_id," +
+  "trailer_type,deleted_at,load_id,created_at";
+const LOAD_COLS_NEW =
+  "id,internal_load_id,load_num,broker,load_price,dispatcher,notes," +
+  "accessorials,rate_con_pdf,ref_nums,audit_log,created_by_name,customer_id";
 
 function rowToStop(r: DbStopRow): Stop {
   return {
@@ -603,9 +619,11 @@ export async function fetchLoadsForDay(orgId: string, dateKey: string): Promise<
   const dayStart = `${dateKey}T00:00`;
   const dayEnd   = `${dateKey}T23:59`;
 
+  // Joined fetch: each event row comes back with its load row nested as
+  // `.load` (or null for non-revenue events).
   const { data: events, error } = await supabase
     .from("events")
-    .select(EVENT_LIST_COLS)
+    .select(`${EVENT_COLS_NEW}, load:loads(${LOAD_COLS_NEW})`)
     .eq("org_id", orgId)
     .is("deleted_at", null)
     .lte("start", dayEnd)
@@ -615,12 +633,18 @@ export async function fetchLoadsForDay(orgId: string, dateKey: string): Promise<
     console.error("fetchLoadsForDay:", error);
     return [];
   }
-
-  const rows = (events ?? []) as DbEventRow[];
+  // PostgREST returns the nested `load` as an array even for many-to-one
+  // relationships. Unwrap to a single object (or null) for the converter.
+  type RowWithLoad = Record<string, unknown> & { load: Record<string, unknown> | null };
+  const rows: RowWithLoad[] = (events ?? []).map((e) => {
+    const ev = e as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
+    const load = Array.isArray(ev.load) ? (ev.load[0] ?? null) : (ev.load ?? null);
+    return { ...ev, load };
+  });
   if (rows.length === 0) return [];
 
-  const eventIds = rows.map((r) => r.id);
-  const assetIds = Array.from(new Set(rows.map((r) => r.asset_id)));
+  const eventIds = rows.map((r) => r.id as string);
+  const assetIds = Array.from(new Set(rows.map((r) => r.asset_id as number)));
 
   const [stopsRes, assetsRes] = await Promise.all([
     supabase.from("stops").select(STOP_COLS).in("event_id", eventIds),
@@ -640,25 +664,12 @@ export async function fetchLoadsForDay(orgId: string, dateKey: string): Promise<
   }
 
   return rows.map((r): Load => {
-    const asset = assetsById.get(r.asset_id);
+    const load = joinEventLoadToApp(r, r.load);
+    const asset = assetsById.get(load.assetId);
     return {
-      id:              r.id,
-      internalLoadId:  r.internal_load_id ?? undefined,
-      loadNum:         r.load_num ?? undefined,
-      title:           r.title,
-      start:           r.start,
-      end:             r.end,
-      status:          (r.status as LoadStatus) ?? "scheduled",
-      broker:          r.broker        ?? undefined,
-      trailerType:  r.trailer_type  ?? undefined,
-      driverPay:    r.driver_pay    ?? undefined,
-      notes:        r.notes         ?? undefined,
-      specialInstructions: r.special_instructions ?? undefined,
-      assetId:      r.asset_id,
-      assetName:    asset ? `${asset.name}${asset.unit ? ` #${asset.unit}` : ""}` : undefined,
-      driverId:     r.driver_id ?? undefined,
-      driverName:   r.driver_name ?? undefined,
-      stops:        (stopsByEvent.get(r.id) ?? []).sort((a, b) => a.sequence - b.sequence),
+      ...load,
+      assetName: asset ? `${asset.name}${asset.unit ? ` #${asset.unit}` : ""}` : undefined,
+      stops: (stopsByEvent.get(r.id as string) ?? []).sort((a, b) => a.sequence - b.sequence),
     };
   });
 }

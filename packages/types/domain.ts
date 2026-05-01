@@ -138,19 +138,39 @@ export interface LoadAuditEntry {
   stopCheckedIn?: { stopFacility?: string; stopType?: StopType; distanceMi?: number };
 }
 
-// ── Load — canonical app-domain shape for events table rows ─────────────
+// ── Load — canonical app-domain shape (joined view) ─────────────────────
+//
+// As of Phase 2.5a, "load" is now a real DB entity (the `loads` table) and
+// `events` are calendar entries that belong to a load (1 or 2 events per
+// revenue load; 0 events tied to a non-revenue event). This `Load` interface
+// is the JOINED VIEW that frontend code consumes — one event + its load row's
+// fields merged into a single shape. Each call site that fetches loads will
+// get one Load object per event row, with load-level fields populated from
+// events.load_id → loads. For relay loads, two events share the same load,
+// so two Load objects come back with the same load-level data but different
+// per-leg fields (start/end/asset/driver/etc.).
 //
 // Web app calls this CalendarEvent (kept as an alias in apps/web/lib/types.ts).
-// Mobile apps already call it Load. Fields are the union of all current usage;
-// most are optional because not every render path needs every column. Some
-// fields (commodity, miles, weight, pickupCity, etc.) reference DB columns
-// that were removed during schema cleanup — they're kept here for now to
-// avoid breaking mobile code that still reads them. See MIGRATION-FOLLOWUPS.md.
+// Mobile apps already call it Load.
+//
+// Mutations: load-level edits write to `loads`, event-level edits write to
+// `events`. The mutation helpers in apps/* know which is which.
+//
+// Notes split:
+//   - `Load.notes` is the load-level note (loads.notes) — broker instructions
+//   - `Load.eventNotes` is the event-level note (events.notes) — leg ops, the
+//     only notes home for non-revenue events
+//
+// Several "legacy" fields below reference DB columns that were dropped
+// during schema cleanup or never made it to the `loads` schema (commodity,
+// miles, weight, pickupCity, etc.). Kept optional so existing mobile code
+// that reads them still type-checks. See MIGRATION-FOLLOWUPS.md.
 
 export interface Load {
   // Identity
-  id: string;
-  internalLoadId?: number;
+  id: string;                  // events.id (the calendar-entry id)
+  loadId?: string;             // loads.id — present for revenue events, absent for non-revenue
+  internalLoadId?: number;     // loads.internal_load_id (5+ digit, per-org unique)
   loadNum?: string;
 
   // Calendar / scheduling
@@ -215,8 +235,9 @@ export interface Load {
   dispatched?: boolean; // legacy column
 
   // Notes & meta
-  notes?: string;
-  specialInstructions?: string;
+  notes?: string;              // loads.notes — load-level (broker instructions)
+  eventNotes?: string;         // events.notes — event/leg-level; non-revenue's only notes home
+  specialInstructions?: string; // legacy: events.special_instructions, merged into loads.notes by migration
   accessorials?: Accessorial[];
   /** Storage path in `rate-cons` bucket (legacy: base64 data URL). */
   rateConPdf?: string;
