@@ -10,7 +10,7 @@
  * reference DB columns that have been dropped — see MIGRATION-FOLLOWUPS.md.
  */
 
-import type { LoadStatus, StopType, GeocodeStatus } from "./enums";
+import type { LoadStatus, StopType, GeocodeStatus, TrailerCategory } from "./enums";
 
 // ── Refs / enums (small) ────────────────────────────────────────────────
 
@@ -90,12 +90,6 @@ export interface Asset {
 }
 
 // ── Trailer ─────────────────────────────────────────────────────────────
-
-export type TrailerCategory =
-  | "Swing"
-  | "Roll Up"
-  | "Flat Bed"
-  | "Other";
 
 export interface Trailer {
   id: number;

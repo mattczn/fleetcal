@@ -1,0 +1,9 @@
+# Minimal config for the Supabase CLI. The hosted FleetCal project lives at
+# https://app.supabase.com/project/vgybqmvmorjhlgbsssmi — link it once with:
+#
+#   supabase login
+#   supabase link --project-ref vgybqmvmorjhlgbsssmi
+#
+# Once linked, the npm scripts in @fleetcal/database/package.json work
+# (db:diff, db:push, db:reset, db:dump).
+project_id = "fleetcal"

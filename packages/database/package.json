@@ -1,0 +1,19 @@
+{
+  "name": "@fleetcal/database",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "db:diff": "supabase db diff --linked",
+    "db:push": "supabase db push --linked",
+    "db:reset": "supabase db reset --linked",
+    "db:dump": "supabase db dump --linked --schema public > supabase/schema.sql",
+    "db:seed": "tsx supabase/seed.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0"
+  }
+}

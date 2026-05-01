@@ -6,13 +6,13 @@ scope tight. None are blockers; this is the honest debt log.
 
 ## Pre-existing issues that came along for the ride
 
-### apps/web/supabase/schema.sql is out of sync with the live database
+### packages/database/supabase/schema.sql is out of sync with the live database
 
 `schema.sql` defines: assets, drivers, driver_asset_prefs, load_documents,
 driver_push_tokens, events, stops, org_settings.
 
 The live DB has additional columns and tables that aren't in `schema.sql` and
-aren't in any migration file in `apps/web/supabase/migrations/`:
+aren't in any migration file in `packages/database/supabase/migrations/`:
 
 - `assets.motive_vehicle_id` (referenced by `DbAsset` in
   `apps/web/lib/supabase.ts`)
@@ -43,7 +43,7 @@ matching `.sql` file checked in).
 Rename the file and update internal references. See
 <https://nextjs.org/docs/messages/middleware-to-proxy>.
 
-### apps/web/supabase/schema.sql — forward reference will fail
+### packages/database/supabase/schema.sql — forward reference will fail
 
 `load_documents` is declared with `REFERENCES events(id)` but appears in the file
 *before* `events` is created. Running `schema.sql` against an empty database
@@ -71,6 +71,66 @@ Performance hint, not a bug. Adding `"type": "module"` to
 `apps/web/package.json` would silence it but might affect Next conventions
 around how `.js`/`.cjs` files are interpreted in the rest of the project, so
 left alone for now. Decide intentionally in a future session.
+
+## TypeScript hygiene — latent errors carried over from Phase 1
+
+Phase 1's "0 errors" verification was wrong: the regex used to count tsc
+output required errors to start with a letter, but cross-package errors come
+through as relative paths (`../../packages/types/...`) which start with `..`
+and fell through the filter. The phase-1-complete commit contains real type
+errors that were never surfaced.
+
+Approximate counts as of phase-2-complete (apps/api is clean):
+
+- `apps/web` — 1 (`components/calendar/EventModal.tsx:2864` — type-narrowing
+  on a state-mode comparison). Unrelated to the migration.
+- `apps/dispatch` — ~28 errors. Mostly `load.stops`, `editableStops`, and
+  `list` flagged "possibly undefined" because Phase 1's unified `Load` made
+  `stops?: Stop[]` optional while mobile callers were authored against a
+  required `Stop[]`. Plus a couple of `Asset.sortOrder` undefined sites.
+- `apps/driver` — ~26 errors. Same shape as dispatch.
+
+These do not block boot — Metro/Babel ignore TS diagnostics and the apps run
+fine. They should be addressed in a focused TS-cleanup pass before Phase 3
+work expands the surface. Likely fixes: tighten `Load.stops` to required and
+have the converter return `[]`, or audit each mobile callsite to add the
+optional-chain it should already have.
+
+## packages/types — hand-written Db* interfaces still in apps/web/lib/supabase.ts
+
+The hand-written `DbAsset`, `DbDriver`, `DbDriverAssetPref`, `DbTrailer`,
+`DbEvent`, `DbStop` interfaces in `apps/web/lib/supabase.ts` are now
+superseded by the generated `Database` Row types in `@fleetcal/types`.
+They've drifted in nullability and JSON-column annotations:
+
+- `DbEvent.event_kind` is typed `string | null`; live DB and generated type
+  say it's NOT NULL with default `'revenue'`.
+- `DbEvent.accessorials` is typed `Accessorial[] | null`; generated says
+  `Json | null`.
+- `DbEvent.audit_log` is typed `LoadAuditEntry[] | null`; generated says
+  `Json | null`.
+
+Phase 2 absorbed this drift by typing the converter input as `any` (the
+right pattern for a boundary converter, but a tell). Cleanup pass: delete
+the `Db*` interfaces, switch all callers to the generated `*Row` aliases,
+tighten the converter input back to `LoadRow`.
+
+## packages/types — events.internal_load_id
+
+The generated type marks `events.internal_load_id` as required on Insert,
+but live DB inserts have always worked without supplying one (a default or
+trigger fills it). The converter casts `as LoadInsert` to bypass. If the
+column ever genuinely requires manual values, this cast hides that fact.
+
+## packages/types — `<claude-code-hint>` injected into generated database.ts
+
+When `supabase gen types typescript` ran during Phase 1, the output ended
+with a stray `<claude-code-hint v="1" type="plugin" value="supabase@..." />`
+marker on the last line. That's not valid TypeScript and triggered TS1005
+errors. The phase-1-complete commit shipped with this present (the regex
+bug above masked it). Removed manually in Phase 2. If a future
+`supabase gen types` run re-injects it, strip the trailing line before
+committing.
 
 ## Migration mechanics worth knowing
 

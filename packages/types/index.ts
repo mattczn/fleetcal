@@ -80,7 +80,7 @@ export * from "./enums";
 
 export * from "./converters";
 
-// ── Stubs (populated as Phase 3+ work lands) ────────────────────────────
+// ── API contracts (Railway endpoints) and Realtime payloads ─────────────
 
-export * as api from "./api";
-export * as realtime from "./realtime";
+export * from "./api";
+export * from "./realtime";

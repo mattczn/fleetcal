@@ -286,7 +286,7 @@ export function appStopToDb(stop: Omit<Stop, 'id'>, orgId: string, eventId: stri
     appt_start:    stop.apptStart      ?? null,
     appt_end:      stop.apptEnd        ?? null,
     timezone:      stop.timezone       ?? null,
-    geocode_status: stop.geocodeStatus,
+    geocode_status: stop.geocodeStatus ?? "pending",
     instructions:  stop.instructions   ?? null,
     arrived_at:    stop.arrivedAt      ?? null,
     arrived_lat:   stop.arrivedLat     ?? null,

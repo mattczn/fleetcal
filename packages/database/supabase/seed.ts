@@ -1,19 +1,22 @@
 /**
- * Migration script — pulls data from the old Supabase DB, transforms it,
- * and seeds the new DB.
+ * One-time migration script — pulls data from the old Supabase DB, transforms
+ * it, and seeds the new DB. This already ran during the original cutover; it's
+ * kept here as historical reference and can be deleted in a cleanup pass.
  *
- * Usage:
- *   SEED_ORG_ID=org_xxxxxxxxxxxx npx tsx supabase/seed.ts
+ * Usage from the workspace root:
+ *   SEED_ORG_ID=org_xxxxxxxxxxxx npm run db:seed -w @fleetcal/database
  *
  *   SEED_ORG_ID — your Clerk org ID
  *                 Clerk Dashboard → Organizations → your org → copy the ID (starts with "org_")
  *
- * Reads NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from .env.local automatically.
+ * Reads NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from
+ * apps/web/.env.local (the canonical location for those credentials today).
  */
 
 import { config } from 'dotenv';
 import { resolve } from 'path';
-config({ path: resolve(process.cwd(), '.env.local') });
+// Walk up from packages/database/supabase/ to apps/web/.env.local
+config({ path: resolve(__dirname, '../../../apps/web/.env.local') });
 
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';

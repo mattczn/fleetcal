@@ -1,5 +1,27 @@
 {
   "name": "@fleetcal/api",
   "version": "0.1.0",
-  "private": true
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clerk/backend": "^1.21.0",
+    "@fleetcal/types": "*",
+    "@hono/node-server": "^1.13.0",
+    "@supabase/supabase-js": "^2.105.1",
+    "dotenv": "^17.4.2",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5"
+  }
 }

@@ -1,17 +1,20 @@
 /**
  * Railway API contract types — request and response shapes for endpoints
- * that all three frontends call.
+ * that the frontends call.
  *
- * Empty for now. As Railway endpoints come online (Phase 3), each one gets
- * its request/response pair declared here so the client and server share a
- * single source of truth. Convention:
+ * Naming convention:
+ *   <Verb><Entity>Request   — POST/PATCH bodies
+ *   <Action>Response        — successful response payload
  *
- *   export type SomeActionRequest  = { ... };
- *   export type SomeActionResponse = { ... };
- *
- * Group related shapes under a namespace if a single endpoint has many
- * related types. Keep this file boring — it's the API surface, not where
- * domain logic lives.
+ * Group related types under section headers; keep this file alphabetized
+ * within each section as endpoints accumulate.
  */
 
-export {};
+// ── /v1/health ──────────────────────────────────────────────────────────
+
+export interface HealthResponse {
+  ok: true;
+  service: "fleetcal-api";
+  version: string;
+  timestamp: string;
+}
