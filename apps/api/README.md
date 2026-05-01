@@ -7,6 +7,10 @@ integrations, document validation, audit logging, push dispatch.
 Phase 2 ships only the foundation — `/v1/health` (public) and `/v1/whoami`
 (Clerk-protected). Real endpoints land in Phase 3+.
 
+**Live:** <https://fleetcalapi-production.up.railway.app>
+- `GET /v1/health` — public
+- `GET /v1/whoami` — Clerk session token required; returns `{ userId, orgId }`
+
 ## Local dev
 
 ```sh
