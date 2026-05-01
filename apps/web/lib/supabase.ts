@@ -225,80 +225,8 @@ export function dbDriverToApp(row: DbDriver): Driver {
   };
 }
 
-export function dbEventToApp(row: DbEvent): CalendarEvent {
-  return {
-    id:                   row.id,
-    internalLoadId:       row.internal_load_id ?? undefined,
-    assetId:              row.asset_id,
-    title:                row.title,
-    start:                row.start,
-    end:                  row.end,
-    driverName:           row.driver_name          ?? undefined,
-    driverId:             row.driver_id            ?? undefined,
-    status:               (row.status as EventStatus) ?? undefined,
-    relayGroupId:         row.relay_group_id        ?? undefined,
-    relayRole:            (row.relay_role as 'pickup' | 'delivery') ?? undefined,
-    loadNum:              row.load_num              ?? undefined,
-    refNums:              parseRefNums(row.ref_nums),
-    broker:               row.broker                ?? undefined,
-    trailerType:          row.trailer_type          ?? undefined,
-    trailerId:            row.trailer_id            ?? undefined,
-    dispatcher:           row.dispatcher            ?? undefined,
-    loadPrice:            row.load_price            ?? undefined,
-    driverPay:            row.driver_pay            ?? undefined,
-    specialInstructions:  row.special_instructions  ?? undefined,
-    notes:                row.notes                 ?? undefined,
-    rateConPdf:           row.rate_con_pdf          ?? undefined,
-    accessorials:         row.accessorials          ?? undefined,
-    priority:             row.priority              ?? undefined,
-    eventKind:            (row.event_kind as 'revenue' | 'non_revenue') ?? 'revenue',
-    nonRevenueType:       row.non_revenue_type      ?? undefined,
-    createdByName:        row.created_by_name        ?? undefined,
-    createdAt:            row.created_at,
-    auditLog:             row.audit_log              ?? undefined,
-    stops:                undefined, // populated separately by fetchStopsForEvents
-  };
-}
-
-// ── Converters: app type → DB row ─────────────────────────────────────────────
-
-export function appEventToDb(
-  ev: Omit<CalendarEvent, 'id'>,
-  orgId: string,
-  id?: string,
-): Omit<DbEvent, 'created_at' | 'updated_at'> {
-  return {
-    id:                   id ?? crypto.randomUUID(),
-    org_id:               orgId,
-    asset_id:             ev.assetId,
-    title:                ev.title,
-    start:                ev.start,
-    end:                  ev.end,
-    driver_name:          ev.driverName           ?? null,
-    driver_id:            ev.driverId             ?? null,
-    status:               ev.status               ?? 'scheduled',
-    relay_group_id:       ev.relayGroupId         ?? null,
-    relay_role:           ev.relayRole            ?? null,
-    load_num:             ev.loadNum              ?? null,
-    ref_nums:             ev.refNums?.length ? JSON.stringify(ev.refNums) : null,
-    broker:               ev.broker               ?? null,
-    trailer_type:         ev.trailerType          ?? null,
-    trailer_id:           ev.trailerId            ?? null,
-    dispatcher:           ev.dispatcher           ?? null,
-    load_price:           ev.loadPrice            ?? null,
-    driver_pay:           ev.driverPay            ?? null,
-    special_instructions: ev.specialInstructions  ?? null,
-    notes:                ev.notes                ?? null,
-    rate_con_pdf:         ev.rateConPdf           ?? null,
-    accessorials:         ev.accessorials         ?? null,
-    priority:             ev.priority             ?? false,
-    event_kind:           ev.eventKind            ?? 'revenue',
-    non_revenue_type:     ev.nonRevenueType       ?? null,
-    created_by_name:      ev.createdByName        ?? null,
-    audit_log:            ev.auditLog             ?? null,
-    deleted_at:           null,
-  };
-}
+// dbEventToApp / appEventToDb moved to @fleetcal/types/converters and re-exported below.
+export { dbEventToApp, appEventToDb } from "@fleetcal/types";
 
 export function appAssetToDb(
   asset: Omit<Asset, 'id'>,

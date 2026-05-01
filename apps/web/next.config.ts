@@ -15,7 +15,8 @@ try {
 const nextConfig: NextConfig = {
   // pdfjs-dist v5 ships only .mjs files; Next.js webpack needs to transpile them
   // or its ESM interop produces "Object.defineProperty called on non-object".
-  transpilePackages: ['pdfjs-dist'],
+  // @fleetcal/* are workspace TS packages; Next has to compile their source.
+  transpilePackages: ['pdfjs-dist', '@fleetcal/tokens', '@fleetcal/types'],
 };
 
 export default nextConfig;
