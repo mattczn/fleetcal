@@ -4,8 +4,10 @@ import type { Accessorial, Asset, Driver, Load, LoadStatus, RefNum, Stop, StopTy
 interface DbAssetRow {
   id:                 number;
   name:               string;
+  type:               string;
   unit:               string | null;
-  color:              string | null;
+  // assets.color is NOT NULL in the DB
+  color:              string;
   hidden:             boolean;
   sort_order:         number;
   motive_vehicle_id:  string | null;
@@ -578,7 +580,7 @@ export async function placeDetails(
 export async function fetchAssets(orgId: string): Promise<Asset[]> {
   const { data, error } = await supabase
     .from("assets")
-    .select("id,name,unit,color,hidden,sort_order,motive_vehicle_id")
+    .select("id,name,type,unit,color,hidden,sort_order,motive_vehicle_id")
     .eq("org_id", orgId)
     .order("sort_order", { ascending: true });
   if (error) {
@@ -588,8 +590,9 @@ export async function fetchAssets(orgId: string): Promise<Asset[]> {
   return ((data ?? []) as DbAssetRow[]).map((r) => ({
     id:              r.id,
     name:            r.name,
+    type:            r.type,
     unit:            r.unit ?? undefined,
-    color:           r.color ?? undefined,
+    color:           r.color,
     hidden:          !!r.hidden,
     sortOrder:       r.sort_order,
     motiveVehicleId: r.motive_vehicle_id ?? undefined,

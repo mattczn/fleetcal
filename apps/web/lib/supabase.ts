@@ -198,6 +198,7 @@ export function dbAssetToApp(row: DbAsset): Asset {
     hidden:           row.hidden,
     notes:            row.notes             ?? undefined,
     motiveVehicleId:  row.motive_vehicle_id ?? undefined,
+    sortOrder:        row.sort_order,
   };
 }
 

@@ -1541,6 +1541,7 @@ export default function EventModal() {
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
         status, relayGroupId: rgId, relayRole: 'pickup',
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
+        stops: [],
         ...(isEdit ? { auditLog: relayAuditLog } : {}),
       };
       const deliveryData: Omit<CalendarEvent, 'id'> = {
@@ -1549,6 +1550,7 @@ export default function EventModal() {
         start: deliveryLegStart, end: `${delivEndDate}T${endTime}`,
         status: 'scheduled', relayGroupId: rgId, relayRole: 'delivery',
         createdByName: currentUserName,
+        stops: [],
       };
       if (isEdit && modalEventId) { updateEvent(modalEventId, pickupData); addEvent(deliveryData, delivId); }
       else createRelayPair(pickupData, deliveryData, pickupId, delivId);
@@ -1565,6 +1567,7 @@ export default function EventModal() {
         start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
         status,
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
+        stops: [],
         ...(isEdit ? { auditLog: nextAuditLog } : {}),
       };
       isEdit && modalEventId ? updateEvent(modalEventId, payload) : addEvent(payload, newEventId);
@@ -1824,7 +1827,7 @@ export default function EventModal() {
     const payload: Omit<CalendarEvent, 'id'> = {
       title: title.trim(), ...optionals, trailerId: linkedTrailerId, rateConPdf: storedPdf,
       accessorials: accessorials.length > 0 ? accessorials : undefined,
-      stops: stops.filter(s => s.type !== 'relay').length > 0 ? stops.filter(s => s.type !== 'relay') : undefined,
+      stops: stops.filter(s => s.type !== 'relay'),
       assetId, driverName: driverName || undefined,
       start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
       status, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined,
@@ -2860,8 +2863,6 @@ export default function EventModal() {
               if (section === 'financial' && eventKind === 'non_revenue') {
                 fields = fields.filter(f => f.id === 'driverPay');
               }
-              // Hide the entire load section for non-revenue (already hidden above, but guard here too)
-              if (section === 'load' && eventKind === 'non_revenue') return null;
               if (fields.length === 0) return null;
               return (
                 <div key={section} style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>

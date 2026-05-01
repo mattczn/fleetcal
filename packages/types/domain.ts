@@ -85,8 +85,8 @@ export interface Asset {
   hidden?: boolean;
   notes?: string;
   motiveVehicleId?: string;
-  /** Surfaced from the assets table by some queries; optional in app domain. */
-  sortOrder?: number;
+  /** assets.sort_order — NOT NULL DEFAULT 0 in the DB; always present. */
+  sortOrder: number;
 }
 
 // ── Trailer ─────────────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ export interface Load {
   title: string;
   start: string; // YYYY-MM-DDTHH:mm (naive, dispatch zone)
   end: string;
-  status?: LoadStatus;
+  status: LoadStatus;
   priority?: boolean;
   eventKind?: "revenue" | "non_revenue";
   nonRevenueType?: string;
@@ -221,8 +221,8 @@ export interface Load {
   /** Storage path in `rate-cons` bucket (legacy: base64 data URL). */
   rateConPdf?: string;
 
-  // Stops
-  stops?: Stop[];
+  // Stops — always an array; converters return [] when not yet loaded.
+  stops: Stop[];
 
   // Relay (split loads)
   relayGroupId?: string;

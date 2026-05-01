@@ -259,7 +259,7 @@ export const useCalendarStore = create<CalendarStore>()(
     if (persistedShowUnassigned && !unassigned && orgId) {
       const tempId = -Date.now();
       set((state) => ({
-        assets: [{ id: tempId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false }, ...state.assets],
+        assets: [{ id: tempId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sortOrder: -1 }, ...state.assets],
       }));
       getSupabase().from('assets')
         .insert({ org_id: orgId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sort_order: -1 })
@@ -348,7 +348,7 @@ export const useCalendarStore = create<CalendarStore>()(
     const UNASSIGNED_ID = -99;
     const demoAssets = [
       // Unassigned column first
-      { id: UNASSIGNED_ID, name: 'Unassigned', color: '#9E9E9E', type: 'OTR', unit: '0', hidden: false },
+      { id: UNASSIGNED_ID, name: 'Unassigned', color: '#9E9E9E', type: 'OTR', unit: '0', hidden: false, sortOrder: -1 },
       ...DUMMY_ASSETS.map(a => ({ ...a, id: -a.id, hidden: false })),
     ];
     const demoEvents = DUMMY_EVENTS.map(e => ({
@@ -410,7 +410,7 @@ export const useCalendarStore = create<CalendarStore>()(
     if (assetExists || !orgId) return;
     const tempId = -Date.now();
     set((state) => ({
-      assets: [{ id: tempId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false }, ...state.assets],
+      assets: [{ id: tempId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sortOrder: -1 }, ...state.assets],
     }));
     db().from('assets')
       .insert({ org_id: orgId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sort_order: -1 })
@@ -933,7 +933,7 @@ export const useCalendarStore = create<CalendarStore>()(
       end: delivery.end,
       relayGroupId: undefined,
       relayRole: undefined,
-      stops: mergedStops.length > 0 ? mergedStops : undefined,
+      stops: mergedStops,
       ...(auditLog !== undefined ? { auditLog } : {}),
     };
     const deletedAt = new Date().toISOString();

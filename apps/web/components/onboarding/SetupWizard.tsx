@@ -39,7 +39,7 @@ function ManualTab({ onAdded }: { onAdded: () => void }) {
   const save = async () => {
     if (!name.trim()) return;
     setSaving(true);
-    addAsset({ name: name.trim(), unit: unit.trim() || undefined, truck: truck.trim() || undefined, type, color, hidden: false });
+    addAsset({ name: name.trim(), unit: unit.trim() || undefined, truck: truck.trim() || undefined, type, color, hidden: false, sortOrder: 0 });
     await new Promise(r => setTimeout(r, 600));
     setSaving(false); setSaved(true);
     setTimeout(() => { setSaved(false); setName(''); setUnit(''); setTruck(''); onAdded(); }, 800);
@@ -144,7 +144,7 @@ function CsvTab({ onImported }: { onImported: () => void }) {
 
   const importSelected = () => {
     rows.filter(r => r.selected).forEach(r => {
-      addAsset({ name: r.name, unit: r.unit, truck: r.truck, type: r.type ?? 'OTR', color: r.color, hidden: false, notes: r.notes });
+      addAsset({ name: r.name, unit: r.unit, truck: r.truck, type: r.type ?? 'OTR', color: r.color, hidden: false, notes: r.notes, sortOrder: 0 });
     });
     setImported(true);
     setTimeout(onImported, 600);

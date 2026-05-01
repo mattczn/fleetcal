@@ -105,6 +105,7 @@ function rowToLoad(
     start:               r.start,
     end:                 r.end,
     status:              (r.status as LoadStatus) ?? "scheduled",
+    assetId:             r.asset_id,
     broker:              r.broker               ?? undefined,
     trailerType:         r.trailer_type         ?? undefined,
     trailerId:           r.trailer_id           ?? undefined,

@@ -19,7 +19,7 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    addAsset({ name: name.trim(), color, type, unit: unit.trim() || undefined, truck: truck.trim() || undefined });
+    addAsset({ name: name.trim(), color, type, unit: unit.trim() || undefined, truck: truck.trim() || undefined, hidden: false, sortOrder: 0 });
     onClose();
   };
 

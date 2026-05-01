@@ -80,7 +80,7 @@ export function dbEventToApp(row: LoadRowInput): Load {
     end:                 r.end as string,
     driverName:          (r.driver_name as string | null)        ?? undefined,
     driverId:            (r.driver_id as number | null)          ?? undefined,
-    status:              (r.status as LoadStatus | null)         ?? undefined,
+    status:              (r.status as LoadStatus | null)         ?? "scheduled",
     relayGroupId:        (r.relay_group_id as string | null)     ?? undefined,
     relayRole:           (r.relay_role as RelayRole | null)      ?? undefined,
     loadNum:             (r.load_num as string | null)           ?? undefined,
@@ -101,7 +101,7 @@ export function dbEventToApp(row: LoadRowInput): Load {
     createdByName:       (r.created_by_name as string | null)    ?? undefined,
     createdAt:           (r.created_at as string | null)         ?? undefined,
     auditLog:            (r.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
-    stops:               undefined, // populated separately
+    stops:               [], // empty by default; callers populate via fetchStopsForEvents
   };
 }
 

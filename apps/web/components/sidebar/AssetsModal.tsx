@@ -48,6 +48,8 @@ export default function AssetsModal({ onClose }: { onClose: () => void }) {
       name,
       color: PRESET_COLORS[assets.length % PRESET_COLORS.length],
       type: assetCategories[0] ?? 'OTR',
+      hidden: false,
+      sortOrder: 0,
     });
     setSelected(newId);
     setAddName('');
