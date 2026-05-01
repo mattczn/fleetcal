@@ -12,6 +12,7 @@ import { serve } from "@hono/node-server";
 
 import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
+import loadsRoute from "./routes/loads.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -62,6 +63,8 @@ authed.get("/whoami", (c) =>
     orgId:  c.get("orgId"),
   }),
 );
+
+authed.route("/loads", loadsRoute);
 
 app.route("/v1", authed);
 

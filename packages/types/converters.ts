@@ -163,6 +163,7 @@ export function joinEventLoadToApp(
     internalLoadId: (l?.internal_load_id as number | undefined) ?? undefined,
     loadNum:        (l?.load_num as string | null | undefined) ?? undefined,
     broker:         (l?.broker as string | null | undefined) ?? undefined,
+    customerId:     (l?.customer_id as string | null | undefined) ?? undefined,
     dispatcher:     (l?.dispatcher as string | null | undefined) ?? undefined,
     createdByName:  (l?.created_by_name as string | null | undefined) ?? undefined,
     loadPrice:      (l?.load_price as number | null | undefined) ?? undefined,
@@ -226,7 +227,7 @@ export function appLoadToLoadInsert(
     org_id:           orgId,
     load_num:         load.loadNum         ?? null,
     broker:           load.broker          ?? null,
-    customer_id:      null, // future: when customer FK is wired into the modal
+    customer_id:      load.customerId      ?? null,
     dispatcher:       load.dispatcher      ?? null,
     created_by_name:  load.createdByName   ?? null,
     load_price:       load.loadPrice       ?? null,

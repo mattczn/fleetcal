@@ -182,11 +182,12 @@ export interface Load {
   eventKind?: "revenue" | "non_revenue";
   nonRevenueType?: string;
 
-  // People
+  // People & customer
   driverId?: number;
   driverName?: string;
   driverPhone?: string;
   dispatcher?: string;
+  customerId?: string;       // loads.customer_id (uuid FK to customers)
   createdByName?: string;
   createdAt?: string;
 
