@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "Curzon Driver",
+    "slug": "curzon-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a2332"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.curzondriver.matt"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a2332"
+      },
+      "package": "com.curzontrucking.driver",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "scheme": "curzon-driver",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Curzon Driver to access your photos for document uploads.",
+          "cameraPermission": "Allow Curzon Driver to use your camera to capture paperwork."
+        }
+      ],
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Allow Curzon Driver to scan documents."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Curzon Driver to record your location when you check in at a stop. This helps verify your arrival and supports detention claims.",
+          "locationWhenInUsePermission": "Allow Curzon Driver to record your location when you check in at a stop."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

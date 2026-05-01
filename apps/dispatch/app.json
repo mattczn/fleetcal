@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "DispatchGo",
+    "slug": "dispatchgo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "dispatchgo",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a73e8"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.dispatchgo.app",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSExceptionDomains": {
+            "192.168.7.126": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            }
+          }
+        }
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a73e8"
+      },
+      "package": "com.dispatchgo.app",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "./plugins/stripAppleSignIn.js",
+      "@react-native-community/datetimepicker"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "clerkPublishableKey": "pk_test_d2VsbC1tYXJsaW4tMTAuY2xlcmsuYWNjb3VudHMuZGV2JA",
+      "supabaseUrl": "https://vgybqmvmorjhlgbsssmi.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZneWJxbXZtb3JqaGxnYnNzc21pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MDA4MzcsImV4cCI6MjA5MjQ3NjgzN30.c6IutFuTbGiuCUSYXO0bVh-Wa_K00dq9Wc8jgiIEYuE",
+      "googleMapsKey": "AIzaSyDKxh_Na3r3bjA9LgZTgQ7JRJ-X-BvoYfo",
+      "dispatchApiUrl": "http://192.168.7.126:3000"
+    }
+  }
+}

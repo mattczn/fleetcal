@@ -1,0 +1,75 @@
+@import "tailwindcss";
+@import "mapbox-gl/dist/mapbox-gl.css";
+
+:root {
+  /* Google Calendar color system */
+  --gc-blue:          #1a73e8;
+  --gc-blue-hover:    #1765cc;
+  --gc-blue-light:    #e8f0fe;
+  --gc-blue-text:     #1967d2;
+  --gc-red:           #ea4335;
+  --gc-surface:       #ffffff;
+  --gc-bg:            #f8f9fa;
+  --gc-border:        #dadce0;
+  --gc-border-light:  #e8eaed;
+  /* Darker text for better readability */
+  --gc-text-1:        #202124;
+  --gc-text-2:        #3c4043;
+  --gc-text-3:        #5f6368;
+  --gc-hover:         rgba(32,33,36,0.059);
+  --gc-hover-strong:  rgba(32,33,36,0.122);
+
+  /* Elevation shadows (Material) */
+  --shadow-1: 0 1px 2px rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15);
+  --shadow-2: 0 1px 2px rgba(60,64,67,.3), 0 2px 6px 2px rgba(60,64,67,.15);
+  --shadow-3: 0 4px 8px 3px rgba(60,64,67,.15), 0 1px 3px rgba(60,64,67,.3);
+}
+
+@theme inline {
+  --font-sans: var(--font-jakarta);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--gc-surface);
+  color: var(--gc-text-1);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Systematic weight bump: each tier shifts up one step ── */
+/* Inline fontWeight values in components were bumped via sed.  */
+/* Tailwind utility classes are remapped here so the hierarchy  */
+/* is preserved: normal→medium, medium→semibold, semibold→bold  */
+.font-normal   { font-weight: 500; }
+.font-medium   { font-weight: 600; }
+.font-semibold { font-weight: 700; }
+
+/* ── Pointer cursor on all interactive elements ── */
+button, [role="button"], select, input[type="checkbox"],
+input[type="radio"], input[type="range"], label[for] {
+  cursor: pointer;
+}
+
+/* ── Hide number input spinners (all methods) ── */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none !important;
+  display: none !important;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
+/* ── Lighter calendar grid lines ── */
+.gc-grid-line      { border-top: 1px solid var(--gc-grid-line-color, #eaecef); }
+.gc-grid-line-half { border-top: 1px solid var(--gc-grid-line-half-color, #f3f4f6); }
+
+
+/* ── Range accent ── */
+input[type="range"] { accent-color: var(--gc-blue); }
+
+@keyframes spin { to { transform: rotate(360deg); } }

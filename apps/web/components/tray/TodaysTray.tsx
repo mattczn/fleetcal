@@ -1,0 +1,548 @@
+'use client';
+
+import { useState, useMemo, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Layers, Truck, User, LayoutDashboard, EyeOff, Eye } from 'lucide-react';
+import { useCalendarStore } from '@/store/useCalendarStore';
+import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
+import CopyChip from '@/components/ui/CopyChip';
+
+// ── Status helpers ─────────────────────────────────────────────────────────────
+
+type StatusMeta = { label: string; bg: string; color: string; border: string };
+
+const STATUS_META: Record<string, StatusMeta> = {
+  upcoming:    { label: 'Upcoming',    bg: '#f1f3f4', color: '#5f6368', border: '#dadce0' },
+  in_progress: { label: 'In Progress', bg: '#e8f0fe', color: '#1a73e8', border: '#c5d8fd' },
+  completed:   { label: 'Completed',   bg: '#e6f4ea', color: '#137333', border: '#b7dfbf' },
+  dispatched:  { label: 'Dispatched',  bg: '#e8f0fe', color: '#1558d6', border: '#c5d8fd' },
+  picked_up:   { label: 'Picked Up',   bg: '#f3e8fd', color: '#7627bb', border: '#ddb9f7' },
+  delivered:   { label: 'Delivered',   bg: '#e6f4ea', color: '#137333', border: '#b7dfbf' },
+  tonu:        { label: 'TONU',        bg: '#fef3c7', color: '#92400e', border: '#fde68a' },
+  cancelled:   { label: 'Cancelled',   bg: '#fce8e6', color: '#c5221f', border: '#f5c6c5' },
+  problem:     { label: 'Problem',     bg: '#fef0e6', color: '#b85c00', border: '#fcd7a6' },
+};
+
+type FilterKey = 'all' | 'upcoming' | 'in_progress' | 'completed';
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all',         label: 'All'         },
+  { key: 'upcoming',    label: 'Upcoming'    },
+  { key: 'in_progress', label: 'In Progress' },
+  { key: 'completed',   label: 'Completed'   },
+];
+
+function derivedKey(ev: CalendarEvent): string {
+  const now = Date.now();
+  if (new Date(ev.start).getTime() > now) return 'upcoming';
+  if (new Date(ev.end).getTime() < now)   return 'completed';
+  return 'in_progress';
+}
+
+function statusKey(ev: CalendarEvent): string {
+  const manual: EventStatus[] = ['dispatched', 'picked_up', 'delivered', 'tonu', 'cancelled', 'problem'];
+  if (ev.status && manual.includes(ev.status)) return ev.status;
+  return derivedKey(ev);
+}
+
+const WINDOW_HOURS = 12;
+const STEP_HOURS   = 12;
+
+function isInWindow(ev: CalendarEvent, start: Date, end: Date): boolean {
+  return new Date(ev.start) < end && new Date(ev.end) > start;
+}
+
+function fmtBound(d: Date): string {
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ', ' +
+    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined, hour12: true });
+}
+
+function fmtPivot(d: Date): string {
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' +
+    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined, hour12: true });
+}
+
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? 'p' : 'a';
+  const hh = h % 12 || 12;
+  return m === 0 ? `${hh}${ampm}` : `${hh}:${String(m).padStart(2, '0')}${ampm}`;
+}
+
+// ── Chip definitions ────────────────────────────────────────────────────────────
+
+type Chip = { key: EventStatus; label: string; group: 'progress' | 'exception' };
+
+const CHIPS: Chip[] = [
+  { key: 'dispatched', label: 'Dispatched', group: 'progress'  },
+  { key: 'picked_up',  label: 'Picked Up',  group: 'progress'  },
+  { key: 'delivered',  label: 'Delivered',  group: 'progress'  },
+  { key: 'tonu',       label: 'TONU',       group: 'exception' },
+  { key: 'cancelled',  label: 'Cancelled',  group: 'exception' },
+  { key: 'problem',    label: 'Problem',    group: 'exception' },
+];
+
+const PROGRESS_CHIPS  = CHIPS.filter(c => c.group === 'progress');
+const EXCEPTION_CHIPS = CHIPS.filter(c => c.group === 'exception');
+
+// ── Load row ───────────────────────────────────────────────────────────────────
+
+function LoadRow({
+  ev, asset, selected, batchMode, onToggleSelect, onStatusChange, onOpenLoad, onHide, isHidden,
+}: {
+  ev: CalendarEvent;
+  asset: Asset | undefined;
+  selected: boolean;
+  batchMode: boolean;
+  onToggleSelect: () => void;
+  onStatusChange: (id: string, status: EventStatus | undefined) => void;
+  onOpenLoad: (id: string) => void;
+  onHide: () => void;
+  isHidden?: boolean;
+}) {
+  const sk       = statusKey(ev);
+  const meta     = STATUS_META[sk] ?? STATUS_META.upcoming;
+  const isManual = ['dispatched', 'picked_up', 'delivered', 'tonu', 'cancelled', 'problem'].includes(sk);
+
+  const handleChip = (chipKey: EventStatus) => {
+    onStatusChange(ev.id, ev.status === chipKey ? undefined : chipKey);
+  };
+
+  return (
+    <div
+      className="flex items-center gap-3 px-4 border-b"
+      style={{
+        borderColor: 'var(--gc-border-light)',
+        background: selected ? '#eef2fd' : 'transparent',
+        minWidth: 0,
+        height: 40,
+      }}
+    >
+      {/* Checkbox / color dot */}
+      <button
+        type="button"
+        onClick={e => { e.stopPropagation(); onToggleSelect(); }}
+        className="shrink-0 flex items-center justify-center"
+        style={{ width: 18, height: 18, cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+      >
+        {batchMode ? (
+          selected
+            ? <svg width="16" height="16" viewBox="0 0 16 16" fill="#1a73e8"><rect rx="2" width="16" height="16"/><path d="M4 8l3 3 5-5" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            : <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect rx="2" width="16" height="16" stroke="var(--gc-border)" strokeWidth="1.5"/></svg>
+        ) : (
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: asset?.color ?? '#94a3b8', display: 'block', flexShrink: 0 }} />
+        )}
+      </button>
+
+      {/* Asset name + unit */}
+      <span className="shrink-0 text-xs font-semibold" style={{ color: 'var(--gc-text-1)', whiteSpace: 'nowrap', width: 100, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {asset?.name ?? '—'}{asset?.unit ? <span style={{ color: 'var(--gc-text-3)', fontWeight: 500 }}> #{asset.unit}</span> : null}
+      </span>
+
+      {/* Driver */}
+      <span className="shrink-0 text-xs" style={{ color: 'var(--gc-text-2)', whiteSpace: 'nowrap', width: 90, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {ev.driverName || '—'}
+      </span>
+
+      {/* Load # (revenue) or non-revenue type pill */}
+      <span style={{ width: 76, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+        {ev.eventKind === 'non_revenue' && ev.nonRevenueType ? (
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: '#7c3aed', borderRadius: 9999, padding: '1px 8px', whiteSpace: 'nowrap' }}>
+            {ev.nonRevenueType}
+          </span>
+        ) : ev.loadNum ? (
+          <CopyChip value={ev.loadNum} style={{ fontSize: 11, fontWeight: 700, color: '#1a73e8' }} />
+        ) : null}
+      </span>
+
+      {/* Time range */}
+      <span className="shrink-0 text-[11px] font-medium tabular-nums" style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap', width: 72 }}>
+        {fmtTime(ev.start)}–{fmtTime(ev.end)}
+      </span>
+
+      {/* Title → opens modal */}
+      <button
+        type="button"
+        onClick={() => onOpenLoad(ev.id)}
+        className="text-xs font-medium truncate text-left"
+        style={{ color: 'var(--gc-text-1)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, flex: 1, minWidth: 0, textDecoration: 'underline', textDecorationColor: 'var(--gc-border)', textUnderlineOffset: 3 }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#1a73e8'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-1)'; }}
+      >
+        {ev.title}
+      </button>
+
+
+      {/* Progress chips */}
+      <div className="flex items-center gap-1 shrink-0">
+        {PROGRESS_CHIPS.map(chip => {
+          const active = ev.status === chip.key;
+          const cm = STATUS_META[chip.key];
+          return (
+            <button key={chip.key} type="button" onClick={e => { e.stopPropagation(); handleChip(chip.key); }}
+              className="text-[11px] font-medium px-2 py-0.5 rounded-full transition-all"
+              style={{ background: active ? cm.bg : 'transparent', color: active ? cm.color : 'var(--gc-text-3)', border: `1px solid ${active ? cm.border : 'var(--gc-border)'}`, cursor: 'pointer' }}
+              onMouseEnter={e => { if (!active) { e.currentTarget.style.background = cm.bg; e.currentTarget.style.color = cm.color; e.currentTarget.style.borderColor = cm.border; } }}
+              onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; } }}>
+              {chip.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ width: 1, height: 18, background: 'var(--gc-border)', flexShrink: 0 }} />
+
+      {/* Exception chips */}
+      <div className="flex items-center gap-1 shrink-0">
+        {EXCEPTION_CHIPS.map(chip => {
+          const active = ev.status === chip.key;
+          const cm = STATUS_META[chip.key];
+          return (
+            <button key={chip.key} type="button" onClick={e => { e.stopPropagation(); handleChip(chip.key); }}
+              className="text-[11px] font-medium px-2 py-0.5 rounded-full transition-all"
+              style={{ background: active ? cm.bg : 'transparent', color: active ? cm.color : 'var(--gc-text-3)', border: `1px solid ${active ? cm.border : 'var(--gc-border)'}`, cursor: 'pointer' }}
+              onMouseEnter={e => { if (!active) { e.currentTarget.style.background = cm.bg; e.currentTarget.style.color = cm.color; e.currentTarget.style.borderColor = cm.border; } }}
+              onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; } }}>
+              {chip.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Clear manual */}
+      {isManual && (
+        <button type="button" onClick={e => { e.stopPropagation(); onStatusChange(ev.id, undefined); }}
+          className="shrink-0 text-[10px] px-1.5 rounded transition-colors"
+          style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer', lineHeight: '20px' }}
+          title="Clear manual status"
+          onMouseEnter={e => { e.currentTarget.style.color = '#c5221f'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
+          ✕
+        </button>
+      )}
+
+      {/* Hide / unhide */}
+      <button
+        type="button"
+        onClick={e => { e.stopPropagation(); onHide(); }}
+        title={isHidden ? 'Unhide' : 'Hide'}
+        className="shrink-0"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: 'var(--gc-text-3)' }}
+        onMouseEnter={e => { e.currentTarget.style.color = isHidden ? '#1a73e8' : 'var(--gc-text-1)'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; }}
+      >
+        {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+      </button>
+    </div>
+  );
+}
+
+// ── Main tray ──────────────────────────────────────────────────────────────────
+
+export default function TodaysTray() {
+  const { events, assets, updateEvent, openEditModal, setTrayOpen } = useCalendarStore();
+  const router = useRouter();
+  const [expanded,        setExpanded]        = useState(false);
+  const [batchMode,       setBatchMode]       = useState(false);
+  const [selected,        setSelected]        = useState<Set<string>>(new Set());
+  const [filter,          setFilter]          = useState<FilterKey>('all');
+  const [pivotTime,       setPivotTime]       = useState<Date>(() => new Date());
+  const [hiddenIds,       setHiddenIds]       = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('dispatch-board-hidden-ids');
+      if (saved) return new Set<string>(JSON.parse(saved));
+    } catch { /* ignore */ }
+    return new Set<string>();
+  });
+  const [hiddenExpanded,  setHiddenExpanded]  = useState(false);
+
+  const windowStart = useMemo(() => new Date(pivotTime.getTime() - WINDOW_HOURS * 3600 * 1000), [pivotTime]);
+  const windowEnd   = useMemo(() => new Date(pivotTime.getTime() + WINDOW_HOURS * 3600 * 1000), [pivotTime]);
+  const isAtNow     = Math.abs(pivotTime.getTime() - Date.now()) < 5 * 60 * 1000;
+  const shiftPivot  = (hours: number) => setPivotTime(p => new Date(p.getTime() + hours * 3600 * 1000));
+
+  const todayLoads = useMemo(() =>
+    events.filter(ev => isInWindow(ev, windowStart, windowEnd))
+          .sort((a, b) => a.start.localeCompare(b.start)),
+  [events, windowStart, windowEnd]);
+
+  const filteredLoads = useMemo(() => {
+    if (filter === 'all') return todayLoads;
+    return todayLoads.filter(ev => derivedKey(ev) === filter);
+  }, [todayLoads, filter]);
+
+  const filterCounts = useMemo(() => {
+    const counts: Record<FilterKey, number> = { all: todayLoads.length, upcoming: 0, in_progress: 0, completed: 0 };
+    for (const ev of todayLoads) {
+      const dk = derivedKey(ev) as FilterKey;
+      if (dk in counts) counts[dk]++;
+    }
+    return counts;
+  }, [todayLoads]);
+
+  const assetMap = useMemo(() => {
+    const m = new Map<number, Asset>();
+    for (const a of assets) m.set(a.id, a);
+    return m;
+  }, [assets]);
+
+  const handleStatusChange = useCallback((id: string, status: EventStatus | undefined) => {
+    updateEvent(id, { status: status ?? 'scheduled' });
+  }, [updateEvent]);
+
+  const handleBatchApply = (status: EventStatus) => {
+    for (const id of selected) updateEvent(id, { status });
+    setSelected(new Set());
+    setBatchMode(false);
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleExpanded = () => {
+    const next = !expanded;
+    setExpanded(next);
+    setTrayOpen(next);
+  };
+  const toggleBatchMode = () => { setBatchMode(b => !b); setSelected(new Set()); };
+
+  const toggleHide = useCallback((id: string) => {
+    setHiddenIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      try { localStorage.setItem('dispatch-board-hidden-ids', JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  const visibleLoads = filteredLoads.filter(ev => !hiddenIds.has(ev.id));
+  const hiddenLoads  = filteredLoads.filter(ev =>  hiddenIds.has(ev.id));
+
+  if (todayLoads.length === 0) return null;
+
+  const EXCEPTION_KEYS: EventStatus[] = ['tonu', 'cancelled', 'problem'];
+  const exceptionCount  = todayLoads.filter(ev => ev.status && EXCEPTION_KEYS.includes(ev.status)).length;
+  const inProgressCount = todayLoads.filter(ev => statusKey(ev) === 'in_progress').length;
+
+  return (
+    <div
+      className="fixed bottom-0 left-0 right-0 z-40 flex flex-col"
+      style={{ background: 'var(--gc-surface)', borderTop: '1px solid var(--gc-border)', boxShadow: '0 -2px 8px rgba(0,0,0,.08)', overflow: 'hidden' }}
+    >
+      {/* Collapsed / header bar */}
+      <div className="flex items-center gap-3 px-5"
+        style={{ height: 48, paddingBottom: 8, background: '#1a73e8' }}>
+        {/* Clickable toggle area */}
+        <div role="button" tabIndex={0} onClick={toggleExpanded}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') toggleExpanded(); }}
+          className="flex items-center gap-3 flex-1 cursor-pointer min-w-0">
+          <Layers size={15} style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }} />
+          <span className="text-sm font-semibold" style={{ color: '#fff' }}>{isAtNow ? "Today's Loads" : fmtPivot(pivotTime)}</span>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+            {todayLoads.length}
+          </span>
+          {inProgressCount > 0 && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+              style={{ background: 'rgba(255,255,255,0.18)', color: '#fff' }}>
+              {inProgressCount} in progress
+            </span>
+          )}
+          {exceptionCount > 0 && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+              style={{ background: 'rgba(255,200,150,0.25)', color: '#ffe0b2' }}>
+              {exceptionCount} exception{exceptionCount > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => router.push('/board')}
+          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors shrink-0"
+          style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)', cursor: 'pointer' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
+        >
+          <LayoutDashboard size={12} />
+          Command Center
+        </button>
+        <div role="button" tabIndex={0} onClick={toggleExpanded}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') toggleExpanded(); }}
+          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+          {expanded
+            ? <ChevronDown size={16} style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }} />
+            : <ChevronUp   size={16} style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }} />
+          }
+        </div>
+      </div>
+
+      {/* Expanded panel */}
+      {expanded && (
+        <div style={{ maxHeight: 380, display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--gc-border-light)' }}>
+
+          {/* Toolbar: filters + date + batch */}
+          <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+            {/* Filter tabs */}
+            <div className="flex items-center gap-1">
+              {FILTERS.map(f => {
+                const active = filter === f.key;
+                const count  = filterCounts[f.key];
+                return (
+                  <button key={f.key} type="button" onClick={() => setFilter(f.key)}
+                    className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full transition-all"
+                    style={{
+                      background: active ? '#1a73e8' : 'transparent',
+                      color:      active ? '#fff'     : 'var(--gc-text-2)',
+                      border:     `1px solid ${active ? '#1a73e8' : 'var(--gc-border)'}`,
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                    {f.label}
+                    <span className="text-[10px] font-medium opacity-75">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex-1" />
+
+            {/* Window description */}
+            <span style={{ fontSize: 11, color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>
+              after <strong style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{fmtBound(windowStart)}</strong>
+              <span style={{ margin: '0 4px', opacity: 0.4 }}>·</span>
+              before <strong style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{fmtBound(windowEnd)}</strong>
+            </span>
+
+            {/* Pivot nav */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6 }}>
+              <button type="button" onClick={() => shiftPivot(-STEP_HOURS)}
+                style={{ display: 'flex', alignItems: 'center', padding: '2px 4px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              ><ChevronLeft size={12} /></button>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--gc-text-1)', padding: '0 6px', whiteSpace: 'nowrap' }}>
+                {fmtPivot(pivotTime)}
+              </span>
+              <button type="button" onClick={() => shiftPivot(STEP_HOURS)}
+                style={{ display: 'flex', alignItems: 'center', padding: '2px 4px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              ><ChevronRight size={12} /></button>
+              {!isAtNow && (
+                <button type="button" onClick={() => setPivotTime(new Date())}
+                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: '#1558d6', marginLeft: 2 }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.08)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                >Now</button>
+              )}
+            </div>
+
+            {/* Batch toggle */}
+            <button type="button" onClick={toggleBatchMode}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+              style={{
+                background: batchMode ? '#e8f0fe' : 'transparent',
+                color:      batchMode ? '#1a73e8' : 'var(--gc-text-2)',
+                border:     `1px solid ${batchMode ? '#c5d8fd' : 'var(--gc-border)'}`,
+                cursor: 'pointer',
+              }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="5" width="4" height="4" rx="1"/><rect x="3" y="13" width="4" height="4" rx="1"/>
+                <line x1="10" y1="7" x2="21" y2="7"/><line x1="10" y1="15" x2="21" y2="15"/>
+              </svg>
+              Batch
+            </button>
+          </div>
+
+          {/* Load rows */}
+          <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 8 }}>
+            {visibleLoads.length === 0 && hiddenLoads.length === 0 ? (
+              <div className="flex items-center justify-center py-8 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+                No {filter === 'all' ? '' : FILTERS.find(f => f.key === filter)?.label.toLowerCase() + ' '}loads today
+              </div>
+            ) : (
+              <>
+                {visibleLoads.map(ev => (
+                  <LoadRow
+                    key={ev.id}
+                    ev={ev}
+                    asset={assetMap.get(ev.assetId)}
+                    selected={selected.has(ev.id)}
+                    batchMode={batchMode}
+                    onToggleSelect={() => toggleSelect(ev.id)}
+                    onStatusChange={handleStatusChange}
+                    onOpenLoad={openEditModal}
+                    onHide={() => toggleHide(ev.id)}
+                  />
+                ))}
+
+                {/* Hidden loads section */}
+                {hiddenLoads.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setHiddenExpanded(e => !e)}
+                      className="flex items-center gap-2 w-full px-4"
+                      style={{ height: 32, background: 'var(--gc-hover, #f1f3f4)', border: 'none', borderTop: '1px solid var(--gc-border-light)', cursor: 'pointer', color: 'var(--gc-text-3)', fontSize: 11, fontWeight: 600 }}
+                    >
+                      {hiddenExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      Hidden ({hiddenLoads.length})
+                    </button>
+                    {hiddenExpanded && hiddenLoads.map(ev => (
+                      <LoadRow
+                        key={ev.id}
+                        ev={ev}
+                        asset={assetMap.get(ev.assetId)}
+                        selected={selected.has(ev.id)}
+                        batchMode={batchMode}
+                        onToggleSelect={() => toggleSelect(ev.id)}
+                        onStatusChange={handleStatusChange}
+                        onOpenLoad={openEditModal}
+                        onHide={() => toggleHide(ev.id)}
+                        isHidden
+                      />
+                    ))}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Batch action bar */}
+          {batchMode && selected.size > 0 && (
+            <div className="flex items-center gap-2 px-4 py-2.5 shrink-0"
+              style={{ borderTop: '1px solid var(--gc-border)', background: 'var(--gc-bg, #f8f9fa)' }}>
+              <span className="text-xs font-semibold shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                Apply to {selected.size} load{selected.size > 1 ? 's' : ''}:
+              </span>
+              {CHIPS.map(chip => {
+                const cm = STATUS_META[chip.key];
+                return (
+                  <button key={chip.key} type="button" onClick={() => handleBatchApply(chip.key)}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-full"
+                    style={{ background: cm.bg, color: cm.color, border: `1px solid ${cm.border}`, cursor: 'pointer' }}
+                    onMouseEnter={e => { e.currentTarget.style.opacity = '0.75'; }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}>
+                    {chip.label}
+                  </button>
+                );
+              })}
+              <button type="button" onClick={() => setSelected(new Set())}
+                className="ml-auto text-xs px-2 py-1 rounded"
+                style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer' }}>
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

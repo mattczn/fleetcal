@@ -1,0 +1,39 @@
+{
+  "name": "@fleetcal/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "dev:turbo": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "@clerk/nextjs": "^7.2.3",
+    "@supabase/supabase-js": "^2.104.0",
+    "@types/mapbox-gl": "^3.4.1",
+    "dotenv": "^17.4.2",
+    "geo-tz": "^8.1.6",
+    "lucide-react": "^1.8.0",
+    "mapbox-gl": "^3.22.0",
+    "next": "16.2.4",
+    "pdfjs-dist": "^5.6.205",
+    "pigeon-maps": "^0.22.1",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

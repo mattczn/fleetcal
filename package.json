@@ -1,0 +1,15 @@
+{
+  "name": "fleetcal",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @fleetcal/web",
+    "dev:driver": "npm run start -w @fleetcal/driver",
+    "dev:dispatch": "npm run start -w @fleetcal/dispatch",
+    "dev:api": "npm run dev -w @fleetcal/api",
+    "types:gen": "supabase gen types typescript --project-id YOUR_ID > packages/types/database.ts"
+  }
+}
