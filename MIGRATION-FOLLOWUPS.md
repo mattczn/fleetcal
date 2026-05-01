@@ -176,3 +176,17 @@ this and make environments reproducible.
 the migration by using `npm install --cache /tmp/fleetcal-npm-cache`. Permanent
 fix is `sudo chown -R thema:staff ~/.npm`. Once that's done, this entry can be
 deleted.
+
+## Deferred validations
+
+### Validate driver-app assetId rendering after Clerk migration (Phase 4)
+
+- Pre-fix, `rowToLoad` in `apps/driver/lib/api/loads.ts` constructed `Load`
+  without `assetId` despite `r.asset_id` being available.
+- Fix landed in `da6d114` but was not validated against running app.
+- Once driver-app is back online with real data, check every UI surface
+  that displays asset info on a load and confirm:
+  - **(a)** values render correctly (scenario: was silently undefined), or
+  - **(b)** no surface uses it (scenario: field not read).
+- If (a), audit git log for any "asset shows blank" bugs that may have
+  been worked around at the UI layer rather than fixed at root.
