@@ -246,6 +246,7 @@ export type Database = {
           event_kind: string
           id: string
           internal_load_id: number
+          load_id: string | null
           load_num: string | null
           load_price: number | null
           non_revenue_type: string | null
@@ -280,6 +281,7 @@ export type Database = {
           event_kind?: string
           id?: string
           internal_load_id: number
+          load_id?: string | null
           load_num?: string | null
           load_price?: number | null
           non_revenue_type?: string | null
@@ -314,6 +316,7 @@ export type Database = {
           event_kind?: string
           id?: string
           internal_load_id?: number
+          load_id?: string | null
           load_num?: string | null
           load_price?: number | null
           non_revenue_type?: string | null
@@ -348,6 +351,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "events_load_id_fkey"
+            columns: ["load_id"]
+            isOneToOne: false
+            referencedRelation: "loads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "events_trailer_id_fkey"
             columns: ["trailer_id"]
             isOneToOne: false
@@ -362,6 +372,7 @@ export type Database = {
           file_name: string
           id: string
           kind: string
+          load_id: string | null
           mime_type: string | null
           notes: string | null
           org_id: string
@@ -375,6 +386,7 @@ export type Database = {
           file_name: string
           id?: string
           kind?: string
+          load_id?: string | null
           mime_type?: string | null
           notes?: string | null
           org_id: string
@@ -388,6 +400,7 @@ export type Database = {
           file_name?: string
           id?: string
           kind?: string
+          load_id?: string | null
           mime_type?: string | null
           notes?: string | null
           org_id?: string
@@ -405,6 +418,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "load_documents_load_id_fkey"
+            columns: ["load_id"]
+            isOneToOne: false
+            referencedRelation: "loads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "load_documents_uploaded_by_driver_id_fkey"
             columns: ["uploaded_by_driver_id"]
             isOneToOne: false
@@ -412,6 +432,89 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      loads: {
+        Row: {
+          accessorials: Json | null
+          audit_log: Json | null
+          broker: string | null
+          created_at: string
+          created_by_name: string | null
+          customer_id: string | null
+          deleted_at: string | null
+          dispatcher: string | null
+          id: string
+          internal_load_id: number
+          load_num: string | null
+          load_price: number | null
+          notes: string | null
+          org_id: string
+          rate_con_pdf: string | null
+          ref_nums: string | null
+          updated_at: string
+        }
+        Insert: {
+          accessorials?: Json | null
+          audit_log?: Json | null
+          broker?: string | null
+          created_at?: string
+          created_by_name?: string | null
+          customer_id?: string | null
+          deleted_at?: string | null
+          dispatcher?: string | null
+          id?: string
+          internal_load_id: number
+          load_num?: string | null
+          load_price?: number | null
+          notes?: string | null
+          org_id: string
+          rate_con_pdf?: string | null
+          ref_nums?: string | null
+          updated_at?: string
+        }
+        Update: {
+          accessorials?: Json | null
+          audit_log?: Json | null
+          broker?: string | null
+          created_at?: string
+          created_by_name?: string | null
+          customer_id?: string | null
+          deleted_at?: string | null
+          dispatcher?: string | null
+          id?: string
+          internal_load_id?: number
+          load_num?: string | null
+          load_price?: number | null
+          notes?: string | null
+          org_id?: string
+          rate_con_pdf?: string | null
+          ref_nums?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "loads_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      loads_internal_id_counters: {
+        Row: {
+          last_id: number
+          org_id: string
+        }
+        Insert: {
+          last_id?: number
+          org_id: string
+        }
+        Update: {
+          last_id?: number
+          org_id?: string
+        }
+        Relationships: []
       }
       org_load_id_counters: {
         Row: {
@@ -657,7 +760,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      allocate_loads_internal_id: {
+        Args: { p_org_id: string }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
@@ -790,4 +896,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-
