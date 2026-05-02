@@ -1240,10 +1240,18 @@ export default function EventModal() {
       setEventKind(ev.eventKind ?? 'revenue');
       setNonRevenueType(ev.nonRevenueType ?? 'Maintenance');
 
-      if (ev.relayGroupId) {
-        setRelayGroupId(ev.relayGroupId);
+      // Treat the leg as part of a relay if EITHER load_id grouping (post-2.5a)
+      // OR legacy relayGroupId is present, AND relayRole is set.
+      const groupKey = ev.loadId ?? ev.relayGroupId;
+      if (groupKey && ev.relayRole) {
+        setRelayGroupId(groupKey);
         setRelayRole(ev.relayRole);
-        const partner = events.find(e => e.relayGroupId === ev.relayGroupId && e.id !== ev.id) ?? null;
+        const partner = events.find(e =>
+          e.id !== ev.id && (
+            (ev.loadId && e.loadId === ev.loadId) ||
+            (ev.relayGroupId && e.relayGroupId === ev.relayGroupId)
+          ),
+        ) ?? null;
         setRelayPartner(partner);
         if (ev.relayRole === 'pickup' && partner) {
           setRelayDelivAssetId(partner.assetId);

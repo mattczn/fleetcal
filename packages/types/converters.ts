@@ -103,8 +103,11 @@ export function joinEventLoadToApp(
     notes:          (l?.notes as string | null | undefined) ?? undefined,
     // relayGroupId aliases loadId for relay legs. Two events with the same
     // load_id and relay_role set ARE the relay; the alias keeps existing
-    // relayGroupId-reading code working.
-    relayGroupId:   (e.relay_role && l?.id) ? (l.id as string) : undefined,
+    // relayGroupId-reading code working. Pre-2.5c, fall back to the
+    // legacy column for events that haven't been backfilled (defensive).
+    relayGroupId:   (e.relay_role && l?.id)
+                      ? (l.id as string)
+                      : (e.relay_group_id as string | null | undefined) ?? undefined,
 
     stops: [], // populated separately by the stops fetch
   };
