@@ -1,14 +1,13 @@
 'use client';
 
-import { getSupabase, dbAssetToApp, dbDriverToApp, dbStopToApp, DbAsset, DbDriver, DbStop } from './supabase';
+import { getSupabase } from './supabase';
 import { joinEventLoadToApp } from '@fleetcal/types';
 import { railway } from './railway';
 import type { DeletedEvent } from '@/store/useCalendarStore';
-import type { Asset, Driver, CalendarEvent, Stop, SavedLocation, Dispatcher, Customer, Trailer } from './types';
+import type { Asset, Driver, CalendarEvent, SavedLocation, Dispatcher, Customer, Trailer } from './types';
 
-// Joined-query columns. events is per-leg; loads is per-load.
-// audit_log is excluded from the list query (accumulates over time;
-// fetched on-demand by the modal via fetchEventAuditLog).
+// Joined-query columns used by the few legacy reads still on Supabase
+// direct (fetchBrokerLoads). All other event reads go through Railway.
 const EVENT_COLS = 'id,org_id,asset_id,title,start,end,driver_name,driver_id,status,relay_role,trailer_type,trailer_id,driver_pay,notes,priority,deleted_at,created_at,updated_at,event_kind,non_revenue_type,load_id';
 const LOAD_COLS = 'id,internal_load_id,load_num,broker,load_price,dispatcher,notes,accessorials,rate_con_pdf,ref_nums,created_by_name,customer_id';
 const EVENT_SELECT_JOINED = `${EVENT_COLS}, load:loads(${LOAD_COLS})`;
@@ -35,108 +34,60 @@ export interface OrgData {
 }
 
 export async function fetchOrgData(
-  orgId: string,
+  _orgId: string,
   windowStart?: string,
   windowEnd?: string,
 ): Promise<OrgData> {
-  const db = getSupabase();
+  const params: Record<string, string> = { includeDeleted: 'true' };
+  if (windowStart) params.from = windowStart;
+  if (windowEnd)   params.to   = windowEnd;
 
-  let eventsQuery = db.from('events').select(EVENT_SELECT_JOINED).eq('org_id', orgId).order('start');
-  if (windowStart) eventsQuery = eventsQuery.gte('start', windowStart);
-  if (windowEnd)   eventsQuery = eventsQuery.lte('start', windowEnd);
-
-  const [assetsRes, driversRes, eventsRes, prefsRes] = await Promise.all([
-    db.from('assets').select('*').eq('org_id', orgId).order('sort_order'),
-    db.from('drivers').select('*').eq('org_id', orgId).order('name'),
-    eventsQuery,
-    db.from('driver_asset_prefs').select('*').eq('org_id', orgId),
+  const [assetsRes, driversRes, loadsRes, prefsRes] = await Promise.all([
+    railway.listAssets(),
+    railway.listDrivers(),
+    railway.listLoads(params),
+    railway.listDriverAssetPrefs(),
   ]);
 
-  if (assetsRes.error) throw assetsRes.error;
-  if (driversRes.error) throw driversRes.error;
-  if (eventsRes.error) throw eventsRes.error;
-
-  const allEventRows = (eventsRes.data ?? []) as Array<Record<string, unknown> & { deleted_at: string | null }>;
-  const events = allEventRows
-    .filter(r => !r.deleted_at)
-    .map(joinedRowToCalendarEvent);
-  const deletedEvents = allEventRows
-    .filter(r => !!r.deleted_at)
-    .map(r => ({
-      ...joinedRowToCalendarEvent(r),
-      deletedAt: r.deleted_at as string,
-    }));
-
-  await attachStopsToEvents([...events, ...deletedEvents]);
+  const { events, deletedEvents } = splitLoadsByDeleted(loadsRes.loads);
+  const driverPrefs: Record<number, number> = {};
+  for (const p of prefsRes.prefs) driverPrefs[p.assetId] = p.driverId;
 
   return {
-    assets:  (assetsRes.data  as DbAsset[]).map(dbAssetToApp),
-    drivers: (driversRes.data as DbDriver[]).map(dbDriverToApp),
+    assets:  assetsRes.assets,
+    drivers: driversRes.drivers,
     events,
     deletedEvents,
-    driverPrefs: Object.fromEntries(
-      (prefsRes.data ?? []).map((p: { asset_id: number; driver_id: number }) => [p.asset_id, p.driver_id])
-    ),
+    driverPrefs,
   };
 }
 
 export async function fetchEventsInRange(
-  orgId: string,
+  _orgId: string,
   rangeStart: string,
   rangeEnd: string,
 ): Promise<{ events: CalendarEvent[]; deletedEvents: DeletedEvent[] }> {
-  const db = getSupabase();
-  const { data, error } = await db.from('events')
-    .select(EVENT_SELECT_JOINED)
-    .eq('org_id', orgId)
-    .gte('start', rangeStart)
-    .lte('start', rangeEnd)
-    .order('start');
-
-  if (error) throw error;
-  const rows = (data ?? []) as Array<Record<string, unknown> & { deleted_at: string | null }>;
-  const events = rows.filter(r => !r.deleted_at).map(joinedRowToCalendarEvent);
-  const deletedEvents = rows
-    .filter(r => !!r.deleted_at)
-    .map(r => ({ ...joinedRowToCalendarEvent(r), deletedAt: r.deleted_at as string }));
-
-  await attachStopsToEvents([...events, ...deletedEvents]);
-
-  return { events, deletedEvents };
+  const { loads } = await railway.listLoads({
+    from: rangeStart,
+    to:   rangeEnd,
+    includeDeleted: 'true',
+  });
+  return splitLoadsByDeleted(loads);
 }
 
-/**
- * Fetch all stops for a set of event IDs and merge them into the events array.
- * Mutates the events in-place for efficiency.
- */
-export async function attachStopsToEvents(events: CalendarEvent[]): Promise<void> {
-  if (events.length === 0) return;
-  const db = getSupabase();
-  const ids = events.map(e => e.id);
-
-  // Supabase "in" filter has limits; chunk if needed
-  const chunkSize = 100;
-  const allRows: DbStop[] = [];
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const { data, error } = await db
-      .from('stops')
-      .select('*')
-      .in('event_id', ids.slice(i, i + chunkSize))
-      .order('sequence');
-    if (!error && data) allRows.push(...(data as DbStop[]));
+/** Split a Load[] from the API into (events, deletedEvents). The API
+ *  populates `.deletedAt` on soft-deleted rows when includeDeleted=true. */
+function splitLoadsByDeleted(loads: CalendarEvent[]): {
+  events: CalendarEvent[];
+  deletedEvents: DeletedEvent[];
+} {
+  const events: CalendarEvent[] = [];
+  const deletedEvents: DeletedEvent[] = [];
+  for (const l of loads) {
+    if (l.deletedAt) deletedEvents.push({ ...l, deletedAt: l.deletedAt });
+    else events.push(l);
   }
-
-  const byEvent = new Map<string, Stop[]>();
-  for (const row of allRows) {
-    const stop = dbStopToApp(row);
-    const arr = byEvent.get(row.event_id) ?? [];
-    arr.push(stop);
-    byEvent.set(row.event_id, arr);
-  }
-
-  for (const ev of events) {
-    ev.stops = byEvent.get(ev.id) ?? [];
-  }
+  return { events, deletedEvents };
 }
 
 // ── Trailers ──────────────────────────────────────────────────────────────────

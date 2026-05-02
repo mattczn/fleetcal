@@ -278,4 +278,8 @@ export interface Load {
 
   // Audit
   auditLog?: LoadAuditEntry[];
+
+  /** events.deleted_at — set on soft-deleted events; populated by reads
+   *  that include deleted rows (trash UI). */
+  deletedAt?: string;
 }

@@ -85,6 +85,7 @@ export function joinEventLoadToApp(
     eventNotes:     (e.notes as string | null) ?? undefined,
     priority:       (e.priority as boolean | null) ?? false,
     createdAt:      (e.created_at as string | null) ?? undefined,
+    deletedAt:      (e.deleted_at as string | null) ?? undefined,
     auditLog:       (e.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
 
     // ── Load-level (from loads row when revenue, else undefined) ────────
