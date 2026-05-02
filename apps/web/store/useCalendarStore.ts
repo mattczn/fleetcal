@@ -754,8 +754,13 @@ export const useCalendarStore = create<CalendarStore>()(
         .then((res) => {
           const created = res.loads[0];
           if (!created) return;
+          // Remove temp AND any prior insertion of the real id (defensive
+          // against realtime/refetch racing with the .then swap).
           set((state) => ({
-            events: state.events.map((e) => (e.id === tempId ? created : e)),
+            events: [
+              ...state.events.filter((e) => e.id !== tempId && e.id !== created.id),
+              created,
+            ],
           }));
         })
         .catch((err) => console.error('addEvent (non-revenue):', err));
@@ -772,10 +777,14 @@ export const useCalendarStore = create<CalendarStore>()(
       .then((res) => {
         const created = res.loads[0];
         if (!created) return;
-        // Swap temp id for real id; carry over the joined fields the
-        // server returned (loadId, internalLoadId, etc.).
+        // Remove temp AND any prior insertion of the real id (defensive
+        // against realtime/refetch racing with the .then swap). Carries
+        // over the joined fields the server returned (loadId, internalLoadId, etc.).
         set((state) => ({
-          events: state.events.map((e) => (e.id === tempId ? created : e)),
+          events: [
+            ...state.events.filter((e) => e.id !== tempId && e.id !== created.id),
+            created,
+          ],
         }));
         // Notify driver if assigned
         if (resolved.driverId) {
@@ -1061,15 +1070,20 @@ export const useCalendarStore = create<CalendarStore>()(
       ],
     })
       .then((res) => {
-        // Find the pickup and delivery rows in the response and swap ids.
         const pickupRes   = res.loads.find((l) => l.relayRole === 'pickup');
         const deliveryRes = res.loads.find((l) => l.relayRole === 'delivery');
+        if (!pickupRes || !deliveryRes) return;
+        // Drop temps + any prior insertions of the real ids, then add the
+        // server-returned rows. Robust against realtime/refetch racing.
+        const realIds = new Set([pickupRes.id, deliveryRes.id]);
         set((state) => ({
-          events: state.events.map((e) => {
-            if (e.id === tempPickupId   && pickupRes)   return pickupRes;
-            if (e.id === tempDeliveryId && deliveryRes) return deliveryRes;
-            return e;
-          }),
+          events: [
+            ...state.events.filter(
+              (e) => e.id !== tempPickupId && e.id !== tempDeliveryId && !realIds.has(e.id),
+            ),
+            pickupRes,
+            deliveryRes,
+          ],
         }));
       })
       .catch((err) => console.error('createRelayPair:', err));
