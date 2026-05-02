@@ -10,7 +10,7 @@
  * each section.
  */
 
-import type { Accessorial, Load, RefNum, Stop } from "./domain";
+import type { Accessorial, Load, LoadAuditEntry, RefNum, Stop } from "./domain";
 import type { LoadStatus, RelayRole } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
@@ -126,6 +126,8 @@ export interface UpdateLoadRequest {
   accessorials?:   Accessorial[] | null;
   refNums?:        RefNum[] | null;
   notes?:          string | null;
+  /** Full replacement of loads.audit_log. Caller fetches, appends, sends. */
+  auditLog?:       LoadAuditEntry[] | null;
 }
 
 export interface UpdateLoadResponse {
@@ -289,6 +291,20 @@ export interface ReplaceStopsRequest {
 
 export interface ReplaceStopsResponse {
   loads: Load[];                       // single entry, with new stops populated
+}
+
+// ── GET /v1/events/:id/audit-log ────────────────────────────────────────
+
+/**
+ * Returns the audit log entries relevant to this event:
+ *   • Revenue events → loads.audit_log of the parent load (load-level
+ *     audit such as broker/accessorial/load-price changes), merged with
+ *     events.audit_log (per-leg driver-side entries like check-ins),
+ *     sorted by changedAt ascending.
+ *   • Non-revenue events → events.audit_log only.
+ */
+export interface GetAuditLogResponse {
+  entries: LoadAuditEntry[];
 }
 
 // ── Errors (shared envelope) ────────────────────────────────────────────

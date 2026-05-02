@@ -31,6 +31,7 @@ const LOAD_LEVEL_KEYS = [
   'refNums',
   'notes',          // load-level for revenue events
   'createdByName',
+  'auditLog',       // full-array replacement; caller appends locally before sending
 ] as const;
 
 const EVENT_LEVEL_KEYS = [

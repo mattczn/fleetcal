@@ -25,6 +25,7 @@ import type {
   UpdateEventByIdRequest, UpdateEventByIdResponse,
   DeleteEventResponse,
   ReplaceStopsRequest, ReplaceStopsResponse,
+  GetAuditLogResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -97,6 +98,9 @@ class RailwayClient {
   deleteEvent(id: string)                         { return this.req<DeleteEventResponse>('DELETE',   `/v1/events/${id}`); }
   replaceStops(eventId: string, body: ReplaceStopsRequest) {
     return this.req<ReplaceStopsResponse>('PUT',  `/v1/events/${eventId}/stops`, body);
+  }
+  getEventAuditLog(eventId: string) {
+    return this.req<GetAuditLogResponse>('GET', `/v1/events/${eventId}/audit-log`);
   }
 }
 

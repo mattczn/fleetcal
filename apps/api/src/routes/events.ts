@@ -24,8 +24,10 @@ import {
   type DeleteEventResponse,
   type ReplaceStopsRequest,
   type ReplaceStopsResponse,
+  type GetAuditLogResponse,
   type ApiErrorResponse,
   type Load,
+  type LoadAuditEntry,
   type LoadStatus,
   LOAD_STATUSES,
   type Stop,
@@ -352,6 +354,54 @@ events.put("/:id/stops", async (c) => {
   const joined = await fetchEventJoined(eventId, orgId);
   if (!joined) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   const res: ReplaceStopsResponse = { loads: [joined] };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /v1/events/:id/audit-log — fetch merged audit log for an event
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Revenue events: returns loads.audit_log (load-level entries) merged with
+// events.audit_log (per-leg driver-side entries), sorted by changedAt asc.
+// Non-revenue events: returns events.audit_log only.
+
+events.get("/:id/audit-log", async (c) => {
+  const orgId = c.get("orgId");
+  const eventId = c.req.param("id");
+
+  const { data: ev, error: evErr } = await supabase
+    .from("events")
+    .select("id,load_id,audit_log")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (evErr) {
+    console.error("[GET /v1/events/:id/audit-log] event read failed:", evErr);
+    return c.json({ error: "fetch_failed", detail: evErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!ev) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const eventEntries = ((ev.audit_log as LoadAuditEntry[] | null) ?? []);
+
+  let loadEntries: LoadAuditEntry[] = [];
+  if (ev.load_id) {
+    const { data: ld, error: ldErr } = await supabase
+      .from("loads")
+      .select("audit_log")
+      .eq("id", ev.load_id)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (ldErr) {
+      console.error("[GET /v1/events/:id/audit-log] load read failed:", ldErr);
+      return c.json({ error: "fetch_failed", detail: ldErr.message } satisfies ApiErrorResponse, 500);
+    }
+    loadEntries = ((ld?.audit_log as LoadAuditEntry[] | null) ?? []);
+  }
+
+  const merged = [...loadEntries, ...eventEntries].sort((a, b) =>
+    (a.changedAt ?? "").localeCompare(b.changedAt ?? ""),
+  );
+  const res: GetAuditLogResponse = { entries: merged };
   return c.json(res);
 });
 

@@ -477,6 +477,7 @@ loads.patch("/:id", async (c) => {
   if ("accessorials" in body) update.accessorials   = body.accessorials ?? null;
   if ("refNums"      in body) update.ref_nums       = body.refNums?.length ? JSON.stringify(body.refNums) : null;
   if ("notes"        in body) update.notes          = body.notes        ?? null;
+  if ("auditLog"     in body) update.audit_log      = body.auditLog     ?? null;
 
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);

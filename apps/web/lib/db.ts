@@ -482,16 +482,14 @@ export async function getLoadDocumentSignedUrl(storagePath: string, expiresInSec
   return data.signedUrl;
 }
 
-export async function fetchEventAuditLog(eventId: string, orgId: string): Promise<import('./types').LoadAuditEntry[] | null> {
-  const db = getSupabase();
-  const { data, error } = await db
-    .from('events')
-    .select('audit_log')
-    .eq('id', eventId)
-    .eq('org_id', orgId)
-    .maybeSingle();
-  if (error) { console.error('fetchEventAuditLog:', error); return null; }
-  return (data?.audit_log as import('./types').LoadAuditEntry[] | null) ?? [];
+export async function fetchEventAuditLog(eventId: string, _orgId: string): Promise<import('./types').LoadAuditEntry[] | null> {
+  try {
+    const { entries } = await railway.getEventAuditLog(eventId);
+    return entries as import('./types').LoadAuditEntry[];
+  } catch (err) {
+    console.error('fetchEventAuditLog:', err);
+    return null;
+  }
 }
 
 export async function fetchEventPdf(eventId: string): Promise<string | null> {
