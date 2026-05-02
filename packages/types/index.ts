@@ -83,14 +83,10 @@ export * from "./enums";
 // ── Converters ──────────────────────────────────────────────────────────
 
 export {
-  // New (Phase 2.5b) — split-schema converters
   joinEventLoadToApp,
   appLoadToEventInsert,
   appLoadToLoadInsert,
   parseRefNums,
-  // Legacy — denormalized event-row converters (kept until Phase 2.5c)
-  dbEventToApp,
-  appEventToDb,
 } from "./converters";
 
 // ── API contracts (Railway endpoints) and Realtime payloads ─────────────

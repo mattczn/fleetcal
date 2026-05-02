@@ -1,20 +1,14 @@
 'use client';
 
-import { getSupabase, dbAssetToApp, dbDriverToApp, dbEventToApp, appStopToDb, dbStopToApp, DbAsset, DbDriver, DbEvent, DbStop, DbTrailer, dbTrailerToApp, appTrailerToDb, trailerUpdatesToDb } from './supabase';
+import { getSupabase, dbAssetToApp, dbDriverToApp, dbStopToApp, DbAsset, DbDriver, DbStop, DbTrailer, dbTrailerToApp, appTrailerToDb, trailerUpdatesToDb } from './supabase';
 import { joinEventLoadToApp } from '@fleetcal/types';
 import type { DeletedEvent } from '@/store/useCalendarStore';
 import type { Asset, Driver, CalendarEvent, Stop, SavedLocation, Dispatcher, Customer, Trailer } from './types';
 
-// Joined-query columns. Event row carries event-level fields plus the
-// legacy denormalized load fields (kept until Phase 2.5c) so reads work
-// for events created either via Railway (load row populated, event-level
-// columns sparse) OR via the legacy direct-Supabase path (load row null,
-// event-level columns populated). joinEventLoadToApp resolves which set
-// to use per row.
-//
-// audit_log is excluded (accumulates over time; fetched on-demand by the
-// modal via fetchEventAuditLog).
-const EVENT_COLS = 'id,org_id,asset_id,title,start,end,driver_name,driver_id,status,relay_role,trailer_type,trailer_id,driver_pay,notes,priority,deleted_at,created_at,updated_at,event_kind,non_revenue_type,load_id,internal_load_id,load_num,ref_nums,broker,dispatcher,load_price,special_instructions,accessorials,rate_con_pdf,created_by_name,relay_group_id';
+// Joined-query columns. events is per-leg; loads is per-load.
+// audit_log is excluded from the list query (accumulates over time;
+// fetched on-demand by the modal via fetchEventAuditLog).
+const EVENT_COLS = 'id,org_id,asset_id,title,start,end,driver_name,driver_id,status,relay_role,trailer_type,trailer_id,driver_pay,notes,priority,deleted_at,created_at,updated_at,event_kind,non_revenue_type,load_id';
 const LOAD_COLS = 'id,internal_load_id,load_num,broker,load_price,dispatcher,notes,accessorials,rate_con_pdf,ref_nums,created_by_name,customer_id';
 const EVENT_SELECT_JOINED = `${EVENT_COLS}, load:loads(${LOAD_COLS})`;
 
@@ -142,34 +136,6 @@ export async function attachStopsToEvents(events: CalendarEvent[]): Promise<void
   for (const ev of events) {
     ev.stops = byEvent.get(ev.id) ?? [];
   }
-}
-
-/**
- * Replace all stops for an event. Deletes existing stops then inserts new ones.
- * Silently no-ops if stops is undefined.
- */
-export async function saveStops(
-  eventId: string,
-  orgId: string,
-  stops: Stop[] | undefined,
-): Promise<void> {
-  if (!stops) return;
-  const db = getSupabase();
-
-  // Delete existing stops for this event
-  await db.from('stops').delete().eq('event_id', eventId);
-
-  if (stops.length === 0) return;
-
-  const rows = stops.map((s, i) =>
-    appStopToDb(
-      { ...s, sequence: i + 1 },
-      orgId,
-      eventId,
-    )
-  );
-  const { error } = await db.from('stops').insert(rows);
-  if (error) console.error('saveStops:', error.code, error.message, error.details, error.hint);
 }
 
 // ── Trailers ──────────────────────────────────────────────────────────────────
@@ -339,28 +305,63 @@ export async function deleteDispatcher(id: string): Promise<void> {
   if (error) console.error('deleteDispatcher:', error.message);
 }
 
-const SEARCH_COLS = 'id,internal_load_id,asset_id,title,start,end,driver_name,status,load_num,ref_nums,event_kind,non_revenue_type';
-
 export async function searchEvents(orgId: string, query: string): Promise<CalendarEvent[]> {
   if (!query || query.length < 2) return [];
   const db = getSupabase();
   const q  = query.trim();
   const numericId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
-  let eventsQuery = db
-    .from('events')
-    .select(SEARCH_COLS)
-    .eq('org_id', orgId)
-    .is('deleted_at', null);
+  // Match against event-level fields directly + load-level fields via join.
+  // Two queries (event-side + load-side) → union — PostgREST doesn't support
+  // OR across nested-relation filters in a single .or().
+  const escaped = q.replace(/[%,()]/g, '\\$&');
+  const pattern = `%${escaped}%`;
 
-  if (numericId !== null) {
-    eventsQuery = eventsQuery.or(`internal_load_id.eq.${numericId},title.ilike.%${q}%,load_num.ilike.%${q}%,driver_name.ilike.%${q}%,notes.ilike.%${q}%`);
-  } else {
-    eventsQuery = eventsQuery.or(`title.ilike.%${q}%,load_num.ilike.%${q}%,driver_name.ilike.%${q}%,notes.ilike.%${q}%`);
+  const evtQuery = db
+    .from('events')
+    .select(EVENT_SELECT_JOINED)
+    .eq('org_id', orgId)
+    .is('deleted_at', null)
+    .or(`title.ilike.${pattern},driver_name.ilike.${pattern},notes.ilike.${pattern}`)
+    .order('start', { ascending: false })
+    .limit(20);
+
+  const loadOr = numericId !== null
+    ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`
+    : `load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`;
+  const loadIdsQuery = db
+    .from('loads')
+    .select('id')
+    .eq('org_id', orgId)
+    .is('deleted_at', null)
+    .or(loadOr)
+    .limit(50);
+
+  const [evtRes, loadIdsRes] = await Promise.all([evtQuery, loadIdsQuery]);
+  if (evtRes.error) { console.error('searchEvents events:', evtRes.error); return []; }
+
+  const matchedLoadIds = ((loadIdsRes.data ?? []) as { id: string }[]).map(r => r.id);
+  let loadMatches: unknown[] = [];
+  if (matchedLoadIds.length > 0) {
+    const res = await db.from('events')
+      .select(EVENT_SELECT_JOINED)
+      .eq('org_id', orgId)
+      .is('deleted_at', null)
+      .in('load_id', matchedLoadIds)
+      .order('start', { ascending: false })
+      .limit(20);
+    if (res.error) console.error('searchEvents loads:', res.error);
+    loadMatches = res.data ?? [];
   }
 
-  const { data, error } = await eventsQuery.order('start', { ascending: false }).limit(20);
-  if (error || !data) return [];
-  return (data as DbEvent[]).map(dbEventToApp);
+  const seen = new Set<string>();
+  const out: CalendarEvent[] = [];
+  for (const r of [...((evtRes.data ?? []) as Array<Record<string, unknown>>), ...(loadMatches as Array<Record<string, unknown>>)]) {
+    const id = r.id as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(joinedRowToCalendarEvent(r));
+  }
+  return out.slice(0, 20);
 }
 
 // ── Payroll adjustments ───────────────────────────────────────────────────────
@@ -542,9 +543,14 @@ export async function fetchEventAuditLog(eventId: string, orgId: string): Promis
 
 export async function fetchEventPdf(eventId: string): Promise<string | null> {
   const db = getSupabase();
-  const { data, error } = await db.from('events').select('rate_con_pdf').eq('id', eventId).single();
+  const { data, error } = await db
+    .from('events')
+    .select('load:loads(rate_con_pdf)')
+    .eq('id', eventId)
+    .single();
   if (error || !data) return null;
-  const val = (data as { rate_con_pdf: string | null }).rate_con_pdf;
+  const load = Array.isArray(data.load) ? data.load[0] : data.load;
+  const val = (load as { rate_con_pdf: string | null } | null)?.rate_con_pdf ?? null;
   if (!val) return null;
   // Legacy: base64 data URLs stored before storage migration — return as-is
   if (val.startsWith('data:')) return val;

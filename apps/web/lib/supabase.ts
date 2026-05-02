@@ -1,21 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { Asset, Driver, CalendarEvent, Accessorial, EventStatus, Stop, StopType, GeocodeStatus, Trailer, TrailerCategory, RefNum, LoadAuditEntry } from './types';
+import type { Asset, Driver, Stop, StopType, GeocodeStatus, Trailer, TrailerCategory, LoadAuditEntry } from './types';
 import { normalizePhone } from './phone';
-
-function parseRefNums(raw: string | null): RefNum[] | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      if (typeof parsed[0] === 'object' && parsed[0] !== null && 'label' in parsed[0]) {
-        return parsed as RefNum[];
-      }
-      // Old format: string[] — migrate on read
-      return (parsed as string[]).filter(Boolean).map(v => ({ label: '', value: String(v) }));
-    }
-  } catch { /* legacy comma-separated */ }
-  return raw.split(',').map(s => s.trim()).filter(Boolean).map(v => ({ label: '', value: v }));
-}
 
 // ── DB row types (snake_case columns) ─────────────────────────────────────────
 // IDs: assets/drivers use bigint (number), events use uuid (string)
@@ -66,7 +51,6 @@ export interface DbTrailer {
 
 export interface DbEvent {
   id: string;
-  internal_load_id: number | null;
   org_id: string;
   asset_id: number;
   title: string;
@@ -75,35 +59,20 @@ export interface DbEvent {
   driver_name: string | null;
   driver_id:   number | null;
   status: string;
-  relay_group_id: string | null;
   relay_role: string | null;
-  load_num: string | null;
-  ref_nums: string | null;
-  broker: string | null;
   trailer_type: string | null;
   trailer_id: number | null;
-  dispatcher: string | null;
-  load_price: number | null;
   driver_pay: number | null;
-  special_instructions: string | null;
   notes: string | null;
-  rate_con_pdf: string | null;
-  accessorials: Accessorial[] | null;
   priority: boolean | null;
   event_kind: string | null;
   non_revenue_type: string | null;
-  created_by_name: string | null;
+  load_id: string | null;
   audit_log: LoadAuditEntry[] | null;
   deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
-
-// Legacy columns removed from DB (kept here for reference during migration):
-// bol_num, po_num, commodity, weight, miles, team_load, hazmat,
-// pickup_city, delivery_city, pickup_appt, delivery_appt,
-// rate_per_mile, factoring_company, invoice_num, payment_status,
-// trailer_num, dispatched
 
 export interface DbStop {
   id: string;
@@ -226,8 +195,6 @@ export function dbDriverToApp(row: DbDriver): Driver {
   };
 }
 
-// dbEventToApp / appEventToDb moved to @fleetcal/types/converters and re-exported below.
-export { dbEventToApp, appEventToDb } from "@fleetcal/types";
 
 export function appAssetToDb(
   asset: Omit<Asset, 'id'>,

@@ -1,16 +1,10 @@
 /**
  * DB row ↔ app domain converters.
  *
- * As of Phase 2.5a, the schema is bilingual:
- *   • Old shape — load-level fields denormalized on `events` row. Used by
- *     `dbEventToApp` / `appEventToDb` (kept for not-yet-migrated callers).
- *   • New shape — `loads` row + `events` row joined via `events.load_id`.
- *     Used by `joinEventLoadToApp` and the split-write helpers
- *     `appLoadToEventInsert` / `appLoadToLoadInsert`.
- *
- * Apps migrate from old to new converters one-by-one. Once all apps are on
- * the new path, the old converters and their underlying event columns get
- * dropped (Phase 2.5c).
+ * Schema (post-2.5c): `loads` row + `events` row joined via
+ * `events.load_id`. `joinEventLoadToApp` reads the joined shape into the
+ * app-domain `Load` view; `appLoadToEventInsert` / `appLoadToLoadInsert`
+ * write the corresponding tables.
  */
 
 import type { Database, Json } from "./database";
@@ -22,34 +16,17 @@ import type {
 } from "./domain";
 import type { LoadStatus, RelayRole, EventKind } from "./enums";
 
-type EventRow      = Database["public"]["Tables"]["events"]["Row"];
 type EventInsert   = Database["public"]["Tables"]["events"]["Insert"];
-type LoadDbRow     = Database["public"]["Tables"]["loads"]["Row"];
 type LoadDbInsert  = Database["public"]["Tables"]["loads"]["Insert"];
-
-/**
- * Converter input type for the legacy event-row converter. The generated
- * `EventRow` and the older hand-written `DbEvent` interface in
- * apps/web/lib/supabase.ts have drifted in nullability and JSON-column
- * annotations. Typing this as `any` lets either feed in cleanly without
- * forcing call-site casts; the function body re-narrows each field to
- * its known type as it builds the app-domain Load.
- *
- * `any` is intentional here: this is the type boundary between two
- * source-of-truth row shapes that we can't yet unify (the hand-written
- * Db* types live to die in a follow-up sweep).
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LegacyEventRowInput = any;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /**
- * `events.ref_nums` is stored as text. Historically it has held three formats:
+ * `loads.ref_nums` is stored as text. Historically it has held three formats:
  *   - JSON array of `{label, value}` (current)
  *   - JSON array of strings           (older)
  *   - comma-separated string          (oldest)
- * This parser handles all three so a long-lived event still reads cleanly.
+ * This parser handles all three so a long-lived load still reads cleanly.
  */
 function parseRefNums(raw: string | null | undefined): RefNum[] | undefined {
   if (!raw) return undefined;
@@ -74,53 +51,7 @@ function parseRefNums(raw: string | null | undefined): RefNum[] | undefined {
     .map((v) => ({ label: "", value: v }));
 }
 
-// ── DB row → app domain ─────────────────────────────────────────────────
-
-export function dbEventToApp(row: LegacyEventRowInput): Load {
-  // The body asserts each access since LegacyEventRowInput is intentionally loose.
-  const r = row as Record<string, unknown>;
-  return {
-    id:                  r.id as string,
-    internalLoadId:      (r.internal_load_id as number | null) ?? undefined,
-    assetId:             r.asset_id as number,
-    title:               r.title as string,
-    start:               r.start as string,
-    end:                 r.end as string,
-    driverName:          (r.driver_name as string | null)        ?? undefined,
-    driverId:            (r.driver_id as number | null)          ?? undefined,
-    status:              (r.status as LoadStatus | null)         ?? "scheduled",
-    relayGroupId:        (r.relay_group_id as string | null)     ?? undefined,
-    relayRole:           (r.relay_role as RelayRole | null)      ?? undefined,
-    loadNum:             (r.load_num as string | null)           ?? undefined,
-    refNums:             parseRefNums(r.ref_nums as string | null | undefined),
-    broker:              (r.broker as string | null)             ?? undefined,
-    trailerType:         (r.trailer_type as string | null)       ?? undefined,
-    trailerId:           (r.trailer_id as number | null)         ?? undefined,
-    dispatcher:          (r.dispatcher as string | null)         ?? undefined,
-    loadPrice:           (r.load_price as number | null)         ?? undefined,
-    driverPay:           (r.driver_pay as number | null)         ?? undefined,
-    specialInstructions: (r.special_instructions as string | null) ?? undefined,
-    notes:               (r.notes as string | null)              ?? undefined,
-    rateConPdf:          (r.rate_con_pdf as string | null)       ?? undefined,
-    accessorials:        (r.accessorials as Accessorial[] | null | undefined) ?? undefined,
-    priority:            (r.priority as boolean | null)          ?? undefined,
-    eventKind:           ((r.event_kind as EventKind | null) ?? "revenue") as EventKind,
-    nonRevenueType:      (r.non_revenue_type as string | null)   ?? undefined,
-    createdByName:       (r.created_by_name as string | null)    ?? undefined,
-    createdAt:           (r.created_at as string | null)         ?? undefined,
-    auditLog:            (r.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
-    stops:               [], // empty by default; callers populate via fetchStopsForEvents
-  };
-}
-
-// ── App domain → DB insert ──────────────────────────────────────────────
-
-// Re-exported helper so apps can call it without re-implementing.
 export { parseRefNums };
-
-// ─────────────────────────────────────────────────────────────────────────
-// NEW (Phase 2.5b) — join-aware converters for split loads + events schema
-// ─────────────────────────────────────────────────────────────────────────
 
 /**
  * Join an `events` row with its `loads` row (or null for non-revenue) into
@@ -154,43 +85,25 @@ export function joinEventLoadToApp(
     eventNotes:     (e.notes as string | null) ?? undefined,
     priority:       (e.priority as boolean | null) ?? false,
     createdAt:      (e.created_at as string | null) ?? undefined,
+    auditLog:       (e.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
 
-    // ── Load-level (from loads row when revenue, else fall back to legacy event columns) ──
-    // Legacy events created before Phase 2.5a have load-level data on the
-    // event row itself. The fallback (e.X) keeps reads working during the
-    // bilingual period; gets removed in Phase 2.5c when those columns are
-    // dropped.
+    // ── Load-level (from loads row when revenue, else undefined) ────────
     loadId:         (l?.id as string | undefined) ?? undefined,
-    internalLoadId: (l?.internal_load_id as number | undefined)
-                      ?? (e.internal_load_id as number | null | undefined) ?? undefined,
-    loadNum:        (l?.load_num as string | null | undefined)
-                      ?? (e.load_num as string | null | undefined) ?? undefined,
-    broker:         (l?.broker as string | null | undefined)
-                      ?? (e.broker as string | null | undefined) ?? undefined,
+    internalLoadId: (l?.internal_load_id as number | null | undefined) ?? undefined,
+    loadNum:        (l?.load_num as string | null | undefined) ?? undefined,
+    broker:         (l?.broker as string | null | undefined) ?? undefined,
     customerId:     (l?.customer_id as string | null | undefined) ?? undefined,
-    dispatcher:     (l?.dispatcher as string | null | undefined)
-                      ?? (e.dispatcher as string | null | undefined) ?? undefined,
-    createdByName:  (l?.created_by_name as string | null | undefined)
-                      ?? (e.created_by_name as string | null | undefined) ?? undefined,
-    loadPrice:      (l?.load_price as number | null | undefined)
-                      ?? (e.load_price as number | null | undefined) ?? undefined,
-    rateConPdf:     (l?.rate_con_pdf as string | null | undefined)
-                      ?? (e.rate_con_pdf as string | null | undefined) ?? undefined,
-    accessorials:   (l?.accessorials as Accessorial[] | null | undefined)
-                      ?? (e.accessorials as Accessorial[] | null | undefined) ?? undefined,
-    refNums:        parseRefNums(
-                      (l?.ref_nums as string | null | undefined)
-                        ?? (e.ref_nums as string | null | undefined),
-                    ),
-    notes:          (l?.notes as string | null | undefined)
-                      // Legacy events: notes was the load-level "notes" field.
-                      // For non-revenue legacy events, the same column was the
-                      // event-level field. The Load consumer treats `notes` as
-                      // load-level; non-revenue uses `eventNotes` directly.
-                      ?? (l ? undefined : (e.notes as string | null | undefined)) ?? undefined,
-    auditLog:       (l?.audit_log as LoadAuditEntry[] | null | undefined)
-                      ?? (e.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
-    specialInstructions: (e.special_instructions as string | null | undefined) ?? undefined,
+    dispatcher:     (l?.dispatcher as string | null | undefined) ?? undefined,
+    createdByName:  (l?.created_by_name as string | null | undefined) ?? undefined,
+    loadPrice:      (l?.load_price as number | null | undefined) ?? undefined,
+    rateConPdf:     (l?.rate_con_pdf as string | null | undefined) ?? undefined,
+    accessorials:   (l?.accessorials as Accessorial[] | null | undefined) ?? undefined,
+    refNums:        parseRefNums(l?.ref_nums as string | null | undefined),
+    notes:          (l?.notes as string | null | undefined) ?? undefined,
+    // relayGroupId aliases loadId for relay legs. Two events with the same
+    // load_id and relay_role set ARE the relay; the alias keeps existing
+    // relayGroupId-reading code working.
+    relayGroupId:   (e.relay_role && l?.id) ? (l.id as string) : undefined,
 
     stops: [], // populated separately by the stops fetch
   };
@@ -259,55 +172,8 @@ export function appLoadToLoadInsert(
 }
 
 // Internal types for the join converter — both intentionally loose at this
-// boundary, same rationale as `LegacyEventRowInput` below.
+// boundary; the function body re-narrows each field as it's read.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type EventRowInput = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LoadDbRowInput = any;
-
-// ─────────────────────────────────────────────────────────────────────────
-// LEGACY (pre-2.5a) — denormalized event-row → app converters
-// ─────────────────────────────────────────────────────────────────────────
-
-export function appEventToDb(
-  ev: Omit<Load, "id">,
-  orgId: string,
-  id?: string,
-): EventInsert {
-  // The generated type marks `internal_load_id` as required, but the live DB
-  // populates it via a default/trigger — existing inserts have always worked
-  // without supplying one. The cast bypasses the spurious requirement.
-  return {
-    id:                   id ?? crypto.randomUUID(),
-    org_id:               orgId,
-    asset_id:             ev.assetId,
-    title:                ev.title,
-    start:                ev.start,
-    end:                  ev.end,
-    driver_name:          ev.driverName          ?? null,
-    driver_id:            ev.driverId            ?? null,
-    status:               ev.status              ?? "scheduled",
-    relay_group_id:       ev.relayGroupId        ?? null,
-    relay_role:           ev.relayRole           ?? null,
-    load_num:             ev.loadNum             ?? null,
-    ref_nums:             ev.refNums?.length ? JSON.stringify(ev.refNums) : null,
-    broker:               ev.broker              ?? null,
-    trailer_type:         ev.trailerType         ?? null,
-    trailer_id:           ev.trailerId           ?? null,
-    dispatcher:           ev.dispatcher          ?? null,
-    load_price:           ev.loadPrice           ?? null,
-    driver_pay:           ev.driverPay           ?? null,
-    special_instructions: ev.specialInstructions ?? null,
-    notes:                ev.notes               ?? null,
-    rate_con_pdf:         ev.rateConPdf          ?? null,
-    // Accessorial[] / LoadAuditEntry[] are structurally JSON-compatible at runtime
-    // but TypeScript can't prove it (Json's index signature requires `[k: string]: Json`).
-    accessorials:         (ev.accessorials ?? null) as unknown as Json | null,
-    priority:             ev.priority            ?? false,
-    event_kind:           ev.eventKind           ?? "revenue",
-    non_revenue_type:     ev.nonRevenueType      ?? null,
-    created_by_name:      ev.createdByName       ?? null,
-    audit_log:            (ev.auditLog ?? null) as unknown as Json | null,
-    deleted_at:           null,
-  } as EventInsert;
-}

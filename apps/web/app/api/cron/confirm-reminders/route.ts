@@ -32,7 +32,7 @@ interface PendingRow {
   org_id: string;
   driver_id: number;
   start: string;
-  load_num: string | null;
+  load: { load_num: string | null } | { load_num: string | null }[] | null;
 }
 
 /**
@@ -59,7 +59,7 @@ export async function GET(req: Request) {
   const db = getSupabase();
   const { data, error } = await db
     .from('events')
-    .select('id, org_id, driver_id, start, load_num')
+    .select('id, org_id, driver_id, start, load:loads(load_num)')
     .eq('status', 'scheduled')
     .is('deleted_at', null)
     .not('driver_id', 'is', null)
@@ -78,8 +78,10 @@ export async function GET(req: Request) {
 
   for (const row of rows) {
     try {
+      const loadObj = Array.isArray(row.load) ? row.load[0] : row.load;
+      const loadNum = loadObj?.load_num ?? null;
       await sendPushToDriver(row.org_id, row.driver_id, {
-        title: row.load_num ? `Confirm load #${row.load_num}` : 'Confirm load',
+        title: loadNum ? `Confirm load #${loadNum}` : 'Confirm load',
         body:  `Pickup at ${fmtPickup(row.start)}. Tap to confirm.`,
         data:  { type: 'confirm_reminder', eventId: row.id, url: `/load/${row.id}` },
       });

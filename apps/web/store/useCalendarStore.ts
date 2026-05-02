@@ -6,10 +6,10 @@ import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trai
 import { buildDefaultFieldSettings, DEFAULT_SECTION_ORDER, FieldSection } from '@/lib/fields';
 import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
 import { DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
-import { getSupabase, appEventToDb, appAssetToDb, appDriverToDb, assetUpdatesToDb } from '@/lib/supabase';
+import { getSupabase, appAssetToDb, appDriverToDb, assetUpdatesToDb } from '@/lib/supabase';
 import { normalizePhone } from '@/lib/phone';
 import type { OrgData } from '@/lib/db';
-import { fetchEventsInRange, saveStops, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
+import { fetchEventsInRange, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
 import { railway } from '@/lib/railway';
 import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib/loadFieldSplit';
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
@@ -835,35 +835,11 @@ export const useCalendarStore = create<CalendarStore>()(
       return;
     }
 
-    // Revenue events. If there's a loadId, write through Railway to both
-    // tables. If there isn't (legacy event created before Phase 2.5a /
-    // before web wired through Railway), fall back to direct events-table
-    // update so existing data stays writable until Phase 2.5c.
+    // Revenue + has loadId: split into load update + event update.
     if (!ev.loadId) {
-      db()
-        .from('events')
-        .update(appEventToDb(resolved, orgId, id))
-        .eq('id', id)
-        .eq('org_id', orgId)
-        .then(({ error }) => {
-          if (error) {
-            console.error('updateEvent (legacy):', error);
-            return;
-          }
-          if ('stops' in updates) saveStops(id, orgId, updates.stops);
-          if (resolved.driverId && resolved.driverId !== prevDriverId) {
-            notifyDriver(
-              resolved.driverId,
-              'Load assigned to you',
-              ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
-              { loadId: id },
-            );
-          }
-        });
+      console.error('updateEvent: revenue event missing loadId; ignoring write', id);
       return;
     }
-
-    // Revenue + has loadId: split into load update + event update.
     const { loadUpdates, eventUpdates } = splitForUpdate(resolvedUpdates);
     const promises: Promise<unknown>[] = [];
     if (Object.keys(loadUpdates).length) {
@@ -909,13 +885,7 @@ export const useCalendarStore = create<CalendarStore>()(
     }
 
     if (!ev.loadId) {
-      // Legacy event without loadId — fall through to legacy soft-delete.
-      // Audit log writing also goes via legacy path here; Railway PATCH
-      // doesn't yet support audit_log entries.
-      const patch: Record<string, unknown> = { deleted_at: deletedAt };
-      if (auditEntry) patch.audit_log = newAuditLog;
-      db().from('events').update(patch).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('removeEvent (legacy):', error); });
+      console.error('removeEvent: revenue event missing loadId; ignoring delete', id);
       return;
     }
 
@@ -962,12 +932,17 @@ export const useCalendarStore = create<CalendarStore>()(
     const { orgId } = get();
     if (!orgId) return;
 
-    if (ev.eventKind === 'non_revenue' || !ev.loadId) {
-      // Non-revenue or legacy revenue: legacy event-level un-soft-delete.
+    if (ev.eventKind === 'non_revenue') {
+      // Non-revenue events have no parent load — un-soft-delete the event row directly.
       const patch: Record<string, unknown> = { deleted_at: null };
       if (auditEntry) patch.audit_log = newAuditLog;
       db().from('events').update(patch).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('restoreEvent (legacy):', error); });
+        .then(({ error }) => { if (error) console.error('restoreEvent (non-revenue):', error); });
+      return;
+    }
+
+    if (!ev.loadId) {
+      console.error('restoreEvent: revenue event missing loadId; ignoring restore', id);
       return;
     }
 
@@ -1121,14 +1096,8 @@ export const useCalendarStore = create<CalendarStore>()(
       dePayload.driverName = resolvedDe.driverName ?? undefined;
     }
 
-    // Legacy fallback: if either leg has no loadId (created pre-Phase-3
-    // wire-up), use the legacy double-write path so existing relays in
-    // production stay editable until backfill / Phase 2.5c.
     if (!pu.loadId || !de.loadId) {
-      db().from('events').update(appEventToDb(resolvedPu, orgId, pickupId)).eq('id', pickupId).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('saveRelayBoth pickup (legacy):', error); });
-      db().from('events').update(appEventToDb(resolvedDe, orgId, deliveryId)).eq('id', deliveryId).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('saveRelayBoth delivery (legacy):', error); });
+      console.error('saveRelayBoth: a leg is missing loadId; ignoring write', { pickupId, deliveryId });
       return;
     }
 
@@ -1164,13 +1133,10 @@ export const useCalendarStore = create<CalendarStore>()(
     const leg = state.events.find((e) => e.id === legId);
     if (!leg) return;
 
-    // Find the partner: prefer load_id grouping (post-Phase-3), fall back
-    // to legacy relay_group_id for events not yet on Railway.
+    // Two events with the same load_id and relay_role set ARE the relay.
     let partner: CalendarEvent | undefined;
     if (leg.loadId) {
       partner = state.events.find((e) => e.loadId === leg.loadId && e.id !== legId);
-    } else if (leg.relayGroupId) {
-      partner = state.events.find((e) => e.relayGroupId === leg.relayGroupId && e.id !== legId);
     }
     if (!partner) return;
 
@@ -1202,31 +1168,13 @@ export const useCalendarStore = create<CalendarStore>()(
     const { orgId } = get();
     if (!orgId) return;
 
-    // Railway path: use POST /v1/loads/:loadId/unsplit-relay if both legs
-    // have a loadId. Otherwise fall back to the legacy direct-supabase
-    // path (used for relays created pre-Phase-3 wire-up).
-    if (pickup.loadId && delivery.loadId && pickup.loadId === delivery.loadId) {
-      railway
-        .unsplitRelay(pickup.loadId, { keepEventId: pickup.id, mergedStops })
-        .catch((err) => console.error('removeRelay:', err));
+    if (!pickup.loadId || !delivery.loadId || pickup.loadId !== delivery.loadId) {
+      console.error('removeRelay: legs do not share a loadId; ignoring', { pickupId: pickup.id, deliveryId: delivery.id });
       return;
     }
-
-    // Legacy fallback
-    const pickupUpdate: Record<string, unknown> = {
-      end:             delivery.end,
-      relay_group_id:  null,
-      relay_role:      null,
-    };
-    if (auditLog !== undefined) pickupUpdate.audit_log = auditLog;
-    Promise.all([
-      db().from('events').update(pickupUpdate).eq('id', pickup.id).eq('org_id', orgId),
-      db().from('events').update({ deleted_at: deletedAt }).eq('id', delivery.id).eq('org_id', orgId),
-      saveStops(pickup.id, orgId, mergedStops),
-    ]).then(([r1, r2]) => {
-      if (r1.error) console.error('removeRelay pickup (legacy):', r1.error);
-      if (r2.error) console.error('removeRelay delivery (legacy):', r2.error);
-    });
+    railway
+      .unsplitRelay(pickup.loadId, { keepEventId: pickup.id, mergedStops })
+      .catch((err) => console.error('removeRelay:', err));
   },
 
   // ── Calendar nav ──────────────────────────────────────────────────────────
