@@ -490,7 +490,6 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         if (target.toLowerCase() !== row.driverName.toLowerCase()) continue;
         items.push({
           id: `acc-${load.id}-${acc.id}`,
-          orgId,
           driverName: row.driverName,
           weekStart,
           category: ACC_CAT_LABELS[acc.category] ?? acc.category,

@@ -21,6 +21,9 @@ import customersRoute from "./routes/customers.js";
 import trailersRoute from "./routes/trailers.js";
 import dispatchersRoute from "./routes/dispatchers.js";
 import driverAssetPrefsRoute from "./routes/driver-asset-prefs.js";
+import savedLocationsRoute from "./routes/saved-locations.js";
+import payrollRoute from "./routes/payroll.js";
+import orgSettingsRoute from "./routes/org-settings.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -81,6 +84,9 @@ authed.route("/customers", customersRoute);
 authed.route("/trailers", trailersRoute);
 authed.route("/dispatchers", dispatchersRoute);
 authed.route("/driver-asset-prefs", driverAssetPrefsRoute);
+authed.route("/saved-locations", savedLocationsRoute);
+authed.route("/payroll", payrollRoute);
+authed.route("/org-settings", orgSettingsRoute);
 
 app.route("/v1", authed);
 

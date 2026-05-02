@@ -429,12 +429,8 @@ function DriverAppPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/org-settings')
-      .then(r => r.json())
-      .then((d: { showDriverPay?: boolean }) => {
-        if (cancelled) return;
-        setShowDriverPay(!!d.showDriverPay);
-      })
+    import('@/lib/railway').then(({ railway }) => railway.getOrgSettings())
+      .then(({ settings }) => { if (!cancelled) setShowDriverPay(settings.showDriverPay); })
       .catch(() => { if (!cancelled) setShowDriverPay(false); });
     return () => { cancelled = true; };
   }, []);
@@ -444,12 +440,10 @@ function DriverAppPanel() {
     const next = !showDriverPay;
     setBusy(true);
     setShowDriverPay(next); // optimistic
-    const res = await fetch('/api/org-settings', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ showDriverPay: next }),
-    }).catch(() => null);
-    if (!res || !res.ok) {
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.updateOrgSettings({ showDriverPay: next });
+    } catch {
       setShowDriverPay(!next); // roll back
     }
     setBusy(false);

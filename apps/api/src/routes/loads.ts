@@ -277,6 +277,7 @@ loads.get("/", async (c) => {
   const to = url.searchParams.get("to");
   const statusParam = url.searchParams.get("status");
   const assetIdParam = url.searchParams.get("assetId");
+  const brokersParam = url.searchParams.get("brokers");
   const includeDeleted = url.searchParams.get("includeDeleted") === "true";
 
   // Validate status values if provided
@@ -296,6 +297,32 @@ loads.get("/", async (c) => {
     assetIds = parsed;
   }
 
+  // Brokers filter: PostgREST .or() can't span the nested loads relation,
+  // so we resolve broker names → matching load_ids first, then filter
+  // events by those IDs.
+  let brokerLoadIds: string[] | undefined;
+  if (brokersParam) {
+    const names = brokersParam.split(",").map((s) => s.trim()).filter(Boolean);
+    if (names.length === 0) {
+      return c.json({ loads: [] } satisfies ListLoadsResponse);
+    }
+    const escaped = names.map((n) => n.replace(/[%,()"]/g, "\\$&"));
+    const orFilter = escaped.map((n) => `broker.ilike."${n}"`).join(",");
+    const { data, error } = await supabase
+      .from("loads")
+      .select("id")
+      .eq("org_id", orgId)
+      .or(orFilter);
+    if (error) {
+      console.error("[GET /v1/loads] broker resolve failed:", error);
+      return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+    brokerLoadIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+    if (brokerLoadIds.length === 0) {
+      return c.json({ loads: [] } satisfies ListLoadsResponse);
+    }
+  }
+
   // Joined fetch via PostgREST nested select
   let q = supabase
     .from("events")
@@ -308,6 +335,7 @@ loads.get("/", async (c) => {
   if (to) q = q.lte("start", to);
   if (statusList) q = q.in("status", statusList);
   if (assetIds) q = q.in("asset_id", assetIds);
+  if (brokerLoadIds) q = q.in("load_id", brokerLoadIds);
 
   const { data: events, error } = await q;
   if (error) {

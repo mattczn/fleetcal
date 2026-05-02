@@ -40,6 +40,11 @@ import type {
   ListDispatchersResponse, CreateDispatcherRequest, CreateDispatcherResponse,
   UpdateDispatcherRequest, UpdateDispatcherResponse,
   ListDriverAssetPrefsResponse, SetDriverAssetPrefRequest, SetDriverAssetPrefResponse,
+  ListSavedLocationsResponse, CreateSavedLocationRequest, CreateSavedLocationResponse,
+  UpdateSavedLocationRequest, UpdateSavedLocationResponse,
+  ListPayrollAdjustmentsResponse, CreatePayrollAdjustmentRequest, CreatePayrollAdjustmentResponse,
+  ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
+  GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -170,6 +175,45 @@ class RailwayClient {
     return this.req<SetDriverAssetPrefResponse>('PUT', `/v1/driver-asset-prefs/${assetId}`, body);
   }
   deleteDriverAssetPref(assetId: number)     { return this.req<void>('DELETE', `/v1/driver-asset-prefs/${assetId}`); }
+
+  // ── Saved locations ──────────────────────────────────────────────────
+  listSavedLocations()                       { return this.req<ListSavedLocationsResponse>('GET', '/v1/saved-locations'); }
+  createSavedLocation(body: CreateSavedLocationRequest) {
+    return this.req<CreateSavedLocationResponse>('POST', '/v1/saved-locations', body);
+  }
+  updateSavedLocation(id: string, body: UpdateSavedLocationRequest) {
+    return this.req<UpdateSavedLocationResponse>('PATCH', `/v1/saved-locations/${id}`, body);
+  }
+  deleteSavedLocation(id: string)            { return this.req<void>('DELETE', `/v1/saved-locations/${id}`); }
+
+  // ── Payroll ───────────────────────────────────────────────────────────
+  listPayrollAdjustments(query: { weekStart?: string; driverName?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (query.weekStart)  qs.set('weekStart',  query.weekStart);
+    if (query.driverName) qs.set('driverName', query.driverName);
+    const s = qs.toString();
+    return this.req<ListPayrollAdjustmentsResponse>('GET', `/v1/payroll/adjustments${s ? `?${s}` : ''}`);
+  }
+  createPayrollAdjustment(body: CreatePayrollAdjustmentRequest) {
+    return this.req<CreatePayrollAdjustmentResponse>('POST', '/v1/payroll/adjustments', body);
+  }
+  deletePayrollAdjustment(id: string)        { return this.req<void>('DELETE', `/v1/payroll/adjustments/${id}`); }
+
+  listPayrollRecords(query: { driverName: string; weekStart?: string }) {
+    const qs = new URLSearchParams({ driverName: query.driverName });
+    if (query.weekStart) qs.set('weekStart', query.weekStart);
+    return this.req<ListPayrollRecordsResponse>('GET', `/v1/payroll/records?${qs.toString()}`);
+  }
+  upsertPayrollRecord(body: UpsertPayrollRecordRequest) {
+    return this.req<UpsertPayrollRecordResponse>('POST', '/v1/payroll/records', body);
+  }
+  deletePayrollRecord(id: string)            { return this.req<void>('DELETE', `/v1/payroll/records/${id}`); }
+
+  // ── Org settings ──────────────────────────────────────────────────────
+  getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }
+  updateOrgSettings(body: UpdateOrgSettingsRequest) {
+    return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
+  }
 }
 
 export const railway = new RailwayClient();

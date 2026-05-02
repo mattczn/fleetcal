@@ -10,7 +10,7 @@
  * each section.
  */
 
-import type { Accessorial, Asset, Customer, Dispatcher, Driver, Load, LoadAuditEntry, RefNum, Stop, Trailer } from "./domain";
+import type { Accessorial, Asset, Customer, Dispatcher, Driver, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
 import type { LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
@@ -469,6 +469,61 @@ export interface DriverAssetPref { assetId: number; driverId: number; }
 export interface ListDriverAssetPrefsResponse { prefs: DriverAssetPref[]; }
 export interface SetDriverAssetPrefRequest { driverId: number; }
 export interface SetDriverAssetPrefResponse { pref: DriverAssetPref; }
+
+// ── /v1/saved-locations ──────────────────────────────────────────────────
+
+export interface ListSavedLocationsResponse { locations: SavedLocation[]; }
+export interface CreateSavedLocationRequest {
+  name:      string;
+  address?:  string | null;
+  lat?:      number | null;
+  lng?:      number | null;
+  timezone?: string | null;
+}
+export interface CreateSavedLocationResponse { location: SavedLocation; }
+export interface UpdateSavedLocationRequest {
+  name?:     string;
+  address?:  string | null;
+  lat?:      number | null;
+  lng?:      number | null;
+  timezone?: string | null;
+}
+export interface UpdateSavedLocationResponse { location: SavedLocation; }
+
+// ── /v1/payroll ─────────────────────────────────────────────────────────
+
+// Query params:
+//   weekStart? — filter to one week (YYYY-MM-DD)
+//   driverName? — filter to one driver
+export interface ListPayrollAdjustmentsResponse { adjustments: PayrollAdjustment[]; }
+export interface CreatePayrollAdjustmentRequest {
+  driverName:   string;
+  weekStart:    string;
+  category:     string;
+  description?: string | null;
+  amount:       number;
+}
+export interface CreatePayrollAdjustmentResponse { adjustment: PayrollAdjustment; }
+
+// Query params:
+//   driverName  — required when listing
+//   weekStart?  — filter to a single week
+export interface ListPayrollRecordsResponse { records: PayrollRecord[]; }
+export interface UpsertPayrollRecordRequest {
+  driverName: string;
+  weekStart:  string;
+  totalPay:   number;
+  notes?:     string | null;
+}
+export interface UpsertPayrollRecordResponse { record: PayrollRecord; }
+
+// ── /v1/org-settings ────────────────────────────────────────────────────
+
+export interface GetOrgSettingsResponse { settings: OrgSettings; }
+export interface UpdateOrgSettingsRequest {
+  showDriverPay?: boolean;
+}
+export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

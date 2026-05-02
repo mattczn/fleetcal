@@ -101,6 +101,44 @@ export interface Trailer {
   sortOrder?: number;
 }
 
+// ── Saved Location ──────────────────────────────────────────────────────
+
+export interface SavedLocation {
+  id: string;
+  name: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+  timezone?: string;
+}
+
+// ── Payroll ─────────────────────────────────────────────────────────────
+
+export interface PayrollAdjustment {
+  id: string;
+  driverName: string;
+  weekStart: string;        // ISO date YYYY-MM-DD
+  category: string;
+  description?: string;
+  amount: number;
+  createdAt: string;
+}
+
+export interface PayrollRecord {
+  id: string;
+  driverName: string;
+  weekStart: string;
+  totalPay: number;
+  finalizedAt: string;
+  notes?: string;
+}
+
+// ── Org settings ────────────────────────────────────────────────────────
+
+export interface OrgSettings {
+  showDriverPay: boolean;
+}
+
 // ── Customer ────────────────────────────────────────────────────────────
 
 export interface Customer {

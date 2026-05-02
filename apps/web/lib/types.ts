@@ -38,19 +38,10 @@ export type EventStatus = LoadStatus;
 // ── Web-only types ──────────────────────────────────────────────────────
 
 import type { Customer as _Customer } from "@fleetcal/types";
-export type { Customer, Dispatcher } from "@fleetcal/types";
+export type { Customer, Dispatcher, SavedLocation } from "@fleetcal/types";
 
 export type CustomerMatchResult =
   | { status: "auto";    customer: _Customer; score: number }
   | { status: "confirm"; customer: _Customer; score: number }
   | { status: "new";     extracted: string }
   | { status: "none" };
-
-export interface SavedLocation {
-  id: string;
-  name: string;
-  address?: string;
-  lat?: number;
-  lng?: number;
-  timezone?: string;
-}

@@ -1,29 +1,8 @@
 'use client';
 
-import { getSupabase } from './supabase';
-import { joinEventLoadToApp } from '@fleetcal/types';
 import { railway } from './railway';
 import type { DeletedEvent } from '@/store/useCalendarStore';
 import type { Asset, Driver, CalendarEvent, SavedLocation, Dispatcher, Customer, Trailer } from './types';
-
-// Joined-query columns used by the few legacy reads still on Supabase
-// direct (fetchBrokerLoads). All other event reads go through Railway.
-const EVENT_COLS = 'id,org_id,asset_id,title,start,end,driver_name,driver_id,status,relay_role,trailer_type,trailer_id,driver_pay,notes,priority,deleted_at,created_at,updated_at,event_kind,non_revenue_type,load_id';
-const LOAD_COLS = 'id,internal_load_id,load_num,broker,load_price,dispatcher,notes,accessorials,rate_con_pdf,ref_nums,created_by_name,customer_id';
-const EVENT_SELECT_JOINED = `${EVENT_COLS}, load:loads(${LOAD_COLS})`;
-
-/**
- * Convert a joined-query row (event + nested `load`) into the app-domain
- * Load (CalendarEvent) view. PostgREST returns the nested relationship as
- * an array even for many-to-one, so we unwrap.
- */
-function joinedRowToCalendarEvent(row: unknown): CalendarEvent {
-  const r = row as Record<string, unknown> & {
-    load?: Record<string, unknown>[] | Record<string, unknown> | null;
-  };
-  const load = Array.isArray(r.load) ? (r.load[0] ?? null) : (r.load ?? null);
-  return joinEventLoadToApp(r, load) as CalendarEvent;
-}
 
 export interface OrgData {
   assets: Asset[];
@@ -131,54 +110,54 @@ export async function deleteTrailer(id: number): Promise<void> {
 
 // ── Saved Locations ───────────────────────────────────────────────────────────
 
-type DbSavedLocation = { id: string; org_id: string; name: string; address: string | null; lat: number | null; lng: number | null; timezone: string | null };
-
-function dbLocToApp(r: DbSavedLocation): SavedLocation {
-  return { id: r.id, name: r.name, address: r.address ?? undefined, lat: r.lat ?? undefined, lng: r.lng ?? undefined, timezone: r.timezone ?? undefined };
+export async function fetchSavedLocations(_orgId: string): Promise<SavedLocation[]> {
+  try { return (await railway.listSavedLocations()).locations; }
+  catch (err) { console.error('fetchSavedLocations:', err); return []; }
 }
 
-export async function fetchSavedLocations(orgId: string): Promise<SavedLocation[]> {
-  const { data, error } = await getSupabase().from('saved_locations').select('*').eq('org_id', orgId).order('name');
-  if (error) { console.error('fetchSavedLocations:', error.message); return []; }
-  return (data as DbSavedLocation[]).map(dbLocToApp);
-}
-
-export async function createSavedLocation(orgId: string, loc: Omit<SavedLocation, 'id'>): Promise<SavedLocation | null> {
-  const { data, error } = await getSupabase().from('saved_locations')
-    .insert({ org_id: orgId, name: loc.name, address: loc.address ?? null, lat: loc.lat ?? null, lng: loc.lng ?? null, timezone: loc.timezone ?? null })
-    .select().single();
-  if (error) { console.error('createSavedLocation:', error.message); return null; }
-  return dbLocToApp(data as DbSavedLocation);
+export async function createSavedLocation(_orgId: string, loc: Omit<SavedLocation, 'id'>): Promise<SavedLocation | null> {
+  try {
+    const { location } = await railway.createSavedLocation({
+      name:     loc.name,
+      address:  loc.address  ?? null,
+      lat:      loc.lat      ?? null,
+      lng:      loc.lng      ?? null,
+      timezone: loc.timezone ?? null,
+    });
+    return location;
+  } catch (err) { console.error('createSavedLocation:', err); return null; }
 }
 
 export async function updateSavedLocation(id: string, updates: Partial<Omit<SavedLocation, 'id'>>): Promise<void> {
-  const { error } = await getSupabase().from('saved_locations').update({
-    name: updates.name, address: updates.address ?? null, lat: updates.lat ?? null, lng: updates.lng ?? null, timezone: updates.timezone ?? null,
-  }).eq('id', id);
-  if (error) console.error('updateSavedLocation:', error.message);
+  try {
+    await railway.updateSavedLocation(id, {
+      ...(updates.name     !== undefined ? { name: updates.name } : {}),
+      ...(updates.address  !== undefined ? { address: updates.address ?? null } : {}),
+      ...(updates.lat      !== undefined ? { lat: updates.lat ?? null } : {}),
+      ...(updates.lng      !== undefined ? { lng: updates.lng ?? null } : {}),
+      ...(updates.timezone !== undefined ? { timezone: updates.timezone ?? null } : {}),
+    });
+  } catch (err) { console.error('updateSavedLocation:', err); }
 }
 
 export async function deleteSavedLocation(id: string): Promise<void> {
-  const { error } = await getSupabase().from('saved_locations').delete().eq('id', id);
-  if (error) console.error('deleteSavedLocation:', error.message);
+  try { await railway.deleteSavedLocation(id); }
+  catch (err) { console.error('deleteSavedLocation:', err); }
 }
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 
-export async function fetchBrokerLoads(orgId: string, names: string[]): Promise<CalendarEvent[]> {
+export async function fetchBrokerLoads(_orgId: string, names: string[]): Promise<CalendarEvent[]> {
   if (names.length === 0) return [];
-  const db = getSupabase();
-  // Quote each value so commas inside names don't break the PostgREST filter parser
-  const orFilter = names.map(n => `broker.ilike."${n.replace(/"/g, '')}"`).join(',');
-  const { data, error } = await db
-    .from('events')
-    .select(EVENT_SELECT_JOINED)
-    .eq('org_id', orgId)
-    .is('deleted_at', null)
-    .or(orFilter)
-    .order('start', { ascending: false });
-  if (error) { console.error('fetchBrokerLoads:', error.message); return []; }
-  return ((data ?? []) as Array<Record<string, unknown>>).map(joinedRowToCalendarEvent);
+  try {
+    // Strip commas from names — comma is the param-list delimiter on the server side.
+    const safe = names.map(n => n.replace(/,/g, '')).filter(Boolean);
+    const { loads } = await railway.listLoads({ brokers: safe.join(',') });
+    return [...loads].sort((a, b) => b.start.localeCompare(a.start));
+  } catch (err) {
+    console.error('fetchBrokerLoads:', err);
+    return [];
+  }
 }
 
 export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
@@ -261,113 +240,63 @@ export async function searchEvents(_orgId: string, query: string): Promise<Calen
 
 // ── Payroll adjustments ───────────────────────────────────────────────────────
 
-export interface PayrollAdjustment {
-  id: string;
-  orgId: string;
-  driverName: string;
-  weekStart: string;   // ISO date string YYYY-MM-DD
-  category: string;
-  description?: string;
-  amount: number;
-  createdAt: string;
-}
+export type PayrollAdjustment = import('@fleetcal/types').PayrollAdjustment;
 
-export async function fetchPayrollAdjustments(orgId: string, weekStart: string): Promise<PayrollAdjustment[]> {
-  const { data, error } = await getSupabase()
-    .from('payroll_adjustments')
-    .select('*')
-    .eq('org_id', orgId)
-    .eq('week_start', weekStart)
-    .order('created_at');
-  if (error || !data) return [];
-  return (data as any[]).map(r => ({
-    id: r.id, orgId: r.org_id, driverName: r.driver_name,
-    weekStart: r.week_start, category: r.category,
-    description: r.description ?? undefined, amount: Number(r.amount),
-    createdAt: r.created_at,
-  }));
+export async function fetchPayrollAdjustments(_orgId: string, weekStart: string): Promise<PayrollAdjustment[]> {
+  try { return (await railway.listPayrollAdjustments({ weekStart })).adjustments; }
+  catch (err) { console.error('fetchPayrollAdjustments:', err); return []; }
 }
 
 export async function addPayrollAdjustment(
-  adj: Omit<PayrollAdjustment, 'id' | 'createdAt'>
+  adj: { orgId?: string; driverName: string; weekStart: string; category: string; description?: string; amount: number },
 ): Promise<PayrollAdjustment | null> {
-  const { data, error } = await getSupabase()
-    .from('payroll_adjustments')
-    .insert({
-      org_id: adj.orgId, driver_name: adj.driverName,
-      week_start: adj.weekStart, category: adj.category,
-      description: adj.description ?? null, amount: adj.amount,
-    })
-    .select()
-    .single();
-  if (error || !data) { console.error('addPayrollAdjustment:', error?.message); return null; }
-  const r = data as any;
-  return { id: r.id, orgId: r.org_id, driverName: r.driver_name, weekStart: r.week_start, category: r.category, description: r.description ?? undefined, amount: Number(r.amount), createdAt: r.created_at };
+  try {
+    const { adjustment } = await railway.createPayrollAdjustment({
+      driverName:  adj.driverName,
+      weekStart:   adj.weekStart,
+      category:    adj.category,
+      description: adj.description ?? null,
+      amount:      adj.amount,
+    });
+    return adjustment;
+  } catch (err) { console.error('addPayrollAdjustment:', err); return null; }
 }
 
 export async function deletePayrollAdjustment(id: string): Promise<void> {
-  const { error } = await getSupabase().from('payroll_adjustments').delete().eq('id', id);
-  if (error) console.error('deletePayrollAdjustment:', error.message);
+  try { await railway.deletePayrollAdjustment(id); }
+  catch (err) { console.error('deletePayrollAdjustment:', err); }
 }
 
 // ── Payroll records (finalized payments) ─────────────────────────────────────
 
-export interface PayrollRecord {
-  id: string;
-  orgId: string;
-  driverName: string;
-  weekStart: string;
-  totalPay: number;
-  finalizedAt: string;
-  notes?: string;
-}
+export type PayrollRecord = import('@fleetcal/types').PayrollRecord;
 
 export async function fetchPayrollRecord(
-  orgId: string, driverName: string, weekStart: string
+  _orgId: string, driverName: string, weekStart: string,
 ): Promise<PayrollRecord | null> {
-  const { data, error } = await getSupabase()
-    .from('payroll_records')
-    .select('*')
-    .eq('org_id', orgId)
-    .eq('driver_name', driverName)
-    .eq('week_start', weekStart)
-    .maybeSingle();
-  if (error || !data) return null;
-  const r = data as any;
-  return { id: r.id, orgId: r.org_id, driverName: r.driver_name, weekStart: r.week_start, totalPay: Number(r.total_pay), finalizedAt: r.finalized_at, notes: r.notes ?? undefined };
+  try {
+    const { records } = await railway.listPayrollRecords({ driverName, weekStart });
+    return records[0] ?? null;
+  } catch (err) { console.error('fetchPayrollRecord:', err); return null; }
 }
 
 export async function finalizeDriverPay(
-  orgId: string, driverName: string, weekStart: string, totalPay: number
+  _orgId: string, driverName: string, weekStart: string, totalPay: number,
 ): Promise<PayrollRecord | null> {
-  const { data, error } = await getSupabase()
-    .from('payroll_records')
-    .upsert({ org_id: orgId, driver_name: driverName, week_start: weekStart, total_pay: totalPay, finalized_at: new Date().toISOString() }, { onConflict: 'org_id,driver_name,week_start' })
-    .select()
-    .single();
-  if (error || !data) { console.error('finalizeDriverPay:', error?.message); return null; }
-  const r = data as any;
-  return { id: r.id, orgId: r.org_id, driverName: r.driver_name, weekStart: r.week_start, totalPay: Number(r.total_pay), finalizedAt: r.finalized_at };
+  try {
+    const { record } = await railway.upsertPayrollRecord({ driverName, weekStart, totalPay });
+    return record;
+  } catch (err) { console.error('finalizeDriverPay:', err); return null; }
 }
 
 export async function unfinalizeDriverPay(id: string): Promise<void> {
-  const { error } = await getSupabase().from('payroll_records').delete().eq('id', id);
-  if (error) console.error('unfinalizeDriverPay:', error.message);
+  try { await railway.deletePayrollRecord(id); }
+  catch (err) { console.error('unfinalizeDriverPay:', err); }
 }
 
-export async function fetchPayrollRecordsForDriver(orgId: string, driverName: string): Promise<PayrollRecord[]> {
-  const { data, error } = await getSupabase()
-    .from('payroll_records')
-    .select('*')
-    .eq('org_id', orgId)
-    .eq('driver_name', driverName)
-    .order('week_start', { ascending: false });
-  if (error || !data) return [];
-  return (data as any[]).map(r => ({
-    id: r.id, orgId: r.org_id, driverName: r.driver_name,
-    weekStart: r.week_start, totalPay: Number(r.total_pay),
-    finalizedAt: r.finalized_at, notes: r.notes ?? undefined,
-  }));
+export async function fetchPayrollRecordsForDriver(_orgId: string, driverName: string): Promise<PayrollRecord[]> {
+  try { return (await railway.listPayrollRecords({ driverName })).records; }
+  catch (err) { console.error('fetchPayrollRecordsForDriver:', err); return []; }
 }
 
 // ── Driver-uploaded documents ─────────────────────────────────────────────────
