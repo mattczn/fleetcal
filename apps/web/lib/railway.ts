@@ -29,6 +29,17 @@ import type {
   GetRateConUrlResponse,
   ListDocumentsResponse,
   GetDocumentUrlResponse,
+  ListAssetsResponse, CreateAssetRequest, CreateAssetResponse,
+  UpdateAssetRequest, UpdateAssetResponse, ReorderAssetsRequest,
+  ListDriversResponse, CreateDriverRequest, CreateDriverResponse,
+  UpdateDriverRequest, UpdateDriverResponse,
+  ListCustomersResponse, CreateCustomerRequest, CreateCustomerResponse,
+  UpdateCustomerRequest, UpdateCustomerResponse,
+  ListTrailersResponse, CreateTrailerRequest, CreateTrailerResponse,
+  UpdateTrailerRequest, UpdateTrailerResponse,
+  ListDispatchersResponse, CreateDispatcherRequest, CreateDispatcherResponse,
+  UpdateDispatcherRequest, UpdateDispatcherResponse,
+  ListDriverAssetPrefsResponse, SetDriverAssetPrefRequest, SetDriverAssetPrefResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -114,6 +125,51 @@ class RailwayClient {
   getDocumentUrl(documentId: string) {
     return this.req<GetDocumentUrlResponse>('GET', `/v1/documents/${documentId}/url`);
   }
+
+  // ── Reference data ──────────────────────────────────────────────────
+  listAssets()                               { return this.req<ListAssetsResponse>('GET', '/v1/assets'); }
+  createAsset(body: CreateAssetRequest)      { return this.req<CreateAssetResponse>('POST', '/v1/assets', body); }
+  updateAsset(id: number, body: UpdateAssetRequest) {
+    return this.req<UpdateAssetResponse>('PATCH', `/v1/assets/${id}`, body);
+  }
+  deleteAsset(id: number)                    { return this.req<void>('DELETE', `/v1/assets/${id}`); }
+  reorderAssets(ids: number[]) {
+    return this.req<void>('POST', '/v1/assets/reorder', { ids } satisfies ReorderAssetsRequest);
+  }
+
+  listDrivers()                              { return this.req<ListDriversResponse>('GET', '/v1/drivers'); }
+  createDriver(body: CreateDriverRequest)    { return this.req<CreateDriverResponse>('POST', '/v1/drivers', body); }
+  updateDriver(id: number, body: UpdateDriverRequest) {
+    return this.req<UpdateDriverResponse>('PATCH', `/v1/drivers/${id}`, body);
+  }
+  deleteDriver(id: number)                   { return this.req<void>('DELETE', `/v1/drivers/${id}`); }
+
+  listCustomers()                            { return this.req<ListCustomersResponse>('GET', '/v1/customers'); }
+  createCustomer(body: CreateCustomerRequest) { return this.req<CreateCustomerResponse>('POST', '/v1/customers', body); }
+  updateCustomer(id: string, body: UpdateCustomerRequest) {
+    return this.req<UpdateCustomerResponse>('PATCH', `/v1/customers/${id}`, body);
+  }
+  deleteCustomer(id: string)                 { return this.req<void>('DELETE', `/v1/customers/${id}`); }
+
+  listTrailers()                             { return this.req<ListTrailersResponse>('GET', '/v1/trailers'); }
+  createTrailer(body: CreateTrailerRequest)  { return this.req<CreateTrailerResponse>('POST', '/v1/trailers', body); }
+  updateTrailer(id: number, body: UpdateTrailerRequest) {
+    return this.req<UpdateTrailerResponse>('PATCH', `/v1/trailers/${id}`, body);
+  }
+  deleteTrailer(id: number)                  { return this.req<void>('DELETE', `/v1/trailers/${id}`); }
+
+  listDispatchers()                          { return this.req<ListDispatchersResponse>('GET', '/v1/dispatchers'); }
+  createDispatcher(body: CreateDispatcherRequest) { return this.req<CreateDispatcherResponse>('POST', '/v1/dispatchers', body); }
+  updateDispatcher(id: string, body: UpdateDispatcherRequest) {
+    return this.req<UpdateDispatcherResponse>('PATCH', `/v1/dispatchers/${id}`, body);
+  }
+  deleteDispatcher(id: string)               { return this.req<void>('DELETE', `/v1/dispatchers/${id}`); }
+
+  listDriverAssetPrefs()                     { return this.req<ListDriverAssetPrefsResponse>('GET', '/v1/driver-asset-prefs'); }
+  setDriverAssetPref(assetId: number, body: SetDriverAssetPrefRequest) {
+    return this.req<SetDriverAssetPrefResponse>('PUT', `/v1/driver-asset-prefs/${assetId}`, body);
+  }
+  deleteDriverAssetPref(assetId: number)     { return this.req<void>('DELETE', `/v1/driver-asset-prefs/${assetId}`); }
 }
 
 export const railway = new RailwayClient();

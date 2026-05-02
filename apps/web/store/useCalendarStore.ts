@@ -6,7 +6,7 @@ import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trai
 import { buildDefaultFieldSettings, DEFAULT_SECTION_ORDER, FieldSection } from '@/lib/fields';
 import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
 import { DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
-import { getSupabase, appAssetToDb, appDriverToDb, assetUpdatesToDb } from '@/lib/supabase';
+import { getSupabase } from '@/lib/supabase';
 import { normalizePhone } from '@/lib/phone';
 import type { OrgData } from '@/lib/db';
 import { fetchEventsInRange, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
@@ -263,17 +263,15 @@ export const useCalendarStore = create<CalendarStore>()(
       set((state) => ({
         assets: [{ id: tempId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sortOrder: -1 }, ...state.assets],
       }));
-      getSupabase().from('assets')
-        .insert({ org_id: orgId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sort_order: -1 })
-        .select('id').single()
-        .then(({ data, error }) => {
-          if (error) { console.error('hydrate: create unassigned asset:', error); return; }
-          const realId = (data as { id: number }).id;
-          set((state) => ({
-            assets: state.assets.map(a => a.id === tempId ? { ...a, id: realId } : a),
-            unassignedAssetId: realId,
-          }));
-        });
+      railway.createAsset({
+        name: 'Unassigned', color: '#94a3b8', type: 'Unassigned',
+        unit: '-', hidden: false, sortOrder: -1,
+      }).then(({ asset }) => {
+        set((state) => ({
+          assets: state.assets.map(a => a.id === tempId ? asset : a),
+          unassignedAssetId: asset.id,
+        }));
+      }).catch((err) => console.error('hydrate: create unassigned asset:', err));
     }
   },
 
@@ -414,17 +412,15 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({
       assets: [{ id: tempId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sortOrder: -1 }, ...state.assets],
     }));
-    db().from('assets')
-      .insert({ org_id: orgId, name: 'Unassigned', color: '#94a3b8', type: 'Unassigned', unit: '-', hidden: false, sort_order: -1 })
-      .select('id').single()
-      .then(({ data, error }) => {
-        if (error) { console.error('setShowUnassigned:', error); return; }
-        const realId = (data as { id: number }).id;
-        set((state) => ({
-          assets: state.assets.map((a) => (a.id === tempId ? { ...a, id: realId } : a)),
-          unassignedAssetId: realId,
-        }));
-      });
+    railway.createAsset({
+      name: 'Unassigned', color: '#94a3b8', type: 'Unassigned',
+      unit: '-', hidden: false, sortOrder: -1,
+    }).then(({ asset }) => {
+      set((state) => ({
+        assets: state.assets.map((a) => (a.id === tempId ? asset : a)),
+        unassignedAssetId: asset.id,
+      }));
+    }).catch((err) => console.error('setShowUnassigned:', err));
   },
 
   activeCategoryFilter: null,
@@ -554,15 +550,15 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({ assetCategories: [...state.assetCategories, name] })),
 
   updateAssetCategory: (oldName, newName) => {
+    const affected = get().assets.filter((a) => a.type === oldName).map((a) => a.id).filter((id) => id > 0);
     set((state) => ({
       assetCategories: state.assetCategories.map((c) => (c === oldName ? newName : c)),
       assets: state.assets.map((a) => (a.type === oldName ? { ...a, type: newName } : a)),
     }));
-    const { orgId } = get();
-    if (orgId) {
-      db().from('assets').update({ type: newName }).eq('org_id', orgId).eq('type', oldName)
-        .then(({ error }) => { if (error) console.error('updateAssetCategory:', error); });
-    }
+    // Per-asset PATCH; small N (≤25 trucks) so this is fine.
+    affected.forEach((id) => {
+      railway.updateAsset(id, { type: newName }).catch((err) => console.error('updateAssetCategory:', err));
+    });
   },
 
   removeAssetCategory: (name) =>
@@ -583,26 +579,36 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({ assets: [...state.assets, { ...asset, id: tempId }] }));
     const { orgId } = get();
     if (!orgId) return;
-    const sortOrder = get().assets.length - 1;
-    db().from('assets')
-      .insert(appAssetToDb(asset, orgId, sortOrder))
-      .select('id').single()
-      .then(({ data, error }) => {
-        if (error) { console.error('addAsset:', error); return; }
-        set((state) => ({
-          assets: state.assets.map((a) => a.id === tempId ? { ...a, id: (data as { id: number }).id } : a),
-        }));
-      });
+    railway.createAsset({
+      name:            asset.name,
+      color:           asset.color,
+      type:            asset.type,
+      unit:            asset.unit             ?? null,
+      truck:           asset.truck            ?? null,
+      notes:           asset.notes            ?? null,
+      hidden:          asset.hidden           ?? false,
+      motiveVehicleId: asset.motiveVehicleId  ?? null,
+      sortOrder:       get().assets.length - 1,
+    }).then(({ asset: created }) => {
+      set((state) => ({
+        assets: state.assets.map((a) => a.id === tempId ? { ...created } : a),
+      }));
+    }).catch((err) => console.error('addAsset:', err));
   },
 
   updateAsset: (id, updates) => {
     set((state) => ({ assets: state.assets.map((a) => (a.id === id ? { ...a, ...updates } : a)) }));
     if (get().isDemo) return;
-    const { orgId } = get();
-    if (orgId) {
-      db().from('assets').update(assetUpdatesToDb(updates)).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('updateAsset:', error); });
-    }
+    railway.updateAsset(id, {
+      ...(updates.name !== undefined            ? { name: updates.name } : {}),
+      ...(updates.color !== undefined           ? { color: updates.color } : {}),
+      ...(updates.type !== undefined            ? { type: updates.type } : {}),
+      ...(updates.unit !== undefined            ? { unit: updates.unit ?? null } : {}),
+      ...(updates.truck !== undefined           ? { truck: updates.truck ?? null } : {}),
+      ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
+      ...(updates.hidden !== undefined          ? { hidden: updates.hidden } : {}),
+      ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
+    }).catch((err) => console.error('updateAsset:', err));
   },
 
   removeAsset: (id) => {
@@ -612,16 +618,12 @@ export const useCalendarStore = create<CalendarStore>()(
       events:        state.events.filter((e) => e.assetId !== id),
       deletedEvents: state.deletedEvents.filter((e) => e.assetId !== id),
     }));
-    const { orgId } = get();
-    if (orgId) {
-      db().from('assets').delete().eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('removeAsset:', error); });
-    }
+    railway.deleteAsset(id).catch((err) => console.error('removeAsset:', err));
   },
 
   reorderAssets: (fromId, toId) => {
     if (get().isDemo) return;
-    const { assets: cur, orgId, unassignedAssetId: unassignedId } = get();
+    const { assets: cur, unassignedAssetId: unassignedId } = get();
     const arr = [...cur];
     const fromIdx = arr.findIndex(a => a.id === fromId);
     const toIdx   = arr.findIndex(a => a.id === toId);
@@ -632,17 +634,14 @@ export const useCalendarStore = create<CalendarStore>()(
 
     let order = 0;
     const withOrder = arr.map(a =>
-      a.id === unassignedId ? { ...a, sort_order: -1 } : { ...a, sort_order: order++ }
+      a.id === unassignedId ? { ...a, sortOrder: -1 } : { ...a, sortOrder: order++ }
     );
     set({ assets: withOrder });
 
-    if (!orgId) return;
-    withOrder
-      .filter(a => a.id > 0 && a.id !== unassignedId)
-      .forEach(a => {
-        db().from('assets').update({ sort_order: a.sort_order }).eq('id', a.id).eq('org_id', orgId)
-          .then(({ error }) => { if (error) console.error('reorderAssets:', error); });
-      });
+    const reorderIds = withOrder.filter(a => a.id > 0 && a.id !== unassignedId).map(a => a.id);
+    if (reorderIds.length) {
+      railway.reorderAssets(reorderIds).catch((err) => console.error('reorderAssets:', err));
+    }
   },
 
   toggleAssetVisibility: (id) => {
@@ -650,11 +649,8 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({
       assets: state.assets.map((a) => a.id === id ? { ...a, hidden: newHidden } : a),
     }));
-    const { orgId } = get();
-    if (orgId) {
-      db().from('assets').update({ hidden: newHidden }).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('toggleAssetVisibility:', error); });
-    }
+    railway.updateAsset(id, { hidden: newHidden })
+      .catch((err) => console.error('toggleAssetVisibility:', err));
   },
 
   // ── Drivers ───────────────────────────────────────────────────────────────
@@ -662,33 +658,25 @@ export const useCalendarStore = create<CalendarStore>()(
     if (get().isDemo) return;
     const tempId = -Date.now();
     set((state) => ({ drivers: [...state.drivers, { id: tempId, name }] }));
-    const { orgId } = get();
-    if (!orgId) return;
-    db().from('drivers')
-      .insert(appDriverToDb({ name }, orgId))
-      .select('id').single()
-      .then(({ data, error }) => {
-        if (error) { console.error('addDriver:', error); return; }
+    railway.createDriver({ name })
+      .then(({ driver }) => {
         set((state) => ({
-          drivers: state.drivers.map((d) => d.id === tempId ? { ...d, id: (data as { id: number }).id } : d),
+          drivers: state.drivers.map((d) => d.id === tempId ? { ...driver } : d),
         }));
-      });
+      })
+      .catch((err) => console.error('addDriver:', err));
   },
 
   updateDriver: (id, updates) => {
     set((state) => ({ drivers: state.drivers.map((d) => (d.id === id ? { ...d, ...updates } : d)) }));
     if (get().isDemo) return;
-    const { orgId } = get();
-    if (orgId) {
-      const dbUpdates: Record<string, unknown> = {};
-      if (updates.name       !== undefined) dbUpdates.name       = updates.name;
-      if (updates.firstName  !== undefined) dbUpdates.first_name = updates.firstName ?? null;
-      if (updates.lastName   !== undefined) dbUpdates.last_name  = updates.lastName  ?? null;
-      if (updates.phone      !== undefined) dbUpdates.phone      = normalizePhone(updates.phone);
-      if (updates.notes      !== undefined) dbUpdates.notes      = updates.notes      ?? null;
-      db().from('drivers').update(dbUpdates).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('updateDriver:', error); });
-    }
+    railway.updateDriver(id, {
+      ...(updates.name      !== undefined ? { name: updates.name } : {}),
+      ...(updates.firstName !== undefined ? { firstName: updates.firstName ?? null } : {}),
+      ...(updates.lastName  !== undefined ? { lastName: updates.lastName ?? null } : {}),
+      ...(updates.phone     !== undefined ? { phone: normalizePhone(updates.phone) } : {}),
+      ...(updates.notes     !== undefined ? { notes: updates.notes ?? null } : {}),
+    }).catch((err) => console.error('updateDriver:', err));
   },
 
   removeDriver: (id) => {
@@ -696,11 +684,7 @@ export const useCalendarStore = create<CalendarStore>()(
     const prefs = { ...get().driverPrefs };
     Object.keys(prefs).forEach((k) => { if (prefs[+k] === id) delete prefs[+k]; });
     set((state) => ({ drivers: state.drivers.filter((d) => d.id !== id), driverPrefs: prefs }));
-    const { orgId } = get();
-    if (orgId) {
-      db().from('drivers').delete().eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('removeDriver:', error); });
-    }
+    railway.deleteDriver(id).catch((err) => console.error('removeDriver:', err));
   },
 
   setDriverPref: (assetId, driverId) => {
@@ -710,15 +694,12 @@ export const useCalendarStore = create<CalendarStore>()(
       else prefs[assetId] = driverId;
       return { driverPrefs: prefs };
     });
-    const { orgId } = get();
-    if (!orgId) return;
     if (driverId === null) {
-      db().from('driver_asset_prefs').delete().eq('asset_id', assetId).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('setDriverPref delete:', error); });
+      railway.deleteDriverAssetPref(assetId)
+        .catch((err) => console.error('setDriverPref delete:', err));
     } else {
-      db().from('driver_asset_prefs')
-        .upsert({ asset_id: assetId, driver_id: driverId, org_id: orgId }, { onConflict: 'asset_id' })
-        .then(({ error }) => { if (error) console.error('setDriverPref upsert:', error); });
+      railway.setDriverAssetPref(assetId, { driverId })
+        .catch((err) => console.error('setDriverPref upsert:', err));
     }
   },
 

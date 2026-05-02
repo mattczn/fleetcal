@@ -1,6 +1,6 @@
 'use client';
 
-import { getSupabase, dbAssetToApp, dbDriverToApp, dbStopToApp, DbAsset, DbDriver, DbStop, DbTrailer, dbTrailerToApp, appTrailerToDb, trailerUpdatesToDb } from './supabase';
+import { getSupabase, dbAssetToApp, dbDriverToApp, dbStopToApp, DbAsset, DbDriver, DbStop } from './supabase';
 import { joinEventLoadToApp } from '@fleetcal/types';
 import { railway } from './railway';
 import type { DeletedEvent } from '@/store/useCalendarStore';
@@ -141,26 +141,41 @@ export async function attachStopsToEvents(events: CalendarEvent[]): Promise<void
 
 // ── Trailers ──────────────────────────────────────────────────────────────────
 
-export async function fetchTrailers(orgId: string): Promise<Trailer[]> {
-  const { data, error } = await getSupabase().from('trailers').select('*').eq('org_id', orgId).order('sort_order');
-  if (error) { console.error('fetchTrailers:', error.message); return []; }
-  return (data as DbTrailer[]).map(dbTrailerToApp);
+export async function fetchTrailers(_orgId: string): Promise<Trailer[]> {
+  try {
+    const { trailers } = await railway.listTrailers();
+    return trailers;
+  } catch (err) { console.error('fetchTrailers:', err); return []; }
 }
 
-export async function createTrailer(orgId: string, t: Omit<Trailer, 'id'>, sortOrder: number): Promise<Trailer | null> {
-  const { data, error } = await getSupabase().from('trailers').insert(appTrailerToDb(t, orgId, sortOrder)).select().single();
-  if (error) { console.error('createTrailer:', error.message); return null; }
-  return dbTrailerToApp(data as DbTrailer);
+export async function createTrailer(_orgId: string, t: Omit<Trailer, 'id'>, _sortOrder: number): Promise<Trailer | null> {
+  try {
+    const { trailer } = await railway.createTrailer({
+      name:            t.name,
+      trailerNumber:   t.trailerNumber  ?? null,
+      category:        t.category,
+      notes:           t.notes          ?? null,
+      motiveVehicleId: t.motiveVehicleId ?? null,
+    });
+    return trailer;
+  } catch (err) { console.error('createTrailer:', err); return null; }
 }
 
 export async function updateTrailer(id: number, updates: Partial<Omit<Trailer, 'id'>>): Promise<void> {
-  const { error } = await getSupabase().from('trailers').update(trailerUpdatesToDb(updates)).eq('id', id);
-  if (error) console.error('updateTrailer:', error.message);
+  try {
+    await railway.updateTrailer(id, {
+      ...(updates.name !== undefined            ? { name: updates.name } : {}),
+      ...(updates.trailerNumber !== undefined   ? { trailerNumber: updates.trailerNumber ?? null } : {}),
+      ...(updates.category !== undefined        ? { category: updates.category } : {}),
+      ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
+      ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
+    });
+  } catch (err) { console.error('updateTrailer:', err); }
 }
 
 export async function deleteTrailer(id: number): Promise<void> {
-  const { error } = await getSupabase().from('trailers').delete().eq('id', id);
-  if (error) console.error('deleteTrailer:', error.message);
+  try { await railway.deleteTrailer(id); }
+  catch (err) { console.error('deleteTrailer:', err); }
 }
 
 // ── Saved Locations ───────────────────────────────────────────────────────────
@@ -199,23 +214,6 @@ export async function deleteSavedLocation(id: string): Promise<void> {
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 
-type DbCustomer = {
-  id: string; org_id: string; name: string; aliases: string[];
-  short_name: string | null;
-  mc_num: string | null; contact_name: string | null; contact_email: string | null;
-  contact_phone: string | null; notes: string | null;
-};
-
-function dbCustomerToApp(r: DbCustomer): Customer {
-  return {
-    id: r.id, name: r.name, aliases: r.aliases ?? [],
-    shortName: r.short_name ?? undefined,
-    mcNum: r.mc_num ?? undefined, contactName: r.contact_name ?? undefined,
-    contactEmail: r.contact_email ?? undefined, contactPhone: r.contact_phone ?? undefined,
-    notes: r.notes ?? undefined,
-  };
-}
-
 export async function fetchBrokerLoads(orgId: string, names: string[]): Promise<CalendarEvent[]> {
   if (names.length === 0) return [];
   const db = getSupabase();
@@ -232,78 +230,71 @@ export async function fetchBrokerLoads(orgId: string, names: string[]): Promise<
   return ((data ?? []) as Array<Record<string, unknown>>).map(joinedRowToCalendarEvent);
 }
 
-export async function fetchCustomers(orgId: string): Promise<Customer[]> {
-  const { data, error } = await getSupabase().from('customers').select('*').eq('org_id', orgId).order('name');
-  if (error) { console.error('fetchCustomers:', error.message); return []; }
-  return (data as DbCustomer[]).map(dbCustomerToApp);
+export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
+  try { return (await railway.listCustomers()).customers; }
+  catch (err) { console.error('fetchCustomers:', err); return []; }
 }
 
-export async function createCustomer(orgId: string, c: Omit<Customer, 'id'>): Promise<Customer | null> {
-  const { data, error } = await getSupabase().from('customers').insert({
-    org_id: orgId, name: c.name, aliases: c.aliases ?? [],
-    short_name: c.shortName ?? null,
-    mc_num: c.mcNum ?? null, contact_name: c.contactName ?? null,
-    contact_email: c.contactEmail ?? null, contact_phone: c.contactPhone ?? null,
-    notes: c.notes ?? null,
-  }).select().single();
-  if (error) { console.error('createCustomer:', error.message); return null; }
-  return dbCustomerToApp(data as DbCustomer);
+export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): Promise<Customer | null> {
+  try {
+    const { customer } = await railway.createCustomer({
+      name:         c.name,
+      aliases:      c.aliases ?? [],
+      shortName:    c.shortName    ?? null,
+      mcNum:        c.mcNum        ?? null,
+      contactName:  c.contactName  ?? null,
+      contactEmail: c.contactEmail ?? null,
+      contactPhone: c.contactPhone ?? null,
+      notes:        c.notes        ?? null,
+    });
+    return customer;
+  } catch (err) { console.error('createCustomer:', err); return null; }
 }
 
 export async function updateCustomer(id: string, updates: Partial<Omit<Customer, 'id'>>): Promise<void> {
-  const patch: Record<string, unknown> = {};
-  if (updates.name        !== undefined) patch.name          = updates.name;
-  if (updates.aliases     !== undefined) patch.aliases       = updates.aliases;
-  if (updates.shortName   !== undefined) patch.short_name    = updates.shortName ?? null;
-  if (updates.mcNum       !== undefined) patch.mc_num        = updates.mcNum ?? null;
-  if (updates.contactName !== undefined) patch.contact_name  = updates.contactName ?? null;
-  if (updates.contactEmail !== undefined) patch.contact_email = updates.contactEmail ?? null;
-  if (updates.contactPhone !== undefined) patch.contact_phone = updates.contactPhone ?? null;
-  if (updates.notes       !== undefined) patch.notes         = updates.notes ?? null;
-  const { error } = await getSupabase().from('customers').update(patch).eq('id', id);
-  if (error) console.error('updateCustomer:', error.message);
+  try {
+    await railway.updateCustomer(id, {
+      ...(updates.name !== undefined         ? { name: updates.name } : {}),
+      ...(updates.aliases !== undefined      ? { aliases: updates.aliases } : {}),
+      ...(updates.shortName !== undefined    ? { shortName: updates.shortName ?? null } : {}),
+      ...(updates.mcNum !== undefined        ? { mcNum: updates.mcNum ?? null } : {}),
+      ...(updates.contactName !== undefined  ? { contactName: updates.contactName ?? null } : {}),
+      ...(updates.contactEmail !== undefined ? { contactEmail: updates.contactEmail ?? null } : {}),
+      ...(updates.contactPhone !== undefined ? { contactPhone: updates.contactPhone ?? null } : {}),
+      ...(updates.notes !== undefined        ? { notes: updates.notes ?? null } : {}),
+    });
+  } catch (err) { console.error('updateCustomer:', err); }
 }
 
 export async function deleteCustomer(id: string): Promise<void> {
-  const { error } = await getSupabase().from('customers').delete().eq('id', id);
-  if (error) console.error('deleteCustomer:', error.message);
+  try { await railway.deleteCustomer(id); }
+  catch (err) { console.error('deleteCustomer:', err); }
 }
 
 // ── Dispatchers ───────────────────────────────────────────────────────────────
 
-type DbDispatcher = { id: string; org_id: string; name: string; is_default: boolean };
-
-function dbDispatcherToApp(r: DbDispatcher): Dispatcher {
-  return { id: r.id, name: r.name, isDefault: r.is_default };
+export async function fetchDispatchers(_orgId: string): Promise<Dispatcher[]> {
+  try { return (await railway.listDispatchers()).dispatchers; }
+  catch (err) { console.error('fetchDispatchers:', err); return []; }
 }
 
-export async function fetchDispatchers(orgId: string): Promise<Dispatcher[]> {
-  const { data, error } = await getSupabase().from('dispatchers').select('*').eq('org_id', orgId).order('name');
-  if (error) { console.error('fetchDispatchers:', error.message); return []; }
-  return (data as DbDispatcher[]).map(dbDispatcherToApp);
+export async function createDispatcher(_orgId: string, name: string, isDefault: boolean): Promise<Dispatcher | null> {
+  try { return (await railway.createDispatcher({ name, isDefault })).dispatcher; }
+  catch (err) { console.error('createDispatcher:', err); return null; }
 }
 
-export async function createDispatcher(orgId: string, name: string, isDefault: boolean): Promise<Dispatcher | null> {
-  const db = getSupabase();
-  if (isDefault) await db.from('dispatchers').update({ is_default: false }).eq('org_id', orgId);
-  const { data, error } = await db.from('dispatchers').insert({ org_id: orgId, name, is_default: isDefault }).select().single();
-  if (error) { console.error('createDispatcher:', error.message); return null; }
-  return dbDispatcherToApp(data as DbDispatcher);
-}
-
-export async function updateDispatcher(id: string, orgId: string, updates: { name?: string; isDefault?: boolean }): Promise<void> {
-  const db = getSupabase();
-  if (updates.isDefault) await db.from('dispatchers').update({ is_default: false }).eq('org_id', orgId);
-  const patch: Record<string, unknown> = {};
-  if (updates.name !== undefined) patch.name = updates.name;
-  if (updates.isDefault !== undefined) patch.is_default = updates.isDefault;
-  const { error } = await db.from('dispatchers').update(patch).eq('id', id);
-  if (error) console.error('updateDispatcher:', error.message);
+export async function updateDispatcher(id: string, _orgId: string, updates: { name?: string; isDefault?: boolean }): Promise<void> {
+  try {
+    await railway.updateDispatcher(id, {
+      ...(updates.name !== undefined      ? { name: updates.name } : {}),
+      ...(updates.isDefault !== undefined ? { isDefault: updates.isDefault } : {}),
+    });
+  } catch (err) { console.error('updateDispatcher:', err); }
 }
 
 export async function deleteDispatcher(id: string): Promise<void> {
-  const { error } = await getSupabase().from('dispatchers').delete().eq('id', id);
-  if (error) console.error('deleteDispatcher:', error.message);
+  try { await railway.deleteDispatcher(id); }
+  catch (err) { console.error('deleteDispatcher:', err); }
 }
 
 export async function searchEvents(_orgId: string, query: string): Promise<CalendarEvent[]> {

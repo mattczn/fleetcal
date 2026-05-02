@@ -37,27 +37,12 @@ export type EventStatus = LoadStatus;
 
 // ── Web-only types ──────────────────────────────────────────────────────
 
-export interface Dispatcher {
-  id: string;
-  name: string;
-  isDefault: boolean;
-}
-
-export interface Customer {
-  id: string;
-  name: string;          // canonical display name
-  shortName?: string;    // abbreviated name used in auto-generated load titles
-  aliases: string[];     // alternative names the AI may extract
-  mcNum?: string;
-  contactName?: string;
-  contactEmail?: string;
-  contactPhone?: string;
-  notes?: string;
-}
+import type { Customer as _Customer } from "@fleetcal/types";
+export type { Customer, Dispatcher } from "@fleetcal/types";
 
 export type CustomerMatchResult =
-  | { status: "auto";    customer: Customer; score: number }
-  | { status: "confirm"; customer: Customer; score: number }
+  | { status: "auto";    customer: _Customer; score: number }
+  | { status: "confirm"; customer: _Customer; score: number }
   | { status: "new";     extracted: string }
   | { status: "none" };
 

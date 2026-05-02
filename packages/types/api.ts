@@ -10,8 +10,8 @@
  * each section.
  */
 
-import type { Accessorial, Load, LoadAuditEntry, RefNum, Stop } from "./domain";
-import type { LoadStatus, RelayRole } from "./enums";
+import type { Accessorial, Asset, Customer, Dispatcher, Driver, Load, LoadAuditEntry, RefNum, Stop, Trailer } from "./domain";
+import type { LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
 
@@ -348,6 +348,127 @@ export interface ListDocumentsResponse {
 export interface GetDocumentUrlResponse {
   url: string | null;
 }
+
+// ── /v1/assets ───────────────────────────────────────────────────────────
+
+export interface ListAssetsResponse { assets: Asset[]; }
+export interface CreateAssetRequest {
+  name:             string;
+  color:            string;
+  type:             string;
+  unit?:            string | null;
+  truck?:           string | null;
+  notes?:           string | null;
+  hidden?:          boolean;
+  motiveVehicleId?: string | null;
+  /** Optional explicit sort_order; otherwise the server appends to the end. */
+  sortOrder?:       number;
+}
+export interface CreateAssetResponse { asset: Asset; }
+export interface UpdateAssetRequest  {
+  name?:            string;
+  color?:           string;
+  type?:            string;
+  unit?:            string | null;
+  truck?:           string | null;
+  notes?:           string | null;
+  hidden?:          boolean;
+  motiveVehicleId?: string | null;
+  sortOrder?:       number;
+}
+export interface UpdateAssetResponse { asset: Asset; }
+/** Reorder assets in one shot. The server writes sort_order = index for each id. */
+export interface ReorderAssetsRequest { ids: number[]; }
+
+// ── /v1/drivers ──────────────────────────────────────────────────────────
+
+export interface ListDriversResponse { drivers: Driver[]; }
+export interface CreateDriverRequest {
+  name:       string;
+  firstName?: string | null;
+  lastName?:  string | null;
+  phone?:     string | null;
+  notes?:     string | null;
+}
+export interface CreateDriverResponse { driver: Driver; }
+export interface UpdateDriverRequest {
+  name?:      string;
+  firstName?: string | null;
+  lastName?:  string | null;
+  phone?:     string | null;
+  notes?:     string | null;
+}
+export interface UpdateDriverResponse { driver: Driver; }
+
+// ── /v1/customers ────────────────────────────────────────────────────────
+
+export interface ListCustomersResponse { customers: Customer[]; }
+export interface CreateCustomerRequest {
+  name:           string;
+  shortName?:     string | null;
+  aliases?:       string[];
+  mcNum?:         string | null;
+  contactName?:   string | null;
+  contactEmail?:  string | null;
+  contactPhone?:  string | null;
+  notes?:         string | null;
+}
+export interface CreateCustomerResponse { customer: Customer; }
+export interface UpdateCustomerRequest {
+  name?:          string;
+  shortName?:     string | null;
+  aliases?:       string[];
+  mcNum?:         string | null;
+  contactName?:   string | null;
+  contactEmail?:  string | null;
+  contactPhone?:  string | null;
+  notes?:         string | null;
+}
+export interface UpdateCustomerResponse { customer: Customer; }
+
+// ── /v1/trailers ─────────────────────────────────────────────────────────
+
+export interface ListTrailersResponse { trailers: Trailer[]; }
+export interface CreateTrailerRequest {
+  name:             string;
+  trailerNumber?:   string | null;
+  category:         TrailerCategory;
+  notes?:           string | null;
+  motiveVehicleId?: string | null;
+}
+export interface CreateTrailerResponse { trailer: Trailer; }
+export interface UpdateTrailerRequest {
+  name?:            string;
+  trailerNumber?:   string | null;
+  category?:        TrailerCategory;
+  notes?:           string | null;
+  motiveVehicleId?: string | null;
+}
+export interface UpdateTrailerResponse { trailer: Trailer; }
+
+// ── /v1/dispatchers ──────────────────────────────────────────────────────
+
+export interface ListDispatchersResponse { dispatchers: Dispatcher[]; }
+export interface CreateDispatcherRequest {
+  name:       string;
+  isDefault?: boolean;
+}
+export interface CreateDispatcherResponse { dispatcher: Dispatcher; }
+export interface UpdateDispatcherRequest {
+  name?:      string;
+  isDefault?: boolean;
+}
+export interface UpdateDispatcherResponse { dispatcher: Dispatcher; }
+
+// ── /v1/driver-asset-prefs ───────────────────────────────────────────────
+//
+// Asset → preferred driver mapping (one preferred driver per asset).
+// Stored in the driver_asset_prefs table; PK is asset_id.
+
+export interface DriverAssetPref { assetId: number; driverId: number; }
+export interface ListDriverAssetPrefsResponse { prefs: DriverAssetPref[]; }
+export interface SetDriverAssetPrefRequest { driverId: number; }
+export interface SetDriverAssetPrefResponse { pref: DriverAssetPref; }
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

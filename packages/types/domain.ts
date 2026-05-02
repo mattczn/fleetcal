@@ -101,6 +101,28 @@ export interface Trailer {
   sortOrder?: number;
 }
 
+// ── Customer ────────────────────────────────────────────────────────────
+
+export interface Customer {
+  id: string;
+  name: string;          // canonical display name
+  shortName?: string;    // abbreviated name used in auto-generated load titles
+  aliases: string[];     // alternative names the AI may extract from rate-cons
+  mcNum?: string;
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  notes?: string;
+}
+
+// ── Dispatcher ──────────────────────────────────────────────────────────
+
+export interface Dispatcher {
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
 // ── Audit trail ─────────────────────────────────────────────────────────
 
 export interface AccessorialChange {

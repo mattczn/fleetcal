@@ -15,6 +15,12 @@ import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
 import loadsRoute from "./routes/loads.js";
 import eventsRoute from "./routes/events.js";
 import documentsRoute from "./routes/documents.js";
+import assetsRoute from "./routes/assets.js";
+import driversRoute from "./routes/drivers.js";
+import customersRoute from "./routes/customers.js";
+import trailersRoute from "./routes/trailers.js";
+import dispatchersRoute from "./routes/dispatchers.js";
+import driverAssetPrefsRoute from "./routes/driver-asset-prefs.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -69,6 +75,12 @@ authed.get("/whoami", (c) =>
 authed.route("/loads", loadsRoute);
 authed.route("/events", eventsRoute);
 authed.route("/documents", documentsRoute);
+authed.route("/assets", assetsRoute);
+authed.route("/drivers", driversRoute);
+authed.route("/customers", customersRoute);
+authed.route("/trailers", trailersRoute);
+authed.route("/dispatchers", dispatchersRoute);
+authed.route("/driver-asset-prefs", driverAssetPrefsRoute);
 
 app.route("/v1", authed);
 

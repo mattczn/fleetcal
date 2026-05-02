@@ -1,9 +1,9 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { Asset, Driver, Stop, StopType, GeocodeStatus, Trailer, TrailerCategory, LoadAuditEntry } from './types';
-import { normalizePhone } from './phone';
+import type { Asset, Driver, Stop, StopType, GeocodeStatus, LoadAuditEntry } from './types';
 
 // ── DB row types (snake_case columns) ─────────────────────────────────────────
-// IDs: assets/drivers use bigint (number), events use uuid (string)
+// Used by the joined-event reads in lib/db.ts which still hit Supabase
+// directly; reference-data CRUD all goes through Railway now.
 
 export interface DbAsset {
   id: number;
@@ -28,24 +28,6 @@ export interface DbDriver {
   last_name: string | null;
   phone: string | null;
   notes: string | null;
-  created_at: string;
-}
-
-export interface DbDriverAssetPref {
-  asset_id: number;
-  driver_id: number;
-  org_id: string;
-}
-
-export interface DbTrailer {
-  id: number;
-  org_id: string;
-  name: string;
-  trailer_number: string | null;
-  category: TrailerCategory;
-  notes: string | null;
-  motive_vehicle_id: string | null;
-  sort_order: number;
   created_at: string;
 }
 
@@ -114,47 +96,8 @@ export function getSupabase(): SupabaseClient {
 }
 
 // ── Converters: DB row → app type ─────────────────────────────────────────────
-// IDs are already the right type (number for assets/drivers, string for events)
-
-export function dbTrailerToApp(row: DbTrailer): Trailer {
-  return {
-    id:              row.id,
-    name:            row.name,
-    trailerNumber:   row.trailer_number   ?? undefined,
-    category:        row.category,
-    notes:           row.notes            ?? undefined,
-    motiveVehicleId: row.motive_vehicle_id ?? undefined,
-    sortOrder:       row.sort_order,
-  };
-}
-
-export function appTrailerToDb(
-  t: Omit<Trailer, 'id'>,
-  orgId: string,
-  sortOrder = 0,
-  id?: number,
-): Omit<DbTrailer, 'created_at'> {
-  return {
-    ...(id != null ? { id } : {}),
-    org_id:            orgId,
-    name:              t.name,
-    trailer_number:    t.trailerNumber    ?? null,
-    category:          t.category,
-    notes:             t.notes            ?? null,
-    motive_vehicle_id: t.motiveVehicleId  ?? null,
-    sort_order:        sortOrder,
-  } as Omit<DbTrailer, 'created_at'>;
-}
-
-export function trailerUpdatesToDb(updates: Partial<Omit<Trailer, 'id'>>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if ('name'            in updates) out.name              = updates.name;
-  if ('trailerNumber'   in updates) out.trailer_number    = updates.trailerNumber    ?? null;
-  if ('category'        in updates) out.category          = updates.category;
-  if ('notes'           in updates) out.notes             = updates.notes            ?? null;
-  if ('motiveVehicleId' in updates) out.motive_vehicle_id = updates.motiveVehicleId  ?? null;
-  return out;
-}
+// Only the read converters used by lib/db.ts:fetchOrgData. All writes go
+// through Railway, so app→db converters live there.
 
 export function dbAssetToApp(row: DbAsset): Asset {
   return {
@@ -171,19 +114,6 @@ export function dbAssetToApp(row: DbAsset): Asset {
   };
 }
 
-export function assetUpdatesToDb(updates: Partial<Omit<Asset, 'id'>>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if ('name'            in updates) out.name              = updates.name;
-  if ('color'           in updates) out.color             = updates.color;
-  if ('type'            in updates) out.type              = updates.type;
-  if ('unit'            in updates) out.unit              = updates.unit             ?? null;
-  if ('truck'           in updates) out.truck             = updates.truck            ?? null;
-  if ('hidden'          in updates) out.hidden            = updates.hidden           ?? false;
-  if ('notes'           in updates) out.notes             = updates.notes            ?? null;
-  if ('motiveVehicleId' in updates) out.motive_vehicle_id = updates.motiveVehicleId ?? null;
-  return out;
-}
-
 export function dbDriverToApp(row: DbDriver): Driver {
   return {
     id:        row.id,
@@ -193,28 +123,6 @@ export function dbDriverToApp(row: DbDriver): Driver {
     phone:     row.phone       ?? undefined,
     notes:     row.notes       ?? undefined,
   };
-}
-
-
-export function appAssetToDb(
-  asset: Omit<Asset, 'id'>,
-  orgId: string,
-  sortOrder = 0,
-  id?: number,
-): Omit<DbAsset, 'created_at'> {
-  return {
-    ...(id != null ? { id } : {}),
-    org_id:            orgId,
-    name:              asset.name,
-    color:             asset.color,
-    type:              asset.type,
-    unit:              asset.unit             ?? null,
-    truck:             asset.truck            ?? null,
-    notes:             asset.notes            ?? null,
-    hidden:            asset.hidden           ?? false,
-    sort_order:        sortOrder,
-    motive_vehicle_id: asset.motiveVehicleId  ?? null,
-  } as Omit<DbAsset, 'created_at'>;
 }
 
 export function dbStopToApp(row: DbStop): Stop {
@@ -239,41 +147,3 @@ export function dbStopToApp(row: DbStop): Stop {
   };
 }
 
-export function appStopToDb(stop: Omit<Stop, 'id'>, orgId: string, eventId: string, id?: string): Omit<DbStop, 'created_at' | 'updated_at'> {
-  return {
-    id:            id ?? crypto.randomUUID(),
-    event_id:      eventId,
-    org_id:        orgId,
-    sequence:      stop.sequence,
-    type:          stop.type,
-    facility_name: stop.facilityName   ?? null,
-    address:       stop.address        ?? null,
-    city:          stop.city           ?? null,
-    lat:           stop.lat            ?? null,
-    lng:           stop.lng            ?? null,
-    appt_start:    stop.apptStart      ?? null,
-    appt_end:      stop.apptEnd        ?? null,
-    timezone:      stop.timezone       ?? null,
-    geocode_status: stop.geocodeStatus ?? "pending",
-    instructions:  stop.instructions   ?? null,
-    arrived_at:    stop.arrivedAt      ?? null,
-    arrived_lat:   stop.arrivedLat     ?? null,
-    arrived_lng:   stop.arrivedLng     ?? null,
-  };
-}
-
-export function appDriverToDb(
-  driver: Omit<Driver, 'id'>,
-  orgId: string,
-  id?: number,
-): Omit<DbDriver, 'created_at'> {
-  return {
-    ...(id != null ? { id } : {}),
-    org_id:     orgId,
-    name:       driver.name,
-    first_name: driver.firstName ?? null,
-    last_name:  driver.lastName  ?? null,
-    phone:      normalizePhone(driver.phone),
-    notes:      driver.notes     ?? null,
-  } as Omit<DbDriver, 'created_at'>;
-}
