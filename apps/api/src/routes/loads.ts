@@ -37,6 +37,9 @@ import {
   type DeleteLoadResponse,
   type RestoreLoadResponse,
   type GetRateConUrlResponse,
+  type ListDocumentsResponse,
+  type DocumentSummary,
+  type DocumentKind,
   type ApiErrorResponse,
   type Load,
   type LoadStatus,
@@ -439,6 +442,67 @@ loads.get("/search", async (c) => {
   merged.sort((a, b) => b.start.localeCompare(a.start));
 
   const res: ListLoadsResponse = { loads: merged.slice(0, limit) };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /v1/loads/:loadId/documents — list driver-uploaded documents
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Returns documents attached to the load, with 1-hour signed URLs minted
+// server-side in a single batch call. If a URL expires before the user
+// clicks (rare), the caller can refresh via GET /v1/documents/:id/url.
+
+loads.get("/:id/documents", async (c) => {
+  const orgId = c.get("orgId");
+  const loadId = c.req.param("id");
+
+  const { data: rows, error } = await supabase
+    .from("load_documents")
+    .select("id,load_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .order("uploaded_at", { ascending: false });
+  if (error) {
+    console.error("[GET /v1/loads/:id/documents] read failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  type DocRow = {
+    id: string; load_id: string | null; storage_path: string;
+    file_name: string; mime_type: string | null; size_bytes: number | null;
+    kind: string; uploaded_at: string;
+  };
+  const docs = (rows ?? []) as DocRow[];
+
+  // Batch-mint signed URLs. createSignedUrls returns one entry per path in
+  // the same order; on partial failure individual entries have an error.
+  const urlByPath = new Map<string, string>();
+  if (docs.length > 0) {
+    const { data: signed, error: signErr } = await supabase.storage
+      .from("load-documents")
+      .createSignedUrls(docs.map((d) => d.storage_path), 3600);
+    if (signErr) {
+      console.error("[GET /v1/loads/:id/documents] sign failed:", signErr);
+    } else {
+      for (const u of signed ?? []) {
+        if (u.path && u.signedUrl) urlByPath.set(u.path, u.signedUrl);
+      }
+    }
+  }
+
+  const documents: DocumentSummary[] = docs.map((d) => ({
+    id:         d.id,
+    loadId:     d.load_id,
+    fileName:   d.file_name,
+    mimeType:   d.mime_type   ?? undefined,
+    sizeBytes:  d.size_bytes  ?? undefined,
+    kind:       (d.kind as DocumentKind) ?? "other",
+    uploadedAt: d.uploaded_at,
+    signedUrl:  urlByPath.get(d.storage_path),
+  }));
+
+  const res: ListDocumentsResponse = { documents };
   return c.json(res);
 });
 

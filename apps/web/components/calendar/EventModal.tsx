@@ -1036,14 +1036,16 @@ export default function EventModal() {
   useEffect(() => {
     if (!showPdfViewer || !modalEventId || !orgId) return;
     if (loadDocuments.length > 0) return; // already loaded
+    const ev = events.find(e => e.id === modalEventId);
+    if (!ev?.loadId) return; // documents are load-scoped
     let cancelled = false;
     (async () => {
       const { fetchLoadDocuments } = await import('@/lib/db');
-      const docs = await fetchLoadDocuments(modalEventId, orgId);
+      const docs = await fetchLoadDocuments(ev.loadId!, orgId);
       if (!cancelled) setLoadDocuments(docs);
     })();
     return () => { cancelled = true; };
-  }, [showPdfViewer, modalEventId, orgId, loadDocuments.length]);
+  }, [showPdfViewer, modalEventId, orgId, loadDocuments.length, events]);
 
   // When a doc gets selected, use the pre-fetched signed URL if we have one.
   useEffect(() => {
@@ -1051,11 +1053,11 @@ export default function EventModal() {
     const doc = loadDocuments.find(d => d.id === selectedDocId);
     if (!doc) return;
     if (doc.signedUrl) { setSelectedDocUrl(doc.signedUrl); return; }
-    // Fallback: fetch on demand (signed URL batch failed)
+    // Fallback: refresh on demand (e.g. cached URL expired)
     let cancelled = false;
     (async () => {
       const { getLoadDocumentSignedUrl } = await import('@/lib/db');
-      const url = await getLoadDocumentSignedUrl(doc.storagePath);
+      const url = await getLoadDocumentSignedUrl(doc.id);
       if (!cancelled) setSelectedDocUrl(url);
     })();
     return () => { cancelled = true; };

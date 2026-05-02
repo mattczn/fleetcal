@@ -14,6 +14,7 @@ import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
 import loadsRoute from "./routes/loads.js";
 import eventsRoute from "./routes/events.js";
+import documentsRoute from "./routes/documents.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -67,6 +68,7 @@ authed.get("/whoami", (c) =>
 
 authed.route("/loads", loadsRoute);
 authed.route("/events", eventsRoute);
+authed.route("/documents", documentsRoute);
 
 app.route("/v1", authed);
 

@@ -430,56 +430,27 @@ export async function fetchPayrollRecordsForDriver(orgId: string, driverName: st
 
 // ── Driver-uploaded documents ─────────────────────────────────────────────────
 
-export interface LoadDocument {
-  id: string;
-  eventId: string;
-  fileName: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  kind: 'bol' | 'pod' | 'scale' | 'other';
-  uploadedAt: string;
-  storagePath: string;
-  signedUrl?: string;
-}
+export type LoadDocument = import('@fleetcal/types').DocumentSummary;
 
-export async function fetchLoadDocuments(eventId: string, orgId: string): Promise<LoadDocument[]> {
-  const db = getSupabase();
-  const { data, error } = await db
-    .from('load_documents')
-    .select('id,event_id,file_name,mime_type,size_bytes,kind,uploaded_at,storage_path')
-    .eq('event_id', eventId)
-    .eq('org_id', orgId)
-    .order('uploaded_at', { ascending: false });
-  if (error) { console.error('fetchLoadDocuments:', error); return []; }
-  const rows = (data ?? []).map(r => ({
-    id:           r.id as string,
-    eventId:      r.event_id as string,
-    fileName:     r.file_name as string,
-    mimeType:     (r.mime_type as string | null) ?? undefined,
-    sizeBytes:    (r.size_bytes as number | null) ?? undefined,
-    kind:         (r.kind as LoadDocument['kind']) ?? 'other',
-    uploadedAt:   r.uploaded_at as string,
-    storagePath:  r.storage_path as string,
-  }));
-  if (rows.length === 0) return rows;
-
-  // Batch-resolve signed URLs in a single API call so clicking a doc is instant.
-  const { data: urlData, error: urlErr } = await db.storage
-    .from('load-documents')
-    .createSignedUrls(rows.map(r => r.storagePath), 3600);
-  if (urlErr) { console.error('fetchLoadDocuments signedUrls:', urlErr); return rows; }
-  const urlByPath = new Map<string, string>();
-  for (const u of urlData ?? []) {
-    if (u.path && u.signedUrl) urlByPath.set(u.path, u.signedUrl);
+export async function fetchLoadDocuments(loadId: string, _orgId: string): Promise<LoadDocument[]> {
+  if (!loadId) return [];
+  try {
+    const { documents } = await railway.listLoadDocuments(loadId);
+    return documents;
+  } catch (err) {
+    console.error('fetchLoadDocuments:', err);
+    return [];
   }
-  return rows.map(r => ({ ...r, signedUrl: urlByPath.get(r.storagePath) }));
 }
 
-export async function getLoadDocumentSignedUrl(storagePath: string, expiresInSec = 3600): Promise<string | null> {
-  const db = getSupabase();
-  const { data, error } = await db.storage.from('load-documents').createSignedUrl(storagePath, expiresInSec);
-  if (error || !data) { console.error('getLoadDocumentSignedUrl:', error); return null; }
-  return data.signedUrl;
+export async function getLoadDocumentSignedUrl(documentId: string): Promise<string | null> {
+  try {
+    const { url } = await railway.getDocumentUrl(documentId);
+    return url;
+  } catch (err) {
+    console.error('getLoadDocumentSignedUrl:', err);
+    return null;
+  }
 }
 
 export async function fetchEventAuditLog(eventId: string, _orgId: string): Promise<import('./types').LoadAuditEntry[] | null> {

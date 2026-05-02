@@ -319,6 +319,36 @@ export interface GetAuditLogResponse {
   entries: LoadAuditEntry[];
 }
 
+// ── /v1/documents ────────────────────────────────────────────────────────
+
+export type DocumentKind = "bol" | "pod" | "scale" | "other";
+
+/**
+ * Document summary shape returned by list/show endpoints. `signedUrl` is
+ * populated by the list endpoint (1-hour signed URL minted server-side);
+ * call GET /v1/documents/:id/url to mint a fresh one.
+ */
+export interface DocumentSummary {
+  id:          string;
+  loadId:      string | null;        // null for legacy non-revenue-event docs
+  fileName:    string;
+  mimeType?:   string;
+  sizeBytes?:  number;
+  kind:        DocumentKind;
+  uploadedAt:  string;
+  signedUrl?:  string;
+}
+
+// GET /v1/loads/:loadId/documents
+export interface ListDocumentsResponse {
+  documents: DocumentSummary[];
+}
+
+// GET /v1/documents/:id/url
+export interface GetDocumentUrlResponse {
+  url: string | null;
+}
+
 // ── Errors (shared envelope) ────────────────────────────────────────────
 
 export interface ApiErrorResponse {

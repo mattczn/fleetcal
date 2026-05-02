@@ -27,6 +27,8 @@ import type {
   ReplaceStopsRequest, ReplaceStopsResponse,
   GetAuditLogResponse,
   GetRateConUrlResponse,
+  ListDocumentsResponse,
+  GetDocumentUrlResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -105,6 +107,12 @@ class RailwayClient {
   }
   getRateConUrl(loadId: string) {
     return this.req<GetRateConUrlResponse>('GET', `/v1/loads/${loadId}/rate-con-url`);
+  }
+  listLoadDocuments(loadId: string) {
+    return this.req<ListDocumentsResponse>('GET', `/v1/loads/${loadId}/documents`);
+  }
+  getDocumentUrl(documentId: string) {
+    return this.req<GetDocumentUrlResponse>('GET', `/v1/documents/${documentId}/url`);
   }
 }
 
