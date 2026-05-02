@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
+import { RailwayClientProvider } from '@/components/RailwayClientProvider';
 import './globals.css';
 
 const font = Plus_Jakarta_Sans({
@@ -59,7 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </head>
         <body className="h-full overflow-hidden antialiased" style={{ fontFamily: 'var(--font-jakarta), sans-serif' }}>
           <ThemeProvider />
-          {children}
+          <RailwayClientProvider>{children}</RailwayClientProvider>
         </body>
       </html>
     </ClerkProvider>
