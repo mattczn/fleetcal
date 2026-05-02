@@ -78,6 +78,102 @@ export interface CreateLoadResponse {
   loads: Load[];
 }
 
+// ── GET /v1/loads (list) ────────────────────────────────────────────────
+
+/**
+ * Query params (all optional):
+ *   from           — lower bound on events.start, YYYY-MM-DD or YYYY-MM-DDTHH:mm
+ *   to             — upper bound on events.end, same format
+ *   status         — comma-separated LoadStatus values
+ *   assetId        — comma-separated asset ids (numeric)
+ *   includeDeleted — "true" to include soft-deleted, default excluded
+ */
+export interface ListLoadsResponse {
+  loads: Load[];
+}
+
+// ── GET /v1/loads/:id (single, by load uuid) ────────────────────────────
+
+export interface GetLoadResponse {
+  loads: Load[]; // 1 entry for single-event load, 2 for relay
+}
+
+// ── PATCH /v1/loads/:id (update load-level fields) ──────────────────────
+
+export interface UpdateLoadRequest {
+  loadNum?:        string | null;
+  broker?:         string | null;
+  customerId?:     string | null;
+  dispatcher?:     string | null;
+  loadPrice?:      number | null;
+  rateConPdf?:     string | null;
+  accessorials?:   Accessorial[] | null;
+  refNums?:        RefNum[] | null;
+  notes?:          string | null;
+}
+
+export interface UpdateLoadResponse {
+  loads: Load[];
+}
+
+// ── PATCH /v1/loads/:id/events/:eventId ─────────────────────────────────
+
+export interface UpdateEventRequest {
+  title?:        string;
+  start?:        string;
+  end?:          string;
+  status?:       LoadStatus;
+  assetId?:      number;
+  driverId?:     number | null;
+  driverName?:   string | null;
+  trailerId?:    number | null;
+  trailerType?:  string | null;
+  driverPay?:    number | null;
+  eventNotes?:   string | null;
+  priority?:     boolean;
+}
+
+export interface UpdateEventResponse {
+  loads: Load[];
+}
+
+// ── POST /v1/loads/:id/split-relay ──────────────────────────────────────
+
+/**
+ * Convert a single-event load into a relay (2-event) load.
+ *
+ * The existing event becomes the pickup leg (gets relay_role='pickup' and
+ * its end clamped to `pickupEnd`). A new event is created as the delivery
+ * leg with `relay_role='delivery'` and the supplied delivery scheduling +
+ * driver/asset assignment. Stops are partitioned by `relayStopIndex`:
+ * indices [0..relayStopIndex] go to the pickup leg, [relayStopIndex+1..end]
+ * go to the delivery leg. The relay handoff stop is typically at index
+ * `relayStopIndex`.
+ */
+export interface SplitRelayRequest {
+  pickupEnd:           string;        // YYYY-MM-DDTHH:mm
+  deliveryStart:       string;
+  deliveryEnd:         string;
+  deliveryAssetId:     number;
+  deliveryDriverId?:   number | null;
+  deliveryDriverName?: string | null;
+  /** Full ordered stop list after the split. */
+  mergedStops:         Stop[];
+  /** Index of the last stop on the pickup leg (the relay handoff). */
+  relayStopIndex:      number;
+}
+
+export interface SplitRelayResponse {
+  loads: Load[]; // 2 entries: pickup leg, delivery leg
+}
+
+// ── DELETE /v1/loads/:id (soft-delete) ──────────────────────────────────
+
+export interface DeleteLoadResponse {
+  ok:     true;
+  loadId: string;
+}
+
 // ── Errors (shared envelope) ────────────────────────────────────────────
 
 export interface ApiErrorResponse {
