@@ -33,6 +33,7 @@ import {
   type SplitRelayRequest,
   type SplitRelayResponse,
   type DeleteLoadResponse,
+  type RestoreLoadResponse,
   type ApiErrorResponse,
   type Load,
   type LoadStatus,
@@ -638,6 +639,43 @@ loads.delete("/:id", async (c) => {
   }
 
   const res: DeleteLoadResponse = { ok: true, loadId };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/loads/:id/restore — undelete a soft-deleted load + its events
+// ─────────────────────────────────────────────────────────────────────────
+
+loads.post("/:id/restore", async (c) => {
+  const orgId = c.get("orgId");
+  const loadId = c.req.param("id");
+
+  const { data: loadRow, error: loadErr } = await supabase
+    .from("loads")
+    .update({ deleted_at: null })
+    .eq("id", loadId)
+    .eq("org_id", orgId)
+    .select()
+    .maybeSingle();
+  if (loadErr) {
+    return c.json({ error: "restore_failed", detail: loadErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!loadRow) {
+    return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  }
+
+  const { error: evErr } = await supabase
+    .from("events")
+    .update({ deleted_at: null })
+    .eq("load_id", loadId)
+    .eq("org_id", orgId);
+  if (evErr) {
+    return c.json({ error: "events_restore_failed", detail: evErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const joined = await fetchLoadJoined(loadId, orgId);
+  if (!joined) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const res: RestoreLoadResponse = { loads: joined };
   return c.json(res);
 });
 

@@ -174,6 +174,88 @@ export interface DeleteLoadResponse {
   loadId: string;
 }
 
+// ── POST /v1/loads/:id/restore ──────────────────────────────────────────
+
+export interface RestoreLoadResponse {
+  loads: Load[];
+}
+
+// ── /v1/events ──────────────────────────────────────────────────────────
+//
+// Event endpoints. Useful for non-revenue events (which have no parent
+// load) and as a load-id-agnostic way to address any event.
+
+/**
+ * Create a non-revenue event. Maintenance/Trailer Move/Drop Trailer/
+ * Deadhead/Training/Inspection/Other.
+ */
+export interface CreateEventRequest {
+  title:           string;
+  start:           string;
+  end:             string;
+  assetId:         number;
+  nonRevenueType:  string;
+  driverId?:       number;
+  driverName?:     string;
+  status?:         LoadStatus;        // defaults to 'scheduled'
+  trailerId?:      number;
+  trailerType?:    string;
+  driverPay?:      number;
+  eventNotes?:     string;
+  priority?:       boolean;
+  stops?:          Stop[];            // rare for non-revenue but allowed
+}
+
+export interface CreateEventResponse {
+  loads: Load[];                       // single entry; loadId undefined
+}
+
+/**
+ * Update any event (revenue or non-revenue) by its uuid. For revenue
+ * events, this is interchangeable with PATCH /v1/loads/:loadId/events/:eventId.
+ */
+export interface UpdateEventByIdRequest {
+  title?:        string;
+  start?:        string;
+  end?:          string;
+  status?:       LoadStatus;
+  assetId?:      number;
+  driverId?:     number | null;
+  driverName?:   string | null;
+  trailerId?:    number | null;
+  trailerType?:  string | null;
+  driverPay?:    number | null;
+  eventNotes?:   string | null;
+  priority?:     boolean;
+  nonRevenueType?: string | null;     // only meaningful when event_kind='non_revenue'
+}
+
+export interface UpdateEventByIdResponse {
+  loads: Load[];                       // single entry (the updated event with its load joined if revenue)
+}
+
+/**
+ * Soft-delete a non-revenue event. For revenue-event delete (which is a
+ * leg of a load), use DELETE /v1/loads/:loadId — that deletes the load
+ * and both its events.
+ */
+export interface DeleteEventResponse {
+  ok:      true;
+  eventId: string;
+}
+
+/**
+ * Replace all stops for an event with the supplied ordered list.
+ * Sequence is rewritten 1..N from array order; caller doesn't manage it.
+ */
+export interface ReplaceStopsRequest {
+  stops: Stop[];
+}
+
+export interface ReplaceStopsResponse {
+  loads: Load[];                       // single entry, with new stops populated
+}
+
 // ── Errors (shared envelope) ────────────────────────────────────────────
 
 export interface ApiErrorResponse {
