@@ -4,12 +4,30 @@ Hono server hosted on Railway. Owns business logic the frontends can't
 safely run themselves: state-machine transitions, Claude API calls, external
 integrations, document validation, audit logging, push dispatch.
 
-Phase 2 ships only the foundation — `/v1/health` (public) and `/v1/whoami`
-(Clerk-protected). Real endpoints land in Phase 3+.
-
 **Live:** <https://fleetcalapi-production.up.railway.app>
-- `GET /v1/health` — public
-- `GET /v1/whoami` — Clerk session token required; returns `{ userId, orgId }`
+
+## Endpoints
+
+### Public
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/v1/health` | Returns `{ ok, service, version, timestamp }` |
+
+### Authenticated (Clerk session token required, with active organization)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET    | `/v1/whoami`                          | Returns `{ userId, orgId }` |
+| POST   | `/v1/loads`                           | Create a load (1 or 2 events) |
+| GET    | `/v1/loads`                           | List loads with filters (`from`, `to`, `status`, `assetId`, `includeDeleted`) |
+| GET    | `/v1/loads/:id`                       | Get one load (joined view, 1-2 entries) |
+| PATCH  | `/v1/loads/:id`                       | Update load-level fields |
+| PATCH  | `/v1/loads/:id/events/:eventId`       | Update event-level fields |
+| POST   | `/v1/loads/:id/split-relay`           | Convert single-event load → relay |
+| DELETE | `/v1/loads/:id`                       | Soft-delete load + its events |
+
+Request/response shapes live in `packages/types/api.ts`.
 
 ## Local dev
 
@@ -28,10 +46,10 @@ curl http://localhost:8080/v1/health
 # {"ok":true,"service":"fleetcal-api","version":"0.1.0","timestamp":"…"}
 ```
 
-Authenticated test (replace `<token>` with a real Clerk session token):
+Authenticated test:
 
 ```sh
-curl http://localhost:8080/v1/whoami -H "Authorization: Bearer <token>"
+curl http://localhost:8080/v1/whoami -H "Authorization: Bearer <clerk-jwt>"
 # {"userId":"user_…","orgId":"org_…"}
 ```
 
@@ -55,24 +73,33 @@ deployed container doesn't need to resolve npm-workspace symlinks.
 4. **Set the start command** to `npm run start -w @fleetcal/api`.
 5. **Set environment variables** on the Railway service:
    - `NODE_ENV=production`
-   - `PORT=8080` *(Railway will override with its own port; that's fine)*
-   - `CLERK_SECRET_KEY` *(from Clerk dashboard — production key, not test)*
-   - `CLERK_PUBLISHABLE_KEY`
+   - `CLERK_SECRET_KEY` *(from Clerk dashboard)*
+   - `CLERK_PUBLISHABLE_KEY` *(must match the publishable key the web app uses)*
    - `SUPABASE_URL=https://vgybqmvmorjhlgbsssmi.supabase.co`
-   - `SUPABASE_SERVICE_ROLE_KEY` *(from Supabase dashboard → Settings → API)*
-6. **Deploy.** Railway auto-deploys on push to `main`. The health check at
-   `/v1/health` is what to wire as Railway's health-check path.
+   - `SUPABASE_SERVICE_ROLE_KEY` *(from Supabase → Settings → API → service_role key, NOT anon)*
 
-The Railway-assigned URL (`<project>.up.railway.app`) becomes the API base
-URL for the frontends. Custom domain (e.g. `api.fleetcal.com`) is a later
-swap once DNS is decided.
+   Don't set `PORT` — Railway injects its own.
+6. **Deploy.** Railway auto-deploys on push to `main`. Health-check path:
+   `/v1/health`.
 
-## What's NOT here yet
+## What's still missing (Phase 3 in progress)
 
-- Loads / stops / documents endpoints — Phase 3.
-- Claude integration (assistant, parse-ratecon, parse-assets) — Phase 3.
-- Motive proxy + credential storage — Phase 3.
-- Push notification dispatch + the confirm-reminders cron — Phase 3.
-- Audit log writer — Phase 3.
-- Rate limiting / request signing — Phase N.
-- Sentry / structured observability — Phase N.
+- `POST /v1/events` — non-revenue events (no associated load)
+- `POST /v1/loads/:id/restore` — soft-delete reversal
+- `PUT  /v1/loads/:id/events/:eventId/stops` — replace stops on a leg
+- `POST /v1/stops/:id/checkin` — driver check-in with geofence validation
+- `POST /v1/loads/:id/documents` — document upload (BOL, POD, scale ticket)
+- `GET  /v1/documents/:id/url` — short-lived signed URL
+- `POST /v1/loads/:id/events/:eventId/status` — state-machine status transition with audit
+- Claude integration (assistant, parse-ratecon, parse-assets)
+- Motive proxy + credential storage
+- Push notification dispatch + the confirm-reminders cron
+- Audit log writer (current PATCH endpoints don't write audit_log entries yet)
+- Rate limiting / request signing — Phase N
+- Sentry / structured observability — Phase N
+
+## What's not yet wired
+
+The web/dispatcher/driver frontends do not call these endpoints yet — they
+still write directly to Supabase via the legacy denormalized event columns.
+Wiring them is the next milestone.

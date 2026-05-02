@@ -27,23 +27,20 @@ type EventInsert   = Database["public"]["Tables"]["events"]["Insert"];
 type LoadDbRow     = Database["public"]["Tables"]["loads"]["Row"];
 type LoadDbInsert  = Database["public"]["Tables"]["loads"]["Insert"];
 
-// Legacy aliases for the old denormalized-event converters
-type LoadRow    = EventRow;
-type LoadInsert = EventInsert;
-
 /**
- * Converter input type. The generated `LoadRow` and the older hand-written
- * `DbEvent` interface in apps/web/lib/supabase.ts have drifted in nullability
- * and JSON-column annotations. Typing this as `any` lets either feed in
- * cleanly without forcing call-site casts; the function body re-narrows
- * each field to its known type as it builds the app-domain Load.
+ * Converter input type for the legacy event-row converter. The generated
+ * `EventRow` and the older hand-written `DbEvent` interface in
+ * apps/web/lib/supabase.ts have drifted in nullability and JSON-column
+ * annotations. Typing this as `any` lets either feed in cleanly without
+ * forcing call-site casts; the function body re-narrows each field to
+ * its known type as it builds the app-domain Load.
  *
  * `any` is intentional here: this is the type boundary between two
  * source-of-truth row shapes that we can't yet unify (the hand-written
  * Db* types live to die in a follow-up sweep).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LoadRowInput = any;
+type LegacyEventRowInput = any;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -79,8 +76,8 @@ function parseRefNums(raw: string | null | undefined): RefNum[] | undefined {
 
 // ── DB row → app domain ─────────────────────────────────────────────────
 
-export function dbEventToApp(row: LoadRowInput): Load {
-  // The body asserts each access since LoadRowInput is intentionally loose.
+export function dbEventToApp(row: LegacyEventRowInput): Load {
+  // The body asserts each access since LegacyEventRowInput is intentionally loose.
   const r = row as Record<string, unknown>;
   return {
     id:                  r.id as string,
@@ -240,7 +237,7 @@ export function appLoadToLoadInsert(
 }
 
 // Internal types for the join converter — both intentionally loose at this
-// boundary, same rationale as `LoadRowInput` below.
+// boundary, same rationale as `LegacyEventRowInput` below.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type EventRowInput = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -254,7 +251,7 @@ export function appEventToDb(
   ev: Omit<Load, "id">,
   orgId: string,
   id?: string,
-): LoadInsert {
+): EventInsert {
   // The generated type marks `internal_load_id` as required, but the live DB
   // populates it via a default/trigger — existing inserts have always worked
   // without supplying one. The cast bypasses the spurious requirement.
@@ -290,5 +287,5 @@ export function appEventToDb(
     created_by_name:      ev.createdByName       ?? null,
     audit_log:            (ev.auditLog ?? null) as unknown as Json | null,
     deleted_at:           null,
-  } as LoadInsert;
+  } as EventInsert;
 }

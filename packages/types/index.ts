@@ -21,9 +21,13 @@ type T = Database["public"]["Tables"];
 // Row / Insert / Update aliases for the entities the apps actually use.
 // Naming matches the table verbatim (snake_case Row shape).
 
-export type LoadRow            = T["events"]["Row"];
-export type LoadInsert         = T["events"]["Insert"];
-export type LoadUpdate         = T["events"]["Update"];
+export type LoadRow            = T["loads"]["Row"];
+export type LoadInsert         = T["loads"]["Insert"];
+export type LoadUpdate         = T["loads"]["Update"];
+
+export type EventRow           = T["events"]["Row"];
+export type EventInsert        = T["events"]["Insert"];
+export type EventUpdate        = T["events"]["Update"];
 
 export type DriverRow          = T["drivers"]["Row"];
 export type DriverInsert       = T["drivers"]["Insert"];

@@ -190,3 +190,80 @@ deleted.
   - **(b)** no surface uses it (scenario: field not read).
 - If (a), audit git log for any "asset shows blank" bugs that may have
   been worked around at the UI layer rather than fixed at root.
+
+## Phase 3 — work outstanding
+
+### Frontend mutations don't call Railway yet
+
+The six load CRUD endpoints under `/v1/loads` exist on Railway, but
+nothing in the frontends calls them. Web/dispatcher/driver still write
+directly to Supabase via the legacy `appEventToDb` converter, which
+writes to the deprecated event columns (`broker`, `load_num`,
+`load_price`, etc.) and never creates a row in `loads`.
+
+**Consequence:** new loads created post-2.5a-migration via the legacy
+path have NO row in `loads`, so a joined-query read returns `load: null`
+and the calendar would render those fields blank. This is why the
+dispatch read-conversion PoC was reverted (see commit `1384a70`).
+
+**Resolution:** wire the web app's mutations to Railway. Pattern:
+- `addEvent` (revenue) → `POST /v1/loads`
+- `addEvent` (non-revenue) → `POST /v1/events` *(endpoint not yet built)*
+- `updateEvent` (load fields) → `PATCH /v1/loads/:id`
+- `updateEvent` (event fields) → `PATCH /v1/loads/:id/events/:eventId`
+- `createRelayPair` → `POST /v1/loads` with `events.length === 2`
+- `saveRelayBoth` → `PATCH /v1/loads/:id` (load fields once) + `PATCH .../events/:eventId` per leg
+- `removeEvent` → `DELETE /v1/loads/:id`
+- `restoreEvent` → `POST /v1/loads/:id/restore` *(endpoint not yet built)*
+
+After web is converted, dispatch and driver follow the same pattern.
+
+### Endpoints still missing on Railway
+
+- `POST /v1/events` — non-revenue events (maintenance, deadhead, etc.)
+- `POST /v1/loads/:id/restore` — soft-delete reversal
+- `PUT  /v1/loads/:id/events/:eventId/stops` — replace stops on a leg
+- `POST /v1/stops/:id/checkin` — driver check-in (haversine validation)
+- `POST /v1/loads/:id/documents` — document upload
+- `GET  /v1/documents/:id/url` — short-lived signed URL
+- `POST /v1/loads/:id/events/:eventId/status` — state-machine status transition
+- Claude integration, Motive proxy, push dispatch, audit log writer
+
+### Audit logging — PATCH endpoints don't write audit entries yet
+
+The `loads.audit_log` jsonb column exists, but the Phase 3 PATCH
+handlers don't append entries when fields change. The shared
+`LoadAuditEntry` type in `packages/types/domain.ts` documents the
+shape. Write the audit append in the PATCH handlers before the next
+phase of work depends on a complete audit trail.
+
+### Schema.sql is still stale (Docker-blocked)
+
+`packages/database/supabase/schema.sql` predates the loads/events split.
+The npm script `db:dump -w @fleetcal/database` runs `supabase db dump
+--linked`, which requires Docker to be running locally — and Docker
+isn't installed/running on this machine.
+
+Two paths to refresh it:
+1. Install Docker Desktop and run `npm run db:dump -w @fleetcal/database`.
+2. Use `pg_dump` directly with the project's connection string (Supabase
+   dashboard → Settings → Database → Connection string).
+
+Until then, the canonical source of schema truth is the migrations
+folder + the generated `packages/types/database.ts`. `schema.sql`
+should be treated as historical reference only.
+
+### Legacy fields in `Load` interface
+
+`packages/types/domain.ts` `Load` carries fields (`commodity`, `weight`,
+`miles`, `pickupCity`, `deliveryCity`, `dispatched`, `bolNum`, `poNum`,
+`relayGroupId`, `specialInstructions`, several legacy financial fields)
+that reference DB columns that are either dropped or about to be dropped
+in Phase 2.5c. Keep until Phase 2.5c lands, then sweep them out in one
+commit alongside the column drops.
+
+### `dbEventToApp` / `appEventToDb` legacy converters
+
+In `packages/types/converters.ts`. Apps still use them (frontend writes
+to deprecated event columns). They're labeled "LEGACY" and will be
+deleted in Phase 2.5c after the column drops. Do not write new callers.
