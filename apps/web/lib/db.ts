@@ -2,6 +2,7 @@
 
 import { getSupabase, dbAssetToApp, dbDriverToApp, dbStopToApp, DbAsset, DbDriver, DbStop, DbTrailer, dbTrailerToApp, appTrailerToDb, trailerUpdatesToDb } from './supabase';
 import { joinEventLoadToApp } from '@fleetcal/types';
+import { railway } from './railway';
 import type { DeletedEvent } from '@/store/useCalendarStore';
 import type { Asset, Driver, CalendarEvent, Stop, SavedLocation, Dispatcher, Customer, Trailer } from './types';
 
@@ -305,63 +306,15 @@ export async function deleteDispatcher(id: string): Promise<void> {
   if (error) console.error('deleteDispatcher:', error.message);
 }
 
-export async function searchEvents(orgId: string, query: string): Promise<CalendarEvent[]> {
+export async function searchEvents(_orgId: string, query: string): Promise<CalendarEvent[]> {
   if (!query || query.length < 2) return [];
-  const db = getSupabase();
-  const q  = query.trim();
-  const numericId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
-  // Match against event-level fields directly + load-level fields via join.
-  // Two queries (event-side + load-side) → union — PostgREST doesn't support
-  // OR across nested-relation filters in a single .or().
-  const escaped = q.replace(/[%,()]/g, '\\$&');
-  const pattern = `%${escaped}%`;
-
-  const evtQuery = db
-    .from('events')
-    .select(EVENT_SELECT_JOINED)
-    .eq('org_id', orgId)
-    .is('deleted_at', null)
-    .or(`title.ilike.${pattern},driver_name.ilike.${pattern},notes.ilike.${pattern}`)
-    .order('start', { ascending: false })
-    .limit(20);
-
-  const loadOr = numericId !== null
-    ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`
-    : `load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`;
-  const loadIdsQuery = db
-    .from('loads')
-    .select('id')
-    .eq('org_id', orgId)
-    .is('deleted_at', null)
-    .or(loadOr)
-    .limit(50);
-
-  const [evtRes, loadIdsRes] = await Promise.all([evtQuery, loadIdsQuery]);
-  if (evtRes.error) { console.error('searchEvents events:', evtRes.error); return []; }
-
-  const matchedLoadIds = ((loadIdsRes.data ?? []) as { id: string }[]).map(r => r.id);
-  let loadMatches: unknown[] = [];
-  if (matchedLoadIds.length > 0) {
-    const res = await db.from('events')
-      .select(EVENT_SELECT_JOINED)
-      .eq('org_id', orgId)
-      .is('deleted_at', null)
-      .in('load_id', matchedLoadIds)
-      .order('start', { ascending: false })
-      .limit(20);
-    if (res.error) console.error('searchEvents loads:', res.error);
-    loadMatches = res.data ?? [];
+  try {
+    const { loads } = await railway.searchLoads(query.trim(), 20);
+    return loads as CalendarEvent[];
+  } catch (err) {
+    console.error('searchEvents:', err);
+    return [];
   }
-
-  const seen = new Set<string>();
-  const out: CalendarEvent[] = [];
-  for (const r of [...((evtRes.data ?? []) as Array<Record<string, unknown>>), ...(loadMatches as Array<Record<string, unknown>>)]) {
-    const id = r.id as string;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push(joinedRowToCalendarEvent(r));
-  }
-  return out.slice(0, 20);
 }
 
 // ── Payroll adjustments ───────────────────────────────────────────────────────

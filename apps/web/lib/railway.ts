@@ -15,6 +15,7 @@
 import type {
   CreateLoadRequest, CreateLoadResponse,
   ListLoadsResponse, GetLoadResponse,
+  SearchLoadsResponse,
   UpdateLoadRequest, UpdateLoadResponse,
   UpdateEventRequest, UpdateEventResponse,
   SplitRelayRequest, SplitRelayResponse,
@@ -69,6 +70,10 @@ class RailwayClient {
     return this.req<ListLoadsResponse>('GET', `/v1/loads${qs ? `?${qs}` : ''}`);
   }
   getLoad(id: string)                 { return this.req<GetLoadResponse>('GET',      `/v1/loads/${id}`); }
+  searchLoads(q: string, limit?: number) {
+    const qs = new URLSearchParams({ q, ...(limit ? { limit: String(limit) } : {}) }).toString();
+    return this.req<SearchLoadsResponse>('GET', `/v1/loads/search?${qs}`);
+  }
   updateLoad(id: string, body: UpdateLoadRequest) {
     return this.req<UpdateLoadResponse>('PATCH', `/v1/loads/${id}`, body);
   }

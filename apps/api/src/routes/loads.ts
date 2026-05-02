@@ -340,6 +340,108 @@ loads.get("/", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /v1/loads/search — search loads by load-level + event-level fields
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Query params:
+//   q     — search string (min 2 chars; shorter returns empty)
+//   limit — max results, default 20, capped at 50
+//
+// Matches:
+//   load-level   — loads.load_num, broker, notes, internal_load_id (if numeric)
+//   event-level  — events.title, driver_name, notes
+//
+// Implementation: PostgREST .or() can't span nested relations, so we run
+// the load-side and event-side filters separately and union by event id.
+// Excludes soft-deleted; sorted newest start first.
+
+loads.get("/search", async (c) => {
+  const orgId = c.get("orgId");
+  const url = new URL(c.req.url);
+  const q = (url.searchParams.get("q") ?? "").trim();
+  const limitParam = url.searchParams.get("limit");
+  const limit = Math.min(Math.max(parseInt(limitParam ?? "20", 10) || 20, 1), 50);
+
+  if (q.length < 2) {
+    return c.json({ loads: [] } satisfies ListLoadsResponse);
+  }
+
+  // Escape PostgREST-special chars in the LIKE pattern.
+  const escaped = q.replace(/[%,()]/g, "\\$&");
+  const pattern = `%${escaped}%`;
+  const numericId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
+
+  // 1) Load-side matches → list of load_ids whose loads-row fields hit.
+  const loadOr = numericId !== null
+    ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`
+    : `load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`;
+  const loadIdsP = supabase
+    .from("loads")
+    .select("id")
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .or(loadOr)
+    .limit(50);
+
+  // 2) Event-side matches → joined events whose event-row fields hit.
+  const eventMatchesP = supabase
+    .from("events")
+    .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .or(`title.ilike.${pattern},driver_name.ilike.${pattern},notes.ilike.${pattern}`)
+    .order("start", { ascending: false })
+    .limit(limit);
+
+  const [loadIdsRes, eventMatchesRes] = await Promise.all([loadIdsP, eventMatchesP]);
+  if (loadIdsRes.error) {
+    console.error("[GET /v1/loads/search] load-side query failed:", loadIdsRes.error);
+    return c.json({ error: "search_failed", detail: loadIdsRes.error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (eventMatchesRes.error) {
+    console.error("[GET /v1/loads/search] event-side query failed:", eventMatchesRes.error);
+    return c.json({ error: "search_failed", detail: eventMatchesRes.error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  const matchedLoadIds = ((loadIdsRes.data ?? []) as Array<{ id: string }>).map((r) => r.id);
+  let loadMatches: unknown[] = [];
+  if (matchedLoadIds.length > 0) {
+    const { data, error } = await supabase
+      .from("events")
+      .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .in("load_id", matchedLoadIds)
+      .order("start", { ascending: false })
+      .limit(limit);
+    if (error) {
+      console.error("[GET /v1/loads/search] load-events query failed:", error);
+      return c.json({ error: "search_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+    loadMatches = data ?? [];
+  }
+
+  // Union by event id, newest start first. Stops aren't fetched here —
+  // search results don't display stop detail (callers re-fetch on click).
+  const seen = new Set<string>();
+  const merged: Load[] = [];
+  for (const r of [
+    ...(eventMatchesRes.data ?? []),
+    ...(loadMatches as Array<Record<string, unknown>>),
+  ] as Array<Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null }>) {
+    const id = r.id as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const loadRow = Array.isArray(r.load) ? (r.load[0] ?? null) : (r.load ?? null);
+    merged.push(joinEventLoadToApp(r, loadRow));
+  }
+  merged.sort((a, b) => b.start.localeCompare(a.start));
+
+  const res: ListLoadsResponse = { loads: merged.slice(0, limit) };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /v1/loads/:id — single load by uuid
 // ─────────────────────────────────────────────────────────────────────────
 

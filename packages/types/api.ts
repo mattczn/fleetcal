@@ -92,6 +92,22 @@ export interface ListLoadsResponse {
   loads: Load[];
 }
 
+// ── GET /v1/loads/search ────────────────────────────────────────────────
+
+/**
+ * Query params:
+ *   q     — search string (min 2 chars; shorter returns empty)
+ *   limit — max results, default 20, capped server-side at 50
+ *
+ * Matches load-level fields (load_num, broker, notes, internal_load_id if
+ * numeric) and event-level fields (title, driver_name, notes). Excludes
+ * soft-deleted; results sorted newest start first.
+ *
+ * Stops are NOT populated on search results — callers refetch via
+ * GET /v1/loads/:id when the user clicks a result.
+ */
+export type SearchLoadsResponse = ListLoadsResponse;
+
 // ── GET /v1/loads/:id (single, by load uuid) ────────────────────────────
 
 export interface GetLoadResponse {
