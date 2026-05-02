@@ -40,8 +40,8 @@ apps/*/android/
 .vercel/
 .railway/
 
-# supabase CLI scratch
-supabase/.temp/
+# supabase CLI scratch (anywhere in tree)
+**/supabase/.temp/
 
 # os / editor
 .DS_Store
