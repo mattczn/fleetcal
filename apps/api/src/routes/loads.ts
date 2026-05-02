@@ -32,6 +32,8 @@ import {
   type UpdateEventResponse,
   type SplitRelayRequest,
   type SplitRelayResponse,
+  type UnsplitRelayRequest,
+  type UnsplitRelayResponse,
   type DeleteLoadResponse,
   type RestoreLoadResponse,
   type ApiErrorResponse,
@@ -676,6 +678,100 @@ loads.post("/:id/restore", async (c) => {
   const joined = await fetchLoadJoined(loadId, orgId);
   if (!joined) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   const res: RestoreLoadResponse = { loads: joined };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/loads/:id/unsplit-relay — collapse 2-event relay back to single
+// ─────────────────────────────────────────────────────────────────────────
+
+loads.post("/:id/unsplit-relay", async (c) => {
+  const orgId = c.get("orgId");
+  const loadId = c.req.param("id");
+  const body = await c.req.json<UnsplitRelayRequest>();
+
+  if (!body?.keepEventId) {
+    return badRequest(c, ["keepEventId required"]);
+  }
+
+  // Fetch the load's active events
+  const { data: existingEventsRaw, error: fetchErr } = await supabase
+    .from("events")
+    .select(EVENT_COLS)
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .is("deleted_at", null)
+    .order("start", { ascending: true });
+  if (fetchErr || !existingEventsRaw) {
+    return c.json({ error: "fetch_failed", detail: fetchErr?.message } satisfies ApiErrorResponse, 500);
+  }
+  const existingEvents = existingEventsRaw as unknown as Array<{
+    id: string; end: string; relay_role: string | null;
+  }>;
+  if (existingEvents.length !== 2) {
+    return badRequest(c, [`load must have exactly 2 events to unsplit; found ${existingEvents.length}`]);
+  }
+
+  const keep = existingEvents.find((e) => e.id === body.keepEventId);
+  const drop = existingEvents.find((e) => e.id !== body.keepEventId);
+  if (!keep || !drop) {
+    return badRequest(c, ["keepEventId not found among this load's events"]);
+  }
+
+  // 1. Soft-delete the dropped event
+  const now = new Date().toISOString();
+  const { error: dropErr } = await supabase
+    .from("events")
+    .update({ deleted_at: now })
+    .eq("id", drop.id)
+    .eq("org_id", orgId);
+  if (dropErr) {
+    return c.json({ error: "drop_event_failed", detail: dropErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // 2. Update the kept event: clear relay_role, extend end to the later of the two
+  const newEnd = keep.end > drop.end ? keep.end : drop.end;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: keepErr } = await supabase
+    .from("events")
+    .update({ end: newEnd, relay_role: null } as any)
+    .eq("id", keep.id)
+    .eq("org_id", orgId);
+  if (keepErr) {
+    // Revert the drop-event soft-delete on failure
+    await supabase.from("events").update({ deleted_at: null }).eq("id", drop.id).eq("org_id", orgId);
+    return c.json({ error: "keep_update_failed", detail: keepErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // 3. Optionally replace stops on the kept event with the supplied merged set
+  if (body.mergedStops) {
+    await supabase.from("stops").delete().eq("event_id", keep.id).eq("org_id", orgId);
+    if (body.mergedStops.length) {
+      const stopRows = body.mergedStops.map((s, idx) => ({
+        event_id:       keep.id,
+        org_id:         orgId,
+        sequence:       idx + 1,
+        type:           s.type,
+        facility_name:  s.facilityName  ?? null,
+        address:        s.address       ?? null,
+        city:           s.city          ?? null,
+        timezone:       s.timezone      ?? null,
+        appt_start:     s.apptStart     ?? null,
+        appt_end:       s.apptEnd       ?? null,
+        lat:            s.lat           ?? null,
+        lng:            s.lng           ?? null,
+        instructions:   s.instructions  ?? null,
+        geocode_status: s.geocodeStatus ?? "pending",
+      }));
+      const { error: stopErr } = await supabase.from("stops").insert(stopRows);
+      if (stopErr) {
+        return c.json({ error: "stops_insert_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
+      }
+    }
+  }
+
+  const joined = await fetchLoadJoined(loadId, orgId);
+  const res: UnsplitRelayResponse = { loads: joined ?? [] };
   return c.json(res);
 });
 

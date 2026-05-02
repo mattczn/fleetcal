@@ -18,6 +18,7 @@ import type {
   UpdateLoadRequest, UpdateLoadResponse,
   UpdateEventRequest, UpdateEventResponse,
   SplitRelayRequest, SplitRelayResponse,
+  UnsplitRelayRequest, UnsplitRelayResponse,
   DeleteLoadResponse, RestoreLoadResponse,
   CreateEventRequest, CreateEventResponse,
   UpdateEventByIdRequest, UpdateEventByIdResponse,
@@ -76,6 +77,9 @@ class RailwayClient {
   }
   splitRelay(loadId: string, body: SplitRelayRequest) {
     return this.req<SplitRelayResponse>('POST', `/v1/loads/${loadId}/split-relay`, body);
+  }
+  unsplitRelay(loadId: string, body: UnsplitRelayRequest) {
+    return this.req<UnsplitRelayResponse>('POST', `/v1/loads/${loadId}/unsplit-relay`, body);
   }
   deleteLoad(id: string)              { return this.req<DeleteLoadResponse>('DELETE',  `/v1/loads/${id}`); }
   restoreLoad(id: string)             { return this.req<RestoreLoadResponse>('POST',   `/v1/loads/${id}/restore`); }

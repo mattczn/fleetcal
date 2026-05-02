@@ -1097,54 +1097,136 @@ export const useCalendarStore = create<CalendarStore>()(
         return e;
       }),
     }));
+    if (get().isDemo) return;
     const { orgId } = get();
-    if (orgId) {
-      const evts = get().events;
-      const pu = evts.find((e) => e.id === pickupId);
-      const de = evts.find((e) => e.id === deliveryId);
-      if (pu) db().from('events').update(appEventToDb(withResolvedDriverId(pu, get().drivers), orgId, pickupId)).eq('id', pickupId).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('saveRelayBoth pickup:', error); });
-      if (de) db().from('events').update(appEventToDb(withResolvedDriverId(de, get().drivers), orgId, deliveryId)).eq('id', deliveryId).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('saveRelayBoth delivery:', error); });
+    if (!orgId) return;
+
+    const evts = get().events;
+    const pu = evts.find((e) => e.id === pickupId);
+    const de = evts.find((e) => e.id === deliveryId);
+    if (!pu || !de) return;
+    const drivers = get().drivers;
+    const resolvedPu = withResolvedDriverId({ ...pu, ...pickupUpdates },   drivers);
+    const resolvedDe = withResolvedDriverId({ ...de, ...deliveryUpdates }, drivers);
+
+    // Apply driver resolution for the API payloads
+    const puPayload: typeof pickupUpdates   = { ...pickupUpdates };
+    const dePayload: typeof deliveryUpdates = { ...deliveryUpdates };
+    if ('driverId' in pickupUpdates || 'driverName' in pickupUpdates) {
+      puPayload.driverId   = resolvedPu.driverId   ?? undefined;
+      puPayload.driverName = resolvedPu.driverName ?? undefined;
     }
+    if ('driverId' in deliveryUpdates || 'driverName' in deliveryUpdates) {
+      dePayload.driverId   = resolvedDe.driverId   ?? undefined;
+      dePayload.driverName = resolvedDe.driverName ?? undefined;
+    }
+
+    // Legacy fallback: if either leg has no loadId (created pre-Phase-3
+    // wire-up), use the legacy double-write path so existing relays in
+    // production stay editable until backfill / Phase 2.5c.
+    if (!pu.loadId || !de.loadId) {
+      db().from('events').update(appEventToDb(resolvedPu, orgId, pickupId)).eq('id', pickupId).eq('org_id', orgId)
+        .then(({ error }) => { if (error) console.error('saveRelayBoth pickup (legacy):', error); });
+      db().from('events').update(appEventToDb(resolvedDe, orgId, deliveryId)).eq('id', deliveryId).eq('org_id', orgId)
+        .then(({ error }) => { if (error) console.error('saveRelayBoth delivery (legacy):', error); });
+      return;
+    }
+
+    // Both legs share the same loadId. Split each leg's updates into
+    // load-level + event-level. Load-level should match across legs (the
+    // modal shows one input for the whole load), but defensively prefer
+    // the pickup leg's values when they conflict.
+    const { loadUpdates: pickupLoadUpdates, eventUpdates: pickupEventUpdates } = splitForUpdate(puPayload);
+    const { loadUpdates: deliveryLoadUpdates, eventUpdates: deliveryEventUpdates } = splitForUpdate(dePayload);
+    const combinedLoadUpdates = { ...deliveryLoadUpdates, ...pickupLoadUpdates }; // pickup wins
+
+    const promises: Promise<unknown>[] = [];
+    if (Object.keys(combinedLoadUpdates).length) {
+      promises.push(railway.updateLoad(pu.loadId, combinedLoadUpdates));
+    }
+    if (Object.keys(pickupEventUpdates).length) {
+      promises.push(railway.updateLoadEvent(pu.loadId, pickupId, pickupEventUpdates));
+    }
+    if (Object.keys(deliveryEventUpdates).length) {
+      promises.push(railway.updateLoadEvent(de.loadId, deliveryId, deliveryEventUpdates));
+    }
+    if ('stops' in pickupUpdates && pickupUpdates.stops) {
+      promises.push(railway.replaceStops(pickupId, { stops: pickupUpdates.stops }));
+    }
+    if ('stops' in deliveryUpdates && deliveryUpdates.stops) {
+      promises.push(railway.replaceStops(deliveryId, { stops: deliveryUpdates.stops }));
+    }
+    Promise.all(promises).catch((err) => console.error('saveRelayBoth:', err));
   },
 
   removeRelay: (legId, auditLog) => {
     const state = get();
-    const leg     = state.events.find((e) => e.id === legId);
-    if (!leg?.relayGroupId) return;
-    const partner  = state.events.find((e) => e.relayGroupId === leg.relayGroupId && e.id !== legId);
+    const leg = state.events.find((e) => e.id === legId);
+    if (!leg) return;
+
+    // Find the partner: prefer load_id grouping (post-Phase-3), fall back
+    // to legacy relay_group_id for events not yet on Railway.
+    let partner: CalendarEvent | undefined;
+    if (leg.loadId) {
+      partner = state.events.find((e) => e.loadId === leg.loadId && e.id !== legId);
+    } else if (leg.relayGroupId) {
+      partner = state.events.find((e) => e.relayGroupId === leg.relayGroupId && e.id !== legId);
+    }
+    if (!partner) return;
+
     const pickup   = leg.relayRole === 'pickup'   ? leg : partner;
     const delivery = leg.relayRole === 'delivery' ? leg : partner;
     if (!pickup || !delivery) return;
-    const mergedStops = (pickup.stops ?? []).filter(s => s.type !== 'relay');
+
+    const mergedStops = (pickup.stops ?? []).filter((s) => s.type !== 'relay');
     const merged: CalendarEvent = {
       ...pickup,
-      end: delivery.end,
-      relayGroupId: undefined,
-      relayRole: undefined,
-      stops: mergedStops,
+      end:           delivery.end,
+      relayGroupId:  undefined,
+      relayRole:     undefined,
+      stops:         mergedStops,
       ...(auditLog !== undefined ? { auditLog } : {}),
     };
     const deletedAt = new Date().toISOString();
-    const trashed: DeletedEvent = { ...delivery, deletedAt, relayGroupId: undefined, relayRole: undefined };
+    const trashed: DeletedEvent = {
+      ...delivery,
+      deletedAt,
+      relayGroupId: undefined,
+      relayRole:    undefined,
+    };
     set((s) => ({
-      events: s.events.filter((e) => e.id !== delivery.id).map((e) => e.id === pickup.id ? merged : e),
+      events:        s.events.filter((e) => e.id !== delivery.id).map((e) => (e.id === pickup.id ? merged : e)),
       deletedEvents: [trashed, ...s.deletedEvents],
     }));
+    if (get().isDemo) return;
     const { orgId } = get();
-    if (orgId) {
-      const pickupUpdate: Record<string, unknown> = { end: delivery.end, relay_group_id: null, relay_role: null };
-      if (auditLog !== undefined) pickupUpdate.audit_log = auditLog;
-      Promise.all([
-        db().from('events').update(pickupUpdate).eq('id', pickup.id).eq('org_id', orgId),
-        db().from('events').update({ deleted_at: deletedAt }).eq('id', delivery.id).eq('org_id', orgId),
-        saveStops(pickup.id, orgId, mergedStops.length > 0 ? mergedStops : []),
-      ]).then(([r1, r2]) => {
-        if (r1.error) console.error('removeRelay pickup:', r1.error);
-        if (r2.error) console.error('removeRelay delivery:', r2.error);
-      });
+    if (!orgId) return;
+
+    // Railway path: use POST /v1/loads/:loadId/unsplit-relay if both legs
+    // have a loadId. Otherwise fall back to the legacy direct-supabase
+    // path (used for relays created pre-Phase-3 wire-up).
+    if (pickup.loadId && delivery.loadId && pickup.loadId === delivery.loadId) {
+      railway
+        .unsplitRelay(pickup.loadId, { keepEventId: pickup.id, mergedStops })
+        .catch((err) => console.error('removeRelay:', err));
+      return;
     }
+
+    // Legacy fallback
+    const pickupUpdate: Record<string, unknown> = {
+      end:             delivery.end,
+      relay_group_id:  null,
+      relay_role:      null,
+    };
+    if (auditLog !== undefined) pickupUpdate.audit_log = auditLog;
+    Promise.all([
+      db().from('events').update(pickupUpdate).eq('id', pickup.id).eq('org_id', orgId),
+      db().from('events').update({ deleted_at: deletedAt }).eq('id', delivery.id).eq('org_id', orgId),
+      saveStops(pickup.id, orgId, mergedStops),
+    ]).then(([r1, r2]) => {
+      if (r1.error) console.error('removeRelay pickup (legacy):', r1.error);
+      if (r2.error) console.error('removeRelay delivery (legacy):', r2.error);
+    });
   },
 
   // ── Calendar nav ──────────────────────────────────────────────────────────

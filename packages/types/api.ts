@@ -167,6 +167,25 @@ export interface SplitRelayResponse {
   loads: Load[]; // 2 entries: pickup leg, delivery leg
 }
 
+// ── POST /v1/loads/:id/unsplit-relay ────────────────────────────────────
+
+/**
+ * Inverse of split-relay: collapse a 2-event relay load back to a single
+ * event. `keepEventId` specifies which leg survives; the other is
+ * soft-deleted. The kept event has `relay_role` cleared and its end
+ * extended to the later of the two ends. If `mergedStops` is supplied
+ * the kept event's stops are replaced with that list (sequence rewritten
+ * 1..N); otherwise the kept event keeps its existing stops as-is.
+ */
+export interface UnsplitRelayRequest {
+  keepEventId: string;
+  mergedStops?: Stop[];
+}
+
+export interface UnsplitRelayResponse {
+  loads: Load[]; // single entry — the surviving event with its load
+}
+
 // ── DELETE /v1/loads/:id (soft-delete) ──────────────────────────────────
 
 export interface DeleteLoadResponse {
