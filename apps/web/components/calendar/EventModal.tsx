@@ -1491,7 +1491,7 @@ export default function EventModal() {
       catch (err) { console.error('PDF upload failed — rate con not saved, re-attach when editing:', err); }
     }
 
-    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops: stops.length > 0 ? stops : undefined, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined };
+    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined };
 
     const relayStop = stops.find(s => s.type === 'relay');
     const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
@@ -1541,7 +1541,6 @@ export default function EventModal() {
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
         status, relayGroupId: rgId, relayRole: 'pickup',
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
-        stops: [],
         ...(isEdit ? { auditLog: relayAuditLog } : {}),
       };
       const deliveryData: Omit<CalendarEvent, 'id'> = {
@@ -1550,7 +1549,6 @@ export default function EventModal() {
         start: deliveryLegStart, end: `${delivEndDate}T${endTime}`,
         status: 'scheduled', relayGroupId: rgId, relayRole: 'delivery',
         createdByName: currentUserName,
-        stops: [],
       };
       if (isEdit && modalEventId) { updateEvent(modalEventId, pickupData); addEvent(deliveryData, delivId); }
       else createRelayPair(pickupData, deliveryData, pickupId, delivId);
@@ -1567,7 +1565,6 @@ export default function EventModal() {
         start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
         status,
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
-        stops: [],
         ...(isEdit ? { auditLog: nextAuditLog } : {}),
       };
       isEdit && modalEventId ? updateEvent(modalEventId, payload) : addEvent(payload, newEventId);
@@ -3048,7 +3045,7 @@ export default function EventModal() {
                       const parts: Part[] = [];
                       if (entry.prevAssetId !== undefined)
                         parts.push({ key: 'asset', node: <>{b('Asset')} changed from {b(assetName(entry.prevAssetId))} to {b(entry.newAssetId !== undefined ? assetName(entry.newAssetId) : '—')}</> });
-                      if (entry.prevDriverName !== undefined)
+                      if (entry.prevDriverName !== undefined || entry.newDriverName !== undefined)
                         parts.push({ key: 'driver', node: <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</> });
                       if (entry.prevLoadPrice !== undefined)
                         parts.push({ key: 'lprice', node: <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</> });
