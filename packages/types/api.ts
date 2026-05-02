@@ -293,6 +293,18 @@ export interface ReplaceStopsResponse {
   loads: Load[];                       // single entry, with new stops populated
 }
 
+// ── GET /v1/loads/:id/rate-con-url ──────────────────────────────────────
+
+/**
+ * Returns a viewable URL for the load's rate-con PDF.
+ *   • Storage-path values → 1-hour signed URL from the `rate-cons` bucket
+ *   • Legacy data: URLs    → returned as-is
+ *   • No rate-con on file  → { url: null }
+ */
+export interface GetRateConUrlResponse {
+  url: string | null;
+}
+
 // ── GET /v1/events/:id/audit-log ────────────────────────────────────────
 
 /**

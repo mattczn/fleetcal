@@ -1069,7 +1069,7 @@ export default function EventModal() {
     let cancelled = false;
 
     if (rateConPdf.startsWith('data:')) {
-      // Fresh base64 upload — convert to object URL
+      // Fresh base64 upload (not yet uploaded) — convert to object URL locally.
       const byteStr = atob(rateConPdf.split(',')[1]);
       const ab = new ArrayBuffer(byteStr.length);
       const ia = new Uint8Array(ab);
@@ -1078,28 +1078,26 @@ export default function EventModal() {
       const url = URL.createObjectURL(blob);
       setPdfObjectUrl(url);
       return () => { cancelled = true; URL.revokeObjectURL(url); };
-    } else if (rateConPdf.startsWith('http') || rateConPdf.startsWith('blob:')) {
-      // Already a usable URL
+    }
+    if (rateConPdf.startsWith('blob:')) {
       setPdfObjectUrl(rateConPdf);
       return () => { cancelled = true; };
-    } else {
-      // Storage path (e.g. org_xxx/uuid.pdf) — fetch a signed URL
-      setPdfObjectUrl(''); // clear stale URL while re-fetching
-      import('@/lib/storage').then(({ getRateConSignedUrl }) =>
-        getRateConSignedUrl(rateConPdf)
-      ).then(url => {
-        if (cancelled) return;
-        if (url) {
-          setPdfObjectUrl(url);
-        } else {
-          console.error('[PDF] getRateConSignedUrl returned null for path:', rateConPdf);
-        }
-      }).catch(err => {
-        if (!cancelled) console.error('[PDF] signed URL fetch error:', err);
-      });
-      return () => { cancelled = true; };
     }
-  }, [rateConPdf, showPdfViewer, pdfRetryKey]);
+
+    // Stored on the load — ask the API for a signed URL (or pass-through
+    // for legacy data: URLs stored before the storage migration).
+    const ev = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+    if (!ev?.loadId) { setPdfObjectUrl(''); return () => { cancelled = true; }; }
+    setPdfObjectUrl(''); // clear stale URL while re-fetching
+    import('@/lib/railway').then(({ railway }) => railway.getRateConUrl(ev.loadId!))
+      .then(({ url }) => {
+        if (cancelled) return;
+        if (url) setPdfObjectUrl(url);
+        else console.error('[PDF] no rate-con URL for load:', ev.loadId);
+      })
+      .catch(err => { if (!cancelled) console.error('[PDF] rate-con URL fetch error:', err); });
+    return () => { cancelled = true; };
+  }, [rateConPdf, showPdfViewer, pdfRetryKey, modalEventId, events]);
 
 
   // Relay state

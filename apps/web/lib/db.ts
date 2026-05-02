@@ -492,20 +492,3 @@ export async function fetchEventAuditLog(eventId: string, _orgId: string): Promi
   }
 }
 
-export async function fetchEventPdf(eventId: string): Promise<string | null> {
-  const db = getSupabase();
-  const { data, error } = await db
-    .from('events')
-    .select('load:loads(rate_con_pdf)')
-    .eq('id', eventId)
-    .single();
-  if (error || !data) return null;
-  const load = Array.isArray(data.load) ? data.load[0] : data.load;
-  const val = (load as { rate_con_pdf: string | null } | null)?.rate_con_pdf ?? null;
-  if (!val) return null;
-  // Legacy: base64 data URLs stored before storage migration — return as-is
-  if (val.startsWith('data:')) return val;
-  // Storage path — return a signed URL valid for 1 hour
-  const { getRateConSignedUrl } = await import('./storage');
-  return getRateConSignedUrl(val);
-}

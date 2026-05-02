@@ -36,6 +36,7 @@ import {
   type UnsplitRelayResponse,
   type DeleteLoadResponse,
   type RestoreLoadResponse,
+  type GetRateConUrlResponse,
   type ApiErrorResponse,
   type Load,
   type LoadStatus,
@@ -438,6 +439,49 @@ loads.get("/search", async (c) => {
   merged.sort((a, b) => b.start.localeCompare(a.start));
 
   const res: ListLoadsResponse = { loads: merged.slice(0, limit) };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /v1/loads/:id/rate-con-url — viewable URL for the load's rate-con PDF
+// ─────────────────────────────────────────────────────────────────────────
+
+loads.get("/:id/rate-con-url", async (c) => {
+  const orgId = c.get("orgId");
+  const loadId = c.req.param("id");
+
+  const { data, error } = await supabase
+    .from("loads")
+    .select("rate_con_pdf")
+    .eq("id", loadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    console.error("[GET /v1/loads/:id/rate-con-url] read failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const val = (data as { rate_con_pdf: string | null }).rate_con_pdf;
+  if (!val) {
+    const res: GetRateConUrlResponse = { url: null };
+    return c.json(res);
+  }
+  // Legacy: base64 data URLs stored before the storage migration — pass through.
+  if (val.startsWith("data:")) {
+    const res: GetRateConUrlResponse = { url: val };
+    return c.json(res);
+  }
+
+  // Storage path → 1-hour signed URL
+  const { data: signed, error: signErr } = await supabase.storage
+    .from("rate-cons")
+    .createSignedUrl(val, 3600);
+  if (signErr || !signed) {
+    console.error("[GET /v1/loads/:id/rate-con-url] sign failed:", signErr);
+    return c.json({ error: "sign_failed", detail: signErr?.message } satisfies ApiErrorResponse, 500);
+  }
+  const res: GetRateConUrlResponse = { url: signed.signedUrl };
   return c.json(res);
 });
 
