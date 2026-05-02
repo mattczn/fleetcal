@@ -155,20 +155,42 @@ export function joinEventLoadToApp(
     priority:       (e.priority as boolean | null) ?? false,
     createdAt:      (e.created_at as string | null) ?? undefined,
 
-    // ── Load-level (from loads row when revenue, else undefined) ────────
+    // ── Load-level (from loads row when revenue, else fall back to legacy event columns) ──
+    // Legacy events created before Phase 2.5a have load-level data on the
+    // event row itself. The fallback (e.X) keeps reads working during the
+    // bilingual period; gets removed in Phase 2.5c when those columns are
+    // dropped.
     loadId:         (l?.id as string | undefined) ?? undefined,
-    internalLoadId: (l?.internal_load_id as number | undefined) ?? undefined,
-    loadNum:        (l?.load_num as string | null | undefined) ?? undefined,
-    broker:         (l?.broker as string | null | undefined) ?? undefined,
+    internalLoadId: (l?.internal_load_id as number | undefined)
+                      ?? (e.internal_load_id as number | null | undefined) ?? undefined,
+    loadNum:        (l?.load_num as string | null | undefined)
+                      ?? (e.load_num as string | null | undefined) ?? undefined,
+    broker:         (l?.broker as string | null | undefined)
+                      ?? (e.broker as string | null | undefined) ?? undefined,
     customerId:     (l?.customer_id as string | null | undefined) ?? undefined,
-    dispatcher:     (l?.dispatcher as string | null | undefined) ?? undefined,
-    createdByName:  (l?.created_by_name as string | null | undefined) ?? undefined,
-    loadPrice:      (l?.load_price as number | null | undefined) ?? undefined,
-    rateConPdf:     (l?.rate_con_pdf as string | null | undefined) ?? undefined,
-    accessorials:   (l?.accessorials as Accessorial[] | null | undefined) ?? undefined,
-    refNums:        parseRefNums(l?.ref_nums as string | null | undefined),
-    notes:          (l?.notes as string | null | undefined) ?? undefined,
-    auditLog:       (l?.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
+    dispatcher:     (l?.dispatcher as string | null | undefined)
+                      ?? (e.dispatcher as string | null | undefined) ?? undefined,
+    createdByName:  (l?.created_by_name as string | null | undefined)
+                      ?? (e.created_by_name as string | null | undefined) ?? undefined,
+    loadPrice:      (l?.load_price as number | null | undefined)
+                      ?? (e.load_price as number | null | undefined) ?? undefined,
+    rateConPdf:     (l?.rate_con_pdf as string | null | undefined)
+                      ?? (e.rate_con_pdf as string | null | undefined) ?? undefined,
+    accessorials:   (l?.accessorials as Accessorial[] | null | undefined)
+                      ?? (e.accessorials as Accessorial[] | null | undefined) ?? undefined,
+    refNums:        parseRefNums(
+                      (l?.ref_nums as string | null | undefined)
+                        ?? (e.ref_nums as string | null | undefined),
+                    ),
+    notes:          (l?.notes as string | null | undefined)
+                      // Legacy events: notes was the load-level "notes" field.
+                      // For non-revenue legacy events, the same column was the
+                      // event-level field. The Load consumer treats `notes` as
+                      // load-level; non-revenue uses `eventNotes` directly.
+                      ?? (l ? undefined : (e.notes as string | null | undefined)) ?? undefined,
+    auditLog:       (l?.audit_log as LoadAuditEntry[] | null | undefined)
+                      ?? (e.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
+    specialInstructions: (e.special_instructions as string | null | undefined) ?? undefined,
 
     stops: [], // populated separately by the stops fetch
   };

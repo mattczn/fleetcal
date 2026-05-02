@@ -10,6 +10,8 @@ import { getSupabase, appEventToDb, appAssetToDb, appDriverToDb, assetUpdatesToD
 import { normalizePhone } from '@/lib/phone';
 import type { OrgData } from '@/lib/db';
 import { fetchEventsInRange, saveStops, fetchSavedLocations, createSavedLocation, updateSavedLocation, deleteSavedLocation, fetchDispatchers, createDispatcher, updateDispatcher, deleteDispatcher, fetchCustomers, createCustomer, updateCustomer, deleteCustomer, fetchTrailers, createTrailer, updateTrailer, deleteTrailer } from '@/lib/db';
+import { railway } from '@/lib/railway';
+import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib/loadFieldSplit';
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
 import { localDateStr } from '@/lib/time-utils';
 
@@ -723,25 +725,69 @@ export const useCalendarStore = create<CalendarStore>()(
   // ── Events ────────────────────────────────────────────────────────────────
   addEvent: (event, presetId?) => {
     if (get().isDemo) return;
-    const id = presetId ?? crypto.randomUUID();
-    set((state) => ({ events: [...state.events, { ...event, id }] }));
+    const tempId = presetId ?? crypto.randomUUID();
+    // Optimistic insert with temp id; gets swapped for the server-allocated
+    // uuid when the Railway create returns.
+    set((state) => ({ events: [...state.events, { ...event, id: tempId }] }));
     const { orgId } = get();
-    if (orgId) {
-      const resolved = withResolvedDriverId(event, get().drivers);
-      db().from('events').insert(appEventToDb(resolved, orgId, id))
-        .then(({ error }) => {
-          if (error) { console.error('addEvent:', error.code, error.message, error.details, error.hint, error); return; }
-          if (event.stops?.length) saveStops(id, orgId, event.stops);
-          if (resolved.driverId) {
-            notifyDriver(
-              resolved.driverId,
-              'New load assigned',
-              event.loadNum ? `Load #${event.loadNum} — ${event.title}` : event.title,
-              { loadId: id },
-            );
-          }
-        });
+    if (!orgId) return;
+    const resolved = withResolvedDriverId(event, get().drivers);
+
+    // Non-revenue events have no parent load; use POST /v1/events.
+    if (event.eventKind === 'non_revenue') {
+      railway.createEvent({
+        title:          event.title,
+        start:          event.start,
+        end:            event.end,
+        assetId:        event.assetId,
+        nonRevenueType: event.nonRevenueType ?? 'Other',
+        driverId:       resolved.driverId,
+        driverName:     resolved.driverName ?? undefined,
+        status:         event.status,
+        trailerId:      event.trailerId,
+        trailerType:    event.trailerType,
+        driverPay:      event.driverPay,
+        eventNotes:     event.notes,           // for non-revenue, web.notes is event-level
+        priority:       event.priority,
+        stops:          event.stops,
+      })
+        .then((res) => {
+          const created = res.loads[0];
+          if (!created) return;
+          set((state) => ({
+            events: state.events.map((e) => (e.id === tempId ? created : e)),
+          }));
+        })
+        .catch((err) => console.error('addEvent (non-revenue):', err));
+      return;
     }
+
+    // Revenue events: POST /v1/loads creates load + 1 event in one shot.
+    const { load, event: evBody } = buildCreateLoadBody({
+      ...event,
+      driverId: resolved.driverId ?? undefined,
+      driverName: resolved.driverName ?? undefined,
+    });
+    railway.createLoad({ load, events: [evBody] })
+      .then((res) => {
+        const created = res.loads[0];
+        if (!created) return;
+        // Swap temp id for real id; carry over the joined fields the
+        // server returned (loadId, internalLoadId, etc.).
+        set((state) => ({
+          events: state.events.map((e) => (e.id === tempId ? created : e)),
+        }));
+        // Notify driver if assigned
+        if (resolved.driverId) {
+          notifyDriver(
+            resolved.driverId,
+            'New load assigned',
+            event.loadNum ? `Load #${event.loadNum} — ${event.title}` : event.title,
+            { loadId: created.id },
+          );
+        }
+      })
+      .catch((err) => console.error('addEvent (revenue):', err));
   },
 
   updateEvent: (id, updates) => {
@@ -749,26 +795,89 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({ events: state.events.map((e) => (e.id === id ? { ...e, ...updates } : e)) }));
     if (get().isDemo) return;
     const { orgId } = get();
-    if (orgId) {
-      const ev = get().events.find((e) => e.id === id);
-      if (ev) {
-        const merged   = { ...ev, ...updates };
-        const resolved = withResolvedDriverId(merged, get().drivers);
-        db().from('events').update(appEventToDb(resolved, orgId, id)).eq('id', id).eq('org_id', orgId)
-          .then(({ error }) => {
-            if (error) { console.error('updateEvent:', error.code, error.message, error.details, error.hint, error); return; }
-            if ('stops' in updates) saveStops(id, orgId, updates.stops);
-            if (resolved.driverId && resolved.driverId !== prevDriverId) {
-              notifyDriver(
-                resolved.driverId,
-                'Load assigned to you',
-                ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
-                { loadId: id },
-              );
-            }
-          });
-      }
+    if (!orgId) return;
+
+    const ev = get().events.find((e) => e.id === id);
+    if (!ev) return;
+    const merged = { ...ev, ...updates };
+    const resolved = withResolvedDriverId(merged, get().drivers);
+
+    // Apply driver resolution to the event-level updates so the API receives
+    // the resolved driver_id when one was needed.
+    const resolvedUpdates: typeof updates = { ...updates };
+    if ('driverId' in updates || 'driverName' in updates) {
+      resolvedUpdates.driverId = resolved.driverId ?? undefined;
+      resolvedUpdates.driverName = resolved.driverName ?? undefined;
     }
+
+    const isNonRevenue = ev.eventKind === 'non_revenue';
+
+    // Non-revenue events: only event-level updates. PATCH /v1/events/:id.
+    if (isNonRevenue) {
+      const evUpdate = buildEventByIdUpdate(resolvedUpdates, true);
+      const promises: Promise<unknown>[] = [];
+      if (Object.keys(evUpdate).length) {
+        promises.push(railway.updateEvent(id, evUpdate));
+      }
+      if ('stops' in updates && updates.stops) {
+        promises.push(railway.replaceStops(id, { stops: updates.stops }));
+      }
+      Promise.all(promises).catch((err) => console.error('updateEvent (non-revenue):', err));
+      return;
+    }
+
+    // Revenue events. If there's a loadId, write through Railway to both
+    // tables. If there isn't (legacy event created before Phase 2.5a /
+    // before web wired through Railway), fall back to direct events-table
+    // update so existing data stays writable until Phase 2.5c.
+    if (!ev.loadId) {
+      db()
+        .from('events')
+        .update(appEventToDb(resolved, orgId, id))
+        .eq('id', id)
+        .eq('org_id', orgId)
+        .then(({ error }) => {
+          if (error) {
+            console.error('updateEvent (legacy):', error);
+            return;
+          }
+          if ('stops' in updates) saveStops(id, orgId, updates.stops);
+          if (resolved.driverId && resolved.driverId !== prevDriverId) {
+            notifyDriver(
+              resolved.driverId,
+              'Load assigned to you',
+              ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
+              { loadId: id },
+            );
+          }
+        });
+      return;
+    }
+
+    // Revenue + has loadId: split into load update + event update.
+    const { loadUpdates, eventUpdates } = splitForUpdate(resolvedUpdates);
+    const promises: Promise<unknown>[] = [];
+    if (Object.keys(loadUpdates).length) {
+      promises.push(railway.updateLoad(ev.loadId, loadUpdates));
+    }
+    if (Object.keys(eventUpdates).length) {
+      promises.push(railway.updateLoadEvent(ev.loadId, id, eventUpdates));
+    }
+    if ('stops' in updates && updates.stops) {
+      promises.push(railway.replaceStops(id, { stops: updates.stops }));
+    }
+    Promise.all(promises)
+      .then(() => {
+        if (resolved.driverId && resolved.driverId !== prevDriverId) {
+          notifyDriver(
+            resolved.driverId,
+            'Load assigned to you',
+            ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
+            { loadId: ev.loadId },
+          );
+        }
+      })
+      .catch((err) => console.error('updateEvent:', err));
   },
 
   removeEvent: (id, auditEntry) => {
@@ -783,12 +892,26 @@ export const useCalendarStore = create<CalendarStore>()(
       deletedEvents: [{ ...updated, deletedAt }, ...state.deletedEvents],
     }));
     const { orgId } = get();
-    if (orgId) {
+    if (!orgId) return;
+
+    if (ev.eventKind === 'non_revenue') {
+      railway.deleteEvent(id).catch((err) => console.error('removeEvent (non-revenue):', err));
+      return;
+    }
+
+    if (!ev.loadId) {
+      // Legacy event without loadId — fall through to legacy soft-delete.
+      // Audit log writing also goes via legacy path here; Railway PATCH
+      // doesn't yet support audit_log entries.
       const patch: Record<string, unknown> = { deleted_at: deletedAt };
       if (auditEntry) patch.audit_log = newAuditLog;
       db().from('events').update(patch).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('removeEvent:', error); });
+        .then(({ error }) => { if (error) console.error('removeEvent (legacy):', error); });
+      return;
     }
+
+    // Revenue + has loadId: DELETE /v1/loads/:loadId cascades to events.
+    railway.deleteLoad(ev.loadId).catch((err) => console.error('removeEvent:', err));
   },
 
   addEventFromRemote: (event) => {
@@ -828,12 +951,19 @@ export const useCalendarStore = create<CalendarStore>()(
       deletedEvents: state.deletedEvents.filter((e) => e.id !== id),
     }));
     const { orgId } = get();
-    if (orgId) {
+    if (!orgId) return;
+
+    if (ev.eventKind === 'non_revenue' || !ev.loadId) {
+      // Non-revenue or legacy revenue: legacy event-level un-soft-delete.
       const patch: Record<string, unknown> = { deleted_at: null };
       if (auditEntry) patch.audit_log = newAuditLog;
       db().from('events').update(patch).eq('id', id).eq('org_id', orgId)
-        .then(({ error }) => { if (error) console.error('restoreEvent:', error); });
+        .then(({ error }) => { if (error) console.error('restoreEvent (legacy):', error); });
+      return;
     }
+
+    // Revenue + has loadId: restore via load endpoint.
+    railway.restoreLoad(ev.loadId).catch((err) => console.error('restoreEvent:', err));
   },
 
   purgeEvent: (id) => {
@@ -875,28 +1005,74 @@ export const useCalendarStore = create<CalendarStore>()(
 
   // ── Relay ─────────────────────────────────────────────────────────────────
   createRelayPair: (pickup, delivery, presetPickupId?, presetDeliveryId?) => {
-    const relayGroupId = crypto.randomUUID();
-    const pickupId     = presetPickupId  ?? crypto.randomUUID();
-    const deliveryId   = presetDeliveryId ?? crypto.randomUUID();
+    // Optimistic insert with temp ids; swapped on Railway response.
+    const tempPickupId   = presetPickupId   ?? crypto.randomUUID();
+    const tempDeliveryId = presetDeliveryId ?? crypto.randomUUID();
     set((state) => ({
       events: [
         ...state.events,
-        { ...pickup,   relayGroupId, relayRole: 'pickup'   as const, id: pickupId   },
-        { ...delivery, relayGroupId, relayRole: 'delivery' as const, id: deliveryId },
+        { ...pickup,   relayRole: 'pickup'   as const, id: tempPickupId   },
+        { ...delivery, relayRole: 'delivery' as const, id: tempDeliveryId },
       ],
     }));
     const { orgId } = get();
-    if (orgId) {
-      Promise.all([
-        db().from('events').insert(appEventToDb(withResolvedDriverId({ ...pickup,   relayGroupId, relayRole: 'pickup'   }, get().drivers), orgId, pickupId)),
-        db().from('events').insert(appEventToDb(withResolvedDriverId({ ...delivery, relayGroupId, relayRole: 'delivery' }, get().drivers), orgId, deliveryId)),
-      ]).then(([r1, r2]) => {
-        if (r1.error) { console.error('createRelayPair pickup:', r1.error); return; }
-        if (r2.error) { console.error('createRelayPair delivery:', r2.error); return; }
-        if (pickup.stops?.length)   saveStops(pickupId,   orgId, pickup.stops);
-        if (delivery.stops?.length) saveStops(deliveryId, orgId, delivery.stops);
-      });
-    }
+    if (!orgId) return;
+    const drivers = get().drivers;
+    const resolvedPickup   = withResolvedDriverId(pickup,   drivers);
+    const resolvedDelivery = withResolvedDriverId(delivery, drivers);
+
+    // POST /v1/loads with two events. Load-level fields come from the
+    // pickup leg (in practice both legs carry the same load-level data
+    // from the modal save).
+    const { load } = buildCreateLoadBody({ ...pickup, driverId: resolvedPickup.driverId, driverName: resolvedPickup.driverName });
+    railway.createLoad({
+      load,
+      events: [
+        {
+          title:        pickup.title,
+          start:        pickup.start,
+          end:          pickup.end,
+          assetId:      pickup.assetId,
+          driverId:     resolvedPickup.driverId,
+          driverName:   resolvedPickup.driverName ?? undefined,
+          status:       pickup.status,
+          relayRole:    'pickup',
+          trailerId:    pickup.trailerId,
+          trailerType:  pickup.trailerType,
+          driverPay:    pickup.driverPay,
+          priority:     pickup.priority,
+          stops:        pickup.stops,
+        },
+        {
+          title:        delivery.title,
+          start:        delivery.start,
+          end:          delivery.end,
+          assetId:      delivery.assetId,
+          driverId:     resolvedDelivery.driverId,
+          driverName:   resolvedDelivery.driverName ?? undefined,
+          status:       delivery.status,
+          relayRole:    'delivery',
+          trailerId:    delivery.trailerId,
+          trailerType:  delivery.trailerType,
+          driverPay:    delivery.driverPay,
+          priority:     delivery.priority,
+          stops:        delivery.stops,
+        },
+      ],
+    })
+      .then((res) => {
+        // Find the pickup and delivery rows in the response and swap ids.
+        const pickupRes   = res.loads.find((l) => l.relayRole === 'pickup');
+        const deliveryRes = res.loads.find((l) => l.relayRole === 'delivery');
+        set((state) => ({
+          events: state.events.map((e) => {
+            if (e.id === tempPickupId   && pickupRes)   return pickupRes;
+            if (e.id === tempDeliveryId && deliveryRes) return deliveryRes;
+            return e;
+          }),
+        }));
+      })
+      .catch((err) => console.error('createRelayPair:', err));
   },
 
   saveRelayBoth: (pickupId, pickupUpdates, deliveryId, deliveryUpdates) => {

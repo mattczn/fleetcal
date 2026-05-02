@@ -1,13 +1,35 @@
 'use client';
 
 import { getSupabase, dbAssetToApp, dbDriverToApp, dbEventToApp, appStopToDb, dbStopToApp, DbAsset, DbDriver, DbEvent, DbStop, DbTrailer, dbTrailerToApp, appTrailerToDb, trailerUpdatesToDb } from './supabase';
+import { joinEventLoadToApp } from '@fleetcal/types';
 import type { DeletedEvent } from '@/store/useCalendarStore';
 import type { Asset, Driver, CalendarEvent, Stop, SavedLocation, Dispatcher, Customer, Trailer } from './types';
 
-// Calendar list fetch — excludes `audit_log` (accumulates over time, can be 2-4KB
-// per event). It's fetched on demand when the modal opens via fetchEventAuditLog.
-// rate_con_pdf is kept since it's a short storage path string (~100 chars).
-const EVENT_COLS = 'id,internal_load_id,org_id,asset_id,title,start,end,driver_name,driver_id,status,relay_group_id,relay_role,load_num,ref_nums,broker,trailer_type,trailer_id,dispatcher,load_price,driver_pay,special_instructions,notes,accessorials,rate_con_pdf,priority,deleted_at,created_at,updated_at,event_kind,non_revenue_type,created_by_name';
+// Joined-query columns. Event row carries event-level fields plus the
+// legacy denormalized load fields (kept until Phase 2.5c) so reads work
+// for events created either via Railway (load row populated, event-level
+// columns sparse) OR via the legacy direct-Supabase path (load row null,
+// event-level columns populated). joinEventLoadToApp resolves which set
+// to use per row.
+//
+// audit_log is excluded (accumulates over time; fetched on-demand by the
+// modal via fetchEventAuditLog).
+const EVENT_COLS = 'id,org_id,asset_id,title,start,end,driver_name,driver_id,status,relay_role,trailer_type,trailer_id,driver_pay,notes,priority,deleted_at,created_at,updated_at,event_kind,non_revenue_type,load_id,internal_load_id,load_num,ref_nums,broker,dispatcher,load_price,special_instructions,accessorials,rate_con_pdf,created_by_name,relay_group_id';
+const LOAD_COLS = 'id,internal_load_id,load_num,broker,load_price,dispatcher,notes,accessorials,rate_con_pdf,ref_nums,created_by_name,customer_id';
+const EVENT_SELECT_JOINED = `${EVENT_COLS}, load:loads(${LOAD_COLS})`;
+
+/**
+ * Convert a joined-query row (event + nested `load`) into the app-domain
+ * Load (CalendarEvent) view. PostgREST returns the nested relationship as
+ * an array even for many-to-one, so we unwrap.
+ */
+function joinedRowToCalendarEvent(row: unknown): CalendarEvent {
+  const r = row as Record<string, unknown> & {
+    load?: Record<string, unknown>[] | Record<string, unknown> | null;
+  };
+  const load = Array.isArray(r.load) ? (r.load[0] ?? null) : (r.load ?? null);
+  return joinEventLoadToApp(r, load) as CalendarEvent;
+}
 
 export interface OrgData {
   assets: Asset[];
@@ -24,7 +46,7 @@ export async function fetchOrgData(
 ): Promise<OrgData> {
   const db = getSupabase();
 
-  let eventsQuery = db.from('events').select(EVENT_COLS).eq('org_id', orgId).order('start');
+  let eventsQuery = db.from('events').select(EVENT_SELECT_JOINED).eq('org_id', orgId).order('start');
   if (windowStart) eventsQuery = eventsQuery.gte('start', windowStart);
   if (windowEnd)   eventsQuery = eventsQuery.lte('start', windowEnd);
 
@@ -39,12 +61,16 @@ export async function fetchOrgData(
   if (driversRes.error) throw driversRes.error;
   if (eventsRes.error) throw eventsRes.error;
 
-  const allEventRows = (eventsRes.data ?? []) as DbEvent[];
-  const events        = allEventRows.filter(r => !r.deleted_at).map(dbEventToApp);
-  const deletedEvents = allEventRows.filter(r => !!r.deleted_at).map(r => ({
-    ...dbEventToApp(r),
-    deletedAt: r.deleted_at!,
-  }));
+  const allEventRows = (eventsRes.data ?? []) as Array<Record<string, unknown> & { deleted_at: string | null }>;
+  const events = allEventRows
+    .filter(r => !r.deleted_at)
+    .map(joinedRowToCalendarEvent);
+  const deletedEvents = allEventRows
+    .filter(r => !!r.deleted_at)
+    .map(r => ({
+      ...joinedRowToCalendarEvent(r),
+      deletedAt: r.deleted_at as string,
+    }));
 
   await attachStopsToEvents([...events, ...deletedEvents]);
 
@@ -66,16 +92,18 @@ export async function fetchEventsInRange(
 ): Promise<{ events: CalendarEvent[]; deletedEvents: DeletedEvent[] }> {
   const db = getSupabase();
   const { data, error } = await db.from('events')
-    .select(EVENT_COLS)
+    .select(EVENT_SELECT_JOINED)
     .eq('org_id', orgId)
     .gte('start', rangeStart)
     .lte('start', rangeEnd)
     .order('start');
 
   if (error) throw error;
-  const rows          = (data ?? []) as DbEvent[];
-  const events        = rows.filter(r => !r.deleted_at).map(dbEventToApp);
-  const deletedEvents = rows.filter(r => !!r.deleted_at).map(r => ({ ...dbEventToApp(r), deletedAt: r.deleted_at! }));
+  const rows = (data ?? []) as Array<Record<string, unknown> & { deleted_at: string | null }>;
+  const events = rows.filter(r => !r.deleted_at).map(joinedRowToCalendarEvent);
+  const deletedEvents = rows
+    .filter(r => !!r.deleted_at)
+    .map(r => ({ ...joinedRowToCalendarEvent(r), deletedAt: r.deleted_at as string }));
 
   await attachStopsToEvents([...events, ...deletedEvents]);
 
@@ -228,13 +256,13 @@ export async function fetchBrokerLoads(orgId: string, names: string[]): Promise<
   const orFilter = names.map(n => `broker.ilike."${n.replace(/"/g, '')}"`).join(',');
   const { data, error } = await db
     .from('events')
-    .select(EVENT_COLS)
+    .select(EVENT_SELECT_JOINED)
     .eq('org_id', orgId)
     .is('deleted_at', null)
     .or(orFilter)
     .order('start', { ascending: false });
   if (error) { console.error('fetchBrokerLoads:', error.message); return []; }
-  return (data as DbEvent[]).map(dbEventToApp);
+  return ((data ?? []) as Array<Record<string, unknown>>).map(joinedRowToCalendarEvent);
 }
 
 export async function fetchCustomers(orgId: string): Promise<Customer[]> {
