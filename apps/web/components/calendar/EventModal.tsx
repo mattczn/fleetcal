@@ -391,16 +391,18 @@ function PdfCanvas({ dataUrl, onRetry }: { dataUrl: string; onRetry?: () => void
   const [zoomMult, setZoomMult] = useState(1.0);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Load PDF once per dataUrl (retryKey bump forces a fresh attempt)
+  // Load PDF once per dataUrl (retryKey bump forces a fresh attempt).
+  // Empty dataUrl is treated as "still loading" — common path: signed-URL
+  // fetch hasn't returned yet — so we stay in the spinner state instead
+  // of flashing an error and a Retry button.
   useEffect(() => {
     let cancelled = false;
     pdfRef.current = null;
     setReady(false);
     setError('');
+    if (!dataUrl) return; // wait for parent to provide a URL
 
     (async () => {
-      if (!dataUrl) throw new Error('No PDF URL provided');
-
       // Load pdfjs from CDN (sidesteps webpack/Next.js .mjs bundling bugs that
       // produce "Object.defineProperty called on non-object" with v5).
       const pdfjsLib = await loadPdfJsFromCDN();
@@ -504,7 +506,7 @@ function PdfCanvas({ dataUrl, onRetry }: { dataUrl: string; onRetry?: () => void
       <div className="flex-1 overflow-auto" style={{ background: '#525659', padding: 16 }}>
         {!ready && !error && (
           <div className="flex items-center justify-center gap-2 py-16 text-sm" style={{ color: 'rgba(255,255,255,.5)' }}>
-            <Loader2 size={16} className="animate-spin" /> Rendering…
+            <Loader2 size={16} className="animate-spin" /> {dataUrl ? 'Rendering…' : 'Loading…'}
           </div>
         )}
         {error && (
