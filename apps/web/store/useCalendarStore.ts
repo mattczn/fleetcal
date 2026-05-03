@@ -601,7 +601,7 @@ export const useCalendarStore = create<CalendarStore>()(
   updateAsset: (id, updates) => {
     set((state) => ({ assets: state.assets.map((a) => (a.id === id ? { ...a, ...updates } : a)) }));
     if (get().isDemo) return;
-    railway.updateAsset(id, {
+    const body = {
       ...(updates.name !== undefined            ? { name: updates.name } : {}),
       ...(updates.color !== undefined           ? { color: updates.color } : {}),
       ...(updates.type !== undefined            ? { type: updates.type } : {}),
@@ -610,7 +610,9 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
       ...(updates.hidden !== undefined          ? { hidden: updates.hidden } : {}),
       ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
-    }).catch((err) => console.error('updateAsset:', err));
+    };
+    if (Object.keys(body).length === 0) return;
+    railway.updateAsset(id, body).catch((err) => console.error('updateAsset:', err));
   },
 
   removeAsset: (id) => {
@@ -672,13 +674,15 @@ export const useCalendarStore = create<CalendarStore>()(
   updateDriver: (id, updates) => {
     set((state) => ({ drivers: state.drivers.map((d) => (d.id === id ? { ...d, ...updates } : d)) }));
     if (get().isDemo) return;
-    railway.updateDriver(id, {
+    const body = {
       ...(updates.name      !== undefined ? { name: updates.name } : {}),
       ...(updates.firstName !== undefined ? { firstName: updates.firstName ?? null } : {}),
       ...(updates.lastName  !== undefined ? { lastName: updates.lastName ?? null } : {}),
       ...(updates.phone     !== undefined ? { phone: normalizePhone(updates.phone) } : {}),
       ...(updates.notes     !== undefined ? { notes: updates.notes ?? null } : {}),
-    }).catch((err) => console.error('updateDriver:', err));
+    };
+    if (Object.keys(body).length === 0) return;
+    railway.updateDriver(id, body).catch((err) => console.error('updateDriver:', err));
   },
 
   removeDriver: (id) => {

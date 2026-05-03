@@ -92,15 +92,16 @@ export async function createTrailer(_orgId: string, t: Omit<Trailer, 'id'>, _sor
 }
 
 export async function updateTrailer(id: number, updates: Partial<Omit<Trailer, 'id'>>): Promise<void> {
-  try {
-    await railway.updateTrailer(id, {
-      ...(updates.name !== undefined            ? { name: updates.name } : {}),
-      ...(updates.trailerNumber !== undefined   ? { trailerNumber: updates.trailerNumber ?? null } : {}),
-      ...(updates.category !== undefined        ? { category: updates.category } : {}),
-      ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
-      ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
-    });
-  } catch (err) { console.error('updateTrailer:', err); }
+  const body = {
+    ...(updates.name !== undefined            ? { name: updates.name } : {}),
+    ...(updates.trailerNumber !== undefined   ? { trailerNumber: updates.trailerNumber ?? null } : {}),
+    ...(updates.category !== undefined        ? { category: updates.category } : {}),
+    ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
+    ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
+  };
+  if (Object.keys(body).length === 0) return;
+  try { await railway.updateTrailer(id, body); }
+  catch (err) { console.error('updateTrailer:', err); }
 }
 
 export async function deleteTrailer(id: number): Promise<void> {
@@ -129,15 +130,16 @@ export async function createSavedLocation(_orgId: string, loc: Omit<SavedLocatio
 }
 
 export async function updateSavedLocation(id: string, updates: Partial<Omit<SavedLocation, 'id'>>): Promise<void> {
-  try {
-    await railway.updateSavedLocation(id, {
-      ...(updates.name     !== undefined ? { name: updates.name } : {}),
-      ...(updates.address  !== undefined ? { address: updates.address ?? null } : {}),
-      ...(updates.lat      !== undefined ? { lat: updates.lat ?? null } : {}),
-      ...(updates.lng      !== undefined ? { lng: updates.lng ?? null } : {}),
-      ...(updates.timezone !== undefined ? { timezone: updates.timezone ?? null } : {}),
-    });
-  } catch (err) { console.error('updateSavedLocation:', err); }
+  const body = {
+    ...(updates.name     !== undefined ? { name: updates.name } : {}),
+    ...(updates.address  !== undefined ? { address: updates.address ?? null } : {}),
+    ...(updates.lat      !== undefined ? { lat: updates.lat ?? null } : {}),
+    ...(updates.lng      !== undefined ? { lng: updates.lng ?? null } : {}),
+    ...(updates.timezone !== undefined ? { timezone: updates.timezone ?? null } : {}),
+  };
+  if (Object.keys(body).length === 0) return;
+  try { await railway.updateSavedLocation(id, body); }
+  catch (err) { console.error('updateSavedLocation:', err); }
 }
 
 export async function deleteSavedLocation(id: string): Promise<void> {
@@ -182,18 +184,19 @@ export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): P
 }
 
 export async function updateCustomer(id: string, updates: Partial<Omit<Customer, 'id'>>): Promise<void> {
-  try {
-    await railway.updateCustomer(id, {
-      ...(updates.name !== undefined         ? { name: updates.name } : {}),
-      ...(updates.aliases !== undefined      ? { aliases: updates.aliases } : {}),
-      ...(updates.shortName !== undefined    ? { shortName: updates.shortName ?? null } : {}),
-      ...(updates.mcNum !== undefined        ? { mcNum: updates.mcNum ?? null } : {}),
-      ...(updates.contactName !== undefined  ? { contactName: updates.contactName ?? null } : {}),
-      ...(updates.contactEmail !== undefined ? { contactEmail: updates.contactEmail ?? null } : {}),
-      ...(updates.contactPhone !== undefined ? { contactPhone: updates.contactPhone ?? null } : {}),
-      ...(updates.notes !== undefined        ? { notes: updates.notes ?? null } : {}),
-    });
-  } catch (err) { console.error('updateCustomer:', err); }
+  const body = {
+    ...(updates.name !== undefined         ? { name: updates.name } : {}),
+    ...(updates.aliases !== undefined      ? { aliases: updates.aliases } : {}),
+    ...(updates.shortName !== undefined    ? { shortName: updates.shortName ?? null } : {}),
+    ...(updates.mcNum !== undefined        ? { mcNum: updates.mcNum ?? null } : {}),
+    ...(updates.contactName !== undefined  ? { contactName: updates.contactName ?? null } : {}),
+    ...(updates.contactEmail !== undefined ? { contactEmail: updates.contactEmail ?? null } : {}),
+    ...(updates.contactPhone !== undefined ? { contactPhone: updates.contactPhone ?? null } : {}),
+    ...(updates.notes !== undefined        ? { notes: updates.notes ?? null } : {}),
+  };
+  if (Object.keys(body).length === 0) return;
+  try { await railway.updateCustomer(id, body); }
+  catch (err) { console.error('updateCustomer:', err); }
 }
 
 export async function deleteCustomer(id: string): Promise<void> {
@@ -214,12 +217,13 @@ export async function createDispatcher(_orgId: string, name: string, isDefault: 
 }
 
 export async function updateDispatcher(id: string, _orgId: string, updates: { name?: string; isDefault?: boolean }): Promise<void> {
-  try {
-    await railway.updateDispatcher(id, {
-      ...(updates.name !== undefined      ? { name: updates.name } : {}),
-      ...(updates.isDefault !== undefined ? { isDefault: updates.isDefault } : {}),
-    });
-  } catch (err) { console.error('updateDispatcher:', err); }
+  const body = {
+    ...(updates.name !== undefined      ? { name: updates.name } : {}),
+    ...(updates.isDefault !== undefined ? { isDefault: updates.isDefault } : {}),
+  };
+  if (Object.keys(body).length === 0) return;
+  try { await railway.updateDispatcher(id, body); }
+  catch (err) { console.error('updateDispatcher:', err); }
 }
 
 export async function deleteDispatcher(id: string): Promise<void> {
