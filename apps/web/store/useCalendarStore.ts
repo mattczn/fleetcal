@@ -129,6 +129,8 @@ interface CalendarStore extends ModalState {
   autoExpireTrash: () => void;
 
   createRelayPair: (pickup: Omit<CalendarEvent, 'id'>, delivery: Omit<CalendarEvent, 'id'>, presetPickupId?: string, presetDeliveryId?: string) => void;
+  /** Convert an existing single-event load into a relay (pickup keeps its loadId; delivery is a new event on the same load). */
+  splitToRelay: (pickupEventId: string, pickupUpdates: Partial<Omit<CalendarEvent, 'id'>>, deliveryData: Omit<CalendarEvent, 'id'>, presetDeliveryId?: string) => void;
   saveRelayBoth: (pickupId: string, pickupUpdates: Partial<Omit<CalendarEvent, 'id'>>, deliveryId: string, deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>>) => void;
   removeRelay: (legId: string, auditLog?: import('@/lib/types').LoadAuditEntry[]) => void;
 
@@ -1043,6 +1045,94 @@ export const useCalendarStore = create<CalendarStore>()(
         }));
       })
       .catch((err) => console.error('createRelayPair:', err));
+  },
+
+  splitToRelay: (pickupEventId, pickupUpdates, deliveryData, presetDeliveryId) => {
+    const state = get();
+    const ev = state.events.find(e => e.id === pickupEventId);
+    if (!ev) {
+      console.error('splitToRelay: event not found', pickupEventId);
+      return;
+    }
+    if (!ev.loadId) {
+      console.error('splitToRelay: event has no loadId; cannot split', pickupEventId);
+      return;
+    }
+    if (state.isDemo) return;
+    const { orgId } = state;
+    if (!orgId) return;
+
+    const tempDeliveryId = presetDeliveryId ?? crypto.randomUUID();
+    const stops = pickupUpdates.stops ?? deliveryData.stops ?? ev.stops ?? [];
+    const relayIdx = stops.findIndex(s => s.type === 'relay');
+    if (relayIdx < 0) {
+      console.error('splitToRelay: no relay-type stop in stops list');
+      return;
+    }
+    const pickupLegStops = stops.slice(0, relayIdx + 1);
+    const deliveryLegStops = stops.slice(relayIdx);
+
+    // Optimistic state: existing event becomes the pickup leg; add a temp
+    // delivery on the same loadId. The .then below swaps in server data.
+    const updatedPickup: CalendarEvent = {
+      ...ev,
+      ...pickupUpdates,
+      relayRole: 'pickup',
+      relayGroupId: ev.loadId,
+      stops: pickupLegStops,
+    };
+    const tempDelivery: CalendarEvent = {
+      ...(deliveryData as CalendarEvent),
+      id: tempDeliveryId,
+      loadId: ev.loadId,
+      relayRole: 'delivery',
+      relayGroupId: ev.loadId,
+      stops: deliveryLegStops,
+    };
+    set(s => ({
+      events: [...s.events.map(e => e.id === pickupEventId ? updatedPickup : e), tempDelivery],
+    }));
+
+    // 1. Apply load-level edits (broker, accessorials, notes, etc.) — splitRelay
+    //    only touches event/stop rows.
+    const drivers = state.drivers;
+    const resolvedPickup = withResolvedDriverId({ ...ev, ...pickupUpdates }, drivers);
+    const resolvedDelivery = withResolvedDriverId(deliveryData, drivers);
+
+    const promises: Promise<unknown>[] = [];
+    const { loadUpdates } = splitForUpdate(resolvedPickup);
+    if (Object.keys(loadUpdates).length) {
+      promises.push(railway.updateLoad(ev.loadId, loadUpdates));
+    }
+
+    // 2. Convert single → relay via the API. The server partitions stops at
+    //    relayStopIndex into pickup/delivery legs and creates the delivery.
+    promises.push(
+      railway.splitRelay(ev.loadId, {
+        pickupEnd:           updatedPickup.end,
+        deliveryStart:       (deliveryData.start as string),
+        deliveryEnd:         (deliveryData.end as string),
+        deliveryAssetId:     resolvedDelivery.assetId as number,
+        deliveryDriverId:    resolvedDelivery.driverId ?? null,
+        deliveryDriverName:  resolvedDelivery.driverName ?? null,
+        mergedStops:         stops,
+        relayStopIndex:      relayIdx,
+      }).then(res => {
+        const realPickup   = res.loads.find(l => l.relayRole === 'pickup');
+        const realDelivery = res.loads.find(l => l.relayRole === 'delivery');
+        if (!realPickup || !realDelivery) return;
+        const realIds = new Set([realPickup.id, realDelivery.id]);
+        set(s => ({
+          events: [
+            ...s.events.filter(e => e.id !== tempDeliveryId && e.id !== pickupEventId && !realIds.has(e.id)),
+            realPickup,
+            realDelivery,
+          ],
+        }));
+      }),
+    );
+
+    Promise.all(promises).catch(err => console.error('splitToRelay:', err));
   },
 
   saveRelayBoth: (pickupId, pickupUpdates, deliveryId, deliveryUpdates) => {
