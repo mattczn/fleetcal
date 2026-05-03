@@ -35,11 +35,14 @@ const assistant = new Hono<{ Variables: AuthVariables }>();
 
 interface AssistantBody {
   messages: { role: "user" | "assistant"; content: string }[];
+  /** IANA timezone name (e.g. "America/Denver"). Used so the agent knows
+   *  the local "now" when interpreting "today" / "tonight" / "tomorrow". */
+  timezone?: string;
   from?: string;
   to?: string;
 }
 
-interface AssetRow { id: number; name: string; unit: string | null; type: string; hidden: boolean; }
+interface AssetRow { id: number; name: string; unit: string | null; type: string; hidden: boolean; motive_vehicle_id: string | null; }
 interface DriverRow { id: number; name: string; phone: string | null; }
 interface CustomerRow { id: string; name: string; aliases: string[] | null; short_name: string | null; mc_num: string | null; }
 interface TrailerRow { id: number; name: string; trailer_number: string | null; category: string; }
@@ -98,6 +101,66 @@ function fmtMoney(n: number | null | undefined): string {
   if (n == null) return "—";
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }
+function fmtRelative(isoOrTimestamp: string): string {
+  const ms = Date.now() - new Date(isoOrTimestamp).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "?";
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1)  return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(ms / 86_400_000);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+// ── Motive (ELD) locations ─────────────────────────────────────────────────
+//
+// Match the cache TTL the web app uses for the same endpoint (10 min).
+// Stale entries are returned silently if the upstream call errors.
+
+interface MotiveLocation { description: string; lat: number; lon: number; locatedAt: string; }
+
+const motiveCache = new Map<string, { locations: Map<string, MotiveLocation>; fetchedAt: number }>();
+const MOTIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+
+async function fetchMotiveLocations(orgId: string): Promise<Map<string, MotiveLocation>> {
+  const cached = motiveCache.get(orgId);
+  if (cached && Date.now() - cached.fetchedAt < MOTIVE_CACHE_TTL_MS) return cached.locations;
+
+  const { data: settingsRow } = await supabase
+    .from("org_settings")
+    .select("motive_api_key")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const apiKey = (settingsRow as { motive_api_key: string | null } | null)?.motive_api_key;
+  if (!apiKey) {
+    const empty = new Map<string, MotiveLocation>();
+    motiveCache.set(orgId, { locations: empty, fetchedAt: Date.now() });
+    return empty;
+  }
+
+  try {
+    const res = await fetch("https://api.keeptruckin.com/v1/vehicle_locations?per_page=50", {
+      headers: { "X-Api-Key": apiKey, "Accept": "application/json" },
+    });
+    if (!res.ok) throw new Error(`Motive ${res.status}`);
+    const json = await res.json() as {
+      vehicles?: Array<{ vehicle: { id: number; current_location: { description: string; lat: number; lon: number; located_at: string } | null } }>;
+    };
+    const map = new Map<string, MotiveLocation>();
+    for (const v of json.vehicles ?? []) {
+      const cl = v.vehicle.current_location;
+      if (cl) map.set(String(v.vehicle.id), {
+        description: cl.description, lat: cl.lat, lon: cl.lon, locatedAt: cl.located_at,
+      });
+    }
+    motiveCache.set(orgId, { locations: map, fetchedAt: Date.now() });
+    return map;
+  } catch (err) {
+    console.warn("[assistant] motive fetch failed:", err);
+    return cached?.locations ?? new Map();
+  }
+}
 
 // ── Static system context (everything that fits in one prompt) ────────────
 
@@ -111,10 +174,12 @@ function buildContext(args: {
   trailers: TrailerRow[];
   dispatchers: DispatcherRow[];
   prefs: PrefRow[];
+  motiveLocations: Map<string, MotiveLocation>;
   fromIso: string;
   toIso: string;
+  timezone: string;
 }): string {
-  const { events, loads, stopsByEvent, assets, drivers, customers, trailers, dispatchers, prefs, fromIso, toIso } = args;
+  const { events, loads, stopsByEvent, assets, drivers, customers, trailers, dispatchers, prefs, motiveLocations, fromIso, toIso, timezone } = args;
 
   const assetById = new Map<number, AssetRow>(assets.map((a) => [a.id, a]));
   const driverById = new Map<number, DriverRow>(drivers.map((d) => [d.id, d]));
@@ -203,6 +268,14 @@ function buildContext(args: {
   const truckLines = assets.filter((a) => !a.hidden).map((a) =>
     `- ${a.name}${a.unit ? ` #${a.unit}` : ""} (${a.type})`,
   );
+  // Truck locations from Motive (only for assets with motive_vehicle_id wired up).
+  const locationLines: string[] = [];
+  for (const a of assets) {
+    if (a.hidden || !a.motive_vehicle_id) continue;
+    const loc = motiveLocations.get(a.motive_vehicle_id);
+    if (!loc) continue;
+    locationLines.push(`- ${a.name}${a.unit ? ` #${a.unit}` : ""}: ${loc.description} · ${fmtRelative(loc.locatedAt)}`);
+  }
   const driverLines = drivers.map((d) => `- ${d.name}${d.phone ? ` (${d.phone})` : ""}`);
   const customerLines = customers.map((c) => {
     const parts = [c.name];
@@ -221,11 +294,35 @@ function buildContext(args: {
     if (truck && driver) prefLines.push(`- ${truck.name}${truck.unit ? ` #${truck.unit}` : ""} → ${driver.name}`);
   }
 
+  // Local time per the user's calendar timezone setting. Critical so the
+  // agent interprets "tonight" / "today" / "tomorrow" correctly.
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const nowStr = now.toISOString().slice(0, 16).replace("T", " ");
+  const localFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone, hour12: false,
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  const tzFmt = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "short" });
+  const tzAbbr = tzFmt.formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? "";
+  const localNow = localFmt.format(now);
 
-  return `You are a dispatch assistant for a trucking company. Answer questions about loads, drivers, and trucks using the data below. Be concise and direct. Format numbers with $ or commas where appropriate. When the user asks about "today" / "this week" / "tomorrow", use the date below.
+  // YYYY-MM-DD date components in the local timezone (used for today/tomorrow strings).
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const get = (t: string) => dateParts.find((p) => p.type === t)?.value ?? "";
+  const todayLocal = `${get("year")}-${get("month")}-${get("day")}`;
+  const tomorrowLocal = (() => {
+    const d = new Date(now); d.setDate(now.getDate() + 1);
+    const p = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(d);
+    return `${p.find(x => x.type === "year")?.value}-${p.find(x => x.type === "month")?.value}-${p.find(x => x.type === "day")?.value}`;
+  })();
+
+  return `You are a dispatch assistant for a trucking company. Answer questions about loads, drivers, and trucks using the data below. Be concise and direct. Format numbers with $ or commas where appropriate.
+
+When the user says "today", "tonight", "tomorrow", "this week", etc., interpret those relative to the local time shown below — events.start/end strings in the data are in the same local timezone (no offset suffix). "Tonight" = the evening of TODAY (~17:00 onward through 23:59 local).
 
 You have a few tools available for things outside the data window:
   - search_loads: free-text search across ALL active loads (load #, broker, etc.)
@@ -234,14 +331,15 @@ You have a few tools available for things outside the data window:
 Use them when the user asks about a load you don't see below, or wants
 history/payroll detail.
 
-CURRENT TIME: ${nowStr} (UTC)
-TODAY'S DATE: ${todayStr}
+LOCAL TIME: ${localNow} (${timezone}${tzAbbr ? `, ${tzAbbr}` : ""})
+TODAY:    ${todayLocal}
+TOMORROW: ${tomorrowLocal}
 DATA WINDOW: ${fromIso.slice(0, 10)} to ${toIso.slice(0, 10)}
 
 TRUCKS (${truckLines.length}):
 ${truckLines.join("\n") || "None"}
 
-DRIVERS (${driverLines.length}):
+${locationLines.length ? `TRUCK LOCATIONS (Motive ELD, last seen):\n${locationLines.join("\n")}\n\n` : ""}DRIVERS (${driverLines.length}):
 ${driverLines.join("\n") || "None"}
 
 PREFERRED DRIVER PER TRUCK:
@@ -554,7 +652,7 @@ assistant.post("/", async (c) => {
     supabase.from("loads")
       .select("id,load_num,internal_load_id,broker,load_price,notes,accessorials,customer_id,ref_nums")
       .eq("org_id", orgId).is("deleted_at", null),
-    supabase.from("assets").select("id,name,unit,type,hidden").eq("org_id", orgId),
+    supabase.from("assets").select("id,name,unit,type,hidden,motive_vehicle_id").eq("org_id", orgId),
     supabase.from("drivers").select("id,name,phone").eq("org_id", orgId).order("name"),
     supabase.from("customers").select("id,name,aliases,short_name,mc_num").eq("org_id", orgId).order("name"),
     supabase.from("trailers").select("id,name,trailer_number,category").eq("org_id", orgId).order("name"),
@@ -587,6 +685,16 @@ assistant.post("/", async (c) => {
     }
   }
 
+  // Validate the timezone from the request body — fall back to UTC if it's
+  // bogus so Intl.DateTimeFormat doesn't throw.
+  const requestedTz = body.timezone?.trim() || "UTC";
+  let timezone = "UTC";
+  try { new Intl.DateTimeFormat("en-US", { timeZone: requestedTz }); timezone = requestedTz; }
+  catch { /* invalid IANA name, stay on UTC */ }
+
+  // Fire Motive in parallel with the prompt build (it has its own 10-min cache).
+  const motiveLocations = await fetchMotiveLocations(orgId);
+
   const systemPrompt = buildContext({
     events, loads, stopsByEvent,
     assets:      (assetsRes.data ?? [])      as AssetRow[],
@@ -595,7 +703,8 @@ assistant.post("/", async (c) => {
     trailers:    (trailersRes.data ?? [])    as TrailerRow[],
     dispatchers: (dispatchersRes.data ?? []) as DispatcherRow[],
     prefs:       (prefsRes.data ?? [])       as PrefRow[],
-    fromIso, toIso,
+    motiveLocations,
+    fromIso, toIso, timezone,
   });
 
   // Conversation messages start from the client's history. We mutate this

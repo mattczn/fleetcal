@@ -124,7 +124,7 @@ export default function AssistantChat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const { trayOpen } = useCalendarStore();
+  const { trayOpen, calendarTimezone } = useCalendarStore();
   const isDark = useIsDark();
 
   useEffect(() => {
@@ -146,8 +146,9 @@ export default function AssistantChat() {
     setLoading(true);
 
     try {
-      // Server (Railway) pulls fresh org data from the DB; we just send chat.
-      const res = await railway.rawFetch('POST', '/v1/assistant', { messages: nextMessages });
+      // Server (Railway) pulls fresh org data from the DB; we just send chat
+      // + the user's timezone (so "today"/"tonight" interpret correctly).
+      const res = await railway.rawFetch('POST', '/v1/assistant', { messages: nextMessages, timezone: calendarTimezone });
       if (!res.ok || !res.body) throw new Error('Request failed');
 
       const assistantMsg: Message = { role: 'assistant', content: '' };
@@ -175,7 +176,7 @@ export default function AssistantChat() {
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [input, loading, messages]);
+  }, [input, loading, messages, calendarTimezone]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
