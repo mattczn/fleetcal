@@ -3,6 +3,10 @@
  *
  * Routes are mounted under /v1. /v1/health is public; everything else
  * requires a valid Clerk session token with an active organization.
+ *
+ * Deploy: Railway watches this file plus the routes/* tree. If a deploy
+ * is needed for changes outside apps/api (e.g. packages/types), nudge
+ * this comment to trigger a rebuild.
  */
 
 import { Hono } from "hono";
