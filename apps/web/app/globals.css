@@ -80,9 +80,9 @@ input[type="range"] { accent-color: var(--gc-blue); }
 .skeleton-pulse {
   background: linear-gradient(
     90deg,
-    rgba(0, 0, 0, 0.04) 0%,
-    rgba(0, 0, 0, 0.08) 50%,
-    rgba(0, 0, 0, 0.04) 100%
+    #e5e7eb 0%,
+    #d1d5db 50%,
+    #e5e7eb 100%
   );
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
