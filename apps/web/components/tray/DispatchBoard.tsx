@@ -9,6 +9,7 @@ import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import MapDrawer from './MapDrawer';
 import CopyChip from '@/components/ui/CopyChip';
 import ManagementHeader from '@/components/nav/ManagementHeader';
+import WindowTimeline from '@/components/ui/WindowTimeline';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -800,12 +801,8 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
 
           <span style={{ color: 'var(--gc-border)', fontSize: 14 }}>|</span>
 
-          {/* Window description */}
-          <span style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-            Delivering after <strong style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{fmtBound(windowStart)}</strong>
-            <span style={{ margin: '0 6px', opacity: 0.4 }}>·</span>
-            Picking up before <strong style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{fmtBound(windowEnd)}</strong>
-          </span>
+          {/* Window description — visual range with a "now" marker */}
+          <WindowTimeline start={windowStart} end={windowEnd} />
 
           <div style={{ flex: 1 }} />
 

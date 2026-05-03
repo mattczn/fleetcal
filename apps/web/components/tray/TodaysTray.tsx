@@ -6,6 +6,7 @@ import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Layers, Truck, User,
 import { useCalendarStore } from '@/store/useCalendarStore';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import CopyChip from '@/components/ui/CopyChip';
+import WindowTimeline from '@/components/ui/WindowTimeline';
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -413,12 +414,8 @@ export default function TodaysTray() {
 
             <div className="flex-1" />
 
-            {/* Window description */}
-            <span style={{ fontSize: 11, color: 'var(--gc-text-3)', whiteSpace: 'nowrap' }}>
-              after <strong style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{fmtBound(windowStart)}</strong>
-              <span style={{ margin: '0 4px', opacity: 0.4 }}>·</span>
-              before <strong style={{ color: 'var(--gc-text-2)', fontWeight: 700 }}>{fmtBound(windowEnd)}</strong>
-            </span>
+            {/* Window description — visual range with a "now" marker */}
+            <WindowTimeline start={windowStart} end={windowEnd} />
 
             {/* Pivot nav */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6 }}>
