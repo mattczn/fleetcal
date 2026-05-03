@@ -20,7 +20,7 @@ export default function CalendarPage() {
   const { viewMode, dbReady } = useCalendarStore();
 
   return (
-    <div className="flex h-full overflow-hidden" style={{ paddingBottom: 64 }}>
+    <div className="flex h-full overflow-hidden" style={{ paddingBottom: 48 }}>
       <DataLoader />
       <EldSync />
       <RealtimeSync />
