@@ -2308,7 +2308,7 @@ export default function EventModal() {
                   {reparsing ? 'Parsing…' : 'Get Load #'}
                 </button>
                 {pdfObjectUrl && (
-                  <Tooltip content="Download rate-con PDF to your computer">
+                  <Tooltip content="Download Rate Con">
                     <a href={pdfObjectUrl} download="rate-con.pdf"
                       className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
                       style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
@@ -2318,7 +2318,7 @@ export default function EventModal() {
                     </a>
                   </Tooltip>
                 )}
-                <Tooltip content="Upload a different PDF to replace the current rate-con">
+                <Tooltip content="Replace Rate Con">
                   <button type="button" onClick={() => attachFileInputRef.current?.click()}
                     className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
                     style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
@@ -2327,7 +2327,7 @@ export default function EventModal() {
                     <Paperclip size={12} />
                   </button>
                 </Tooltip>
-                <Tooltip content={confirmRemoveRateCon ? 'Click again to confirm — this removes the rate-con from the load' : 'Remove the attached rate-con PDF (you can re-upload later)'}>
+                <Tooltip content={confirmRemoveRateCon ? 'Click again to confirm' : 'Delete Rate Con'}>
                   <button type="button"
                     onClick={() => {
                       if (!confirmRemoveRateCon) { setConfirmRemoveRateCon(true); return; }
@@ -2508,7 +2508,7 @@ export default function EventModal() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Tooltip content={priority ? 'Remove priority flag' : 'Flag as priority — highlights this load on the calendar so dispatchers spot it first'}>
+            <Tooltip content={priority ? 'Remove Priority' : 'Mark as Priority'}>
               <button
                 type="button"
                 onClick={() => { markDirty(); setPriority(p => !p); }}
