@@ -324,12 +324,15 @@ function buildContext(args: {
 
 When the user says "today", "tonight", "tomorrow", "this week", etc., interpret those relative to the local time shown below — events.start/end strings in the data are in the same local timezone (no offset suffix). "Tonight" = the evening of TODAY (~17:00 onward through 23:59 local).
 
-You have a few tools available for things outside the data window:
+Tools available:
+  Read:
   - search_loads: free-text search across ALL active loads (load #, broker, etc.)
   - get_load_details: full info for a single load (audit log, all stops, accessorials)
   - get_payroll_summary: a driver's adjustments + finalized pay records
-Use them when the user asks about a load you don't see below, or wants
-history/payroll detail.
+  Write:
+  - add_accessorial: append a detention/lumper/layover/scale_ticket/other charge to a load.
+
+For WRITE tools: always restate exactly what you're about to do (which load, which amount, which category) and ask the user to confirm before calling. If their request is ambiguous (no specific load number or amount), ask first — never invent values.
 
 LOCAL TIME: ${localNow} (${timezone}${tzAbbr ? `, ${tzAbbr}` : ""})
 TODAY:    ${todayLocal}
@@ -404,6 +407,27 @@ const TOOLS: Tool[] = [
         weekStart: { type: "string", description: "Optional YYYY-MM-DD; filters to one pay week" },
       },
       required: ["driverName"],
+    },
+  },
+  {
+    name: "add_accessorial",
+    description:
+      "Add an accessorial charge to a load (detention, lumper, layover, scale_ticket, or other). " +
+      "Existing accessorials are preserved; the new one is appended. " +
+      "BEFORE CALLING: confirm the load identifier and the dollar amount with the user — do not invent values. " +
+      "Writes an audit log entry crediting 'AI Assistant'. Returns a summary of what was added.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        loadId:      { type: "string", description: "Load UUID or internal_load_id (numeric, e.g. '10042')" },
+        category:    { type: "string", enum: ["detention", "lumper", "layover", "scale_ticket", "other"] },
+        amount:      { type: "number", description: "Dollar amount, positive number" },
+        description: { type: "string", description: "Optional free-text description (e.g. '2 hr at receiver')" },
+        billable:    { type: "boolean", description: "Billable to the broker. Default true." },
+        status:      { type: "string", enum: ["requested", "approved", "denied"], description: "Optional approval status. Default 'requested'." },
+        payToDriver: { type: "boolean", description: "If true, flows into driver payroll as an adjustment. Default false." },
+      },
+      required: ["loadId", "category", "amount"],
     },
   },
 ];
@@ -615,12 +639,69 @@ async function runGetPayrollSummary(orgId: string, input: { driverName?: unknown
   return lines.join("\n");
 }
 
+async function runAddAccessorial(orgId: string, input: Record<string, unknown>): Promise<string> {
+  const rawId = typeof input.loadId === "string" ? input.loadId.trim() : "";
+  const category = typeof input.category === "string" ? input.category : "";
+  const amount = Number(input.amount);
+  if (!rawId)                                 return "loadId required.";
+  if (!["detention", "lumper", "layover", "scale_ticket", "other"].includes(category)) {
+    return `Invalid category '${category}'. Must be one of: detention, lumper, layover, scale_ticket, other.`;
+  }
+  if (!Number.isFinite(amount) || amount <= 0) return "amount must be a positive number.";
+
+  // Resolve load (uuid or internal_load_id) under this org.
+  let q = supabase.from("loads").select("id,internal_load_id,load_num,broker,accessorials,audit_log").eq("org_id", orgId);
+  q = /^\d+$/.test(rawId) ? q.eq("internal_load_id", parseInt(rawId, 10)) : q.eq("id", rawId);
+  const { data: load, error: fetchErr } = await q.maybeSingle();
+  if (fetchErr) return `Error fetching load: ${fetchErr.message}`;
+  if (!load)    return `Load '${rawId}' not found.`;
+
+  const description = typeof input.description === "string" ? input.description : undefined;
+  const billable    = typeof input.billable    === "boolean" ? input.billable    : true;
+  const status      = typeof input.status      === "string"  ? input.status      : "requested";
+  const payToDriver = typeof input.payToDriver === "boolean" ? input.payToDriver : false;
+
+  const newAcc = {
+    id: crypto.randomUUID(),
+    category, amount, billable, status, payToDriver,
+    ...(description ? { description } : {}),
+  };
+
+  const existingAccs = Array.isArray(load.accessorials) ? load.accessorials : [];
+  const updatedAccs  = [...existingAccs, newAcc];
+
+  const existingAudit = Array.isArray(load.audit_log) ? load.audit_log : [];
+  const auditEntry = {
+    changedAt: new Date().toISOString(),
+    changedByName: "AI Assistant",
+    accessorialsChanged: [{
+      action: "added" as const,
+      category,
+      ...(description ? { description } : {}),
+      amount,
+    }],
+  };
+  const updatedAudit = [...existingAudit, auditEntry];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: updErr } = await supabase
+    .from("loads")
+    .update({ accessorials: updatedAccs, audit_log: updatedAudit } as any)
+    .eq("id", load.id)
+    .eq("org_id", orgId);
+  if (updErr) return `Error saving: ${updErr.message}`;
+
+  const descPart = description ? ` (${description})` : "";
+  return `Added ${category}${descPart} for ${fmtMoney(amount)} to Load #${load.internal_load_id}${load.load_num ? ` (broker #${load.load_num})` : ""}${load.broker ? ` — ${load.broker}` : ""}. Status: ${status}${billable ? ", billable" : ", not billable"}${payToDriver ? ", flows to driver pay" : ""}.`;
+}
+
 async function executeTool(orgId: string, name: string, input: unknown): Promise<string> {
   const safe = (input && typeof input === "object") ? input as Record<string, unknown> : {};
   try {
     if (name === "search_loads")        return await runSearchLoads(orgId, safe);
     if (name === "get_load_details")    return await runGetLoadDetails(orgId, safe);
     if (name === "get_payroll_summary") return await runGetPayrollSummary(orgId, safe);
+    if (name === "add_accessorial")     return await runAddAccessorial(orgId, safe);
     return `Unknown tool: ${name}`;
   } catch (err) {
     console.error(`[assistant.tool ${name}] error:`, err);
