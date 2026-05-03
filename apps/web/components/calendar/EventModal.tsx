@@ -1157,15 +1157,21 @@ export default function EventModal() {
     return () => { cancelled = true; };
   }, [relayPartner, relayRole]);
 
-  // Auto-fill driver pay from percentage setting whenever load price changes
+  // Auto-fill driver pay from percentage setting whenever load price changes.
+  // Handles loadPrice as either number or numeric string (AI parses sometimes
+  // return "1500.00"); only fills if driverPay is empty/zero or was previously
+  // auto-set, so manual entries aren't clobbered.
   useEffect(() => {
     if (driverPayPct == null) return;
-    const lp = fieldValues['loadPrice'];
-    if (typeof lp !== 'number' || lp <= 0) return;
-    // Only auto-fill if driver pay is empty or was previously auto-set
-    const dp = fieldValues['driverPay'];
-    if (!driverPayAutoSet.current && (typeof dp === 'number' && dp > 0)) return;
+    const lpRaw = fieldValues['loadPrice'];
+    const lp = typeof lpRaw === 'number' ? lpRaw : parseFloat(String(lpRaw ?? ''));
+    if (!Number.isFinite(lp) || lp <= 0) return;
+    const dpRaw = fieldValues['driverPay'];
+    const dp = typeof dpRaw === 'number' ? dpRaw : parseFloat(String(dpRaw ?? ''));
+    const dpIsSet = Number.isFinite(dp) && dp > 0;
+    if (!driverPayAutoSet.current && dpIsSet) return;
     const auto = Math.round(lp * (driverPayPct / 100) * 100) / 100;
+    if (dp === auto) return; // avoid no-op state updates
     setFieldValues(prev => ({ ...prev, driverPay: auto }));
     driverPayAutoSet.current = true;
     setDriverPayIsAuto(true);
@@ -1324,10 +1330,11 @@ export default function EventModal() {
         const dpNum = vals['driverPay'] != null ? parseFloat(String(vals['driverPay'])) : NaN;
         if (Number.isFinite(dpNum)) vals['driverPay'] = dpNum;
 
-        // Auto-fill driver pay from percentage if not already provided by parse
+        // Driver-pay: if a percentage is configured in settings, it always
+        // wins. Otherwise keep whatever the AI extracted (if any).
         driverPayAutoSet.current = false;
         setDriverPayIsAuto(false);
-        if (driverPayPct != null && Number.isFinite(lpNum) && lpNum > 0 && !Number.isFinite(dpNum)) {
+        if (driverPayPct != null && Number.isFinite(lpNum) && lpNum > 0) {
           vals['driverPay'] = Math.round(lpNum * (driverPayPct / 100) * 100) / 100;
           driverPayAutoSet.current = true;
           setDriverPayIsAuto(true);
@@ -1744,13 +1751,23 @@ export default function EventModal() {
           const [ed, et = '17:00'] = parsed.end.split('T');
           setEndDate(ed); setEndTime(et.slice(0, 5));
         }
-        if (parsed.loadPrice) {
-          setField('loadPrice', parsed.loadPrice);
-          if (driverPayPct != null && !parsed.driverPay) {
-            const auto = Math.round(parsed.loadPrice * (driverPayPct / 100) * 100) / 100;
+        // Coerce numeric fields (AI sometimes returns "1500.00" strings).
+        const lpNum = parsed.loadPrice != null ? parseFloat(String(parsed.loadPrice)) : NaN;
+        const dpNum = parsed.driverPay != null ? parseFloat(String(parsed.driverPay)) : NaN;
+        if (Number.isFinite(lpNum) && lpNum > 0) {
+          setField('loadPrice', lpNum);
+          // Driver-pay precedence: if a percentage is configured in settings,
+          // it always wins (the user's intent — they set it to drive every load).
+          // Only fall back to AI-extracted driverPay when no percentage is set.
+          if (driverPayPct != null) {
+            const auto = Math.round(lpNum * (driverPayPct / 100) * 100) / 100;
             setFieldValues(prev => ({ ...prev, driverPay: auto }));
             driverPayAutoSet.current = true;
             setDriverPayIsAuto(true);
+          } else if (Number.isFinite(dpNum) && dpNum > 0) {
+            setField('driverPay', dpNum);
+            driverPayAutoSet.current = false;
+            setDriverPayIsAuto(false);
           }
         }
         if (parsed.notes)     setField('notes', parsed.notes);
