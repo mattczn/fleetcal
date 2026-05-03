@@ -927,6 +927,7 @@ export default function EventModal() {
   const [historyExpanded,      setHistoryExpanded]      = useState(false);
   const [auditLog,             setAuditLog]             = useState<LoadAuditEntry[]>([]);
   const [confirmRemoveRateCon, setConfirmRemoveRateCon] = useState(false);
+  const [loadIdCopied, setLoadIdCopied] = useState(false);
   const [confirmSkip,          setConfirmSkip]          = useState(false);
   const [confirmBatchCancel,   setConfirmBatchCancel]   = useState(false);
 
@@ -2306,7 +2307,7 @@ export default function EventModal() {
                   {reparsing ? 'Parsing…' : 'Get Load #'}
                 </button>
                 {pdfObjectUrl && (
-                  <a href={pdfObjectUrl} download="rate-con.pdf" title="Download"
+                  <a href={pdfObjectUrl} download="rate-con.pdf" title="Download rate-con PDF to your computer"
                     className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
                     style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
@@ -2314,7 +2315,7 @@ export default function EventModal() {
                     <Download size={12} />
                   </a>
                 )}
-                <button type="button" onClick={() => attachFileInputRef.current?.click()} title="Replace rate con"
+                <button type="button" onClick={() => attachFileInputRef.current?.click()} title="Upload a different PDF to replace the current rate-con"
                   className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
                   style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
@@ -2326,7 +2327,7 @@ export default function EventModal() {
                     if (!confirmRemoveRateCon) { setConfirmRemoveRateCon(true); return; }
                     setRateConPdf(undefined); setShowPdfViewer(false); setConfirmRemoveRateCon(false); markDirty();
                   }}
-                  title={confirmRemoveRateCon ? 'Confirm remove' : 'Remove rate con'}
+                  title={confirmRemoveRateCon ? 'Click again to confirm — this removes the rate-con from the load' : 'Remove the attached rate-con PDF (you can re-upload later)'}
                   className={`flex items-center justify-center rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${confirmRemoveRateCon ? 'px-2.5 h-7' : 'w-7 h-7'}`}
                   style={confirmRemoveRateCon
                     ? { background: '#d93025', color: 'white', border: '1px solid #d93025' }
@@ -2443,11 +2444,37 @@ export default function EventModal() {
                 </div>
                 {isEdit && (() => {
                   const ev = events.find(e => e.id === modalEventId);
-                  return ev?.internalLoadId ? (
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 20, background: `${headerColor}20`, color: headerColor, border: `1px solid ${headerColor}40`, fontVariantNumeric: 'tabular-nums' }}>
+                  if (!ev?.internalLoadId) return null;
+                  return (
+                    <button
+                      type="button"
+                      title={loadIdCopied ? 'Copied!' : 'Click to copy load ID'}
+                      onClick={() => {
+                        const idStr = String(ev.internalLoadId);
+                        if (navigator.clipboard?.writeText) {
+                          void navigator.clipboard.writeText(idStr);
+                        }
+                        setLoadIdCopied(true);
+                        setTimeout(() => setLoadIdCopied(false), 1500);
+                      }}
+                      className="flex items-center gap-1 transition-colors"
+                      style={{
+                        fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
+                        padding: '2px 8px', borderRadius: 20,
+                        background: loadIdCopied ? '#dcfce7' : `${headerColor}20`,
+                        color: loadIdCopied ? '#15803d' : headerColor,
+                        border: `1px solid ${loadIdCopied ? '#86efac' : `${headerColor}40`}`,
+                        fontVariantNumeric: 'tabular-nums', cursor: 'pointer',
+                      }}
+                      onMouseEnter={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}30`; }}
+                      onMouseLeave={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}20`; }}
+                    >
                       #{ev.internalLoadId}
-                    </span>
-                  ) : null;
+                      {loadIdCopied
+                        ? <CheckCircle2 size={10} />
+                        : <Copy size={10} style={{ opacity: 0.7 }} />}
+                    </button>
+                  );
                 })()}
                 {(isPickupLeg || isDeliveryLeg) && (
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
@@ -2477,7 +2504,7 @@ export default function EventModal() {
             <button
               type="button"
               onClick={() => { markDirty(); setPriority(p => !p); }}
-              title={priority ? 'Remove priority' : 'Mark as priority'}
+              title={priority ? 'Remove priority flag (highlights this load on the calendar)' : 'Flag as priority — highlights this load on the calendar so dispatchers spot it first'}
               style={{
                 display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px',
                 borderRadius: 20, border: priority ? '1px solid #f59e0b' : `1px solid ${headerColor}40`,
