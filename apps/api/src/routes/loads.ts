@@ -565,13 +565,16 @@ loads.get("/:id/rate-con-url", async (c) => {
     return c.json(res);
   }
 
-  // Storage path → 1-hour signed URL
+  // Storage path → 1-hour signed URL. If signing fails (file missing,
+  // permissions issue, etc.), return null so the modal can show "no
+  // rate-con on file" rather than flashing a 500. Log so we can debug.
   const { data: signed, error: signErr } = await supabase.storage
     .from("rate-cons")
     .createSignedUrl(val, 3600);
   if (signErr || !signed) {
-    console.error("[GET /v1/loads/:id/rate-con-url] sign failed:", signErr);
-    return c.json({ error: "sign_failed", detail: signErr?.message } satisfies ApiErrorResponse, 500);
+    console.warn("[GET /v1/loads/:id/rate-con-url] sign failed for path", val, "—", signErr);
+    const res: GetRateConUrlResponse = { url: null };
+    return c.json(res);
   }
   const res: GetRateConUrlResponse = { url: signed.signedUrl };
   return c.json(res);

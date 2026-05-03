@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink } from 'lucide-react';
 import { useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
@@ -2307,35 +2308,40 @@ export default function EventModal() {
                   {reparsing ? 'Parsing…' : 'Get Load #'}
                 </button>
                 {pdfObjectUrl && (
-                  <a href={pdfObjectUrl} download="rate-con.pdf" title="Download rate-con PDF to your computer"
+                  <Tooltip content="Download rate-con PDF to your computer">
+                    <a href={pdfObjectUrl} download="rate-con.pdf"
+                      className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
+                      style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                      <Download size={12} />
+                    </a>
+                  </Tooltip>
+                )}
+                <Tooltip content="Upload a different PDF to replace the current rate-con">
+                  <button type="button" onClick={() => attachFileInputRef.current?.click()}
                     className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
                     style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                     onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                    <Download size={12} />
-                  </a>
-                )}
-                <button type="button" onClick={() => attachFileInputRef.current?.click()} title="Upload a different PDF to replace the current rate-con"
-                  className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
-                  style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <Paperclip size={12} />
-                </button>
-                <button type="button"
-                  onClick={() => {
-                    if (!confirmRemoveRateCon) { setConfirmRemoveRateCon(true); return; }
-                    setRateConPdf(undefined); setShowPdfViewer(false); setConfirmRemoveRateCon(false); markDirty();
-                  }}
-                  title={confirmRemoveRateCon ? 'Click again to confirm — this removes the rate-con from the load' : 'Remove the attached rate-con PDF (you can re-upload later)'}
-                  className={`flex items-center justify-center rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${confirmRemoveRateCon ? 'px-2.5 h-7' : 'w-7 h-7'}`}
-                  style={confirmRemoveRateCon
-                    ? { background: '#d93025', color: 'white', border: '1px solid #d93025' }
-                    : { color: '#d93025', border: '1px solid var(--gc-border-light)' }}
-                  onMouseEnter={e => { if (!confirmRemoveRateCon) { e.currentTarget.style.background = 'rgba(217,48,37,.08)'; e.currentTarget.style.borderColor = '#d93025'; } }}
-                  onMouseLeave={e => { if (!confirmRemoveRateCon) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'var(--gc-border-light)'; } }}>
-                  {confirmRemoveRateCon ? 'Confirm?' : <Trash2 size={12} />}
-                </button>
+                    <Paperclip size={12} />
+                  </button>
+                </Tooltip>
+                <Tooltip content={confirmRemoveRateCon ? 'Click again to confirm — this removes the rate-con from the load' : 'Remove the attached rate-con PDF (you can re-upload later)'}>
+                  <button type="button"
+                    onClick={() => {
+                      if (!confirmRemoveRateCon) { setConfirmRemoveRateCon(true); return; }
+                      setRateConPdf(undefined); setShowPdfViewer(false); setConfirmRemoveRateCon(false); markDirty();
+                    }}
+                    className={`flex items-center justify-center rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${confirmRemoveRateCon ? 'px-2.5 h-7' : 'w-7 h-7'}`}
+                    style={confirmRemoveRateCon
+                      ? { background: '#d93025', color: 'white', border: '1px solid #d93025' }
+                      : { color: '#d93025', border: '1px solid var(--gc-border-light)' }}
+                    onMouseEnter={e => { if (!confirmRemoveRateCon) { e.currentTarget.style.background = 'rgba(217,48,37,.08)'; e.currentTarget.style.borderColor = '#d93025'; } }}
+                    onMouseLeave={e => { if (!confirmRemoveRateCon) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'var(--gc-border-light)'; } }}>
+                    {confirmRemoveRateCon ? 'Confirm?' : <Trash2 size={12} />}
+                  </button>
+                </Tooltip>
                 </>)}
                 <button onClick={() => setShowPdfViewer(false)} title="Close PDF viewer"
                   className="p-1.5 rounded-full transition-colors" style={{ color: 'var(--gc-text-3)' }}
@@ -2446,34 +2452,35 @@ export default function EventModal() {
                   const ev = events.find(e => e.id === modalEventId);
                   if (!ev?.internalLoadId) return null;
                   return (
-                    <button
-                      type="button"
-                      title={loadIdCopied ? 'Copied!' : 'Click to copy load ID'}
-                      onClick={() => {
-                        const idStr = String(ev.internalLoadId);
-                        if (navigator.clipboard?.writeText) {
-                          void navigator.clipboard.writeText(idStr);
-                        }
-                        setLoadIdCopied(true);
-                        setTimeout(() => setLoadIdCopied(false), 1500);
-                      }}
-                      className="flex items-center gap-1 transition-colors"
-                      style={{
-                        fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
-                        padding: '2px 8px', borderRadius: 20,
-                        background: loadIdCopied ? '#dcfce7' : `${headerColor}20`,
-                        color: loadIdCopied ? '#15803d' : headerColor,
-                        border: `1px solid ${loadIdCopied ? '#86efac' : `${headerColor}40`}`,
-                        fontVariantNumeric: 'tabular-nums', cursor: 'pointer',
-                      }}
-                      onMouseEnter={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}30`; }}
-                      onMouseLeave={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}20`; }}
-                    >
-                      #{ev.internalLoadId}
-                      {loadIdCopied
-                        ? <CheckCircle2 size={10} />
-                        : <Copy size={10} style={{ opacity: 0.7 }} />}
-                    </button>
+                    <Tooltip content={loadIdCopied ? 'Copied!' : 'Click to copy load ID'}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const idStr = String(ev.internalLoadId);
+                          if (navigator.clipboard?.writeText) {
+                            void navigator.clipboard.writeText(idStr);
+                          }
+                          setLoadIdCopied(true);
+                          setTimeout(() => setLoadIdCopied(false), 1500);
+                        }}
+                        className="flex items-center gap-1 transition-colors"
+                        style={{
+                          fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
+                          padding: '2px 8px', borderRadius: 20,
+                          background: loadIdCopied ? '#dcfce7' : `${headerColor}20`,
+                          color: loadIdCopied ? '#15803d' : headerColor,
+                          border: `1px solid ${loadIdCopied ? '#86efac' : `${headerColor}40`}`,
+                          fontVariantNumeric: 'tabular-nums', cursor: 'pointer',
+                        }}
+                        onMouseEnter={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}30`; }}
+                        onMouseLeave={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}20`; }}
+                      >
+                        #{ev.internalLoadId}
+                        {loadIdCopied
+                          ? <CheckCircle2 size={10} />
+                          : <Copy size={10} style={{ opacity: 0.7 }} />}
+                      </button>
+                    </Tooltip>
                   );
                 })()}
                 {(isPickupLeg || isDeliveryLeg) && (
@@ -2501,22 +2508,23 @@ export default function EventModal() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => { markDirty(); setPriority(p => !p); }}
-              title={priority ? 'Remove priority flag (highlights this load on the calendar)' : 'Flag as priority — highlights this load on the calendar so dispatchers spot it first'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px',
-                borderRadius: 20, border: priority ? '1px solid #f59e0b' : `1px solid ${headerColor}40`,
-                background: priority ? '#fef3c7' : `${headerColor}10`,
-                cursor: 'pointer', transition: 'all 150ms',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = priority ? '#fde68a' : `${headerColor}20`; }}
-              onMouseLeave={e => { e.currentTarget.style.background = priority ? '#fef3c7' : `${headerColor}10`; }}
-            >
-              <Star size={13} fill={priority ? '#f59e0b' : 'none'} style={{ color: priority ? '#f59e0b' : headerColor }} />
-              {priority && <span style={{ fontSize: 12, fontWeight: 700, color: '#92400e' }}>Priority</span>}
-            </button>
+            <Tooltip content={priority ? 'Remove priority flag' : 'Flag as priority — highlights this load on the calendar so dispatchers spot it first'}>
+              <button
+                type="button"
+                onClick={() => { markDirty(); setPriority(p => !p); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px',
+                  borderRadius: 20, border: priority ? '1px solid #f59e0b' : `1px solid ${headerColor}40`,
+                  background: priority ? '#fef3c7' : `${headerColor}10`,
+                  cursor: 'pointer', transition: 'all 150ms',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = priority ? '#fde68a' : `${headerColor}20`; }}
+                onMouseLeave={e => { e.currentTarget.style.background = priority ? '#fef3c7' : `${headerColor}10`; }}
+              >
+                <Star size={13} fill={priority ? '#f59e0b' : 'none'} style={{ color: priority ? '#f59e0b' : headerColor }} />
+                {priority && <span style={{ fontSize: 12, fontWeight: 700, color: '#92400e' }}>Priority</span>}
+              </button>
+            </Tooltip>
             {eventKind === 'revenue' && (
               <StyledSelect value={status} onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
                 style={{
