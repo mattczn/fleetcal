@@ -30,7 +30,7 @@ function CheckboxSwatch({ color, hidden, onToggle }: { color: string; hidden: bo
 }
 
 export default function AssetSidebar() {
-  const { assets: allAssets, reorderAssets, openCreateModal, sidebarOpen, toggleSidebar, toggleAssetVisibility, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, unassignedAssetId, showUnassigned } = useCalendarStore();
+  const { assets: allAssets, reorderAssets, openCreateModal, sidebarOpen, toggleSidebar, toggleAssetVisibility, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, unassignedAssetId, showUnassigned, dbReady } = useCalendarStore();
   const assets = allAssets.filter(a => a.id !== unassignedAssetId);
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   const { organization } = useOrganization();
@@ -245,7 +245,20 @@ export default function AssetSidebar() {
           {unassignedAsset && (
             <UnassignedRow asset={unassignedAsset} />
           )}
-          {assets.length === 0 && !unassignedAsset && (
+          {assets.length === 0 && !unassignedAsset && !dbReady && (
+            <div className="flex flex-col gap-1 px-2 py-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-2 rounded-md">
+                  <div className="skeleton-pulse rounded-full" style={{ width: 26, height: 26 }} />
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <div className="skeleton-pulse rounded" style={{ height: 9, width: '60%' }} />
+                    <div className="skeleton-pulse rounded" style={{ height: 7, width: '38%' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {assets.length === 0 && !unassignedAsset && dbReady && (
             <div className="flex flex-col items-center gap-3 py-10" style={{ color: 'var(--gc-text-3)' }}>
               <Truck size={26} style={{ opacity: 0.35 }} />
               <span className="text-sm">No assets yet</span>
