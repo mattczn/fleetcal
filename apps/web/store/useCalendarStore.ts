@@ -1085,6 +1085,19 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(deliveryData as CalendarEvent),
       id: tempDeliveryId,
       loadId: ev.loadId,
+      // Propagate the existing load's load-level fields so the delivery leg
+      // displays #internalLoadId, broker, accessorials, etc. immediately —
+      // before the API swap. Real values come back via the .then below.
+      internalLoadId: ev.internalLoadId,
+      loadNum:        ev.loadNum,
+      broker:         ev.broker,
+      customerId:     ev.customerId,
+      dispatcher:     ev.dispatcher,
+      loadPrice:      ev.loadPrice,
+      rateConPdf:     ev.rateConPdf,
+      accessorials:   ev.accessorials,
+      refNums:        ev.refNums,
+      notes:          ev.notes,
       relayRole: 'delivery',
       relayGroupId: ev.loadId,
       stops,

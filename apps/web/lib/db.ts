@@ -329,7 +329,10 @@ export async function fetchEventAuditLog(eventId: string, _orgId: string): Promi
     const { entries } = await railway.getEventAuditLog(eventId);
     return entries as import('./types').LoadAuditEntry[];
   } catch (err) {
-    console.error('fetchEventAuditLog:', err);
+    // 404 happens when the modal opens an event whose id hasn't been swapped
+    // from optimistic temp → server uuid yet. No audit log to fetch; silent.
+    const status = (err as { status?: number } | null)?.status;
+    if (status !== 404) console.error('fetchEventAuditLog:', err);
     return null;
   }
 }
