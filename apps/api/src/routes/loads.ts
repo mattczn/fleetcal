@@ -783,47 +783,31 @@ loads.post("/:id/split-relay", async (c) => {
     return c.json({ error: "delivery_create_failed", detail: delivErr?.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 3. Replace stops on both legs
-  const pickupStops = body.mergedStops.slice(0, body.relayStopIndex + 1);
-  const deliveryStops = body.mergedStops.slice(body.relayStopIndex + 1);
-
-  // Delete existing stops, insert new partitioned ones
+  // 3. Replace stops on both legs with the full merged list. Both legs
+  //    share the same stops; the relay-type stop (at relayStopIndex) is the
+  //    handoff marker. The modal greys out the other leg's stops based on
+  //    relay_role + the relay marker's position. (relayStopIndex is still
+  //    accepted for forward-compat but isn't used to partition anymore.)
+  void body.relayStopIndex;
   await supabase.from("stops").delete().eq("event_id", pickupEvent.id).eq("org_id", orgId);
 
-  const stopRows = [
-    ...pickupStops.map((s, idx) => ({
-      event_id:       pickupEvent.id,
-      org_id:         orgId,
-      sequence:       idx + 1,
-      type:           s.type,
-      facility_name:  s.facilityName  ?? null,
-      address:        s.address       ?? null,
-      city:           s.city          ?? null,
-      timezone:       s.timezone      ?? null,
-      appt_start:     s.apptStart     ?? null,
-      appt_end:       s.apptEnd       ?? null,
-      lat:            s.lat           ?? null,
-      lng:            s.lng           ?? null,
-      instructions:   s.instructions  ?? null,
-      geocode_status: s.geocodeStatus ?? "pending",
-    })),
-    ...deliveryStops.map((s, idx) => ({
-      event_id:       deliveryEvent.id,
-      org_id:         orgId,
-      sequence:       idx + 1,
-      type:           s.type,
-      facility_name:  s.facilityName  ?? null,
-      address:        s.address       ?? null,
-      city:           s.city          ?? null,
-      timezone:       s.timezone      ?? null,
-      appt_start:     s.apptStart     ?? null,
-      appt_end:       s.apptEnd       ?? null,
-      lat:            s.lat           ?? null,
-      lng:            s.lng           ?? null,
-      instructions:   s.instructions  ?? null,
-      geocode_status: s.geocodeStatus ?? "pending",
-    })),
-  ];
+  const buildStopRows = (eventId: string) => body.mergedStops.map((s, idx) => ({
+    event_id:       eventId,
+    org_id:         orgId,
+    sequence:       idx + 1,
+    type:           s.type,
+    facility_name:  s.facilityName  ?? null,
+    address:        s.address       ?? null,
+    city:           s.city          ?? null,
+    timezone:       s.timezone      ?? null,
+    appt_start:     s.apptStart     ?? null,
+    appt_end:       s.apptEnd       ?? null,
+    lat:            s.lat           ?? null,
+    lng:            s.lng           ?? null,
+    instructions:   s.instructions  ?? null,
+    geocode_status: s.geocodeStatus ?? "pending",
+  }));
+  const stopRows = [...buildStopRows(pickupEvent.id), ...buildStopRows(deliveryEvent.id)];
 
   if (stopRows.length) {
     const { error: stopErr } = await supabase.from("stops").insert(stopRows);
@@ -982,32 +966,35 @@ loads.post("/:id/unsplit-relay", async (c) => {
     return c.json({ error: "keep_update_failed", detail: keepErr.message } satisfies ApiErrorResponse, 500);
   }
 
-  // 3. Optionally replace stops on the kept event with the supplied merged set
-  if (body.mergedStops) {
-    await supabase.from("stops").delete().eq("event_id", keep.id).eq("org_id", orgId);
-    if (body.mergedStops.length) {
-      const stopRows = body.mergedStops.map((s, idx) => ({
-        event_id:       keep.id,
-        org_id:         orgId,
-        sequence:       idx + 1,
-        type:           s.type,
-        facility_name:  s.facilityName  ?? null,
-        address:        s.address       ?? null,
-        city:           s.city          ?? null,
-        timezone:       s.timezone      ?? null,
-        appt_start:     s.apptStart     ?? null,
-        appt_end:       s.apptEnd       ?? null,
-        lat:            s.lat           ?? null,
-        lng:            s.lng           ?? null,
-        instructions:   s.instructions  ?? null,
-        geocode_status: s.geocodeStatus ?? "pending",
-      }));
-      const { error: stopErr } = await supabase.from("stops").insert(stopRows);
-      if (stopErr) {
-        return c.json({ error: "stops_insert_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
-      }
-    }
+  // 3. Drop the relay-marker stop from the kept event. Both legs share
+  //    the full stops list (split-relay duplicates them); the kept event
+  //    already has every real stop, so we just remove relay-type stops.
+  await supabase
+    .from("stops")
+    .delete()
+    .eq("event_id", keep.id)
+    .eq("org_id", orgId)
+    .eq("type", "relay");
+  // Re-sequence remaining stops (1..N).
+  const { data: remainingRaw } = await supabase
+    .from("stops")
+    .select("id")
+    .eq("event_id", keep.id)
+    .eq("org_id", orgId)
+    .order("sequence", { ascending: true });
+  const remaining = (remainingRaw ?? []) as Array<{ id: string }>;
+  for (let i = 0; i < remaining.length; i++) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase
+      .from("stops")
+      .update({ sequence: i + 1 } as any)
+      .eq("id", remaining[i].id)
+      .eq("org_id", orgId);
   }
+  // body.mergedStops is now ignored — the server reconstructs from the
+  // kept event's existing stops minus the relay marker. Field accepted
+  // for API back-compat but not used.
+  void body.mergedStops;
 
   const joined = await fetchLoadJoined(loadId, orgId);
   const res: UnsplitRelayResponse = { loads: joined ?? [] };

@@ -1069,17 +1069,17 @@ export const useCalendarStore = create<CalendarStore>()(
       console.error('splitToRelay: no relay-type stop in stops list');
       return;
     }
-    const pickupLegStops = stops.slice(0, relayIdx + 1);
-    const deliveryLegStops = stops.slice(relayIdx);
 
     // Optimistic state: existing event becomes the pickup leg; add a temp
-    // delivery on the same loadId. The .then below swaps in server data.
+    // delivery on the same loadId. Both legs share the full stops list
+    // (relay-marker is the handoff cutoff in the modal display). Server
+    // mirrors this in /v1/loads/:id/split-relay.
     const updatedPickup: CalendarEvent = {
       ...ev,
       ...pickupUpdates,
       relayRole: 'pickup',
       relayGroupId: ev.loadId,
-      stops: pickupLegStops,
+      stops,
     };
     const tempDelivery: CalendarEvent = {
       ...(deliveryData as CalendarEvent),
@@ -1087,7 +1087,7 @@ export const useCalendarStore = create<CalendarStore>()(
       loadId: ev.loadId,
       relayRole: 'delivery',
       relayGroupId: ev.loadId,
-      stops: deliveryLegStops,
+      stops,
     };
     set(s => ({
       events: [...s.events.map(e => e.id === pickupEventId ? updatedPickup : e), tempDelivery],
