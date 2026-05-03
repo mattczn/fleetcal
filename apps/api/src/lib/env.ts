@@ -36,6 +36,7 @@ export const env = {
   clerkPublishableKey:    required("CLERK_PUBLISHABLE_KEY"),
   supabaseUrl:            required("SUPABASE_URL"),
   supabaseServiceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
+  anthropicApiKey:        required("ANTHROPIC_API_KEY"),
 } as const;
 
 export const isProd = env.nodeEnv === "production";

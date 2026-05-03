@@ -83,6 +83,19 @@ class RailwayClient {
     return res.json() as Promise<T>;
   }
 
+  /** Raw fetch — for endpoints that stream. Caller handles res.body. */
+  async rawFetch(method: string, path: string, body?: unknown): Promise<Response> {
+    const token = _getToken ? await _getToken() : null;
+    return fetch(`${BASE_URL}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  }
+
   // ── Loads ────────────────────────────────────────────────────────────
   createLoad(req: CreateLoadRequest)  { return this.req<CreateLoadResponse>('POST',   '/v1/loads', req); }
   listLoads(query: Record<string, string>) {

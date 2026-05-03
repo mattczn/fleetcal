@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { railway } from '@/lib/railway';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -123,7 +124,7 @@ export default function AssistantChat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const { events, assets, drivers, trayOpen } = useCalendarStore();
+  const { trayOpen } = useCalendarStore();
   const isDark = useIsDark();
 
   useEffect(() => {
@@ -145,12 +146,8 @@ export default function AssistantChat() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/assistant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: nextMessages, events, assets, drivers }),
-      });
-
+      // Server (Railway) pulls fresh org data from the DB; we just send chat.
+      const res = await railway.rawFetch('POST', '/v1/assistant', { messages: nextMessages });
       if (!res.ok || !res.body) throw new Error('Request failed');
 
       const assistantMsg: Message = { role: 'assistant', content: '' };
@@ -178,7 +175,7 @@ export default function AssistantChat() {
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [input, loading, messages, events, assets, drivers]);
+  }, [input, loading, messages]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -253,7 +250,6 @@ export default function AssistantChat() {
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
             <span style={{ fontWeight: 700, fontSize: 14 }}>Dispatch Assistant</span>
-            <span style={{ marginLeft: 'auto', fontSize: 11, opacity: 0.75 }}>{events.length} loads</span>
           </div>
 
           {/* Messages */}

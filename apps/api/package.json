@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
     "@clerk/backend": "^1.21.0",
     "@fleetcal/types": "*",
     "@hono/node-server": "^1.13.0",

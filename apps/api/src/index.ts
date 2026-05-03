@@ -28,6 +28,7 @@ import driverAssetPrefsRoute from "./routes/driver-asset-prefs.js";
 import savedLocationsRoute from "./routes/saved-locations.js";
 import payrollRoute from "./routes/payroll.js";
 import orgSettingsRoute from "./routes/org-settings.js";
+import assistantRoute from "./routes/assistant.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -91,6 +92,7 @@ authed.route("/driver-asset-prefs", driverAssetPrefsRoute);
 authed.route("/saved-locations", savedLocationsRoute);
 authed.route("/payroll", payrollRoute);
 authed.route("/org-settings", orgSettingsRoute);
+authed.route("/assistant", assistantRoute);
 
 app.route("/v1", authed);
 
