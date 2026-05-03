@@ -1,8 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W, formatHour } from '@/lib/time-utils';
+
+/** Best-effort container-width estimate before we can measure the ref.
+ *  Subtracts the asset sidebar (Tailwind w-56 = 224px) from window width.
+ *  Refined by the useLayoutEffect below once the ref is mounted. */
+function estimateContainerWidth(): number {
+  if (typeof window === 'undefined') return 1200;
+  return Math.max(400, window.innerWidth - 224);
+}
 
 /**
  * Placeholder grid shown while initial data is loading. Renders the same
@@ -16,18 +24,25 @@ import { GUTTER_W, formatHour } from '@/lib/time-utils';
 export default function CalendarSkeleton() {
   const { rowHeight, lastKnownAssetCount } = useCalendarStore();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [columnWidth, setColumnWidth] = useState(120);
-
   const columnCount = lastKnownAssetCount > 0 ? lastKnownAssetCount : 8;
 
-  useEffect(() => {
+  // Seed columnWidth from a window-based estimate so the very first paint
+  // already fills the screen instead of using a 120px default that left
+  // the columns bunched on the left for one frame.
+  const [columnWidth, setColumnWidth] = useState(() =>
+    Math.max(80, Math.floor((estimateContainerWidth() - GUTTER_W) / columnCount)),
+  );
+
+  // Refine via the actual container ref before the first paint
+  // (useLayoutEffect runs synchronously between commit and paint).
+  useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const compute = () => {
       const containerW = el.clientWidth;
       if (!containerW) return;
       const fitted = Math.max(80, Math.floor((containerW - GUTTER_W) / columnCount));
-      setColumnWidth(fitted);
+      setColumnWidth(prev => (prev === fitted ? prev : fitted));
     };
     compute();
     const obs = new ResizeObserver(compute);
