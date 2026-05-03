@@ -91,3 +91,15 @@ input[type="range"] { accent-color: var(--gc-blue); }
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* Blue variant for skeletons sitting on the blue tray. */
+.skeleton-pulse-blue {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.15) 0%,
+    rgba(255, 255, 255, 0.30) 50%,
+    rgba(255, 255, 255, 0.15) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}

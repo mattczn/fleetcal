@@ -11,6 +11,7 @@ import DataLoader from '@/components/DataLoader';
 import OnboardingController from '@/components/onboarding/OnboardingController';
 import AssistantChat from '@/components/AssistantChat';
 import TodaysTray from '@/components/tray/TodaysTray';
+import TodaysTraySkeleton from '@/components/tray/TodaysTraySkeleton';
 import EldSync from '@/components/EldSync';
 import RealtimeSync from '@/components/RealtimeSync';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -32,7 +33,7 @@ export default function CalendarPage() {
       <BatchNotification />
       <OnboardingController />
       <AssistantChat />
-      <TodaysTray />
+      {dbReady ? <TodaysTray /> : <TodaysTraySkeleton />}
     </div>
   );
 }
