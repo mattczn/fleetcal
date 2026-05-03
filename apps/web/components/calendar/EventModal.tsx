@@ -1246,16 +1246,30 @@ export default function EventModal() {
       if (groupKey && ev.relayRole) {
         setRelayGroupId(groupKey);
         setRelayRole(ev.relayRole);
-        const partner = events.find(e =>
+        const localPartner = events.find(e =>
           e.id !== ev.id && (
             (ev.loadId && e.loadId === ev.loadId) ||
             (ev.relayGroupId && e.relayGroupId === ev.relayGroupId)
           ),
         ) ?? null;
-        setRelayPartner(partner);
-        if (ev.relayRole === 'pickup' && partner) {
-          setRelayDelivAssetId(partner.assetId);
-          setRelayDelivDriverName(partner.driverName ?? '');
+        setRelayPartner(localPartner);
+        if (ev.relayRole === 'pickup' && localPartner) {
+          setRelayDelivAssetId(localPartner.assetId);
+          setRelayDelivDriverName(localPartner.driverName ?? '');
+        }
+        // Fallback: partner not in the loaded events window → fetch the load.
+        if (!localPartner && ev.loadId) {
+          import('@/lib/railway').then(({ railway }) => railway.getLoad(ev.loadId!))
+            .then(({ loads }) => {
+              const partner = loads.find(l => l.id !== ev.id) as CalendarEvent | undefined;
+              if (!partner) return;
+              setRelayPartner(partner);
+              if (ev.relayRole === 'pickup') {
+                setRelayDelivAssetId(partner.assetId);
+                setRelayDelivDriverName(partner.driverName ?? '');
+              }
+            })
+            .catch(err => console.error('relay-partner fetch:', err));
         }
       }
     } else if (isBatch) {

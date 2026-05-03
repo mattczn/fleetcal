@@ -730,44 +730,42 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                     </button>
                   )
                 )}
-                {/* Instructions */}
-                {stop.type !== 'relay' && (
-                  expandedInstructions.has(stop.id) ? (
-                    <textarea
-                      autoFocus
-                      value={stop.instructions ?? ''}
-                      onChange={e => update(idx, { instructions: e.target.value })}
-                      placeholder="Gate codes, dock notes, contacts…"
-                      rows={3}
-                      style={{ ...inp, resize: 'vertical', fontSize: 12, lineHeight: 1.4, padding: '5px 8px' }}
-                      onFocus={e => (e.currentTarget.style.borderColor = headerColor)}
-                      onBlur={e => {
-                        e.currentTarget.style.borderColor = 'var(--gc-border)';
-                        if (!stop.instructions?.trim()) setExpandedInstructions(prev => { const s = new Set(prev); s.delete(stop.id); return s; });
-                      }}
-                    />
-                  ) : stop.instructions ? (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedInstructions(prev => { const s = new Set(prev); s.add(stop.id); return s; })}
-                      style={{ alignSelf: 'flex-start', width: '100%', textAlign: 'left', fontSize: 12, color: 'var(--gc-text-2)', background: 'var(--gc-bg)', border: '1px solid var(--gc-border)', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                      onMouseEnter={e => (e.currentTarget.style.borderColor = headerColor)}
-                      onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-                      title={stop.instructions}
-                    >
-                      {stop.instructions}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedInstructions(prev => { const s = new Set(prev); s.add(stop.id); return s; })}
-                      style={{ alignSelf: 'flex-start', fontSize: 11, color: 'var(--gc-text-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}
-                      onMouseEnter={e => (e.currentTarget.style.color = headerColor)}
-                      onMouseLeave={e => (e.currentTarget.style.color = 'var(--gc-text-3)')}
-                    >
-                      <Plus size={11} /> Instructions
-                    </button>
-                  )
+                {/* Instructions — allowed on every stop type, including relays */}
+                {expandedInstructions.has(stop.id) ? (
+                  <textarea
+                    autoFocus
+                    value={stop.instructions ?? ''}
+                    onChange={e => update(idx, { instructions: e.target.value })}
+                    placeholder="Gate codes, dock notes, contacts…"
+                    rows={3}
+                    style={{ ...inp, resize: 'vertical', fontSize: 12, lineHeight: 1.4, padding: '5px 8px' }}
+                    onFocus={e => (e.currentTarget.style.borderColor = headerColor)}
+                    onBlur={e => {
+                      e.currentTarget.style.borderColor = 'var(--gc-border)';
+                      if (!stop.instructions?.trim()) setExpandedInstructions(prev => { const s = new Set(prev); s.delete(stop.id); return s; });
+                    }}
+                  />
+                ) : stop.instructions ? (
+                  <button
+                    type="button"
+                    onClick={() => setExpandedInstructions(prev => { const s = new Set(prev); s.add(stop.id); return s; })}
+                    style={{ alignSelf: 'flex-start', width: '100%', textAlign: 'left', fontSize: 12, color: 'var(--gc-text-2)', background: 'var(--gc-bg)', border: '1px solid var(--gc-border)', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    onMouseEnter={e => (e.currentTarget.style.borderColor = headerColor)}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+                    title={stop.instructions}
+                  >
+                    {stop.instructions}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setExpandedInstructions(prev => { const s = new Set(prev); s.add(stop.id); return s; })}
+                    style={{ alignSelf: 'flex-start', fontSize: 11, color: 'var(--gc-text-3)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}
+                    onMouseEnter={e => (e.currentTarget.style.color = headerColor)}
+                    onMouseLeave={e => (e.currentTarget.style.color = 'var(--gc-text-3)')}
+                  >
+                    <Plus size={11} /> Instructions
+                  </button>
                 )}
               </div>
 
