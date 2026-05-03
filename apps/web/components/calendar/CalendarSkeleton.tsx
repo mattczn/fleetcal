@@ -61,11 +61,16 @@ export default function CalendarSkeleton() {
   const totalW = GUTTER_W + columnCount * columnWidth;
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-auto bg-[var(--gc-bg)]" data-tour="calendar-skeleton">
+    <div
+      ref={containerRef}
+      className="flex-1 overflow-auto"
+      style={{ background: 'var(--gc-surface)' }}
+      data-tour="calendar-skeleton"
+    >
       <div style={{ minWidth: totalW }}>
         {/* Header row */}
         <div className="sticky top-0 z-20 flex"
-          style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border)' }}>
+          style={{ background: 'var(--gc-surface)', borderBottom: '1px solid var(--gc-border)' }}>
           <div style={{ width: GUTTER_W, height: 56 }} />
           {Array.from({ length: columnCount }).map((_, i) => (
             <div key={i} className="flex flex-col items-center justify-center"
@@ -76,11 +81,11 @@ export default function CalendarSkeleton() {
           ))}
         </div>
 
-        {/* Body: hour gutter + faux columns */}
-        <div className="flex relative" style={{ height: 24 * rowHeight }}>
+        {/* Body: hour gutter + columns */}
+        <div className="flex">
           {/* Hour gutter — matches the real HourGutter layout + labels (12-hour, 12a/6a/12p/6p). */}
           <div className="sticky left-0 z-10 shrink-0 select-none"
-            style={{ width: GUTTER_W, background: 'var(--gc-surface)', borderRight: '1px solid var(--gc-border-light)' }}>
+            style={{ width: GUTTER_W, height: 24 * rowHeight, background: 'var(--gc-surface)', borderRight: '1px solid var(--gc-border-light)' }}>
             {Array.from({ length: 24 }).map((_, h) => (
               <div key={h} className="relative" style={{ height: rowHeight }}>
                 {h > 0 && (
@@ -95,25 +100,28 @@ export default function CalendarSkeleton() {
             ))}
           </div>
 
-          {/* Faux asset columns */}
-          {columnBlocks.map((blocks, col) => (
-            <div key={col} className="relative shrink-0"
-              style={{ width: columnWidth, borderRight: '1px solid var(--gc-border-light)' }}>
-              {/* Hour rows */}
-              {Array.from({ length: 24 }).map((_, h) => (
-                <div key={h} style={{
-                  height: rowHeight,
-                  borderTop: h === 0 ? 'none' : '1px solid var(--gc-border-light)',
-                  background: h % 2 === 0 ? 'var(--gc-bg)' : 'rgba(0,0,0,0.015)',
-                }} />
-              ))}
-              {/* Faux event blocks */}
-              {blocks.map((b, i) => (
-                <div key={i} className="absolute skeleton-pulse rounded-md"
-                  style={{ left: 4, right: 4, top: b.top, height: b.height }} />
-              ))}
-            </div>
-          ))}
+          {/* Grid body — matches the real calendar exactly: plain columns
+              with hour + half-hour overlay lines, faux event blocks on top. */}
+          <div className="relative flex z-0" style={{ height: 24 * rowHeight }}>
+            {Array.from({ length: 25 }).map((_, h) => (
+              <div key={`h-${h}`} className="absolute left-0 right-0 pointer-events-none gc-grid-line"
+                style={{ top: h * rowHeight }} />
+            ))}
+            {Array.from({ length: 24 }).map((_, h) => (
+              <div key={`hh-${h}`} className="absolute left-0 right-0 pointer-events-none gc-grid-line-half"
+                style={{ top: (h + 0.5) * rowHeight }} />
+            ))}
+
+            {columnBlocks.map((blocks, col) => (
+              <div key={col} className="relative border-r border-gray-100 shrink-0"
+                style={{ width: columnWidth, height: 24 * rowHeight }}>
+                {blocks.map((b, i) => (
+                  <div key={i} className="absolute skeleton-pulse rounded-md"
+                    style={{ left: 4, right: 4, top: b.top, height: b.height }} />
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
