@@ -1,30 +1,77 @@
 'use client';
 
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W, hoursToTimeStr } from '@/lib/time-utils';
 
 /**
  * Placeholder grid shown while initial data is loading. Renders the same
- * hour gutter the real calendar uses plus a few greyed-out asset columns
- * with a pulse animation so the page doesn't flash blank.
+ * hour gutter the real calendar uses plus N greyed-out asset columns
+ * (where N is the persisted lastKnownAssetCount, defaulting to 8) sized
+ * to fill the container width — same logic as CalendarView's auto-fit.
+ *
+ * Each column gets 3-5 deterministic faux event blocks so the page looks
+ * populated rather than half-empty during the load window.
  */
 export default function CalendarSkeleton() {
-  const { resourceWidth: rw, rowHeight } = useCalendarStore();
-  const skeletonColumns = 5;
-  const totalW = GUTTER_W + skeletonColumns * rw;
+  const { rowHeight, lastKnownAssetCount } = useCalendarStore();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [columnWidth, setColumnWidth] = useState(120);
+
+  const columnCount = lastKnownAssetCount > 0 ? lastKnownAssetCount : 8;
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const compute = () => {
+      const containerW = el.clientWidth;
+      if (!containerW) return;
+      const fitted = Math.max(80, Math.floor((containerW - GUTTER_W) / columnCount));
+      setColumnWidth(fitted);
+    };
+    compute();
+    const obs = new ResizeObserver(compute);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [columnCount]);
+
+  // Deterministic per-column event-block layouts. Seeded by column index
+  // so the skeleton is stable across re-renders during the same load.
+  const columnBlocks = useMemo(() => {
+    return Array.from({ length: columnCount }).map((_, col) => {
+      const blocks: Array<{ top: number; height: number }> = [];
+      // Pseudo-random but deterministic from col index
+      const seed = (col * 9301 + 49297) % 233280;
+      const rand = (n: number) => (((seed * (n + 1)) ^ (col * 31)) % 100) / 100;
+      const blockCount = 3 + (col % 3); // 3, 4, or 5 blocks
+      let cursor = 5 + Math.floor(rand(0) * 3); // start hour 5-7
+      for (let i = 0; i < blockCount && cursor < 23; i++) {
+        const dur = 1 + Math.floor(rand(i + 1) * 3); // 1-3 hours
+        const offset = Math.floor(rand(i + 7) * 30); // minutes
+        blocks.push({
+          top: cursor * rowHeight + offset + 4,
+          height: dur * rowHeight - 8,
+        });
+        cursor += dur + 1 + Math.floor(rand(i + 13) * 2); // gap 1-2 hours
+      }
+      return blocks;
+    });
+  }, [columnCount, rowHeight]);
+
+  const totalW = GUTTER_W + columnCount * columnWidth;
 
   return (
-    <div className="flex-1 overflow-auto bg-[var(--gc-bg)]" data-tour="calendar-skeleton">
+    <div ref={containerRef} className="flex-1 overflow-auto bg-[var(--gc-bg)]" data-tour="calendar-skeleton">
       <div style={{ minWidth: totalW }}>
         {/* Header row */}
         <div className="sticky top-0 z-20 flex"
           style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border)' }}>
           <div style={{ width: GUTTER_W, height: 56 }} />
-          {Array.from({ length: skeletonColumns }).map((_, i) => (
+          {Array.from({ length: columnCount }).map((_, i) => (
             <div key={i} className="flex flex-col items-center justify-center"
-              style={{ width: rw, height: 56, gap: 6 }}>
+              style={{ width: columnWidth, height: 56, gap: 6 }}>
               <div className="skeleton-pulse rounded-full" style={{ width: 32, height: 32 }} />
-              <div className="skeleton-pulse rounded" style={{ width: rw * 0.55, height: 8 }} />
+              <div className="skeleton-pulse rounded" style={{ width: Math.min(80, columnWidth * 0.55), height: 8 }} />
             </div>
           ))}
         </div>
@@ -43,10 +90,10 @@ export default function CalendarSkeleton() {
             ))}
           </div>
 
-          {/* Faux asset columns with pulsing skeleton blocks */}
-          {Array.from({ length: skeletonColumns }).map((_, col) => (
+          {/* Faux asset columns */}
+          {columnBlocks.map((blocks, col) => (
             <div key={col} className="relative shrink-0"
-              style={{ width: rw, borderRight: '1px solid var(--gc-border-light)' }}>
+              style={{ width: columnWidth, borderRight: '1px solid var(--gc-border-light)' }}>
               {/* Hour rows */}
               {Array.from({ length: 24 }).map((_, h) => (
                 <div key={h} style={{
@@ -55,28 +102,15 @@ export default function CalendarSkeleton() {
                   background: h % 2 === 0 ? 'var(--gc-bg)' : 'rgba(0,0,0,0.015)',
                 }} />
               ))}
-              {/* A couple of fake event blocks per column */}
-              {col % 2 === 0 && (
-                <div className="absolute skeleton-pulse rounded-md"
-                  style={{
-                    left: 4, right: 4,
-                    top: rowHeight * 8 + 4,
-                    height: rowHeight * 3 - 8,
-                  }} />
-              )}
-              {col % 3 === 0 && (
-                <div className="absolute skeleton-pulse rounded-md"
-                  style={{
-                    left: 4, right: 4,
-                    top: rowHeight * 14 + 4,
-                    height: rowHeight * 2 - 8,
-                  }} />
-              )}
+              {/* Faux event blocks */}
+              {blocks.map((b, i) => (
+                <div key={i} className="absolute skeleton-pulse rounded-md"
+                  style={{ left: 4, right: 4, top: b.top, height: b.height }} />
+              ))}
             </div>
           ))}
         </div>
       </div>
-
     </div>
   );
 }

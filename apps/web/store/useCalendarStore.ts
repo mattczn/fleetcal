@@ -86,6 +86,9 @@ interface CalendarStore extends ModalState {
   dbReady: boolean;
   loadedStart: string | null;
   loadedEnd: string | null;
+  /** Persisted across reloads — used by CalendarSkeleton to render the right
+   *  number of columns before fetchOrgData returns. Updated on hydrate. */
+  lastKnownAssetCount: number;
   hydrate: (payload: HydratePayload) => void;
   extendLoadedRange: (start: string, end: string) => Promise<void>;
 
@@ -249,15 +252,18 @@ export const useCalendarStore = create<CalendarStore>()(
   dbReady:     false,
   loadedStart: null,
   loadedEnd:   null,
+  lastKnownAssetCount: 0,
 
   hydrate: ({ orgId, assets, events, deletedEvents, drivers, driverPrefs, loadedStart, loadedEnd }) => {
     const unassigned = assets.find(a => a.type === 'Unassigned' || a.name === 'Unassigned');
     const persistedShowUnassigned = get().showUnassigned;
+    const visibleCount = assets.filter(a => !a.hidden).length;
     set({
       orgId, assets, events, deletedEvents, drivers, driverPrefs,
       dbReady: true, currentDate: new Date(), loadedStart, loadedEnd,
       unassignedAssetId: unassigned?.id ?? null,
       showUnassigned: persistedShowUnassigned,
+      lastKnownAssetCount: visibleCount,
     });
     // If the setting is on but the asset doesn't exist in DB yet, create it now
     if (persistedShowUnassigned && !unassigned && orgId) {
@@ -1377,6 +1383,7 @@ export const useCalendarStore = create<CalendarStore>()(
         calendarTimezone:   state.calendarTimezone,
         cardFields:         state.cardFields,
         unassignedAssetId:  state.unassignedAssetId,
+        lastKnownAssetCount: state.lastKnownAssetCount,
       }),
     }
   )
