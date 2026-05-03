@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { GUTTER_W, hoursToTimeStr } from '@/lib/time-utils';
+import { GUTTER_W, formatHour } from '@/lib/time-utils';
 
 /**
  * Placeholder grid shown while initial data is loading. Renders the same
@@ -78,14 +78,19 @@ export default function CalendarSkeleton() {
 
         {/* Body: hour gutter + faux columns */}
         <div className="flex relative" style={{ height: 24 * rowHeight }}>
-          {/* Hour gutter — real, doesn't need data */}
-          <div className="sticky left-0 z-10 shrink-0"
-            style={{ width: GUTTER_W, background: 'var(--gc-bg)', borderRight: '1px solid var(--gc-border)' }}>
+          {/* Hour gutter — matches the real HourGutter layout + labels (12-hour, 12a/6a/12p/6p). */}
+          <div className="sticky left-0 z-10 shrink-0 select-none"
+            style={{ width: GUTTER_W, background: 'var(--gc-surface)', borderRight: '1px solid var(--gc-border-light)' }}>
             {Array.from({ length: 24 }).map((_, h) => (
-              <div key={h}
-                className="flex items-start justify-end pr-2 text-[10px] tabular-nums"
-                style={{ height: rowHeight, color: 'var(--gc-text-3)', borderTop: h === 0 ? 'none' : '1px solid var(--gc-border-light)' }}>
-                {hoursToTimeStr(h)}
+              <div key={h} className="relative" style={{ height: rowHeight }}>
+                {h > 0 && (
+                  <span
+                    className="absolute -top-2.5 right-2 text-[11px] font-medium tabular-nums leading-none"
+                    style={{ color: 'var(--gc-text-2)' }}
+                  >
+                    {formatHour(h)}
+                  </span>
+                )}
               </div>
             ))}
           </div>
