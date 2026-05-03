@@ -1215,6 +1215,12 @@ export default function EventModal() {
     if (isEdit && modalEventId) {
       const ev = events.find(e => e.id === modalEventId);
       if (!ev) return;
+      // TEMP debug: remove once relay/audit-log issues are diagnosed
+      console.log('[EventModal init]', {
+        id: ev.id, loadId: ev.loadId, relayGroupId: ev.relayGroupId,
+        relayRole: ev.relayRole, eventKind: ev.eventKind, assetId: ev.assetId,
+        title: ev.title, start: ev.start, end: ev.end,
+      });
       setTitle(ev.title);
       setAssetId(ev.assetId);
       setDriverName(ev.driverName ?? '');
