@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useAuth } from '@clerk/nextjs';
-import { fetchOrgData, fetchSavedLocations } from '@/lib/db';
+import { fetchOrgData } from '@/lib/db';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useOnboardingStore } from '@/store/useOnboardingStore';
 
@@ -10,6 +10,7 @@ export default function DataLoader() {
   const { orgId } = useAuth();
   const hydrate              = useCalendarStore((s) => s.hydrate);
   const hydrateDemoMode      = useCalendarStore((s) => s.hydrateDemoMode);
+  const extendLoadedRange    = useCalendarStore((s) => s.extendLoadedRange);
   const loadSavedLocations   = useCalendarStore((s) => s.fetchSavedLocations);
   const loadDispatchers      = useCalendarStore((s) => s.fetchDispatchers);
   const loadCustomers        = useCalendarStore((s) => s.fetchCustomers);
@@ -22,34 +23,42 @@ export default function DataLoader() {
     if (!orgId || loadedId.current === orgId) return;
     loadedId.current = orgId;
 
+    // Two-stage load: today's loads first (small payload, page paints
+    // with real data fast), then extend out to a 28-day window in the
+    // background for trash + nav across weeks.
     const today = new Date();
-    const windowStart = new Date(today);
-    windowStart.setDate(today.getDate() - 21);
-    const windowEnd = new Date(today);
-    windowEnd.setDate(today.getDate() + 7);
-    const loadedStart = windowStart.toISOString();
-    const loadedEnd   = windowEnd.toISOString();
+    const dayStart = new Date(today); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd   = new Date(today); dayEnd.setHours(23, 59, 59, 999);
+    const stage1Start = dayStart.toISOString();
+    const stage1End   = dayEnd.toISOString();
 
-    fetchOrgData(orgId, loadedStart, loadedEnd)
+    const windowStart = new Date(today); windowStart.setDate(today.getDate() - 21);
+    const windowEnd   = new Date(today); windowEnd.setDate(today.getDate() + 7);
+    const stage2Start = windowStart.toISOString();
+    const stage2End   = windowEnd.toISOString();
+
+    fetchOrgData(orgId, stage1Start, stage1End)
       .then((data) => {
         if (data.assets.length === 0 && phase !== 'complete') {
-          // New org with no data — show onboarding with demo data
-          hydrate({ orgId, ...data, loadedStart, loadedEnd }); // sets orgId in store
+          hydrate({ orgId, ...data, loadedStart: stage1Start, loadedEnd: stage1End });
           hydrateDemoMode();
           setPhase('demo');
         } else {
-          // Org has real data — skip onboarding
-          hydrate({ orgId, ...data, loadedStart, loadedEnd });
+          hydrate({ orgId, ...data, loadedStart: stage1Start, loadedEnd: stage1End });
           if (phase !== 'complete') completeOnboarding();
         }
+        // Reference data — not blocking the calendar paint
         void loadSavedLocations();
         void loadDispatchers();
         void loadCustomers();
         void loadTrailers();
         autoExpireTrash();
+        // Stage 2: extend the events window in the background. Merges by id,
+        // updates loadedStart/loadedEnd in the store.
+        void extendLoadedRange(stage2Start, stage2End);
       })
       .catch((err) => console.error('[DataLoader] fetch failed:', err));
-  }, [orgId, hydrate, hydrateDemoMode, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, autoExpireTrash, phase, completeOnboarding, setPhase]);
+  }, [orgId, hydrate, hydrateDemoMode, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, autoExpireTrash, phase, completeOnboarding, setPhase]);
 
   return null;
 }
