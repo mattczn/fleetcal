@@ -12,10 +12,17 @@ import { tzAbbr } from '@/lib/time-utils';
 const POLL_MS = 30 * 60_000; // 30 minutes
 
 function relativeTime(date: Date): string {
-  const mins = Math.floor((Date.now() - date.getTime()) / 60_000);
+  const ms = Date.now() - date.getTime();
+  const mins = Math.floor(ms / 60_000);
   if (mins < 1) return 'just now';
   if (mins === 1) return '1 min ago';
-  return `${mins} min ago`;
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours === 1) return '1 hr ago';
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(ms / 86_400_000);
+  if (days === 1) return '1 day ago';
+  return `${days} days ago`;
 }
 
 function staleness(locatedAt: string): 'fresh' | 'stale' | 'old' {
