@@ -4,14 +4,6 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W, formatHour } from '@/lib/time-utils';
 
-/** Best-effort container-width estimate before we can measure the ref.
- *  Subtracts the asset sidebar (Tailwind w-56 = 224px) from window width.
- *  Refined by the useLayoutEffect below once the ref is mounted. */
-function estimateContainerWidth(): number {
-  if (typeof window === 'undefined') return 1200;
-  return Math.max(400, window.innerWidth - 224);
-}
-
 /**
  * Placeholder grid shown while initial data is loading. Renders the same
  * hour gutter the real calendar uses plus N greyed-out asset columns
@@ -26,15 +18,14 @@ export default function CalendarSkeleton() {
   const containerRef = useRef<HTMLDivElement>(null);
   const columnCount = lastKnownAssetCount > 0 ? lastKnownAssetCount : 8;
 
-  // Seed columnWidth from a window-based estimate so the very first paint
-  // already fills the screen instead of using a 120px default that left
-  // the columns bunched on the left for one frame.
-  const [columnWidth, setColumnWidth] = useState(() =>
-    Math.max(80, Math.floor((estimateContainerWidth() - GUTTER_W) / columnCount)),
-  );
+  // 0 means "not yet measured". SSR + first client render both produce
+  // the same HTML (columns with width:0, layout intentionally collapsed)
+  // so React doesn't flag a hydration mismatch. useLayoutEffect runs
+  // synchronously after commit but before paint — it measures the real
+  // container, sets the width, and the user only ever sees the
+  // final-sized skeleton paint.
+  const [columnWidth, setColumnWidth] = useState(0);
 
-  // Refine via the actual container ref before the first paint
-  // (useLayoutEffect runs synchronously between commit and paint).
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
