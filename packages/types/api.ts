@@ -35,6 +35,8 @@ export interface CreateLoadRequestLoad {
   customerId?: string;          // uuid FK → customers
   dispatcher?: string;
   loadPrice?: number;
+  commodity?: string;
+  weight?: number;              // lbs
   rateConPdf?: string;          // Storage path in `rate-cons` bucket
   accessorials?: Accessorial[];
   refNums?: RefNum[];
@@ -122,6 +124,8 @@ export interface UpdateLoadRequest {
   customerId?:     string | null;
   dispatcher?:     string | null;
   loadPrice?:      number | null;
+  commodity?:      string | null;
+  weight?:         number | null;
   rateConPdf?:     string | null;
   accessorials?:   Accessorial[] | null;
   refNums?:        RefNum[] | null;

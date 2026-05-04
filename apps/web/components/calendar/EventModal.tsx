@@ -958,6 +958,7 @@ export default function EventModal() {
   const [savePromptAfterNav, setSavePromptAfterNav] = useState<string | null>(null); // relay partner id to open after save
   const [dupLoadNum,     setDupLoadNum]     = useState<string | null>(null); // load# that triggered duplicate warning
   const [pendingSave,    setPendingSave]    = useState<'single' | 'batch' | null>(null);
+  const [geocodeBlock,   setGeocodeBlock]   = useState<'single' | 'batch' | null>(null); // save target when ungeocoded stops detected
   const markDirty = () => setIsDirty(true);
 
   // Shift stop appointment times when the start date changes (duplicate/+1 Week flow).
@@ -1209,7 +1210,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -1491,12 +1492,19 @@ export default function EventModal() {
     return [...(existing ?? []), entry];
   }
 
-  const doSave = async () => {
+  const doSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
 
     // Block save if a new broker was detected but user hasn't resolved it
     if (brokerMatch.status === 'new') {
       setBrokerSaveBlocked(true);
+      return;
+    }
+
+    // Warn if any stop failed to geocode (red-flag stops). Easy to overlook the
+    // inline indicator, so surface a confirmation before saving.
+    if (!opts?.skipGeocodeCheck && stops.some(s => s.geocodeStatus === 'failed')) {
+      setGeocodeBlock('single');
       return;
     }
 
@@ -1676,7 +1684,7 @@ export default function EventModal() {
     };
     let insertIdx = stops.length;
     for (let i = stops.length - 1; i >= 0; i--) {
-      if (stops[i].type !== 'delivery' && stops[i].type !== 'drop_hook') { insertIdx = i + 1; break; }
+      if (stops[i].type !== 'delivery' && stops[i].type !== 'drop_hook' && stops[i].type !== 'drop') { insertIdx = i + 1; break; }
       insertIdx = i;
     }
     const next = [...stops.slice(0, insertIdx), relayStop, ...stops.slice(insertIdx)];
@@ -1855,9 +1863,13 @@ export default function EventModal() {
     }
   };
 
-  const handleBatchSave = () => {
+  const handleBatchSave = (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
     if (brokerMatch.status === 'new') { setBrokerSaveBlocked(true); return; }
+    if (!opts?.skipGeocodeCheck && stops.some(s => s.geocodeStatus === 'failed')) {
+      setGeocodeBlock('batch');
+      return;
+    }
     if (!dupLoadNum) {
       const loadNum = String(fieldValues['loadNum'] ?? '').trim();
       if (loadNum) {
@@ -2158,6 +2170,60 @@ export default function EventModal() {
         </div>
       </div>
     )}
+    {geocodeBlock && (() => {
+      const ungeocoded = stops.filter(s => s.geocodeStatus === 'failed');
+      const which = geocodeBlock;
+      return (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
+          <div className="rounded-2xl p-6 space-y-4" style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 420, border: '1px solid var(--gc-border-light)' }}>
+            <div className="flex items-start gap-3">
+              <div style={{ background: '#fef2f2', borderRadius: 10, padding: 8, flexShrink: 0 }}>
+                <AlertTriangle size={18} style={{ color: '#dc2626' }} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
+                  {ungeocoded.length === 1 ? '1 location not geocoded' : `${ungeocoded.length} locations not geocoded`}
+                </div>
+                <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
+                  These stops don&apos;t have map coordinates and won&apos;t appear on the route map or in distance calculations.
+                </div>
+                <ul className="mt-2 space-y-0.5">
+                  {ungeocoded.map((s, i) => {
+                    const idx = stops.indexOf(s);
+                    const label = s.facilityName?.trim() || s.address?.trim() || `Stop ${idx + 1}`;
+                    return (
+                      <li key={s.id ?? i} className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                        · Stop {idx + 1}: {label}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setGeocodeBlock(null)}
+                className="w-full py-2.5 rounded-xl text-sm font-semibold"
+                style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGeocodeBlock(null);
+                  if (which === 'batch') handleBatchSave({ skipGeocodeCheck: true });
+                  else void doSave({ skipGeocodeCheck: true });
+                }}
+                className="w-full py-2.5 rounded-xl text-sm font-medium"
+                style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-1)', border: '1px solid var(--gc-border)', cursor: 'pointer' }}>
+                Ignore and save
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    })()}
     {brokerSaveBlocked && brokerMatch.status === 'new' && (
       <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
         <div className="rounded-2xl p-6 space-y-4" style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}>
@@ -3225,7 +3291,7 @@ export default function EventModal() {
                   onMouseLeave={e => { if (!confirmSkip) e.currentTarget.style.background = 'transparent'; }}>
                   {confirmSkip ? 'Confirm skip?' : 'Skip'}
                 </button>
-                <button type="button" onClick={handleBatchSave} disabled={!title.trim() || !startDate || !endDate}
+                <button type="button" onClick={() => handleBatchSave()} disabled={!title.trim() || !startDate || !endDate}
                   className="px-6 py-2.5 rounded-full text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   style={{ background: 'var(--gc-blue)' }}
                   onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}

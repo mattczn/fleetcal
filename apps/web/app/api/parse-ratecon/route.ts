@@ -11,6 +11,7 @@ interface RawStop {
   facilityName?: string;
   address?: string;
   city?: string;
+  scheduleType?: string;
   apptStart?: string;
   apptEnd?: string;
   instructions?: string;
@@ -75,6 +76,7 @@ export async function POST(req: NextRequest) {
     enrichedStops = sorted.map((stop, i) => {
       const geo = geoResults[i];
       const geocodeStatus: GeocodeStatus = geo ? 'success' : (stop.address ? 'failed' : 'pending');
+      const validSchedule = stop.scheduleType === 'appointment' || stop.scheduleType === 'window' || stop.scheduleType === 'fcfs';
       return {
         sequence:      i + 1,
         type:          (stop.type ?? 'stop') as StopType,
@@ -84,6 +86,7 @@ export async function POST(req: NextRequest) {
         lat:           geo?.lat           ?? undefined,
         lng:           geo?.lng           ?? undefined,
         timezone:      geo?.timezone      ?? undefined,
+        scheduleType:  validSchedule ? stop.scheduleType : undefined,
         apptStart:     stop.apptStart     || undefined,
         apptEnd:       stop.apptEnd       || undefined,
         instructions:  stop.instructions  || undefined,

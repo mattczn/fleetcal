@@ -29,6 +29,8 @@ export const ALL_FIELDS: FieldDef[] = [
   { id: 'trailer',    label: 'Trailer',           section: 'load',      type: 'select', defaultEnabled: false },
   { id: 'broker',     label: 'Broker / Customer', section: 'load',      type: 'text',   defaultEnabled: true,  placeholder: 'XYZ Logistics',    extractionHint: 'Broker or customer company name' },
   { id: 'dispatcher', label: 'Dispatcher',        section: 'load',      type: 'text',   defaultEnabled: true,  placeholder: 'John Smith' },
+  { id: 'commodity',  label: 'Commodity',         section: 'load',      type: 'text',   defaultEnabled: true,  placeholder: 'Frozen produce, Industrial parts…', extractionHint: 'What is being hauled. Free text from the rate con (e.g. "Frozen blueberries", "Auto parts", "General freight"). If reefer, prepend the temperature setpoint or range. Omit if not stated.' },
+  { id: 'weight',     label: 'Weight (lbs)',      section: 'load',      type: 'number', defaultEnabled: true,  placeholder: '40000',            extractionHint: 'Total cargo weight in pounds — number only, no commas or units. Convert from kg/tons if needed. Omit if not stated.' },
 
   // Financial
   { id: 'loadPrice',     label: 'Load Price ($)',     section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00',    extractionHint: 'Total load rate or price — number only, no $ sign or commas, e.g. 1850.00' },

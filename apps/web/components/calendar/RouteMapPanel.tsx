@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, MapPin, Clock, Truck, CheckCircle2 } from 'lucide-react';
+import { X, MapPin, Clock, Truck, CheckCircle2, Activity } from 'lucide-react';
 import type { Stop, StopType } from '@/lib/types';
-import { fmtAppt } from './StopsSection';
+import { fmtStopWindow } from './StopsSection';
+import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
 const VERIFY_THRESHOLD_MI = 0.5;
 
@@ -42,27 +43,30 @@ interface TruckLocation {
 
 
 const TYPE_CONFIG: Record<StopType, { label: string; color: string; bg: string }> = {
-  pickup:    { label: 'Pickup',      color: '#166534', bg: '#dcfce7' },
-  delivery:  { label: 'Delivery',    color: '#991b1b', bg: '#fee2e2' },
-  stop:      { label: 'Stop',        color: '#92400e', bg: '#fef3c7' },
-  drop_hook: { label: 'Drop & Hook', color: '#1e40af', bg: '#dbeafe' },
-  relay:     { label: 'Relay Point', color: '#6d28d9', bg: '#f5f3ff' },
+  pickup:    { label: 'Pickup',       color: '#166534', bg: '#dcfce7' },
+  delivery:  { label: 'Delivery',     color: '#991b1b', bg: '#fee2e2' },
+  drop:      { label: 'Drop Trailer', color: '#0e7490', bg: '#cffafe' },
+  drop_hook: { label: 'Drop & Hook',  color: '#1e40af', bg: '#dbeafe' },
+  stop:      { label: 'Stop',         color: '#92400e', bg: '#fef3c7' },
+  relay:     { label: 'Relay Point',  color: '#6d28d9', bg: '#f5f3ff' },
 };
 
-// Colors for map markers (same palette as above but as hex for mapbox)
 const MARKER_COLORS: Record<StopType, string> = {
   pickup:    '#16a34a',
   delivery:  '#dc2626',
-  stop:      '#d97706',
+  drop:      '#0891b2',
   drop_hook: '#2563eb',
+  stop:      '#d97706',
   relay:     '#7c3aed',
 };
 
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
+
 export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mapRef       = useRef<any>(null);
-  const token        = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
+  const mapRef       = useRef<google.maps.Map | null>(null);
+  const trafficRef   = useRef<google.maps.TrafficLayer | null>(null);
+  const [trafficOn, setTrafficOn] = useState(true);
   const [truckLoc, setTruckLoc] = useState<TruckLocation | null>(null);
   const truckRef = useRef<TruckLocation | null>(null);
   const [etas, setEtas] = useState<Record<string, string | 'loading'>>({});
@@ -70,10 +74,10 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
   const geocodedStops = stops.filter(s => s.lat != null && s.lng != null);
 
   function fetchEta(stopId: string, stopLat: number, stopLng: number, stopTimezone?: string) {
-    if (!truckLoc || !token) return;
+    if (!truckLoc || !MAPBOX_TOKEN) return;
     setEtas(prev => ({ ...prev, [stopId]: 'loading' }));
 
-    fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${truckLoc.lon},${truckLoc.lat};${stopLng},${stopLat}?access_token=${token}&overview=false`)
+    fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${truckLoc.lon},${truckLoc.lat};${stopLng},${stopLat}?access_token=${MAPBOX_TOKEN}&overview=false`)
       .then(r => r.json())
       .then((dir: { routes?: { duration: number }[] }) => {
         const secs = dir.routes?.[0]?.duration;
@@ -103,190 +107,169 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
   }, [motiveVehicleId]);
 
   useEffect(() => {
-    if (!mapContainer.current || !token) return;
+    if (!mapContainer.current) return;
 
-    let map: mapboxgl.Map;
-    const ro = new ResizeObserver(() => { mapRef.current?.resize(); });
-    if (mapContainer.current) ro.observe(mapContainer.current);
+    let cancelled = false;
+    let openInfoWindow: google.maps.InfoWindow | null = null;
 
-    import('mapbox-gl').then(({ default: mapboxgl }) => {
-      import('mapbox-gl/dist/mapbox-gl.css').catch(() => {/* CSS may already be loaded */});
-
-      mapboxgl.accessToken = token;
-
-      map = new mapboxgl.Map({
-        container: mapContainer.current!,
-        style: 'mapbox://styles/mapbox/streets-v12',
-        center: [-98.5795, 39.8283], // center of US
-        zoom: 3.5,
+    loadGoogleMaps().then(google => {
+      if (cancelled || !mapContainer.current) return;
+      const map = new google.maps.Map(mapContainer.current, {
+        center: { lat: 39.8283, lng: -98.5795 }, // center of US
+        zoom: 4,
+        mapId: MAP_ID,
+        clickableIcons: false,
+        gestureHandling: 'greedy',
       });
       mapRef.current = map;
 
-      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+      // Live traffic overlay (toggleable)
+      trafficRef.current = new google.maps.TrafficLayer({ map: trafficOn ? map : null });
 
-      // Force correct size once the flex container has settled
-      map.on('load', () => { map.resize(); });
+      const openPopup = (anchor: google.maps.marker.AdvancedMarkerElement, html: string) => {
+        if (!openInfoWindow) openInfoWindow = new google.maps.InfoWindow();
+        openInfoWindow.setContent(html);
+        openInfoWindow.open({ anchor, map });
+      };
 
-      map.on('load', () => {
-        // Add markers for each geocoded stop
-        geocodedStops.forEach((stop, idx) => {
-          const el = document.createElement('div');
-          el.style.cssText = `
-            width: 28px; height: 28px; border-radius: 50%;
-            background: ${MARKER_COLORS[stop.type]};
-            border: 2.5px solid white;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-            display: flex; align-items: center; justify-content: center;
-            color: white; font-size: 11px; font-weight: 700;
-            cursor: default;
-          `;
-          el.textContent = String(idx + 1);
+      // Stop markers
+      geocodedStops.forEach((stop, idx) => {
+        const el = document.createElement('div');
+        el.style.cssText = `width:28px;height:28px;border-radius:50%;background:${MARKER_COLORS[stop.type]};border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;color:white;font-size:11px;font-weight:700;cursor:pointer;`;
+        el.textContent = String(idx + 1);
 
-          const popup = new mapboxgl.Popup({ offset: 18, closeButton: false })
-            .setHTML(`
-              <div style="font-size:12px;line-height:1.4;max-width:200px">
-                <div style="font-weight:700;color:${MARKER_COLORS[stop.type]}">${TYPE_CONFIG[stop.type].label}</div>
-                ${stop.facilityName ? `<div style="font-weight:600">${stop.facilityName}</div>` : ''}
-                ${stop.address     ? `<div style="color:#555">${stop.address}</div>` : ''}
-                ${stop.apptStart   ? `<div style="color:#888;margin-top:2px">${fmtAppt(stop.apptStart)}${stop.apptEnd ? ` – ${fmtAppt(stop.apptEnd)}` : ''}</div>` : ''}
-              </div>
-            `);
-
-          new mapboxgl.Marker({ element: el })
-            .setLngLat([stop.lng!, stop.lat!])
-            .setPopup(popup)
-            .addTo(map);
+        const html = `
+          <div style="font-size:12px;line-height:1.4;max-width:200px;padding:2px 4px">
+            <div style="font-weight:700;color:${MARKER_COLORS[stop.type]}">${TYPE_CONFIG[stop.type].label}</div>
+            ${stop.facilityName ? `<div style="font-weight:600">${stop.facilityName}</div>` : ''}
+            ${stop.address     ? `<div style="color:#555">${stop.address}</div>` : ''}
+            ${stop.apptStart   ? `<div style="color:#888;margin-top:2px">${fmtStopWindow(stop)}</div>` : ''}
+          </div>`;
+        const marker = new google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: stop.lat!, lng: stop.lng! },
+          content: el,
         });
+        marker.addListener('click', () => openPopup(marker, html));
+      });
 
-        // Add driver check-in markers for any stop with a recorded arrival
-        stops.forEach((stop, idx) => {
-          if (stop.arrivedLat == null || stop.arrivedLng == null || !stop.arrivedAt) return;
-          const distMi =
-            stop.lat != null && stop.lng != null
-              ? distanceMiles(stop.lat, stop.lng, stop.arrivedLat, stop.arrivedLng)
-              : null;
-          const onSite = distMi != null && distMi <= VERIFY_THRESHOLD_MI;
-          const ringColor = onSite ? '#16a34a' : '#d97706';
+      // Driver check-in markers
+      stops.forEach((stop, idx) => {
+        if (stop.arrivedLat == null || stop.arrivedLng == null || !stop.arrivedAt) return;
+        const distMi =
+          stop.lat != null && stop.lng != null
+            ? distanceMiles(stop.lat, stop.lng, stop.arrivedLat, stop.arrivedLng)
+            : null;
+        const onSite = distMi != null && distMi <= VERIFY_THRESHOLD_MI;
+        const ringColor = onSite ? '#16a34a' : '#d97706';
 
-          const el = document.createElement('div');
-          el.style.cssText = `
-            width: 22px; height: 22px; border-radius: 50%;
-            background: white;
-            border: 2.5px solid ${ringColor};
-            box-shadow: 0 1px 4px rgba(0,0,0,0.25);
-            display: flex; align-items: center; justify-content: center;
-            cursor: default;
-          `;
-          el.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="${ringColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+        const el = document.createElement('div');
+        el.style.cssText = `width:22px;height:22px;border-radius:50%;background:white;border:2.5px solid ${ringColor};box-shadow:0 1px 4px rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;cursor:pointer;`;
+        el.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="${ringColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
-          const distLabel =
-            distMi == null
-              ? ''
-              : distMi < 0.1
-                ? '<div style="color:#16a34a;font-weight:600;margin-top:2px">On-site</div>'
-                : `<div style="color:${onSite ? '#16a34a' : '#d97706'};font-weight:600;margin-top:2px">${distMi.toFixed(1)} mi off</div>`;
+        const distLabel =
+          distMi == null
+            ? ''
+            : distMi < 0.1
+              ? '<div style="color:#16a34a;font-weight:600;margin-top:2px">On-site</div>'
+              : `<div style="color:${onSite ? '#16a34a' : '#d97706'};font-weight:600;margin-top:2px">${distMi.toFixed(1)} mi off</div>`;
 
-          const popup = new mapboxgl.Popup({ offset: 14, closeButton: false })
-            .setHTML(`
-              <div style="font-size:12px;line-height:1.4;max-width:200px">
-                <div style="font-weight:700;color:${ringColor}">Stop ${idx + 1} check-in</div>
-                <div style="color:#555;margin-top:1px">${fmtCheckInTime(stop.arrivedAt!)}</div>
-                ${distLabel}
-              </div>
-            `);
+        const html = `
+          <div style="font-size:12px;line-height:1.4;max-width:200px;padding:2px 4px">
+            <div style="font-weight:700;color:${ringColor}">Stop ${idx + 1} check-in</div>
+            <div style="color:#555;margin-top:1px">${fmtCheckInTime(stop.arrivedAt!)}</div>
+            ${distLabel}
+          </div>`;
 
-          new mapboxgl.Marker({ element: el })
-            .setLngLat([stop.arrivedLng!, stop.arrivedLat!])
-            .setPopup(popup)
-            .addTo(map);
+        const marker = new google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: stop.arrivedLat!, lng: stop.arrivedLng! },
+          content: el,
         });
+        marker.addListener('click', () => openPopup(marker, html));
+      });
 
-        // Add truck location marker if ELD data is available
-        const truck = truckRef.current;
-        if (truck) {
-          // Pulsing blue dot (Apple Maps style)
-          const wrapper = document.createElement('div');
-          wrapper.style.cssText = 'position:relative;width:22px;height:22px;';
-
-          const pulse = document.createElement('div');
-          pulse.style.cssText = `
-            position:absolute;inset:0;border-radius:50%;
-            background:rgba(59,130,246,0.25);
-            animation:truck-pulse 2s ease-out infinite;
-          `;
-
-          const dot = document.createElement('div');
-          dot.style.cssText = `
-            position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-            width:14px;height:14px;border-radius:50%;
-            background:#3b82f6;border:2.5px solid white;
-            box-shadow:0 1px 6px rgba(59,130,246,0.6);
-          `;
-
-          // Inject keyframes once
-          if (!document.getElementById('truck-pulse-style')) {
-            const style = document.createElement('style');
-            style.id = 'truck-pulse-style';
-            style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
-            document.head.appendChild(style);
-          }
-
-          wrapper.appendChild(pulse);
-          wrapper.appendChild(dot);
-
-          const age    = Math.round((Date.now() - new Date(truck.locatedAt).getTime()) / 60000);
-          const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
-          const truckPopup = new mapboxgl.Popup({ offset: 14, closeButton: false })
-            .setHTML(`
-              <div style="font-size:12px;line-height:1.5;max-width:200px">
-                <div style="font-weight:700;color:#1d4ed8">Truck Location</div>
-                <div style="color:#555">${truck.description}</div>
-                <div style="color:#888;margin-top:2px">Updated ${ageStr}</div>
-              </div>
-            `);
-
-          new mapboxgl.Marker({ element: wrapper })
-            .setLngLat([truck.lon, truck.lat])
-            .setPopup(truckPopup)
-            .addTo(map);
+      // Truck location marker
+      const truck = truckRef.current;
+      if (truck) {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:relative;width:22px;height:22px;cursor:pointer;';
+        const pulse = document.createElement('div');
+        pulse.style.cssText = 'position:absolute;inset:0;border-radius:50%;background:rgba(59,130,246,0.25);animation:truck-pulse 2s ease-out infinite;';
+        const dot = document.createElement('div');
+        dot.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid white;box-shadow:0 1px 6px rgba(59,130,246,0.6);';
+        if (!document.getElementById('truck-pulse-style')) {
+          const style = document.createElement('style');
+          style.id = 'truck-pulse-style';
+          style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
+          document.head.appendChild(style);
         }
+        wrapper.appendChild(pulse);
+        wrapper.appendChild(dot);
 
-        // Draw route line between stops
-        if (geocodedStops.length >= 2) {
-          const coords = geocodedStops.map(s => [s.lng!, s.lat!]);
+        const age    = Math.round((Date.now() - new Date(truck.locatedAt).getTime()) / 60000);
+        const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+        const html = `
+          <div style="font-size:12px;line-height:1.5;max-width:200px;padding:2px 4px">
+            <div style="font-weight:700;color:#1d4ed8">Truck Location</div>
+            <div style="color:#555">${truck.description}</div>
+            <div style="color:#888;margin-top:2px">Updated ${ageStr}</div>
+          </div>`;
 
-          // Try to get actual road route from Mapbox Directions
-          const coordStr = coords.map(([lng, lat]) => `${lng},${lat}`).join(';');
-          fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordStr}?access_token=${token}&geometries=geojson&overview=full`)
+        const marker = new google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: truck.lat, lng: truck.lon },
+          content: wrapper,
+        });
+        marker.addListener('click', () => openPopup(marker, html));
+      }
+
+      // Route line
+      if (geocodedStops.length >= 2) {
+        const coordPairs = geocodedStops.map(s => ({ lng: s.lng!, lat: s.lat! }));
+        const coordStr = coordPairs.map(c => `${c.lng},${c.lat}`).join(';');
+
+        if (MAPBOX_TOKEN) {
+          fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordStr}?access_token=${MAPBOX_TOKEN}&geometries=geojson&overview=full`)
             .then(r => r.json())
             .then((data: { routes?: { geometry: GeoJSON.LineString }[] }) => {
-              const geometry = data.routes?.[0]?.geometry ?? {
-                type: 'LineString' as const,
-                coordinates: coords,
-              };
-              addRouteLine(map, geometry);
+              const path =
+                data.routes?.[0]?.geometry.coordinates.map(([lng, lat]) => ({ lat, lng })) ??
+                coordPairs.map(c => ({ lat: c.lat, lng: c.lng }));
+              drawRouteLine(map, path);
             })
-            .catch(() => {
-              // Fallback: straight lines between stops
-              addRouteLine(map, { type: 'LineString', coordinates: coords });
-            });
-
-          // Fit map to stops
-          const bounds = coords.reduce(
-            (b, [lng, lat]) => b.extend([lng, lat] as mapboxgl.LngLatLike),
-            new mapboxgl.LngLatBounds([coords[0][0], coords[0][1]], [coords[0][0], coords[0][1]])
-          );
-          map.fitBounds(bounds, { padding: 60, maxZoom: 12, duration: 800 });
-        } else if (geocodedStops.length === 1) {
-          map.setCenter([geocodedStops[0].lng!, geocodedStops[0].lat!]);
-          map.setZoom(10);
+            .catch(() => drawRouteLine(map, coordPairs.map(c => ({ lat: c.lat, lng: c.lng }))));
+        } else {
+          drawRouteLine(map, coordPairs.map(c => ({ lat: c.lat, lng: c.lng })));
         }
-      });
+
+        // Fit bounds to stops
+        const bounds = new google.maps.LatLngBounds();
+        coordPairs.forEach(c => bounds.extend({ lat: c.lat, lng: c.lng }));
+        map.fitBounds(bounds, 60);
+      } else if (geocodedStops.length === 1) {
+        map.setCenter({ lat: geocodedStops[0].lat!, lng: geocodedStops[0].lng! });
+        map.setZoom(10);
+      }
     });
 
-    return () => { ro.disconnect(); map?.remove(); mapRef.current = null; };
+    return () => { cancelled = true; mapRef.current = null; trafficRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sync the traffic layer's visibility with the toggle.
+  useEffect(() => {
+    if (trafficRef.current && mapRef.current) {
+      trafficRef.current.setMap(trafficOn ? mapRef.current : null);
+    }
+  }, [trafficOn]);
+
+  const flyTo = (lat: number, lng: number, zoom: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.panTo({ lat, lng });
+    map.setZoom(zoom);
+  };
 
   return (
     <div className="flex flex-col shrink-0" style={{ width: '44%', borderRight: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
@@ -308,7 +291,27 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
       </div>
 
       {/* Map */}
-      <div ref={mapContainer} style={{ flex: 1 }} />
+      <div style={{ flex: 1, position: 'relative' }}>
+        <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+        <button
+          type="button"
+          onClick={() => setTrafficOn(t => !t)}
+          style={{
+            position: 'absolute', top: 56, right: 10, zIndex: 1,
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '6px 10px', fontSize: 12, fontWeight: 600,
+            borderRadius: 6, cursor: 'pointer',
+            border: '1px solid rgba(0,0,0,0.15)',
+            background: trafficOn ? '#1a73e8' : 'rgba(255,255,255,0.95)',
+            color: trafficOn ? '#fff' : 'var(--gc-text-2)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+          }}
+          title={trafficOn ? 'Hide traffic' : 'Show traffic'}
+        >
+          <Activity size={12} />
+          Traffic
+        </button>
+      </div>
 
       {/* Stop legend */}
       <div style={{ borderTop: '1px solid var(--gc-border)', background: 'var(--gc-surface)', maxHeight: 180, overflowY: 'auto', padding: '10px 12px' }}>
@@ -320,10 +323,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
               <div
                 key={stop.id}
                 className="flex items-start gap-2.5"
-                onClick={() => {
-                  if (!hasCoords || !mapRef.current) return;
-                  mapRef.current.flyTo({ center: [stop.lng!, stop.lat!], zoom: 13, duration: 800 });
-                }}
+                onClick={() => { if (hasCoords) flyTo(stop.lat!, stop.lng!, 13); }}
                 style={{ cursor: hasCoords ? 'pointer' : 'default', borderRadius: 6, padding: '2px 4px', margin: '0 -4px', transition: 'background 120ms' }}
                 onMouseEnter={e => { if (hasCoords) e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
@@ -353,7 +353,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
                   )}
                   {stop.apptStart && (
                     <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-                      <Clock size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />{fmtAppt(stop.apptStart)}{stop.apptEnd ? ` – ${fmtAppt(stop.apptEnd)}` : ''}
+                      <Clock size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />{fmtStopWindow(stop)}
                     </div>
                   )}
                   {stop.arrivedAt && stop.arrivedLat != null && stop.arrivedLng != null && (() => {
@@ -369,12 +369,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
                         : ` · ${distMi.toFixed(1)} mi off`;
                     return (
                       <div
-                        onClick={e => {
-                          e.stopPropagation();
-                          if (mapRef.current) {
-                            mapRef.current.flyTo({ center: [stop.arrivedLng!, stop.arrivedLat!], zoom: 14, duration: 800 });
-                          }
-                        }}
+                        onClick={e => { e.stopPropagation(); flyTo(stop.arrivedLat!, stop.arrivedLng!, 14); }}
                         style={{ fontSize: 11, fontWeight: 600, color: tint, marginTop: 1, cursor: 'pointer' }}
                       >
                         <CheckCircle2 size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />
@@ -408,7 +403,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
           {truckLoc && (
             <div
               className="flex items-start gap-2.5"
-              onClick={() => { mapRef.current?.flyTo({ center: [truckLoc.lon, truckLoc.lat], zoom: 13, duration: 800 }); }}
+              onClick={() => flyTo(truckLoc.lat, truckLoc.lon, 13)}
               style={{ cursor: 'pointer', borderRadius: 6, padding: '2px 4px', margin: '0 -4px', transition: 'background 120ms' }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
@@ -438,25 +433,20 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function addRouteLine(map: any, geometry: object) {
-  // The directions fetch is async — bail if the map was disposed in the meantime.
-  if (!map || typeof map.getStyle !== 'function' || !map.getStyle()) return;
-  try {
-    if (map.getSource('route')) {
-      map.getSource('route').setData({ type: 'Feature', properties: {}, geometry });
-      return;
-    }
-    map.addSource('route', { type: 'geojson', data: { type: 'Feature', properties: {}, geometry } });
-    map.addLayer({ id: 'route-outline', type: 'line', source: 'route',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#ffffff', 'line-width': 6, 'line-opacity': 0.8 },
-    }, 'road-label');
-    map.addLayer({ id: 'route-line', type: 'line', source: 'route',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#2563eb', 'line-width': 3.5 },
-    }, 'road-label');
-  } catch {
-    // map was disposed mid-call — nothing to draw on
-  }
+function drawRouteLine(map: google.maps.Map, path: { lat: number; lng: number }[]) {
+  // White outline beneath blue line for contrast over varied tiles.
+  new google.maps.Polyline({
+    map,
+    path,
+    strokeColor: '#ffffff',
+    strokeOpacity: 0.85,
+    strokeWeight: 6,
+  });
+  new google.maps.Polyline({
+    map,
+    path,
+    strokeColor: '#2563eb',
+    strokeOpacity: 1,
+    strokeWeight: 3.5,
+  });
 }

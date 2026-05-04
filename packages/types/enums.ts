@@ -33,12 +33,22 @@ export function isLoadStatus(v: unknown): v is LoadStatus {
 export const STOP_TYPES = [
   "pickup",
   "delivery",
-  "stop",
+  "drop",
   "drop_hook",
+  "stop",
   "relay",
 ] as const;
 
 export type StopType = (typeof STOP_TYPES)[number];
+
+// ── Schedule type ───────────────────────────────────────────────────────
+// stops.schedule_type column. Describes how the apptStart/apptEnd window
+// should be read in the UI; null = legacy ("appointment" if only apptStart,
+// "window" if both).
+
+export const SCHEDULE_TYPES = ["appointment", "window", "fcfs"] as const;
+
+export type ScheduleType = (typeof SCHEDULE_TYPES)[number];
 
 // ── Trailer category ────────────────────────────────────────────────────
 // trailers.category column.

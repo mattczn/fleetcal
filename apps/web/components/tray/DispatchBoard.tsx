@@ -211,7 +211,7 @@ function LoadCard({
     const stops = ev.stops ?? [];
     const stop = distance.target === 'pickup'
       ? stops.find(s => s.type === 'pickup')
-      : [...stops].reverse().find(s => s.type === 'delivery' || s.type === 'drop_hook');
+      : [...stops].reverse().find(s => s.type === 'delivery' || s.type === 'drop_hook' || s.type === 'drop');
     return stop?.timezone;
   })();
 
@@ -681,7 +681,7 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
         const isDispatched = getColumn(ev) === 'dispatched';
         let targetStop = isDispatched
           ? stops.find(s => s.type === 'pickup' && s.lat != null && s.lng != null)
-          : [...stops].reverse().find(s => (s.type === 'delivery' || s.type === 'drop_hook') && s.lat != null && s.lng != null);
+          : [...stops].reverse().find(s => (s.type === 'delivery' || s.type === 'drop_hook' || s.type === 'drop') && s.lat != null && s.lng != null);
         if (!targetStop) targetStop = isDispatched
           ? stops.find(s => s.lat != null)
           : [...stops].reverse().find(s => s.lat != null);

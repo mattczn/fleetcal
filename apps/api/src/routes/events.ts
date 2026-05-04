@@ -43,7 +43,7 @@ const events = new Hono<{ Variables: AuthVariables }>();
 
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,timezone," +
-  "appt_start,appt_end,lat,lng,instructions,geocode_status," +
+  "appt_start,appt_end,schedule_type,lat,lng,instructions,geocode_status," +
   "arrived_at,arrived_lat,arrived_lng";
 
 const EVENT_COLS =
@@ -52,9 +52,9 @@ const EVENT_COLS =
   "trailer_type,deleted_at,load_id,created_at,updated_at";
 
 const LOAD_COLS =
-  "id,internal_load_id,load_num,broker,load_price,dispatcher,notes," +
-  "accessorials,rate_con_pdf,ref_nums,audit_log,created_by_name," +
-  "customer_id,deleted_at,created_at,updated_at";
+  "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
+  "dispatcher,notes,accessorials,rate_con_pdf,ref_nums,audit_log," +
+  "created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 interface StopRow {
   id: string;
@@ -67,6 +67,7 @@ interface StopRow {
   timezone: string | null;
   appt_start: string | null;
   appt_end: string | null;
+  schedule_type: string | null;
   lat: number | null;
   lng: number | null;
   instructions: string | null;
@@ -88,6 +89,7 @@ function rowToStop(s: StopRow): Stop {
     timezone:      s.timezone      ?? undefined,
     apptStart:     s.appt_start    ?? undefined,
     apptEnd:       s.appt_end      ?? undefined,
+    scheduleType:  (s.schedule_type as Stop["scheduleType"]) ?? undefined,
     lat:           s.lat           ?? undefined,
     lng:           s.lng           ?? undefined,
     instructions:  s.instructions  ?? undefined,
@@ -195,6 +197,7 @@ events.post("/", async (c) => {
       timezone:       s.timezone      ?? null,
       appt_start:     s.apptStart     ?? null,
       appt_end:       s.apptEnd       ?? null,
+      schedule_type:  s.scheduleType  ?? null,
       lat:            s.lat           ?? null,
       lng:            s.lng           ?? null,
       instructions:   s.instructions  ?? null,
@@ -340,6 +343,7 @@ events.put("/:id/stops", async (c) => {
       timezone:       s.timezone      ?? null,
       appt_start:     s.apptStart     ?? null,
       appt_end:       s.apptEnd       ?? null,
+      schedule_type:  s.scheduleType  ?? null,
       lat:            s.lat           ?? null,
       lng:            s.lng           ?? null,
       instructions:   s.instructions  ?? null,

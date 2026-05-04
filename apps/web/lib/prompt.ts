@@ -58,10 +58,11 @@ export function buildRateConPrompt(
   const stopsSchema = `  "stops": [
     {
       "sequence": <integer starting at 1, in order of occurrence in the document>,
-      "type": "<pickup | delivery | stop | drop_hook>",
+      "type": "<pickup | delivery | drop | drop_hook | stop>",
       "facilityName": "<shipper/receiver/facility name, or empty string>",
       "address": "<full street address including city, state, zip — as complete as possible>",
       "city": "<just the city name, e.g. 'Spanish Fork' or 'Milford' — no state, no road, no zip>",
+      "scheduleType": "<appointment | window | fcfs — pick 'appointment' if a single time, 'window' if a time range, 'fcfs' if 'first come first served' or no fixed time. Empty string if unclear.>",
       "apptStart": "<appointment time or window start in YYYY-MM-DDTHH:mm (${variables.timezone}), or empty string>",
       "apptEnd": "<window end time in YYYY-MM-DDTHH:mm if a time window is given, otherwise empty string>",
       "instructions": "<any stop-specific instructions, notes, gate codes, or requirements listed on the rate con for this location, or empty string>"
@@ -72,7 +73,7 @@ export function buildRateConPrompt(
 
 Fill as many fields as possible. Use an empty string for any field not found — do not omit keys.
 
-The "stops" array is REQUIRED. Extract every pickup, delivery, and intermediate stop in the order they appear in the document. For drop-and-hook stops use type "drop_hook". If a stop is both a pickup and delivery at the same location, create two entries.
+The "stops" array is REQUIRED. Extract every pickup, delivery, and intermediate stop in the order they appear in the document. Stop type rules: "pickup" = live load (driver waits), "delivery" = live unload, "drop" = drop loaded trailer (no hook of another), "drop_hook" = drop loaded AND hook empty/different, "stop" = intermediate non-loading stop. If a stop is both a pickup and delivery at the same location, create two entries.
 
 ${schema},
 ${stopsSchema}

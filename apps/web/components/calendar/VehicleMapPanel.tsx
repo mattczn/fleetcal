@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { X, MapPin, ExternalLink } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { X, MapPin, ExternalLink, Activity } from 'lucide-react';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
+import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
 interface Props {
   asset: { name: string; color: string; unit?: string };
@@ -22,9 +23,9 @@ const STALENESS_COLOR = { fresh: '#16a34a', stale: '#b45309', old: '#9ca3af' };
 export default function VehicleMapPanel({ asset, location, onClose }: Props) {
   const overlayRef    = useRef<HTMLDivElement>(null);
   const mapContainer  = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mapRef        = useRef<any>(null);
-  const token         = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
+  const mapRef        = useRef<google.maps.Map | null>(null);
+  const trafficRef    = useRef<google.maps.TrafficLayer | null>(null);
+  const [trafficOn,   setTrafficOn] = useState(true);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -33,62 +34,59 @@ export default function VehicleMapPanel({ asset, location, onClose }: Props) {
   }, [onClose]);
 
   useEffect(() => {
-    if (!mapContainer.current || !token) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let map: any;
-    const ro = new ResizeObserver(() => mapRef.current?.resize());
-    ro.observe(mapContainer.current);
+    if (!mapContainer.current) return;
 
-    import('mapbox-gl').then(({ default: mapboxgl }) => {
-      import('mapbox-gl/dist/mapbox-gl.css').catch(() => {});
-      mapboxgl.accessToken = token;
-
-      map = new mapboxgl.Map({
-        container: mapContainer.current!,
-        style: 'mapbox://styles/mapbox/streets-v12',
-        center: [location.lon, location.lat],
+    let cancelled = false;
+    loadGoogleMaps().then(google => {
+      if (cancelled || !mapContainer.current) return;
+      const map = new google.maps.Map(mapContainer.current, {
+        center: { lat: location.lat, lng: location.lon },
         zoom: 13,
+        mapId: MAP_ID,
+        disableDefaultUI: false,
+        clickableIcons: false,
+        gestureHandling: 'greedy',
       });
       mapRef.current = map;
-      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-      map.on('load', () => map.resize());
 
-      map.on('load', () => {
-        // Pulsing blue dot marker
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'position:relative;width:22px;height:22px;';
+      // Live traffic overlay (toggleable)
+      trafficRef.current = new google.maps.TrafficLayer({ map: trafficOn ? map : null });
 
-        const pulse = document.createElement('div');
-        pulse.style.cssText = `
-          position:absolute;inset:0;border-radius:50%;
-          background:rgba(59,130,246,0.25);
-          animation:truck-pulse 2s ease-out infinite;
-        `;
-        const dot = document.createElement('div');
-        dot.style.cssText = `
-          position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-          width:14px;height:14px;border-radius:50%;
-          background:#3b82f6;border:2.5px solid white;
-          box-shadow:0 1px 6px rgba(59,130,246,0.6);
-        `;
-        if (!document.getElementById('truck-pulse-style')) {
-          const style = document.createElement('style');
-          style.id = 'truck-pulse-style';
-          style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
-          document.head.appendChild(style);
-        }
-        wrapper.appendChild(pulse);
-        wrapper.appendChild(dot);
+      // Pulsing blue dot marker
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'position:relative;width:22px;height:22px;';
+      const pulse = document.createElement('div');
+      pulse.style.cssText =
+        'position:absolute;inset:0;border-radius:50%;background:rgba(59,130,246,0.25);animation:truck-pulse 2s ease-out infinite;';
+      const dot = document.createElement('div');
+      dot.style.cssText =
+        'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid white;box-shadow:0 1px 6px rgba(59,130,246,0.6);';
+      if (!document.getElementById('truck-pulse-style')) {
+        const style = document.createElement('style');
+        style.id = 'truck-pulse-style';
+        style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
+        document.head.appendChild(style);
+      }
+      wrapper.appendChild(pulse);
+      wrapper.appendChild(dot);
 
-        new mapboxgl.Marker({ element: wrapper })
-          .setLngLat([location.lon, location.lat])
-          .addTo(map);
+      new google.maps.marker.AdvancedMarkerElement({
+        map,
+        position: { lat: location.lat, lng: location.lon },
+        content: wrapper,
       });
     });
 
-    return () => { ro.disconnect(); map?.remove(); mapRef.current = null; };
+    return () => { cancelled = true; mapRef.current = null; trafficRef.current = null; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sync the traffic layer's visibility with the toggle.
+  useEffect(() => {
+    if (trafficRef.current && mapRef.current) {
+      trafficRef.current.setMap(trafficOn ? mapRef.current : null);
+    }
+  }, [trafficOn]);
 
   const age       = staleness(location.locatedAt);
   const locatedAt = new Date(location.locatedAt);
@@ -134,6 +132,26 @@ export default function VehicleMapPanel({ asset, location, onClose }: Props) {
         {/* Map */}
         <div className="flex-1 relative">
           <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+
+          {/* Traffic toggle */}
+          <button
+            type="button"
+            onClick={() => setTrafficOn(t => !t)}
+            style={{
+              position: 'absolute', top: 56, right: 10, zIndex: 1,
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '6px 10px', fontSize: 12, fontWeight: 600,
+              borderRadius: 6, cursor: 'pointer',
+              border: '1px solid rgba(0,0,0,0.15)',
+              background: trafficOn ? '#1a73e8' : 'rgba(255,255,255,0.95)',
+              color: trafficOn ? '#fff' : 'var(--gc-text-2)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
+            }}
+            title={trafficOn ? 'Hide traffic' : 'Show traffic'}
+          >
+            <Activity size={12} />
+            Traffic
+          </button>
 
           {/* Coords + Google Maps link */}
           <div

@@ -10,7 +10,7 @@
  * reference DB columns that have been dropped — see MIGRATION-FOLLOWUPS.md.
  */
 
-import type { LoadStatus, StopType, GeocodeStatus, TrailerCategory } from "./enums";
+import type { LoadStatus, StopType, ScheduleType, GeocodeStatus, TrailerCategory } from "./enums";
 
 // ── Refs / enums (small) ────────────────────────────────────────────────
 
@@ -55,6 +55,8 @@ export interface Stop {
   timezone?: string;
   apptStart?: string;
   apptEnd?: string;
+  /** How the appointment window should be interpreted in the UI. Null = legacy. */
+  scheduleType?: ScheduleType;
   geocodeStatus?: GeocodeStatus;
   instructions?: string;
   arrivedAt?: string;
@@ -265,10 +267,12 @@ export interface Load {
   bolNum?: string; // legacy column
   poNum?: string; // legacy column
 
-  // Load info (some legacy)
+  // Load info
   broker?: string;
-  commodity?: string; // legacy column
-  weight?: number; // legacy column
+  /** What's being hauled (free text from rate-con: "Frozen produce", "Industrial parts", etc.). */
+  commodity?: string;
+  /** Cargo weight in lbs. */
+  weight?: number;
   miles?: number; // legacy column
   teamLoad?: boolean; // legacy column
   hazmat?: boolean; // legacy column

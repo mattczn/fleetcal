@@ -44,6 +44,23 @@ export function fmtAppt(val: string): string {
   return `${month} ${d}, ${h % 12 || 12}:${String(min).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
 }
 
+/**
+ * Render the stop's appointment window with its schedule-type tag.
+ *   appointment → "Appt: Apr 23, 8:00 AM"
+ *   window      → "Window: Apr 23, 8:00 AM – 11:00 AM"
+ *   fcfs        → "FCFS: opens Apr 23, 7:00 AM, closes 5:00 PM"
+ * Falls back to legacy interpretation if scheduleType is not set.
+ */
+export function fmtStopWindow(stop: { apptStart?: string; apptEnd?: string; scheduleType?: string }): string {
+  if (!stop.apptStart) return '';
+  const start = fmtAppt(stop.apptStart);
+  const end   = stop.apptEnd ? fmtAppt(stop.apptEnd) : '';
+  const effective = stop.scheduleType ?? (stop.apptEnd ? 'window' : 'appointment');
+  if (effective === 'fcfs')   return end ? `FCFS: ${start} – ${end}` : `FCFS: opens ${start}`;
+  if (effective === 'window') return end ? `Window: ${start} – ${end}` : `Window: ${start}`;
+  return `Appt: ${start}`;
+}
+
 function StopTimeInput({ value, onChange, headerColor }: { value: string; onChange: (v: string) => void; headerColor: string }) {
   const [raw, setRaw] = useState(value);
   useEffect(() => { setRaw(value); }, [value]);
@@ -102,14 +119,15 @@ function ApptInput({ value, onChange, placeholder, headerColor }: { value: strin
 const TYPE_CONFIG: Record<StopType, { label: string; color: string; bg: string }> = {
   pickup:    { label: 'PU',    color: '#166534', bg: '#dcfce7' },
   delivery:  { label: 'DEL',   color: '#991b1b', bg: '#fee2e2' },
-  stop:      { label: 'STOP',  color: '#92400e', bg: '#fef3c7' },
+  drop:      { label: 'DROP',  color: '#0e7490', bg: '#cffafe' },
   drop_hook: { label: 'D&H',   color: '#1e40af', bg: '#dbeafe' },
+  stop:      { label: 'STOP',  color: '#92400e', bg: '#fef3c7' },
   relay:     { label: 'RELAY', color: '#6d28d9', bg: '#f5f3ff' },
 };
 
-const STOP_TYPES: StopType[] = ['pickup', 'delivery', 'stop', 'drop_hook', 'relay'];
+const STOP_TYPES: StopType[] = ['pickup', 'delivery', 'drop', 'drop_hook', 'stop', 'relay'];
 const TYPE_LABELS: Record<StopType, string> = {
-  pickup: 'Pickup', delivery: 'Delivery', stop: 'Stop', drop_hook: 'Drop & Hook', relay: 'Relay Point',
+  pickup: 'Pickup', delivery: 'Delivery', drop: 'Drop Trailer', drop_hook: 'Drop & Hook', stop: 'Stop', relay: 'Relay Point',
 };
 
 function GeocodeIndicator({ status }: { status: Stop['geocodeStatus'] }) {
@@ -813,8 +831,44 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                   </>
                 ) : (
                   <>
-                    <ApptInput value={stop.apptStart ?? ''} onChange={v => update(idx, { apptStart: v })} placeholder="Appt / from" headerColor={headerColor} />
-                    <ApptInput value={stop.apptEnd ?? ''} onChange={v => update(idx, { apptEnd: v })} placeholder="To (if window)" headerColor={headerColor} />
+                    {/* Schedule-type pill set: appointment | window | fcfs */}
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {(['appointment', 'window', 'fcfs'] as const).map(opt => {
+                        const effective = stop.scheduleType ?? (stop.apptEnd ? 'window' : 'appointment');
+                        const active = effective === opt;
+                        const label = opt === 'appointment' ? 'Appt' : opt === 'window' ? 'Window' : 'FCFS';
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => update(idx, { scheduleType: opt })}
+                            style={{
+                              flex: 1, fontSize: 10, fontWeight: 700, padding: '3px 6px',
+                              borderRadius: 5, cursor: 'pointer',
+                              border: `1px solid ${active ? headerColor : 'var(--gc-border)'}`,
+                              background: active ? headerColor : 'transparent',
+                              color: active ? '#fff' : 'var(--gc-text-3)',
+                              transition: 'all 100ms',
+                            }}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {(() => {
+                      const effective = stop.scheduleType ?? (stop.apptEnd ? 'window' : 'appointment');
+                      if (effective === 'appointment') {
+                        return <ApptInput value={stop.apptStart ?? ''} onChange={v => update(idx, { apptStart: v, apptEnd: undefined })} placeholder="Appointment" headerColor={headerColor} />;
+                      }
+                      // window OR fcfs both use a start/end pair
+                      return (
+                        <>
+                          <ApptInput value={stop.apptStart ?? ''} onChange={v => update(idx, { apptStart: v })} placeholder={effective === 'fcfs' ? 'Opens' : 'From'} headerColor={headerColor} />
+                          <ApptInput value={stop.apptEnd ?? ''} onChange={v => update(idx, { apptEnd: v })} placeholder={effective === 'fcfs' ? 'Closes' : 'To'} headerColor={headerColor} />
+                        </>
+                      );
+                    })()}
                   </>
                 )}
               </div>

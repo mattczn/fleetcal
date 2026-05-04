@@ -438,6 +438,7 @@ export type Database = {
           accessorials: Json | null
           audit_log: Json | null
           broker: string | null
+          commodity: string | null
           created_at: string
           created_by_name: string | null
           customer_id: string | null
@@ -452,11 +453,13 @@ export type Database = {
           rate_con_pdf: string | null
           ref_nums: string | null
           updated_at: string
+          weight: number | null
         }
         Insert: {
           accessorials?: Json | null
           audit_log?: Json | null
           broker?: string | null
+          commodity?: string | null
           created_at?: string
           created_by_name?: string | null
           customer_id?: string | null
@@ -471,11 +474,13 @@ export type Database = {
           rate_con_pdf?: string | null
           ref_nums?: string | null
           updated_at?: string
+          weight?: number | null
         }
         Update: {
           accessorials?: Json | null
           audit_log?: Json | null
           broker?: string | null
+          commodity?: string | null
           created_at?: string
           created_by_name?: string | null
           customer_id?: string | null
@@ -490,6 +495,7 @@ export type Database = {
           rate_con_pdf?: string | null
           ref_nums?: string | null
           updated_at?: string
+          weight?: number | null
         }
         Relationships: [
           {
@@ -660,6 +666,7 @@ export type Database = {
           lat: number | null
           lng: number | null
           org_id: string
+          schedule_type: string | null
           sequence: number
           timezone: string | null
           type: string
@@ -682,6 +689,7 @@ export type Database = {
           lat?: number | null
           lng?: number | null
           org_id: string
+          schedule_type?: string | null
           sequence: number
           timezone?: string | null
           type: string
@@ -704,6 +712,7 @@ export type Database = {
           lat?: number | null
           lng?: number | null
           org_id?: string
+          schedule_type?: string | null
           sequence?: number
           timezone?: string | null
           type?: string
