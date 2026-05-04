@@ -319,6 +319,11 @@ export interface Load {
 
   // Notes & meta
   notes?: string;              // loads.notes — load-level (broker instructions)
+  /**
+   * Internal-only dispatch note pinned to the load. Never sent to driver/broker.
+   * `null` is sent on the wire to explicitly clear the column on update.
+   */
+  internalNote?: string | null;
   eventNotes?: string;         // events.notes — event/leg-level; non-revenue's only notes home
   specialInstructions?: string; // legacy: events.special_instructions, merged into loads.notes by migration
   accessorials?: Accessorial[];

@@ -215,16 +215,16 @@ export default function CheckCallsSection({ loadId, currentUserName, accentColor
                     <span style={{ color: 'var(--gc-text-3)', fontSize: 11 }} title={fmtAbsolute(call.ts)}>
                       {fmtRelative(call.ts)}
                     </span>
+                    {call.nextCheckAt && (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, color: '#1a73e8', background: '#e8f0fe', padding: '1px 7px', borderRadius: 4 }}>
+                        <Clock size={10} />
+                        Next: {fmtAbsolute(call.nextCheckAt)}
+                      </span>
+                    )}
                   </div>
                   <div style={{ color: 'var(--gc-text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 1 }}>
                     {call.body}
                   </div>
-                  {call.nextCheckAt && (
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3, fontSize: 11, color: '#1a73e8', background: '#e8f0fe', padding: '2px 7px', borderRadius: 4 }}>
-                      <Clock size={10} />
-                      Next: {fmtAbsolute(call.nextCheckAt)}
-                    </div>
-                  )}
                 </div>
                 <button
                   type="button"

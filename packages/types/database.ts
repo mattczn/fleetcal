@@ -493,6 +493,7 @@ export type Database = {
           dispatcher: string | null
           id: string
           internal_load_id: number
+          internal_note: string | null
           load_num: string | null
           load_price: number | null
           notes: string | null
@@ -514,6 +515,7 @@ export type Database = {
           dispatcher?: string | null
           id?: string
           internal_load_id: number
+          internal_note?: string | null
           load_num?: string | null
           load_price?: number | null
           notes?: string | null
@@ -535,6 +537,7 @@ export type Database = {
           dispatcher?: string | null
           id?: string
           internal_load_id?: number
+          internal_note?: string | null
           load_num?: string | null
           load_price?: number | null
           notes?: string | null

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink } from 'lucide-react';
+import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin } from 'lucide-react';
 import { useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
@@ -1011,6 +1011,9 @@ export default function EventModal() {
   const [showBrokerProfile, setShowBrokerProfile] = useState(false);
   const brokerComboRef = useRef<HTMLInputElement | null>(null);
   const [linkedTrailerId, setLinkedTrailerId] = useState<number | undefined>(undefined);
+  // Internal note pinned to the load. undefined = not added (show button);
+  // any string (incl. '') = note exists (show editable field).
+  const [internalNote, setInternalNote] = useState<string | undefined>(undefined);
   const driverPayAutoSet = useRef(false); // true when driverPay was auto-filled from pct
   const [driverPayIsAuto, setDriverPayIsAuto] = useState(false);
   const [prevDriverPay, setPrevDriverPay] = useState<number | null>(null);
@@ -1209,10 +1212,11 @@ export default function EventModal() {
     setStops(ev.stops ?? []);
     setEventKind(ev.eventKind ?? 'revenue');
     setNonRevenueType(ev.nonRevenueType ?? 'Maintenance');
+    setInternalNote(ev.internalNote ?? undefined);
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNote(undefined); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -1534,7 +1538,7 @@ export default function EventModal() {
       catch (err) { console.error('PDF upload failed — rate con not saved, re-attach when editing:', err); }
     }
 
-    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined };
+    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, internalNote: internalNote ?? null };
 
     const relayStop = stops.find(s => s.type === 'relay');
     const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
@@ -2663,6 +2667,57 @@ export default function EventModal() {
                 reader.readAsDataURL(f);
                 e.target.value = '';
               }} />
+
+            {/* Internal note — pinned, internal-only */}
+            {internalNote === undefined ? (
+              <button
+                type="button"
+                onClick={() => { setInternalNote(''); markDirty(); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 12, fontWeight: 600, padding: '4px 10px',
+                  borderRadius: 6, border: '1px dashed #d4a017',
+                  background: 'transparent', color: '#a16207', cursor: 'pointer',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#fef9c3'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <Plus size={12} /> Internal Note
+              </button>
+            ) : (
+              <div style={{
+                display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8,
+                background: '#fef9c3', border: '1px solid #fde68a',
+              }}>
+                <Pin size={13} style={{ color: '#a16207', flexShrink: 0, marginTop: 2 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e', marginBottom: 3 }}>
+                    Internal Note
+                  </div>
+                  <textarea
+                    value={internalNote}
+                    onChange={e => { setInternalNote(e.target.value); markDirty(); }}
+                    placeholder="Pinned at the top of this load. Never sent to driver or broker."
+                    rows={2}
+                    style={{
+                      width: '100%', fontSize: 13, lineHeight: 1.4, color: '#78350f',
+                      background: 'transparent', border: 'none', outline: 'none', resize: 'vertical',
+                      fontFamily: 'inherit',
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setInternalNote(undefined); markDirty(); }}
+                  title="Remove internal note"
+                  style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#a16207' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = '#a16207'; }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
 
             {/* Event kind toggle */}
             <div className="flex items-center justify-center gap-2 pb-3">

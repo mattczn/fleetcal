@@ -41,6 +41,7 @@ export interface CreateLoadRequestLoad {
   accessorials?: Accessorial[];
   refNums?: RefNum[];
   notes?: string;               // load-level notes
+  internalNote?: string;        // internal-only dispatch note
   createdByName?: string;
 }
 
@@ -130,6 +131,7 @@ export interface UpdateLoadRequest {
   accessorials?:   Accessorial[] | null;
   refNums?:        RefNum[] | null;
   notes?:          string | null;
+  internalNote?:   string | null;
   /** Full replacement of loads.audit_log. Caller fetches, appends, sends. */
   auditLog?:       LoadAuditEntry[] | null;
 }

@@ -32,6 +32,7 @@ const LOAD_LEVEL_KEYS = [
   'accessorials',
   'refNums',
   'notes',          // load-level for revenue events
+  'internalNote',
   'createdByName',
   'auditLog',       // full-array replacement; caller appends locally before sending
 ] as const;
@@ -81,6 +82,7 @@ export function buildCreateLoadBody(event: Omit<CalendarEvent, 'id'>): {
     accessorials:  event.accessorials,
     refNums:       event.refNums,
     notes:         mergedNotes,
+    internalNote:  event.internalNote ?? undefined,
     createdByName: event.createdByName,
   });
 
