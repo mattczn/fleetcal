@@ -94,8 +94,9 @@ authed.route("/saved-locations", savedLocationsRoute);
 authed.route("/payroll", payrollRoute);
 authed.route("/org-settings", orgSettingsRoute);
 authed.route("/assistant", assistantRoute);
-// check-calls owns paths /loads/:loadId/check-calls AND /check-calls/:id, so mount at root.
-authed.route("/", checkCallsRoute);
+// Top-level /check-calls/:id (DELETE). Per-load list/create paths are
+// mounted from inside loadsRoute as /loads/:loadId/check-calls.
+authed.route("/check-calls", checkCallsRoute);
 
 app.route("/v1", authed);
 

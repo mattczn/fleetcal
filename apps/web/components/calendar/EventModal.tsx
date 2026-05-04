@@ -3165,6 +3165,19 @@ export default function EventModal() {
 
           </div>
 
+          {/* Check Calls — only when load row exists */}
+          {isEdit && (() => {
+            const ev = events.find(e => e.id === modalEventId);
+            if (!ev?.loadId) return null;
+            return (
+              <CheckCallsSection
+                loadId={ev.loadId}
+                currentUserName={currentUserName}
+                accentColor={headerColor}
+              />
+            );
+          })()}
+
           {/* Audit history — edit mode only */}
           {isEdit && (() => {
             const ev = events.find(e => e.id === modalEventId);
@@ -3269,19 +3282,6 @@ export default function EventModal() {
                   </div>
                 )}
               </div>
-            );
-          })()}
-
-          {/* Check Calls — only when load row exists */}
-          {isEdit && (() => {
-            const ev = events.find(e => e.id === modalEventId);
-            if (!ev?.loadId) return null;
-            return (
-              <CheckCallsSection
-                loadId={ev.loadId}
-                currentUserName={currentUserName}
-                accentColor={headerColor}
-              />
             );
           })()}
 

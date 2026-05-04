@@ -50,6 +50,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { checkCallsScopedRouter } from "./check-calls.js";
 
 const loads = new Hono<{ Variables: AuthVariables }>();
 
@@ -1011,5 +1012,9 @@ loads.post("/:id/unsplit-relay", async (c) => {
   const res: UnsplitRelayResponse = { loads: joined ?? [] };
   return c.json(res);
 });
+
+// Mount the per-load check-calls subroutes here so Hono's path merging
+// produces /v1/loads/:loadId/check-calls cleanly.
+loads.route("/:loadId/check-calls", checkCallsScopedRouter);
 
 export default loads;

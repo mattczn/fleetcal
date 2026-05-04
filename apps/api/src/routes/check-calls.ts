@@ -1,10 +1,9 @@
 /**
- * /v1/loads/:loadId/check-calls — communication log for a load.
+ * Check-call helpers and the bare /v1/check-calls/:id DELETE handler.
  *
- * Endpoints:
- *   GET    /v1/loads/:loadId/check-calls           list, newest ts first
- *   POST   /v1/loads/:loadId/check-calls           append a new entry
- *   DELETE /v1/check-calls/:id                     remove an entry
+ * The load-scoped GET/POST handlers are mounted from loads.ts via
+ * `loads.route("/:loadId/check-calls", checkCallsScopedRouter)` so that
+ * Hono's path-merging works the same way as every other sub-route.
  *
  * Auth: clerk org_id required. Rows are scoped per-org so cross-org access
  * fails the eq("org_id") filter.
@@ -25,8 +24,6 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-
-const router = new Hono<{ Variables: AuthVariables }>();
 
 interface CheckCallRow {
   id:            string;
@@ -56,11 +53,16 @@ function rowToCheckCall(r: CheckCallRow): CheckCall {
 
 const COLS = "id,load_id,ts,by_name,channel,with_party,body,next_check_at,created_at";
 
-// ── GET /v1/loads/:loadId/check-calls ───────────────────────────────────
+// ── /v1/loads/:loadId/check-calls (mounted from loads.ts) ───────────────
 
-router.get("/loads/:loadId/check-calls", async (c) => {
+export const checkCallsScopedRouter = new Hono<{ Variables: AuthVariables }>();
+
+checkCallsScopedRouter.get("/", async (c) => {
   const orgId = c.get("orgId");
-  const loadId = c.req.param("loadId");
+  // `loadId` is bound by the parent mount (`/loads/:loadId/check-calls`);
+  // inner-router types don't carry it, so narrow defensively.
+  const loadId = c.req.param("loadId") ?? "";
+  if (!loadId) return c.json({ error: "missing_load_id" } satisfies ApiErrorResponse, 400);
 
   const { data, error } = await supabase
     .from("check_calls")
@@ -79,11 +81,10 @@ router.get("/loads/:loadId/check-calls", async (c) => {
   return c.json(res);
 });
 
-// ── POST /v1/loads/:loadId/check-calls ──────────────────────────────────
-
-router.post("/loads/:loadId/check-calls", async (c) => {
+checkCallsScopedRouter.post("/", async (c) => {
   const orgId = c.get("orgId");
-  const loadId = c.req.param("loadId");
+  const loadId = c.req.param("loadId") ?? "";
+  if (!loadId) return c.json({ error: "missing_load_id" } satisfies ApiErrorResponse, 400);
   const body = await c.req.json<CreateCheckCallRequest>();
 
   const errors: string[] = [];
@@ -125,9 +126,11 @@ router.post("/loads/:loadId/check-calls", async (c) => {
   return c.json(res, 201);
 });
 
-// ── DELETE /v1/check-calls/:id ──────────────────────────────────────────
+// ── /v1/check-calls (top-level) — DELETE only ───────────────────────────
 
-router.delete("/check-calls/:id", async (c) => {
+const checkCallsRouter = new Hono<{ Variables: AuthVariables }>();
+
+checkCallsRouter.delete("/:id", async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase
@@ -142,4 +145,4 @@ router.delete("/check-calls/:id", async (c) => {
   return c.body(null, 204);
 });
 
-export default router;
+export default checkCallsRouter;

@@ -76,8 +76,11 @@ class RailwayClient {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     if (!res.ok) {
-      let detail: unknown;
-      try { detail = await res.json(); } catch { detail = await res.text(); }
+      // Read the body once — calling .json() consumes the stream even on
+      // parse failure, so we can't fall through to .text() afterwards.
+      const text = await res.text();
+      let detail: unknown = text;
+      try { detail = JSON.parse(text); } catch { /* keep raw text */ }
       throw new RailwayError(res.status, detail, `${method} ${path} → ${res.status}`);
     }
     if (res.status === 204) return undefined as unknown as T;
