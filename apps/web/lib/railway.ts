@@ -45,6 +45,7 @@ import type {
   ListPayrollAdjustmentsResponse, CreatePayrollAdjustmentRequest, CreatePayrollAdjustmentResponse,
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
+  ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -226,6 +227,17 @@ class RailwayClient {
   getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }
   updateOrgSettings(body: UpdateOrgSettingsRequest) {
     return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
+  }
+
+  // ── Check calls ───────────────────────────────────────────────────────
+  listCheckCalls(loadId: string) {
+    return this.req<ListCheckCallsResponse>('GET', `/v1/loads/${loadId}/check-calls`);
+  }
+  createCheckCall(loadId: string, body: CreateCheckCallRequest) {
+    return this.req<CreateCheckCallResponse>('POST', `/v1/loads/${loadId}/check-calls`, body);
+  }
+  deleteCheckCall(id: string) {
+    return this.req<void>('DELETE', `/v1/check-calls/${id}`);
   }
 }
 

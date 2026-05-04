@@ -11,8 +11,9 @@
 // Order roughly matches happy-path progression; off-path values at the end.
 
 export const LOAD_STATUSES = [
-  "scheduled",
-  "dispatched",
+  "scheduled",   // no driver assigned
+  "assigned",    // driver assigned, info not yet sent
+  "dispatched",  // driver confirmed in mobile app
   "en_route",
   "picked_up",
   "delivered",
@@ -97,3 +98,13 @@ export type EventKind = (typeof EVENT_KINDS)[number];
 export const RELAY_ROLES = ["pickup", "delivery"] as const;
 
 export type RelayRole = (typeof RELAY_ROLES)[number];
+
+// ── Check call channel & party ──────────────────────────────────────────
+// check_calls.channel — how the communication happened.
+// check_calls.with_party — who the comm was with.
+
+export const CHECK_CALL_CHANNELS = ["call", "text", "email", "note"] as const;
+export type CheckCallChannel = (typeof CHECK_CALL_CHANNELS)[number];
+
+export const CHECK_CALL_PARTIES = ["driver", "broker", "shipper", "receiver"] as const;
+export type CheckCallParty = (typeof CHECK_CALL_PARTIES)[number];

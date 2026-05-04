@@ -29,6 +29,7 @@ import savedLocationsRoute from "./routes/saved-locations.js";
 import payrollRoute from "./routes/payroll.js";
 import orgSettingsRoute from "./routes/org-settings.js";
 import assistantRoute from "./routes/assistant.js";
+import checkCallsRoute from "./routes/check-calls.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -93,6 +94,8 @@ authed.route("/saved-locations", savedLocationsRoute);
 authed.route("/payroll", payrollRoute);
 authed.route("/org-settings", orgSettingsRoute);
 authed.route("/assistant", assistantRoute);
+// check-calls owns paths /loads/:loadId/check-calls AND /check-calls/:id, so mount at root.
+authed.route("/", checkCallsRoute);
 
 app.route("/v1", authed);
 

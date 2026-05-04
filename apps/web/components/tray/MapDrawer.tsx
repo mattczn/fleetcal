@@ -54,6 +54,7 @@ const STOP_LABELS: Record<string, string> = {
 };
 
 const STATUS_CHIPS: { key: EventStatus; label: string }[] = [
+  { key: 'assigned',   label: 'Assigned'   },
   { key: 'dispatched', label: 'Dispatched' },
   { key: 'picked_up',  label: 'Picked Up'  },
   { key: 'delivered',  label: 'Delivered'  },

@@ -16,6 +16,7 @@ import StopsSection from './StopsSection';
 import RouteMapPanel from './RouteMapPanel';
 import { uploadRateCon } from '@/lib/storage';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
+import CheckCallsSection from '@/components/calendar/CheckCallsSection';
 
 const RELAY_COLOR = '#7c3aed';
 
@@ -40,6 +41,7 @@ function timeAgoModal(iso: string): string {
 
 const STATUSES: { value: EventStatus; label: string; color: string; bg: string }[] = [
   { value: 'scheduled',  label: 'Scheduled',  color: '#1a73e8', bg: '#e8f0fe' },
+  { value: 'assigned',   label: 'Assigned',   color: '#5b21b6', bg: '#ede9fe' },
   { value: 'dispatched', label: 'Dispatched', color: '#1558d6', bg: '#e8f0fe' },
   { value: 'en_route',   label: 'En Route',   color: '#e37400', bg: '#fef3e2' },
   { value: 'picked_up',  label: 'Picked Up',  color: '#7b1fa2', bg: '#f3e5f5' },
@@ -3267,6 +3269,19 @@ export default function EventModal() {
                   </div>
                 )}
               </div>
+            );
+          })()}
+
+          {/* Check Calls — only when load row exists */}
+          {isEdit && (() => {
+            const ev = events.find(e => e.id === modalEventId);
+            if (!ev?.loadId) return null;
+            return (
+              <CheckCallsSection
+                loadId={ev.loadId}
+                currentUserName={currentUserName}
+                accentColor={headerColor}
+              />
             );
           })()}
 

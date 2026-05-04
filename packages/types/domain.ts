@@ -10,7 +10,7 @@
  * reference DB columns that have been dropped — see MIGRATION-FOLLOWUPS.md.
  */
 
-import type { LoadStatus, StopType, ScheduleType, GeocodeStatus, TrailerCategory } from "./enums";
+import type { LoadStatus, StopType, ScheduleType, GeocodeStatus, TrailerCategory, CheckCallChannel, CheckCallParty } from "./enums";
 
 // ── Refs / enums (small) ────────────────────────────────────────────────
 
@@ -161,6 +161,24 @@ export interface Dispatcher {
   id: string;
   name: string;
   isDefault: boolean;
+}
+
+// ── Check call ──────────────────────────────────────────────────────────
+// One logged communication tied to a load. Append-only timeline; per-org.
+
+export interface CheckCall {
+  id: string;
+  loadId: string;
+  /** When the communication happened (defaults to created_at). */
+  ts: string;
+  /** Dispatcher who logged the entry. */
+  byName: string;
+  channel: CheckCallChannel;
+  withParty: CheckCallParty;
+  body: string;
+  /** Optional reminder for when the next check-in is expected. */
+  nextCheckAt?: string;
+  createdAt: string;
 }
 
 // ── Audit trail ─────────────────────────────────────────────────────────

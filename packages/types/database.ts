@@ -59,6 +59,53 @@ export type Database = {
         }
         Relationships: []
       }
+      check_calls: {
+        Row: {
+          body: string
+          by_name: string
+          channel: string
+          created_at: string
+          id: string
+          load_id: string
+          next_check_at: string | null
+          org_id: string
+          ts: string
+          with_party: string
+        }
+        Insert: {
+          body: string
+          by_name: string
+          channel: string
+          created_at?: string
+          id?: string
+          load_id: string
+          next_check_at?: string | null
+          org_id: string
+          ts?: string
+          with_party: string
+        }
+        Update: {
+          body?: string
+          by_name?: string
+          channel?: string
+          created_at?: string
+          id?: string
+          load_id?: string
+          next_check_at?: string | null
+          org_id?: string
+          ts?: string
+          with_party?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "check_calls_load_id_fkey"
+            columns: ["load_id"]
+            isOneToOne: false
+            referencedRelation: "loads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           aliases: string[] | null

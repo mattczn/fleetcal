@@ -7,11 +7,13 @@ import { PRESET_COLORS } from '@/lib/asset-colors';
 import type { Asset, CalendarEvent, Driver } from '@/lib/types';
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
-  scheduled: { label: 'Scheduled', color: '#1a73e8', bg: '#e8f0fe' },
-  en_route:  { label: 'En Route',  color: '#e37400', bg: '#fef3e2' },
-  picked_up: { label: 'Picked Up', color: '#7b1fa2', bg: '#f3e5f5' },
-  delivered: { label: 'Delivered', color: '#188038', bg: '#e6f4ea' },
-  cancelled: { label: 'Cancelled', color: '#d93025', bg: '#fce8e6' },
+  scheduled:  { label: 'Scheduled',  color: '#1a73e8', bg: '#e8f0fe' },
+  assigned:   { label: 'Assigned',   color: '#5b21b6', bg: '#ede9fe' },
+  dispatched: { label: 'Dispatched', color: '#1558d6', bg: '#e8f0fe' },
+  en_route:   { label: 'En Route',   color: '#e37400', bg: '#fef3e2' },
+  picked_up:  { label: 'Picked Up',  color: '#7b1fa2', bg: '#f3e5f5' },
+  delivered:  { label: 'Delivered',  color: '#188038', bg: '#e6f4ea' },
+  cancelled:  { label: 'Cancelled',  color: '#d93025', bg: '#fce8e6' },
 };
 
 const P_INPUT: React.CSSProperties = {

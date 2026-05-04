@@ -17,6 +17,7 @@ const STATUS_META: Record<string, StatusMeta> = {
   upcoming:    { label: 'Upcoming',    bg: '#f1f3f4', color: '#5f6368', border: '#dadce0' },
   in_progress: { label: 'In Progress', bg: '#e8f0fe', color: '#1a73e8', border: '#c5d8fd' },
   completed:   { label: 'Completed',   bg: '#e6f4ea', color: '#137333', border: '#b7dfbf' },
+  assigned:    { label: 'Assigned',    bg: '#ede9fe', color: '#5b21b6', border: '#c4b5fd' },
   dispatched:  { label: 'Dispatched',  bg: '#e8f0fe', color: '#1558d6', border: '#c5d8fd' },
   picked_up:   { label: 'Picked Up',   bg: '#f3e8fd', color: '#7627bb', border: '#ddb9f7' },
   delivered:   { label: 'Delivered',   bg: '#e6f4ea', color: '#137333', border: '#b7dfbf' },

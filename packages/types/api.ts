@@ -10,8 +10,8 @@
  * each section.
  */
 
-import type { Accessorial, Asset, Customer, Dispatcher, Driver, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
-import type { LoadStatus, RelayRole, TrailerCategory } from "./enums";
+import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
+import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
 
@@ -528,6 +528,24 @@ export interface UpdateOrgSettingsRequest {
   showDriverPay?: boolean;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
+
+// ── /v1/loads/:loadId/check-calls ───────────────────────────────────────
+
+export interface ListCheckCallsResponse { checkCalls: CheckCall[]; }
+
+export interface CreateCheckCallRequest {
+  channel:      CheckCallChannel;
+  withParty:    CheckCallParty;
+  body:         string;
+  /** Display name of the dispatcher who is logging the entry. */
+  byName:       string;
+  /** Optional ISO timestamp; defaults to "now" server-side. */
+  ts?:          string;
+  /** Optional ISO timestamp for when the next check-in is due. */
+  nextCheckAt?: string;
+}
+
+export interface CreateCheckCallResponse { checkCall: CheckCall; }
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

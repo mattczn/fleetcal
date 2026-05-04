@@ -9,6 +9,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 
 const STATUS_CONFIG: Record<EventStatus, { dot: string; label: string }> = {
   scheduled:  { dot: 'rgba(255,255,255,0.55)', label: 'Scheduled'  },
+  assigned:   { dot: '#c4b5fd',                label: 'Assigned'   },
   dispatched: { dot: '#93c5fd',                label: 'Dispatched' },
   en_route:   { dot: '#fbbf24',                label: 'En Route'   },
   picked_up:  { dot: '#7dd3fc',                label: 'Picked Up'  },

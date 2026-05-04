@@ -390,7 +390,7 @@ export default function DashboardView() {
   // ── Export helpers ──────────────────────────────────────────────────────────
   function exportWeekLoads(format: 'csv' | 'xls') {
     const STATUS_LABELS: Record<string, string> = {
-      scheduled: 'Scheduled', dispatched: 'Dispatched', en_route: 'En Route',
+      scheduled: 'Scheduled', assigned: 'Assigned', dispatched: 'Dispatched', en_route: 'En Route',
       picked_up: 'Picked Up', delivered: 'Delivered', cancelled: 'Cancelled',
       tonu: 'TONU', problem: 'Problem',
     };
