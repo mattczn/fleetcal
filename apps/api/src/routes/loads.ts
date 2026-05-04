@@ -401,7 +401,9 @@ loads.get("/search", async (c) => {
   // Escape PostgREST-special chars in the LIKE pattern.
   const escaped = q.replace(/[%,()]/g, "\\$&");
   const pattern = `%${escaped}%`;
-  const numericId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
+  // internal_load_id is an int4 column — gate on max int4 to avoid overflow on long numeric queries (e.g. phone numbers).
+  const parsedNum = /^\d+$/.test(q) ? Number(q) : NaN;
+  const numericId = Number.isFinite(parsedNum) && parsedNum <= 2147483647 ? parsedNum : null;
 
   // 1) Load-side matches → list of load_ids whose loads-row fields hit.
   const loadOr = numericId !== null
