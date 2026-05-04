@@ -2,11 +2,12 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Layers, Truck, User, LayoutDashboard, EyeOff, Eye } from 'lucide-react';
+import { ChevronUp, ChevronDown, Layers, Truck, User, LayoutDashboard, EyeOff, Eye } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import CopyChip from '@/components/ui/CopyChip';
 import WindowTimeline from '@/components/ui/WindowTimeline';
+import Tooltip from '@/components/ui/Tooltip';
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -225,17 +226,18 @@ function LoadRow({
       )}
 
       {/* Hide / unhide */}
-      <button
-        type="button"
-        onClick={e => { e.stopPropagation(); onHide(); }}
-        title={isHidden ? 'Unhide' : 'Hide'}
-        className="shrink-0"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: 'var(--gc-text-3)' }}
-        onMouseEnter={e => { e.currentTarget.style.color = isHidden ? '#1a73e8' : 'var(--gc-text-1)'; }}
-        onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; }}
-      >
-        {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
-      </button>
+      <Tooltip content={isHidden ? 'Unhide' : 'Hide'}>
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); onHide(); }}
+          className="shrink-0"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: 'var(--gc-text-3)' }}
+          onMouseEnter={e => { e.currentTarget.style.color = isHidden ? '#1a73e8' : 'var(--gc-text-1)'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; }}
+        >
+          {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -414,27 +416,22 @@ export default function TodaysTray() {
 
             <div className="flex-1" />
 
-            {/* Window description — visual range with a "now" marker */}
-            <WindowTimeline start={windowStart} end={windowEnd} />
-
-            {/* Pivot nav */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6 }}>
+            {/* Window nav: [−12h] Showing loads from … to … [+12h] [Now] */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <button type="button" onClick={() => shiftPivot(-STEP_HOURS)}
-                style={{ display: 'flex', alignItems: 'center', padding: '2px 4px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+                style={{ fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)', whiteSpace: 'nowrap' }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-              ><ChevronLeft size={12} /></button>
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--gc-text-1)', padding: '0 6px', whiteSpace: 'nowrap' }}>
-                {fmtPivot(pivotTime)}
-              </span>
+              >−12 hours</button>
+              <WindowTimeline start={windowStart} end={windowEnd} />
               <button type="button" onClick={() => shiftPivot(STEP_HOURS)}
-                style={{ display: 'flex', alignItems: 'center', padding: '2px 4px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+                style={{ fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)', whiteSpace: 'nowrap' }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-              ><ChevronRight size={12} /></button>
+              >+12 hours</button>
               {!isAtNow && (
                 <button type="button" onClick={() => setPivotTime(new Date())}
-                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: '#1558d6', marginLeft: 2 }}
+                  style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: '#1558d6' }}
                   onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.08)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >Now</button>

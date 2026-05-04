@@ -8,6 +8,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
 import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
+import Tooltip from '@/components/ui/Tooltip';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -413,20 +414,21 @@ export default function CalendarToolbar() {
 
         {/* Trash */}
         <div ref={trashContainer} style={{ position: 'relative' }}>
-          <button
-            data-tour="trash"
-            onClick={() => setTrashOpen(o => !o)}
-            className="flex items-center justify-center w-9 h-9 rounded-full transition-colors relative"
-            style={{ color: trashOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)', background: trashOpen ? 'var(--gc-blue-light)' : 'transparent' }}
-            onMouseOver={e => { if (!trashOpen) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-            onMouseOut={e => { if (!trashOpen) e.currentTarget.style.background = 'transparent'; }}
-            title="Recently deleted"
-          >
-            <Trash2 size={17} />
-            {deletedEvents.length > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full" style={{ background: 'var(--gc-red)' }} />
-            )}
-          </button>
+          <Tooltip content="Recently deleted" placement="bottom">
+            <button
+              data-tour="trash"
+              onClick={() => setTrashOpen(o => !o)}
+              className="flex items-center justify-center w-9 h-9 rounded-full transition-colors relative"
+              style={{ color: trashOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)', background: trashOpen ? 'var(--gc-blue-light)' : 'transparent' }}
+              onMouseOver={e => { if (!trashOpen) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseOut={e => { if (!trashOpen) e.currentTarget.style.background = 'transparent'; }}
+            >
+              <Trash2 size={17} />
+              {deletedEvents.length > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full" style={{ background: 'var(--gc-red)' }} />
+              )}
+            </button>
+          </Tooltip>
 
           {trashOpen && (
             <div className="absolute right-0 flex flex-col"
@@ -659,16 +661,17 @@ export default function CalendarToolbar() {
 
         {/* View sliders popover */}
         <div ref={viewContainer} style={{ position: 'relative' }}>
-          <button
-            onClick={() => setViewOpen(o => !o)}
-            className="flex items-center justify-center w-9 h-9 rounded-full transition-colors"
-            style={{ color: viewOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)', background: viewOpen ? 'var(--gc-blue-light)' : 'transparent' }}
-            onMouseOver={e => { if (!viewOpen) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-            onMouseOut={e => { if (!viewOpen) e.currentTarget.style.background = 'transparent'; }}
-            title="Adjust column &amp; row size"
-          >
-            <SlidersHorizontal size={16} />
-          </button>
+          <Tooltip content="Screen adjustments" placement="bottom">
+            <button
+              onClick={() => setViewOpen(o => !o)}
+              className="flex items-center justify-center w-9 h-9 rounded-full transition-colors"
+              style={{ color: viewOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)', background: viewOpen ? 'var(--gc-blue-light)' : 'transparent' }}
+              onMouseOver={e => { if (!viewOpen) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseOut={e => { if (!viewOpen) e.currentTarget.style.background = 'transparent'; }}
+            >
+              <SlidersHorizontal size={16} />
+            </button>
+          </Tooltip>
           {viewOpen && (
             <div className="absolute right-0 flex flex-col"
               style={{ top: 'calc(100% + 6px)', width: 220, borderRadius: 10, boxShadow: 'var(--shadow-3)', border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', zIndex: 100, padding: '12px 16px', gap: 12, display: 'flex', flexDirection: 'column' }}>

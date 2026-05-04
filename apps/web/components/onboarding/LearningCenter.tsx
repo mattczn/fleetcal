@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { BookOpen, Check, ChevronDown, ChevronUp, X } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import { LEARNING_MODULES, ALL_STEP_IDS } from '@/lib/learningModules';
 import { useOnboardingStore } from '@/store/useOnboardingStore';
 
@@ -45,25 +46,26 @@ export default function LearningCenter() {
   return (
     <div ref={panelRef} style={{ position: 'relative' }}>
       {/* Trigger button */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        title="Learning center"
-        className="flex items-center justify-center w-9 h-9 rounded-full transition-colors relative"
-        style={{
-          color:      open ? 'var(--gc-blue)' : 'var(--gc-text-2)',
-          background: open ? 'var(--gc-blue-light)' : 'transparent',
-        }}
-        onMouseOver={e => { if (!open) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-        onMouseOut={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
-      >
-        <BookOpen size={17} />
-        {completedCount < totalSteps && (
-          <span
-            className="absolute bottom-1 right-1 rounded-full"
-            style={{ width: 7, height: 7, background: 'var(--gc-blue)', border: '1.5px solid var(--gc-surface)' }}
-          />
-        )}
-      </button>
+      <Tooltip content="Tutorials" placement="bottom">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="flex items-center justify-center w-9 h-9 rounded-full transition-colors relative"
+          style={{
+            color:      open ? 'var(--gc-blue)' : 'var(--gc-text-2)',
+            background: open ? 'var(--gc-blue-light)' : 'transparent',
+          }}
+          onMouseOver={e => { if (!open) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+          onMouseOut={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
+        >
+          <BookOpen size={17} />
+          {completedCount < totalSteps && (
+            <span
+              className="absolute bottom-1 right-1 rounded-full"
+              style={{ width: 7, height: 7, background: 'var(--gc-blue)', border: '1.5px solid var(--gc-surface)' }}
+            />
+          )}
+        </button>
+      </Tooltip>
 
       {/* Panel */}
       {open && (

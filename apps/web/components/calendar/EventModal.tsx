@@ -1618,6 +1618,13 @@ export default function EventModal() {
     else closeModal();
   };
 
+  // Used by the explicit close affordances (X button, Cancel button).
+  // Unlike the backdrop, these still work in batch mode.
+  const attemptClose = () => {
+    if (isDirty) setShowSavePrompt(true);
+    else closeModal();
+  };
+
   const handleDelete = () => {
     if (!confirmDel) { setConfirmDel(true); return; }
     if (modalEventId) {
@@ -2563,7 +2570,7 @@ export default function EventModal() {
                 <Paperclip size={13} /> Attach Rate Con
               </button>
             ))}
-            <button onClick={isBatch ? () => { clearBatch(); closeModal(); } : closeModal} className="p-2 rounded-full transition-colors"
+            <button onClick={isBatch ? () => { clearBatch(); closeModal(); } : attemptClose} className="p-2 rounded-full transition-colors"
               style={{ color: 'var(--gc-text-2)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover-strong)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -3264,7 +3271,7 @@ export default function EventModal() {
                 )}
               </div>
               <div className="flex gap-2">
-                <button type="button" onClick={closeModal}
+                <button type="button" onClick={attemptClose}
                   className="px-6 py-2.5 rounded-full text-[13px] font-medium transition-colors"
                   style={{ color: 'var(--gc-blue)' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}

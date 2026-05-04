@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { X, Star, RefreshCw, Truck, User, MapPin, ChevronLeft, ChevronRight, LayoutDashboard, ChevronDown, ChevronUp, EyeOff, Eye } from 'lucide-react';
+import { X, Star, RefreshCw, Truck, User, MapPin, LayoutDashboard, ChevronDown, ChevronUp, EyeOff, Eye } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { calcDirections } from '@/lib/directions';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
@@ -10,6 +10,7 @@ import MapDrawer from './MapDrawer';
 import CopyChip from '@/components/ui/CopyChip';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import WindowTimeline from '@/components/ui/WindowTimeline';
+import Tooltip from '@/components/ui/Tooltip';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -90,11 +91,6 @@ function fmtBound(d: Date): string {
   const date    = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const time    = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined, hour12: true });
   return `${weekday} ${date}, ${time}`;
-}
-
-function fmtPivot(d: Date): string {
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' +
-    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined, hour12: true });
 }
 
 function fmtTime(iso: string): string {
@@ -775,34 +771,27 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
           borderTop: '1px solid var(--gc-border-light)',
           background: 'var(--gc-bg)',
         }}>
-          {/* Pivot nav */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {/* Window nav: [−12h] Showing loads from … to … [+12h] [Now] */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button type="button" onClick={() => shiftPivot(-STEP_HOURS)}
-              style={{ display: 'flex', alignItems: 'center', padding: '3px 5px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+              style={{ fontSize: 12, fontWeight: 600, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)', whiteSpace: 'nowrap' }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-            ><ChevronLeft size={14} /></button>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--gc-text-1)', padding: '0 8px', minWidth: 160, textAlign: 'center' }}>
-              {fmtPivot(pivotTime)}
-            </span>
+            >−12 hours</button>
+            <WindowTimeline start={windowStart} end={windowEnd} />
             <button type="button" onClick={() => shiftPivot(STEP_HOURS)}
-              style={{ display: 'flex', alignItems: 'center', padding: '3px 5px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+              style={{ fontSize: 12, fontWeight: 600, padding: '3px 8px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-2)', whiteSpace: 'nowrap' }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-            ><ChevronRight size={14} /></button>
+            >+12 hours</button>
+            {!isAtNow && (
+              <button type="button" onClick={() => setPivotTime(new Date())}
+                style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: '#1558d6' }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.08)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              >Now</button>
+            )}
           </div>
-          {!isAtNow && (
-            <button type="button" onClick={() => setPivotTime(new Date())}
-              style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', cursor: 'pointer', color: '#1558d6' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.08)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-            >Now</button>
-          )}
-
-          <span style={{ color: 'var(--gc-border)', fontSize: 14 }}>|</span>
-
-          {/* Window description — visual range with a "now" marker */}
-          <WindowTimeline start={windowStart} end={windowEnd} />
 
           <div style={{ flex: 1 }} />
 
@@ -816,22 +805,24 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
           {!eldError && eldLastUpdate && (
             <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>ELD · {timeAgo(eldLastUpdate.toISOString())}</span>
           )}
-          <button
-            type="button"
-            onClick={() => fetchEld().then(locs => calcDistances(locs, todayLoads))}
-            disabled={eldLoading}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600,
-              padding: '4px 10px', borderRadius: 9999, cursor: eldLoading ? 'default' : 'pointer',
-              background: 'transparent', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)',
-              opacity: eldLoading ? 0.55 : 1,
-            }}
-            onMouseEnter={e => { if (!eldLoading) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <RefreshCw size={11} style={{ animation: eldLoading ? 'spin 1s linear infinite' : 'none' }} />
-            Refresh ELD
-          </button>
+          <Tooltip content="Pull latest truck locations from ELD" placement="bottom">
+            <button
+              type="button"
+              onClick={() => fetchEld().then(locs => calcDistances(locs, todayLoads))}
+              disabled={eldLoading}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600,
+                padding: '4px 10px', borderRadius: 9999, cursor: eldLoading ? 'default' : 'pointer',
+                background: 'transparent', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)',
+                opacity: eldLoading ? 0.55 : 1,
+              }}
+              onMouseEnter={e => { if (!eldLoading) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <RefreshCw size={11} style={{ animation: eldLoading ? 'spin 1s linear infinite' : 'none' }} />
+              Refresh ELD
+            </button>
+          </Tooltip>
         </div>
       </div>
 
