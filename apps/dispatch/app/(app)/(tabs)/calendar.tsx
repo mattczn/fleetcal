@@ -19,7 +19,7 @@ import { DatePickerModal } from "@/components/DatePickerModal";
 import { LoadResultCard } from "@/components/LoadResultCard";
 import {
   STATUS_TINT, STATUS_LABEL, showStatusPill,
-  fmtTimeRangeShort, loadNumLabel, fmtPrice, RelayChip,
+  fmtTimeRangeShort, loadNumLabel, fmtPrice, RelayChip, DiagonalStripes, NonRevChip,
 } from "@/lib/loadCard";
 import type { Asset, Load } from "@/lib/types";
 
@@ -163,6 +163,7 @@ function LoadBlock({
   const titleFg  = readableOn(assetColor);
   const spans    = p.spansBefore || p.spansAfter;
   const price    = fmtPrice(p.load.loadPrice);
+  const isNonRev = p.load.eventKind === "non_revenue";
 
   // Lay loads out across the available canvas. With one lane we just use
   // full width; with N>1 lanes each lane is 1/N of the canvas with a small
@@ -186,6 +187,7 @@ function LoadBlock({
         borderRadius: 8, padding: 6, overflow: "hidden",
       }}
     >
+      {isNonRev ? <DiagonalStripes /> : null}
       {spans ? (
         <Text style={[txt(800), { fontSize: 10, color: stripe, letterSpacing: 0.4, marginBottom: 1 }]} numberOfLines={1}>
           CONTINUES
@@ -194,9 +196,10 @@ function LoadBlock({
       <Text style={[txt(800), { fontSize: 13, color: titleFg }]} numberOfLines={2}>
         {p.load.title}
       </Text>
-      {p.load.relayRole ? (
-        <View style={{ marginTop: 3, alignSelf: "flex-start" }}>
-          <RelayChip role={p.load.relayRole} size="small" />
+      {(isNonRev || p.load.relayRole) ? (
+        <View style={{ flexDirection: "row", gap: 4, marginTop: 3, flexWrap: "wrap" }}>
+          {isNonRev ? <NonRevChip size="small" /> : null}
+          {p.load.relayRole ? <RelayChip role={p.load.relayRole} size="small" /> : null}
         </View>
       ) : null}
       {p.height >= 48 && p.load.driverName ? (
@@ -235,6 +238,7 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
   const titleFg = readableOn(assetColor);
   const tint   = STATUS_TINT[load.status];
   const price  = fmtPrice(load.loadPrice);
+  const isNonRev = load.eventKind === "non_revenue";
   return (
     <TouchableOpacity
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
@@ -245,12 +249,15 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
         borderRadius: 10,
         marginBottom: 10,
         padding: 12,
+        overflow: "hidden",
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {isNonRev ? <DiagonalStripes /> : null}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <Text style={[txt(800), { fontSize: 14, color: titleFg, flex: 1 }]} numberOfLines={1}>
           {load.title}
         </Text>
+        {isNonRev ? <NonRevChip /> : null}
         {load.relayRole ? <RelayChip role={load.relayRole} /> : null}
       </View>
       {load.driverName ? (

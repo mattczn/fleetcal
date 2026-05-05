@@ -6,7 +6,7 @@ import type { Load } from "@/lib/types";
 import { txt } from "@/lib/font";
 import {
   STATUS_TINT, STATUS_LABEL, showStatusPill,
-  fmtTimeRange, fmtCardDate, loadNumLabel, RelayChip,
+  fmtTimeRange, fmtCardDate, loadNumLabel, RelayChip, DiagonalStripes, NonRevChip,
 } from "@/lib/loadCard";
 
 /**
@@ -16,6 +16,7 @@ import {
 export function LoadResultCard({ load }: { load: Load }) {
   const router = useRouter();
   const tint   = STATUS_TINT[load.status] ?? STATUS_TINT.scheduled;
+  const isNonRev = load.eventKind === "non_revenue";
 
   return (
     <TouchableOpacity
@@ -27,12 +28,15 @@ export function LoadResultCard({ load }: { load: Load }) {
         padding: 14,
         marginBottom: 10,
         borderWidth: 1, borderColor: "#e8eaed",
+        overflow: "hidden",
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {isNonRev ? <DiagonalStripes /> : null}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <Text style={[txt(800), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
           {load.title}
         </Text>
+        {isNonRev ? <NonRevChip /> : null}
         {load.relayRole ? <RelayChip role={load.relayRole} /> : null}
       </View>
 

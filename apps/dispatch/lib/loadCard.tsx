@@ -6,6 +6,7 @@
  */
 import React from "react";
 import { View, Text } from "react-native";
+import Svg, { Defs, Pattern, Rect } from "react-native-svg";
 import { Split } from "lucide-react-native";
 import { txt } from "@/lib/font";
 import type { Load, LoadStatus } from "./types";
@@ -103,6 +104,63 @@ export function fmtPrice(n?: number): string {
   return whole
     ? `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}`
     : `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * Diagonal-stripe overlay used to mark non-revenue events visually
+ * (Maintenance, Deadhead, etc.) wherever they show up alongside revenue
+ * loads. Drop this as the first child of an `overflow: hidden` card and
+ * it'll fill the parent at low contrast, with text/content layered above.
+ *
+ * Implemented via an SVG `<Pattern>` so the stripes scale with the card
+ * and don't pixelate on retina; pointer events are disabled so taps fall
+ * through to the underlying card.
+ */
+export function DiagonalStripes({
+  color = "rgba(95,99,104,0.08)",
+  spacing = 22,
+  thickness = 2,
+}: {
+  color?:     string;
+  spacing?:   number;
+  thickness?: number;
+}) {
+  return (
+    <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <Pattern
+            id="non-rev-stripes"
+            width={spacing}
+            height={spacing}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(-45)"
+          >
+            <Rect width={thickness} height={spacing} fill={color} />
+          </Pattern>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#non-rev-stripes)" />
+      </Svg>
+    </View>
+  );
+}
+
+/** Compact "NON-REV" pill for use in the same row as the title. */
+export function NonRevChip({ size = "default" }: { size?: "default" | "small" }) {
+  const fontSize = size === "small" ? 9 : 10;
+  const padH     = size === "small" ? 5 : 6;
+  const padV     = size === "small" ? 0 : 1;
+  return (
+    <View style={{
+      paddingHorizontal: padH, paddingVertical: padV,
+      borderRadius: 999,
+      backgroundColor: "#fef3c7",
+    }}>
+      <Text style={[txt(800), { fontSize, color: "#92400e", letterSpacing: 0.4 }]}>
+        NON-REV
+      </Text>
+    </View>
+  );
 }
 
 /**

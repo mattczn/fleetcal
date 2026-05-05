@@ -13,7 +13,8 @@ import { ActiveLoadsSheet } from "@/components/ActiveLoadsSheet";
 import { env } from "@/lib/env";
 import { txt } from "@/lib/font";
 import {
-  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel, RelayChip,
+  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+  RelayChip, DiagonalStripes, NonRevChip,
 } from "@/lib/loadCard";
 import type { Asset, Load, Stop } from "@/lib/types";
 
@@ -575,6 +576,7 @@ export default function MapScreen() {
               selectedAssetLoads.map((l) => {
                 const isFocused = l.id === focusedLoadId;
                 const tint = STATUS_TINT[l.status];
+                const isNonRev = l.eventKind === "non_revenue";
                 return (
                   <View
                     key={l.id}
@@ -584,17 +586,20 @@ export default function MapScreen() {
                       marginBottom: 4,
                       borderRadius: 10,
                       backgroundColor: isFocused ? "#e8f0fe" : "transparent",
+                      overflow: "hidden",
                     }}
                   >
+                    {isNonRev ? <DiagonalStripes /> : null}
                     <TouchableOpacity
                       activeOpacity={0.7}
                       onPress={() => setFocusedLoadId(l.id)}
                       style={{ flex: 1 }}
                     >
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <Text style={[txt(800), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
                           {l.title}
                         </Text>
+                        {isNonRev ? <NonRevChip size="small" /> : null}
                         {l.relayRole ? <RelayChip role={l.relayRole} size="small" /> : null}
                       </View>
                       {l.driverName ? (

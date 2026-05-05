@@ -3,7 +3,8 @@ import { Modal, View, Text, TouchableOpacity, Pressable, SectionList } from "rea
 import { X, Truck } from "lucide-react-native";
 import { txt } from "@/lib/font";
 import {
-  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel, RelayChip,
+  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+  RelayChip, DiagonalStripes, NonRevChip,
 } from "@/lib/loadCard";
 import type { Asset, Load } from "@/lib/types";
 
@@ -96,6 +97,7 @@ export function ActiveLoadsSheet({
                   : load.assetName ?? "—";
                 const driverLabel = load.driverName?.trim();
                 const line2 = driverLabel ? `${assetLabel} · ${driverLabel}` : assetLabel;
+                const isNonRev = load.eventKind === "non_revenue";
                 return (
                   <TouchableOpacity
                     activeOpacity={0.7}
@@ -104,8 +106,10 @@ export function ActiveLoadsSheet({
                       flexDirection: "row", alignItems: "center", gap: 12,
                       paddingHorizontal: 18, paddingVertical: 14,
                       borderBottomWidth: 1, borderBottomColor: "#f1f3f4",
+                      overflow: "hidden",
                     }}
                   >
+                    {isNonRev ? <DiagonalStripes /> : null}
                     <View style={{
                       width: 36, height: 36, borderRadius: 10,
                       backgroundColor: color,
@@ -114,10 +118,11 @@ export function ActiveLoadsSheet({
                       <Truck size={16} color="#ffffff" strokeWidth={2.2} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <Text style={[txt(800), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
                           {load.title}
                         </Text>
+                        {isNonRev ? <NonRevChip size="small" /> : null}
                         {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
                       </View>
                       <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
