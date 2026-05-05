@@ -249,8 +249,11 @@ function buildHtml(
       allLats.forEach((la, i) => bounds.extend({ lat: la, lng: allLons[i] }));
       map.fitBounds(bounds, 60);
     } else if (allLats.length === 1) {
+      // Single truck on screen (typically because the user tapped one):
+      // zoom in close so it's clearly the focus, not a tiny pin in the
+      // middle of a continent.
       map.setCenter({ lat: allLats[0], lng: allLons[0] });
-      map.setZoom(8);
+      map.setZoom(12);
     }
 
     // Highlight the active truck if any
@@ -413,12 +416,14 @@ export default function MapScreen() {
     };
   }, [focusedLoad, assets]);
 
-  // When a route is focused, hide every other truck so the user is looking at
-  // just the asset on that route. The X on the bottom card clears focus and
-  // brings everyone back. If the focused load's asset has no Motive vehicle,
-  // there'll simply be no truck pins — the route polyline still renders.
-  const trucks = focused
-    ? allTrucks.filter((t) => t.vehicleId === focused.vehicleId)
+  // When the user has selected a truck (or focused a route), hide every
+  // other truck so the map narrows to just that one. The X on the bottom
+  // card clears the selection and brings everyone back. If the focused
+  // load's asset has no Motive vehicle, there'll simply be no truck pins —
+  // the route polyline still renders.
+  const isolatingVehicleId = selectedVehicleId ?? focused?.vehicleId ?? null;
+  const trucks = isolatingVehicleId
+    ? allTrucks.filter((t) => t.vehicleId === isolatingVehicleId)
     : allTrucks;
 
   const html = useMemo(
