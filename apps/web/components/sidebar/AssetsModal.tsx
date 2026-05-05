@@ -31,12 +31,14 @@ const P_INPUT: React.CSSProperties = {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function AssetsModal({ onClose }: { onClose: () => void }) {
+export default function AssetsModal({ onClose, initialAssetId }: { onClose: () => void; initialAssetId?: number }) {
   const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, unassignedAssetId } = useCalendarStore();
   const assets = allAssets.filter(a => a.id !== unassignedAssetId);
 
   const [selected, setSelected] = useState<number>(
-    assets.length > 0 ? assets[0].id : -1
+    initialAssetId && assets.some(a => a.id === initialAssetId)
+      ? initialAssetId
+      : (assets.length > 0 ? assets[0].id : -1)
   );
   const [showAdd,  setShowAdd]  = useState(false);
   const [addName,  setAddName]  = useState('');

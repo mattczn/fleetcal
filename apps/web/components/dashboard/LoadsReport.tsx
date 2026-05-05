@@ -2,13 +2,15 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp } from 'lucide-react';
+import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { CalendarEvent } from '@/lib/types';
 import DatePicker from '@/components/calendar/DatePicker';
 import CopyChip from '@/components/ui/CopyChip';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
+import DriversModal from '@/components/sidebar/DriversModal';
+import AssetsModal from '@/components/sidebar/AssetsModal';
 
 // ── Column catalog ────────────────────────────────────────────────────────────
 
@@ -62,7 +64,6 @@ const COLUMNS: ColumnDef[] = [
   { id: 'loadNum',      label: 'Load #',      get: (l) => l.loadNum ?? '' },
   { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '', noFormat: true },
   { id: 'customer',     label: 'Customer',    get: (l, ctx) => ctx.customers.find(c => c.id === l.customerId)?.name ?? l.broker ?? '' },
-  { id: 'broker',       label: 'Broker',      get: (l) => l.broker ?? '' },
   { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
   { id: 'driver',       label: 'Driver',      get: (l) => l.driverName ?? '' },
   { id: 'asset',        label: 'Asset',       get: (l, ctx) => {
@@ -254,7 +255,9 @@ function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onCha
 
 export default function LoadsReport() {
   const { customers, drivers, assets, openEditModal } = useCalendarStore();
-  const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
+  const [brokerProfileId,  setBrokerProfileId]  = useState<string | null>(null);
+  const [driverModalId,    setDriverModalId]    = useState<number | null>(null);
+  const [assetModalId,     setAssetModalId]     = useState<number | null>(null);
 
   // Date range — default last 30 days
   const today = new Date();
@@ -288,6 +291,15 @@ export default function LoadsReport() {
 
   // Sort: click a column header to toggle asc → desc → off.
   const [sortKey, setSortKey] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null);
+
+  // Pagination — display only. CSV/Excel exports always include the full
+  // filtered set across pages.
+  const [pageSize, setPageSize] = useState<50 | 100 | 200>(50);
+  const [page,     setPage]     = useState(0);
+
+  // Refs for the columns-picker dropdown (used to detect outside clicks).
+  const columnsBtnRef    = useRef<HTMLButtonElement>(null);
+  const columnsPanelRef  = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -335,16 +347,31 @@ export default function LoadsReport() {
     }
   };
 
-  // Apply client-side multi-select filters
+  // Apply client-side multi-select filters.
+  // For customers: match on customerId FK first, then fall back to broker
+  // text matching the selected customer's name (older loads have no FK).
+  const selectedCustomerNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const id of selectedCustomers) {
+      const c = customers.find(x => x.id === id);
+      if (c) names.add(c.name);
+    }
+    return names;
+  }, [selectedCustomers, customers]);
+
   const topRows = useMemo(() => {
     if (!loads) return [];
     return loads.filter(load => {
-      if (selectedCustomers.size > 0 && !selectedCustomers.has(load.customerId ?? '')) return false;
-      if (selectedDrivers.size   > 0 && !selectedDrivers.has(load.driverName ?? '')) return false;
-      if (selectedAssets.size    > 0 && !selectedAssets.has(String(load.assetId))) return false;
+      if (selectedCustomers.size > 0) {
+        const fkMatch   = !!load.customerId && selectedCustomers.has(load.customerId);
+        const nameMatch = !!load.broker     && selectedCustomerNames.has(load.broker);
+        if (!fkMatch && !nameMatch) return false;
+      }
+      if (selectedDrivers.size > 0 && !selectedDrivers.has(load.driverName ?? '')) return false;
+      if (selectedAssets.size  > 0 && !selectedAssets.has(String(load.assetId))) return false;
       return true;
     });
-  }, [loads, selectedCustomers, selectedDrivers, selectedAssets]);
+  }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
 
   const visibleColumns = COLUMNS.filter(c => visible.has(c.id));
 
@@ -355,6 +382,7 @@ export default function LoadsReport() {
     const v = col.get(load, ctx);
     if (v === '' || v == null) return '';
     if (typeof v === 'number') {
+      if (col.noFormat) return String(v);
       const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials';
       return isMoney && v > 0 ? fmt$(v) : v.toLocaleString();
     }
@@ -404,6 +432,13 @@ export default function LoadsReport() {
     });
   };
 
+  // Reset to page 0 whenever the visible-row set or sort changes.
+  useEffect(() => { setPage(0); }, [topRows, columnFilters, sortKey, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedRows = sortedRows.slice(safePage * pageSize, (safePage + 1) * pageSize);
+
   // Totals (numeric columns only) — based on the filtered rows
   const totals = useMemo(() => {
     const sums: Record<string, number> = {};
@@ -446,6 +481,19 @@ export default function LoadsReport() {
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, [openFilterCol]);
+
+  // Close columns-picker on outside click (clicking the trigger toggles).
+  useEffect(() => {
+    if (!showColumnPicker) return;
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (columnsBtnRef.current?.contains(t)) return;
+      if (columnsPanelRef.current?.contains(t)) return;
+      setShowColumnPicker(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [showColumnPicker]);
 
   const toggleColFilterValue = (colId: string, value: string) => {
     setColumnFilters(prev => {
@@ -538,11 +586,11 @@ export default function LoadsReport() {
       {/* Filter row */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, padding: '20px 28px', alignItems: 'flex-end', background: 'var(--gc-bg)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>From</label>
+          <label style={labelStyle}>Pickup From</label>
           <DatePicker value={from} onChange={setFrom} headerColor="#1a73e8" />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>To</label>
+          <label style={labelStyle}>Pickup To</label>
           <DatePicker value={to} onChange={setTo} headerColor="#1a73e8" min={from} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -621,6 +669,7 @@ export default function LoadsReport() {
             </div>
             <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
               <button
+                ref={columnsBtnRef}
                 type="button"
                 onClick={() => setShowColumnPicker(p => !p)}
                 style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}
@@ -654,7 +703,7 @@ export default function LoadsReport() {
               </button>
 
               {showColumnPicker && (
-                <div style={{
+                <div ref={columnsPanelRef} style={{
                   position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 30,
                   background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
                   borderRadius: 8, boxShadow: 'var(--shadow-3)', width: 240, maxHeight: 360, overflowY: 'auto',
@@ -714,11 +763,21 @@ export default function LoadsReport() {
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr style={{ background: 'var(--gc-bg)' }}>
+                  <tr style={{ background: 'linear-gradient(180deg, #eef4fc 0%, #e4ecf7 100%)' }}>
+                    <th style={{
+                      padding: '12px 14px', fontSize: 10, fontWeight: 800,
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                      color: '#1558d6', textAlign: 'left',
+                      borderBottom: '2px solid #c5d8fd',
+                      whiteSpace: 'nowrap', width: 1,
+                    }}>
+                      View
+                    </th>
                     {visibleColumns.map(col => {
                       const isFiltered = !!columnFilters[col.id]?.size;
                       const isOpen = openFilterCol === col.id;
                       const sortDir = sortKey?.col === col.id ? sortKey.dir : null;
+                      const isActive = isFiltered || sortDir;
                       return (
                         <th
                           key={col.id}
@@ -727,15 +786,19 @@ export default function LoadsReport() {
                           title={`Click to sort${isFiltered ? ' · filter active' : ''}`}
                           style={{
                             textAlign: col.align === 'right' ? 'right' : 'left',
-                            padding: '10px 12px', fontWeight: 700, fontSize: 10,
-                            textTransform: 'uppercase', letterSpacing: '0.04em',
-                            color: isFiltered ? '#1a73e8' : 'var(--gc-text-3)',
-                            borderBottom: '1px solid var(--gc-border-light)',
-                            background: isOpen ? 'var(--gc-hover)' : 'transparent',
+                            padding: '12px 14px', fontWeight: 800, fontSize: 10,
+                            textTransform: 'uppercase', letterSpacing: '0.06em',
+                            color: isActive ? '#1558d6' : '#3c4858',
+                            borderBottom: `2px solid ${isActive ? '#1a73e8' : '#c5d8fd'}`,
+                            background: isOpen
+                              ? 'rgba(26,115,232,0.14)'
+                              : (isActive ? 'rgba(26,115,232,0.06)' : 'transparent'),
                             whiteSpace: 'nowrap', cursor: 'pointer',
                             userSelect: 'none',
                             transition: 'background 100ms, color 100ms',
                           }}
+                          onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = 'rgba(26,115,232,0.10)'; }}
+                          onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = isActive ? 'rgba(26,115,232,0.06)' : 'transparent'; }}
                         >
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: col.align === 'right' ? 'flex-end' : 'flex-start' }}>
                             {col.label}
@@ -757,10 +820,10 @@ export default function LoadsReport() {
                                 display: 'inline-flex', alignItems: 'center',
                                 padding: 2, borderRadius: 3,
                                 border: 'none', background: 'transparent',
-                                cursor: 'pointer', color: isFiltered ? '#1a73e8' : 'var(--gc-text-3)',
+                                cursor: 'pointer', color: isFiltered ? '#1a73e8' : '#5f6c80',
                                 opacity: isFiltered ? 1 : 0.5,
                               }}
-                              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.12)'; e.currentTarget.style.opacity = '1'; }}
+                              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.18)'; e.currentTarget.style.opacity = '1'; }}
                               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.opacity = isFiltered ? '1' : '0.5'; }}
                             >
                               <Filter size={10} />
@@ -769,28 +832,40 @@ export default function LoadsReport() {
                         </th>
                       );
                     })}
-                    <th style={{
-                      padding: '10px 12px', fontSize: 10, fontWeight: 700,
-                      textTransform: 'uppercase', letterSpacing: '0.04em',
-                      color: 'var(--gc-text-3)', textAlign: 'right',
-                      borderBottom: '1px solid var(--gc-border-light)',
-                      whiteSpace: 'nowrap',
-                    }}>
-                      View
-                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map(load => {
-                    const customer = customers.find(c => c.id === load.customerId);
+                  {pagedRows.map(load => {
+                    // Match by FK first, then fall back to name match against broker text
+                    const customer =
+                      customers.find(c => c.id === load.customerId) ??
+                      (load.broker ? customers.find(c => c.name === load.broker) : undefined);
                     return (
                       <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                        <td style={{ padding: '10px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(load.id)}
+                            title="Open load"
+                            style={{
+                              fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 5,
+                              border: '1px solid var(--gc-border)', background: 'transparent',
+                              color: 'var(--gc-text-2)', cursor: 'pointer',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
+                          >
+                            View
+                          </button>
+                        </td>
                         {visibleColumns.map(col => {
                           const display = cellDisplay(col, load);
                           let inner: React.ReactNode = display || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
 
                           if (col.id === 'loadNum' && load.loadNum) {
                             inner = <CopyChip value={load.loadNum} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
+                          } else if (col.id === 'internalId' && load.internalLoadId != null) {
+                            inner = <CopyChip value={String(load.internalLoadId)} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
                           } else if (col.id === 'customer' && customer) {
                             inner = (
                               <button
@@ -803,6 +878,36 @@ export default function LoadsReport() {
                                 {customer.name}
                               </button>
                             );
+                          } else if (col.id === 'driver' && load.driverName) {
+                            const driverRec = drivers.find(d => d.name === load.driverName);
+                            if (driverRec) {
+                              inner = (
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); setDriverModalId(driverRec.id); }}
+                                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
+                                  onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+                                  onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                                >
+                                  {load.driverName}
+                                </button>
+                              );
+                            }
+                          } else if (col.id === 'asset') {
+                            const a = assets.find(x => x.id === load.assetId);
+                            if (a) {
+                              inner = (
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); setAssetModalId(a.id); }}
+                                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
+                                  onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+                                  onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                                >
+                                  {a.unit ? `${a.name} #${a.unit}` : a.name}
+                                </button>
+                              );
+                            }
                           }
 
                           return (
@@ -820,29 +925,91 @@ export default function LoadsReport() {
                             </td>
                           );
                         })}
-                        <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(load.id)}
-                            title="Open load"
-                            style={{
-                              display: 'inline-flex', alignItems: 'center', gap: 4,
-                              fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 5,
-                              border: '1px solid var(--gc-border)', background: 'transparent',
-                              color: 'var(--gc-text-2)', cursor: 'pointer',
-                            }}
-                            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
-                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
-                          >
-                            <Eye size={11} />
-                            View
-                          </button>
-                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Pagination footer — only when there are rows */}
+          {rows.length > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 20px', borderTop: '1px solid var(--gc-border-light)',
+              fontSize: 12, color: 'var(--gc-text-2)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span>Rows per page</span>
+                <select
+                  value={pageSize}
+                  onChange={e => setPageSize(Number(e.target.value) as 50 | 100 | 200)}
+                  style={{
+                    fontSize: 12, padding: '4px 8px', borderRadius: 6,
+                    border: '1px solid var(--gc-border)', background: 'var(--gc-surface)',
+                    color: 'var(--gc-text-1)', cursor: 'pointer',
+                  }}
+                >
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span>
+                  {rows.length === 0
+                    ? '0 rows'
+                    : <>
+                        <strong style={{ color: 'var(--gc-text-1)' }}>{safePage * pageSize + 1}</strong>
+                        {'–'}
+                        <strong style={{ color: 'var(--gc-text-1)' }}>{Math.min((safePage + 1) * pageSize, rows.length)}</strong>
+                        {' of '}
+                        <strong style={{ color: 'var(--gc-text-1)' }}>{rows.length}</strong>
+                      </>}
+                </span>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => setPage(p => Math.max(0, p - 1))}
+                    disabled={safePage === 0}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 28, height: 28, borderRadius: 6,
+                      border: '1px solid var(--gc-border)', background: 'transparent',
+                      color: 'var(--gc-text-2)',
+                      cursor: safePage === 0 ? 'default' : 'pointer',
+                      opacity: safePage === 0 ? 0.4 : 1,
+                    }}
+                    onMouseEnter={e => { if (safePage > 0) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 8px', minWidth: 70, justifyContent: 'center' }}>
+                    Page <strong style={{ color: 'var(--gc-text-1)', margin: '0 4px' }}>{safePage + 1}</strong> / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                    disabled={safePage >= totalPages - 1}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 28, height: 28, borderRadius: 6,
+                      border: '1px solid var(--gc-border)', background: 'transparent',
+                      color: 'var(--gc-text-2)',
+                      cursor: safePage >= totalPages - 1 ? 'default' : 'pointer',
+                      opacity: safePage >= totalPages - 1 ? 0.4 : 1,
+                    }}
+                    onMouseEnter={e => { if (safePage < totalPages - 1) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    title="Next page"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </>
@@ -853,6 +1020,18 @@ export default function LoadsReport() {
         <BrokerProfileModal
           initialBrokerId={brokerProfileId}
           onClose={() => setBrokerProfileId(null)}
+        />
+      )}
+      {driverModalId !== null && (
+        <DriversModal
+          initialDriverId={driverModalId}
+          onClose={() => setDriverModalId(null)}
+        />
+      )}
+      {assetModalId !== null && (
+        <AssetsModal
+          initialAssetId={assetModalId}
+          onClose={() => setAssetModalId(null)}
         />
       )}
 
