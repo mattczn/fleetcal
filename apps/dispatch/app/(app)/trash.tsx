@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, RefreshControl,
+  View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -35,7 +35,7 @@ export default function TrashScreen() {
   const { organization } = useOrganization();
   const orgId = organization?.id;
 
-  const { data: rows = [], isLoading, refetch, isRefetching } = useQuery({
+  const { data: rows = [], isLoading } = useQuery({
     queryKey: ["deleted-loads", orgId],
     queryFn:  () => fetchDeletedLoads(orgId!),
     enabled:  !!orgId,
@@ -86,10 +86,7 @@ export default function TrashScreen() {
           </Text>
         </View>
       ) : (
-        <ScrollView
-          contentContainerStyle={{ padding: 16 }}
-          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />}
-        >
+        <ScrollView contentContainerStyle={{ padding: 16 }}>
           {rows.map((r) => (
             <View key={r.id} style={{
               backgroundColor: "#ffffff", borderRadius: 14,

@@ -1,10 +1,10 @@
 import React, { useRef, useState } from "react";
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, RefreshControl,
+  View, Text, ScrollView, TouchableOpacity, TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useOrganization, useUser } from "@clerk/clerk-expo";
 import {
   Plus, Search, X, CalendarDays, Map as MapIcon, ChevronRight, User as UserIcon, Truck,
@@ -27,26 +27,8 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
   const [trucksPickerOpen, setTrucksPickerOpen] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
-  const qc = useQueryClient();
   const online = useOnlineStatus();
-
-  async function onRefresh() {
-    setRefreshing(true);
-    try {
-      // Hit the queries the home screen actually displays (assets +
-      // motive locations) and the in-transit window so the routes view
-      // and live trucks card both come back fresh.
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["assets", orgId] }),
-        qc.invalidateQueries({ queryKey: ["motive-locations", orgId] }),
-        qc.invalidateQueries({ queryKey: ["loads-in-transit-window", orgId] }),
-      ]);
-    } finally {
-      setRefreshing(false);
-    }
-  }
 
   const { data: assets = [] } = useQuery({
     queryKey: ["assets", orgId],
@@ -177,9 +159,6 @@ export default function HomeScreen() {
           style={{ flex: 1, backgroundColor: "#f8f9fa" }}
           contentContainerStyle={{ padding: 16, paddingBottom: 24 + insets.bottom }}
           keyboardShouldPersistTaps="handled"
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1a73e8" />
-          }
         >
           {/* Primary CTA: + Load */}
           <TouchableOpacity
