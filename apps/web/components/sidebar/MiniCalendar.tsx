@@ -14,6 +14,12 @@ export default function MiniCalendar() {
   const [viewYear,  setViewYear]  = useState(currentDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(currentDate.getMonth());
 
+  // SSR can render at a different wall-clock time than the client's hydrate.
+  // Withhold "today" + "selected" styling until after mount to avoid the
+  // hydration mismatch. The plain day numbers still render server-side.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   // Sync view when main calendar navigates to a different month
   useEffect(() => {
     setViewYear(currentDate.getFullYear());
@@ -102,8 +108,8 @@ export default function MiniCalendar() {
 
           const pad    = (n: number) => String(n).padStart(2, '0');
           const dStr   = `${viewYear}-${pad(viewMonth + 1)}-${pad(day)}`;
-          const isSel  = dStr === selectedStr;
-          const isTday = dStr === todayStr;
+          const isSel  = mounted && dStr === selectedStr;
+          const isTday = mounted && dStr === todayStr;
 
           return (
             <button

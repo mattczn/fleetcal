@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { CalendarEvent } from '@/lib/types';
@@ -253,18 +253,32 @@ function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onCha
 
 // ── Main report component ─────────────────────────────────────────────────────
 
-export default function LoadsReport() {
-  const { customers, drivers, assets, openEditModal } = useCalendarStore();
+interface Props {
+  /** YYYY-MM-DD — initial pickup-from. Re-syncs when prop changes. */
+  defaultFrom?: string;
+  /** YYYY-MM-DD — initial pickup-to. Re-syncs when prop changes. */
+  defaultTo?: string;
+}
+
+export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
+  const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
   const [brokerProfileId,  setBrokerProfileId]  = useState<string | null>(null);
   const [driverModalId,    setDriverModalId]    = useState<number | null>(null);
   const [assetModalId,     setAssetModalId]     = useState<number | null>(null);
 
-  // Date range — default last 30 days
+  // Date range — defaults to props (dashboard period) or last 30 days
   const today = new Date();
   const monthAgo = new Date(today); monthAgo.setDate(today.getDate() - 30);
   const fmtDateInput = (d: Date) => d.toISOString().slice(0, 10);
-  const [from, setFrom] = useState(fmtDateInput(monthAgo));
-  const [to,   setTo]   = useState(fmtDateInput(today));
+  const [from, setFrom] = useState(() => defaultFrom ?? fmtDateInput(monthAgo));
+  const [to,   setTo]   = useState(() => defaultTo   ?? fmtDateInput(today));
+
+  // When the dashboard period changes, re-seed the date range. Manual edits
+  // by the user are preserved until the parent prop changes again.
+  useEffect(() => {
+    if (defaultFrom) setFrom(defaultFrom);
+    if (defaultTo)   setTo(defaultTo);
+  }, [defaultFrom, defaultTo]);
 
   // Multi-select filters (all = empty set)
   const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
@@ -279,6 +293,11 @@ export default function LoadsReport() {
   // Column visibility
   const [visible, setVisible] = useState<Set<string>>(() => new Set(DEFAULT_VISIBLE));
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+
+  // Column display order (drag-and-drop reorderable). Default = COLUMNS order.
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => COLUMNS.map(c => c.id));
+  const [draggedColId, setDraggedColId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   // Per-column filter (Excel-style): column id → set of EXCLUDED display values.
   // A row passes if for every keyed column its cell display value is not in
@@ -307,12 +326,26 @@ export default function LoadsReport() {
       const stored = localStorage.getItem('loadsReport.columns');
       if (stored) setVisible(new Set(JSON.parse(stored)));
     } catch { /* ignore */ }
+    try {
+      const storedOrder = localStorage.getItem('loadsReport.columnOrder');
+      if (storedOrder) {
+        const known = new Set(COLUMNS.map(c => c.id));
+        const arr = (JSON.parse(storedOrder) as string[]).filter(id => known.has(id));
+        const missing = COLUMNS.filter(c => !arr.includes(c.id)).map(c => c.id);
+        setColumnOrder([...arr, ...missing]);
+      }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     localStorage.setItem('loadsReport.columns', JSON.stringify([...visible]));
   }, [visible]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('loadsReport.columnOrder', JSON.stringify(columnOrder));
+  }, [columnOrder]);
 
   // Distinct driver names from the loaded events as the picker options.
   // (Drivers table ids don't always match driverName text, so name-based
@@ -347,6 +380,17 @@ export default function LoadsReport() {
     }
   };
 
+  // Auto-run whenever the date range changes (mount + dashboard-period sync).
+  // Edits to from/to via the DatePickers trigger this too — same as clicking Run.
+  // Wait for `dbReady` so the Clerk token provider is wired before the first
+  // call (otherwise the auto-run on mount fires unauthenticated and 401s).
+  useEffect(() => {
+    if (!dbReady) return;
+    if (!from || !to || from > to) return;
+    void run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to, dbReady]);
+
   // Apply client-side multi-select filters.
   // For customers: match on customerId FK first, then fall back to broker
   // text matching the selected customer's name (older loads have no FK).
@@ -373,7 +417,25 @@ export default function LoadsReport() {
     });
   }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
 
-  const visibleColumns = COLUMNS.filter(c => visible.has(c.id));
+  // Columns in user's chosen order (drag-and-drop in the picker).
+  const orderedColumns = useMemo(
+    () => columnOrder.map(id => COLUMNS.find(c => c.id === id)).filter((c): c is ColumnDef => !!c),
+    [columnOrder],
+  );
+  const visibleColumns = orderedColumns.filter(c => visible.has(c.id));
+
+  const moveColumn = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setColumnOrder(prev => {
+      const fromIdx = prev.indexOf(fromId);
+      const toIdx   = prev.indexOf(toId);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      const next = [...prev];
+      next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, fromId);
+      return next;
+    });
+  };
 
   // Display value for a cell — same formatting the table renders, used for
   // both the visible table and the column-filter distinct-value list.
@@ -709,7 +771,7 @@ export default function LoadsReport() {
                   borderRadius: 8, boxShadow: 'var(--shadow-3)', width: 240, maxHeight: 360, overflowY: 'auto',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>Columns</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--gc-text-3)' }}>Columns · drag to reorder</span>
                     <button
                       type="button"
                       onClick={() => setShowColumnPicker(false)}
@@ -718,23 +780,54 @@ export default function LoadsReport() {
                       <X size={12} />
                     </button>
                   </div>
-                  {COLUMNS.map(col => (
-                    <label key={col.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer', color: 'var(--gc-text-1)' }}
-                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={visible.has(col.id)}
-                        onChange={() => {
+                  {orderedColumns.map(col => {
+                    const isDragging = draggedColId === col.id;
+                    const isTarget   = dropTargetId === col.id && draggedColId && draggedColId !== col.id;
+                    return (
+                      <div
+                        key={col.id}
+                        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (draggedColId && draggedColId !== col.id) setDropTargetId(col.id); }}
+                        onDragLeave={() => { if (dropTargetId === col.id) setDropTargetId(null); }}
+                        onDrop={e => { e.preventDefault(); if (draggedColId) moveColumn(draggedColId, col.id); setDraggedColId(null); setDropTargetId(null); }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '6px 12px', fontSize: 13, color: 'var(--gc-text-1)',
+                          opacity: isDragging ? 0.4 : 1,
+                          borderTop: isTarget ? '2px solid #1a73e8' : '2px solid transparent',
+                          background: isTarget ? 'var(--gc-blue-light)' : 'transparent',
+                        }}
+                        onMouseEnter={e => { if (!isTarget && !isDragging) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                        onMouseLeave={e => { if (!isTarget) e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        <span
+                          draggable
+                          onDragStart={e => { setDraggedColId(col.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', col.id); }}
+                          onDragEnd={() => { setDraggedColId(null); setDropTargetId(null); }}
+                          title="Drag to reorder"
+                          style={{ cursor: 'grab', display: 'flex', color: 'var(--gc-text-3)', userSelect: 'none' }}
+                        >
+                          <GripVertical size={12} />
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={visible.has(col.id)}
+                          onChange={() => {
+                            const next = new Set(visible);
+                            if (next.has(col.id)) next.delete(col.id); else next.add(col.id);
+                            setVisible(next);
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        />
+                        <span style={{ flex: 1, cursor: 'pointer' }} onClick={() => {
                           const next = new Set(visible);
                           if (next.has(col.id)) next.delete(col.id); else next.add(col.id);
                           setVisible(next);
-                        }}
-                      />
-                      {col.label}
-                    </label>
-                  ))}
+                        }}>
+                          {col.label}
+                        </span>
+                      </div>
+                    );
+                  })}
                   <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid var(--gc-border-light)' }}>
                     <button
                       type="button"

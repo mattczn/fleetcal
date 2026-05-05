@@ -171,7 +171,12 @@ export default function CalendarToolbar() {
     setCurrentDate(new Date(n.getFullYear(), n.getMonth(), n.getDate()));
   };
 
-  const today = isToday(currentDate, calendarTimezone);
+  // Withhold the "today" highlight until after mount — server SSR may render
+  // at a different wall-clock day than the client hydrates, causing a
+  // hydration mismatch on the Today pill.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  const today = mounted && isToday(currentDate, calendarTimezone);
 
   return (
     <header
