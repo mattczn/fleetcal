@@ -18,6 +18,7 @@ import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
 import { botAuth } from "./middleware/botAuth.js";
 import loadsRoute from "./routes/loads.js";
+import botLoadsRoute from "./routes/bot-loads.js";
 import eventsRoute from "./routes/events.js";
 import documentsRoute from "./routes/documents.js";
 import assetsRoute from "./routes/assets.js";
@@ -107,7 +108,7 @@ authed.route("/check-calls", checkCallsRoute);
 
 const bot = new Hono<{ Variables: AuthVariables }>();
 bot.use("*", botAuth);
-bot.route("/loads", loadsRoute);
+bot.route("/loads", botLoadsRoute);
 app.route("/v1/bot", bot);
 
 app.route("/v1", authed);
