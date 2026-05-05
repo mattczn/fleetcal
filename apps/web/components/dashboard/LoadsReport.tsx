@@ -1,19 +1,25 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { CalendarEvent } from '@/lib/types';
+import DatePicker from '@/components/calendar/DatePicker';
+import CopyChip from '@/components/ui/CopyChip';
+import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 
 // ── Column catalog ────────────────────────────────────────────────────────────
 
 interface ColumnDef {
   id:    string;
   label: string;
-  /** Render cell from a load. Returns string | number for export. */
+  /** Raw value — used for sorting, column-filter distinct values, and export. */
   get:   (load: CalendarEvent, ctx: ColumnCtx) => string | number;
   align?: 'right';
+  /** Skip thousands-separator formatting (e.g. ID columns). */
+  noFormat?: boolean;
 }
 
 interface ColumnCtx {
@@ -54,7 +60,7 @@ function firstStop(load: CalendarEvent, type: 'pickup' | 'delivery'): string {
 const COLUMNS: ColumnDef[] = [
   { id: 'pickupDate',   label: 'Pickup Date', get: (l) => fmtDate(l.start) },
   { id: 'loadNum',      label: 'Load #',      get: (l) => l.loadNum ?? '' },
-  { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '' },
+  { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '', noFormat: true },
   { id: 'customer',     label: 'Customer',    get: (l, ctx) => ctx.customers.find(c => c.id === l.customerId)?.name ?? l.broker ?? '' },
   { id: 'broker',       label: 'Broker',      get: (l) => l.broker ?? '' },
   { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
@@ -92,15 +98,40 @@ interface MultiSelectProps<T> {
   width?:   number;
 }
 
-function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onChange, width = 200 }: MultiSelectProps<T>) {
+function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onChange, width = 220, icon }: MultiSelectProps<T> & { icon?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const ref = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popupRef   = useRef<HTMLDivElement>(null);
 
+  // Position the popup relative to the trigger button (fixed, body-portaled).
+  useLayoutEffect(() => {
+    if (!open) { setCoords(null); return; }
+    const compute = () => {
+      const t = triggerRef.current;
+      if (!t) return;
+      const r = t.getBoundingClientRect();
+      setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    compute();
+    const onScroll = () => compute();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [open]);
+
+  // Close on outside click (covers both the trigger and the portaled popup).
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (popupRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
@@ -123,43 +154,55 @@ function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onCha
       : `${selected.size} selected`;
 
   return (
-    <div ref={ref} style={{ position: 'relative', width }}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(o => !o)}
         style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
-          fontSize: 13, padding: '7px 10px', borderRadius: 8,
-          border: '1px solid var(--gc-border)', background: 'var(--gc-surface)',
+          width, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+          fontSize: 14, padding: '9px 12px', borderRadius: 8,
+          border: `1px solid ${open ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+          background: 'var(--gc-surface)',
           color: 'var(--gc-text-1)', cursor: 'pointer', textAlign: 'left',
+          boxShadow: open ? '0 0 0 3px rgba(26,115,232,0.15)' : 'none',
+          transition: 'border-color 120ms, box-shadow 120ms',
         }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: selected.size === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)' }}>
-          {summary}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+          {icon}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: selected.size === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)' }}>
+            {summary}
+          </span>
         </span>
-        <ChevronDown size={13} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+        <ChevronDown size={14} style={{ color: 'var(--gc-text-3)', flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }} />
       </button>
-      {open && (
-        <div style={{
-          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20,
-          background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
-          borderRadius: 8, boxShadow: 'var(--shadow-3)', maxHeight: 320, display: 'flex', flexDirection: 'column',
-        }}>
+      {open && coords && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={popupRef}
+          style={{
+            position: 'fixed', top: coords.top, left: coords.left, width: coords.width,
+            zIndex: 9999,
+            background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+            borderRadius: 8, boxShadow: 'var(--shadow-3)', maxHeight: 360,
+            display: 'flex', flexDirection: 'column',
+          }}
+        >
           <div style={{ padding: 8, borderBottom: '1px solid var(--gc-border-light)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', background: 'var(--gc-bg)', borderRadius: 6 }}>
-              <Search size={12} style={{ color: 'var(--gc-text-3)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 10px', background: 'var(--gc-bg)', borderRadius: 6 }}>
+              <Search size={13} style={{ color: 'var(--gc-text-3)' }} />
               <input
                 autoFocus
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 placeholder={`Search ${label.toLowerCase()}…`}
-                style={{ flex: 1, fontSize: 12, border: 'none', background: 'transparent', outline: 'none', color: 'var(--gc-text-1)' }}
+                style={{ flex: 1, fontSize: 13, border: 'none', background: 'transparent', outline: 'none', color: 'var(--gc-text-1)' }}
               />
             </div>
           </div>
           <div style={{ overflowY: 'auto', flex: 1 }}>
             {filtered.length === 0 ? (
-              <div style={{ padding: 12, fontSize: 12, color: 'var(--gc-text-3)', textAlign: 'center' }}>
+              <div style={{ padding: 14, fontSize: 13, color: 'var(--gc-text-3)', textAlign: 'center' }}>
                 No matches
               </div>
             ) : filtered.map(o => {
@@ -167,7 +210,7 @@ function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onCha
               const checked = selected.has(id);
               return (
                 <label key={id} style={{
-                  display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
                   fontSize: 13, cursor: 'pointer',
                   background: checked ? 'var(--gc-blue-light)' : 'transparent',
                   color: 'var(--gc-text-1)',
@@ -193,23 +236,25 @@ function MultiSelect<T>({ label, options, optionId, optionLabel, selected, onCha
               type="button"
               onClick={() => { onChange(new Set()); }}
               style={{
-                padding: '8px 12px', fontSize: 11, fontWeight: 600, color: 'var(--gc-text-3)',
+                padding: '10px 14px', fontSize: 12, fontWeight: 600, color: 'var(--gc-text-3)',
                 background: 'var(--gc-bg)', border: 'none', borderTop: '1px solid var(--gc-border-light)',
                 cursor: 'pointer', textAlign: 'left',
               }}>
               Clear selection
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }
 
 // ── Main report component ─────────────────────────────────────────────────────
 
 export default function LoadsReport() {
-  const { customers, drivers, assets } = useCalendarStore();
+  const { customers, drivers, assets, openEditModal } = useCalendarStore();
+  const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
 
   // Date range — default last 30 days
   const today = new Date();
@@ -231,6 +276,18 @@ export default function LoadsReport() {
   // Column visibility
   const [visible, setVisible] = useState<Set<string>>(() => new Set(DEFAULT_VISIBLE));
   const [showColumnPicker, setShowColumnPicker] = useState(false);
+
+  // Per-column filter (Excel-style): column id → set of EXCLUDED display values.
+  // A row passes if for every keyed column its cell display value is not in
+  // the excluded set. Empty/absent map = no filter for that column.
+  const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
+  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
+  const [filterCoords,  setFilterCoords]  = useState<{ top: number; left: number } | null>(null);
+  const [colFilterSearch, setColFilterSearch] = useState('');
+  const filterPopupRef = useRef<HTMLDivElement>(null);
+
+  // Sort: click a column header to toggle asc → desc → off.
+  const [sortKey, setSortKey] = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -279,7 +336,7 @@ export default function LoadsReport() {
   };
 
   // Apply client-side multi-select filters
-  const rows = useMemo(() => {
+  const topRows = useMemo(() => {
     if (!loads) return [];
     return loads.filter(load => {
       if (selectedCustomers.size > 0 && !selectedCustomers.has(load.customerId ?? '')) return false;
@@ -291,7 +348,63 @@ export default function LoadsReport() {
 
   const visibleColumns = COLUMNS.filter(c => visible.has(c.id));
 
-  // Totals (numeric columns only)
+  // Display value for a cell — same formatting the table renders, used for
+  // both the visible table and the column-filter distinct-value list.
+  const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const cellDisplay = (col: ColumnDef, load: CalendarEvent): string => {
+    const v = col.get(load, ctx);
+    if (v === '' || v == null) return '';
+    if (typeof v === 'number') {
+      const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials';
+      return isMoney && v > 0 ? fmt$(v) : v.toLocaleString();
+    }
+    return String(v);
+  };
+
+  // Apply column filters (post top-level filters)
+  const rows = useMemo(() => {
+    const activeKeys = Object.keys(columnFilters).filter(k => columnFilters[k]?.size);
+    if (activeKeys.length === 0) return topRows;
+    return topRows.filter(load => {
+      for (const colId of activeKeys) {
+        const col = COLUMNS.find(c => c.id === colId);
+        if (!col) continue;
+        if (columnFilters[colId].has(cellDisplay(col, load))) return false;
+      }
+      return true;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topRows, columnFilters, ctx]);
+
+  // Display-only sort. Exports use unsorted `rows` so CSV/Excel stays raw.
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return rows;
+    const col = COLUMNS.find(c => c.id === sortKey.col);
+    if (!col) return rows;
+    const dir = sortKey.dir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = col.get(a, ctx);
+      const bv = col.get(b, ctx);
+      const aEmpty = av === '' || av == null;
+      const bEmpty = bv === '' || bv == null;
+      if (aEmpty && bEmpty) return 0;
+      if (aEmpty) return 1;            // empties always at the bottom
+      if (bEmpty) return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+      return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dir;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, sortKey, ctx]);
+
+  const cycleSort = (colId: string) => {
+    setSortKey(prev => {
+      if (!prev || prev.col !== colId) return { col: colId, dir: 'asc' };
+      if (prev.dir === 'asc') return { col: colId, dir: 'desc' };
+      return null;
+    });
+  };
+
+  // Totals (numeric columns only) — based on the filtered rows
   const totals = useMemo(() => {
     const sums: Record<string, number> = {};
     for (const col of visibleColumns) {
@@ -301,6 +414,66 @@ export default function LoadsReport() {
     }
     return sums;
   }, [rows, visibleColumns, ctx]);
+
+  // Distinct values for the currently-open column-filter popup, computed
+  // from topRows so excluded values are still visible/uncheckable.
+  const distinctForOpenCol = useMemo(() => {
+    if (!openFilterCol) return [] as Array<{ value: string; count: number }>;
+    const col = COLUMNS.find(c => c.id === openFilterCol);
+    if (!col) return [];
+    const counts = new Map<string, number>();
+    for (const load of topRows) {
+      const display = cellDisplay(col, load);
+      counts.set(display, (counts.get(display) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFilterCol, topRows, ctx]);
+
+  // Close column filter popup on outside click
+  useEffect(() => {
+    if (!openFilterCol) return;
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (filterPopupRef.current?.contains(t)) return;
+      // Allow clicking the same header to toggle close — handled there.
+      const headerEl = (e.target as HTMLElement)?.closest?.('[data-col-header]');
+      if (headerEl?.getAttribute('data-col-header') === openFilterCol) return;
+      setOpenFilterCol(null);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [openFilterCol]);
+
+  const toggleColFilterValue = (colId: string, value: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      const set = new Set(next[colId] ?? []);
+      if (set.has(value)) set.delete(value); else set.add(value);
+      if (set.size === 0) delete next[colId];
+      else next[colId] = set;
+      return next;
+    });
+  };
+
+  const clearColumnFilter = (colId: string) => {
+    setColumnFilters(prev => {
+      if (!prev[colId]) return prev;
+      const next = { ...prev };
+      delete next[colId];
+      return next;
+    });
+  };
+
+  const openColFilter = (col: ColumnDef, headerEl: HTMLElement) => {
+    if (openFilterCol === col.id) { setOpenFilterCol(null); return; }
+    const r = headerEl.getBoundingClientRect();
+    setFilterCoords({ top: r.bottom + 4, left: r.left });
+    setColFilterSearch('');
+    setOpenFilterCol(col.id);
+  };
 
   // ── Export helpers ──────────────────────────────────────────────────────────
 
@@ -339,44 +512,41 @@ export default function LoadsReport() {
     URL.revokeObjectURL(url);
   };
 
-  const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  const labelStyle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: '0.05em', color: 'var(--gc-text-3)',
+  };
+
   return (
-    <div style={{ marginTop: 24, background: 'var(--gc-surface)', borderRadius: 12, border: '1px solid var(--gc-border)', overflow: 'hidden' }}>
-      <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--gc-border-light)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Filter size={14} style={{ color: 'var(--gc-text-3)' }} />
-          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)' }}>Loads Report</span>
-          <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>
-            Pick filters → run → export
-          </span>
+    <div style={{ marginTop: 32, marginBottom: 16, background: 'var(--gc-surface)', borderRadius: 14, border: '1px solid var(--gc-border)' }}>
+      <div style={{ padding: '20px 28px', borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: '#e8f0fe', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Filter size={16} style={{ color: '#1a73e8' }} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--gc-text-1)' }}>Custom Loads Report</div>
+            <div style={{ fontSize: 13, color: 'var(--gc-text-3)', marginTop: 2 }}>
+              Filter loads by customer, driver, asset, and date range — then export the columns you need.
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Filter row */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, padding: '14px 20px', alignItems: 'flex-end', background: 'var(--gc-bg)' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)' }}>From</label>
-          <input
-            type="date"
-            value={from}
-            onChange={e => setFrom(e.target.value)}
-            style={{ fontSize: 13, padding: '7px 10px', borderRadius: 8, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
-          />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, padding: '20px 28px', alignItems: 'flex-end', background: 'var(--gc-bg)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={labelStyle}>From</label>
+          <DatePicker value={from} onChange={setFrom} headerColor="#1a73e8" />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)' }}>To</label>
-          <input
-            type="date"
-            value={to}
-            onChange={e => setTo(e.target.value)}
-            style={{ fontSize: 13, padding: '7px 10px', borderRadius: 8, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
-          />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={labelStyle}>To</label>
+          <DatePicker value={to} onChange={setTo} headerColor="#1a73e8" min={from} />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)' }}>Customer</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={labelStyle}>Customer</label>
           <MultiSelect
             label="customers"
             options={customers}
@@ -384,11 +554,12 @@ export default function LoadsReport() {
             optionLabel={c => c.name}
             selected={selectedCustomers}
             onChange={setSelectedCustomers}
-            width={220}
+            width={240}
+            icon={<Users size={13} style={{ color: 'var(--gc-text-3)' }} />}
           />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)' }}>Driver</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={labelStyle}>Driver</label>
           <MultiSelect
             label="drivers"
             options={driverOptions}
@@ -396,11 +567,12 @@ export default function LoadsReport() {
             optionLabel={d => d.name}
             selected={selectedDrivers}
             onChange={setSelectedDrivers}
-            width={200}
+            width={220}
+            icon={<User size={13} style={{ color: 'var(--gc-text-3)' }} />}
           />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <label style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)' }}>Asset</label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={labelStyle}>Asset</label>
           <MultiSelect
             label="assets"
             options={assets.filter(a => !a.hidden)}
@@ -408,7 +580,8 @@ export default function LoadsReport() {
             optionLabel={a => a.unit ? `${a.name} #${a.unit}` : a.name}
             selected={selectedAssets}
             onChange={setSelectedAssets}
-            width={200}
+            width={220}
+            icon={<Truck size={13} style={{ color: 'var(--gc-text-3)' }} />}
           />
         </div>
         <button
@@ -416,13 +589,14 @@ export default function LoadsReport() {
           onClick={run}
           disabled={loading}
           style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            fontSize: 13, fontWeight: 700, padding: '8px 16px', borderRadius: 8,
+            display: 'flex', alignItems: 'center', gap: 7,
+            fontSize: 14, fontWeight: 700, padding: '10px 20px', borderRadius: 8,
             border: 'none', background: '#1a73e8', color: '#fff', cursor: loading ? 'default' : 'pointer',
             opacity: loading ? 0.6 : 1,
+            boxShadow: '0 1px 2px rgba(26,115,232,0.25)',
           }}
         >
-          {loading ? <Loader2 size={13} className="animate-spin" /> : <Filter size={13} />}
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <Filter size={14} />}
           Run Report
         </button>
       </div>
@@ -435,7 +609,7 @@ export default function LoadsReport() {
       )}
 
       {/* Results */}
-      {loads !== null && !loading && (
+      {loads !== null && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px', borderTop: '1px solid var(--gc-border-light)' }}>
             <div style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>
@@ -541,48 +715,132 @@ export default function LoadsReport() {
               <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)' }}>
-                    {visibleColumns.map(col => (
-                      <th
-                        key={col.id}
-                        style={{
-                          textAlign: col.align === 'right' ? 'right' : 'left',
-                          padding: '10px 12px', fontWeight: 700, fontSize: 10,
-                          textTransform: 'uppercase', letterSpacing: '0.04em',
-                          color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {col.label}
-                      </th>
-                    ))}
+                    {visibleColumns.map(col => {
+                      const isFiltered = !!columnFilters[col.id]?.size;
+                      const isOpen = openFilterCol === col.id;
+                      const sortDir = sortKey?.col === col.id ? sortKey.dir : null;
+                      return (
+                        <th
+                          key={col.id}
+                          data-col-header={col.id}
+                          onClick={() => cycleSort(col.id)}
+                          title={`Click to sort${isFiltered ? ' · filter active' : ''}`}
+                          style={{
+                            textAlign: col.align === 'right' ? 'right' : 'left',
+                            padding: '10px 12px', fontWeight: 700, fontSize: 10,
+                            textTransform: 'uppercase', letterSpacing: '0.04em',
+                            color: isFiltered ? '#1a73e8' : 'var(--gc-text-3)',
+                            borderBottom: '1px solid var(--gc-border-light)',
+                            background: isOpen ? 'var(--gc-hover)' : 'transparent',
+                            whiteSpace: 'nowrap', cursor: 'pointer',
+                            userSelect: 'none',
+                            transition: 'background 100ms, color 100ms',
+                          }}
+                        >
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: col.align === 'right' ? 'flex-end' : 'flex-start' }}>
+                            {col.label}
+                            {sortDir && (
+                              sortDir === 'asc'
+                                ? <ChevronUp size={11} style={{ color: '#1a73e8' }} />
+                                : <ChevronDown size={11} style={{ color: '#1a73e8' }} />
+                            )}
+                            <button
+                              type="button"
+                              data-filter-trigger
+                              onClick={e => {
+                                e.stopPropagation();
+                                const th = (e.currentTarget as HTMLElement).closest('th');
+                                if (th instanceof HTMLElement) openColFilter(col, th);
+                              }}
+                              title="Filter values"
+                              style={{
+                                display: 'inline-flex', alignItems: 'center',
+                                padding: 2, borderRadius: 3,
+                                border: 'none', background: 'transparent',
+                                cursor: 'pointer', color: isFiltered ? '#1a73e8' : 'var(--gc-text-3)',
+                                opacity: isFiltered ? 1 : 0.5,
+                              }}
+                              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(26,115,232,0.12)'; e.currentTarget.style.opacity = '1'; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.opacity = isFiltered ? '1' : '0.5'; }}
+                            >
+                              <Filter size={10} />
+                            </button>
+                          </span>
+                        </th>
+                      );
+                    })}
+                    <th style={{
+                      padding: '10px 12px', fontSize: 10, fontWeight: 700,
+                      textTransform: 'uppercase', letterSpacing: '0.04em',
+                      color: 'var(--gc-text-3)', textAlign: 'right',
+                      borderBottom: '1px solid var(--gc-border-light)',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      View
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(load => (
-                    <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                      {visibleColumns.map(col => {
-                        const v = col.get(load, ctx);
-                        const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials';
-                        const display = (typeof v === 'number' && isMoney && v > 0)
-                          ? fmt$(v)
-                          : (typeof v === 'number' ? v.toLocaleString() : v);
-                        return (
-                          <td
-                            key={col.id}
+                  {sortedRows.map(load => {
+                    const customer = customers.find(c => c.id === load.customerId);
+                    return (
+                      <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                        {visibleColumns.map(col => {
+                          const display = cellDisplay(col, load);
+                          let inner: React.ReactNode = display || <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+
+                          if (col.id === 'loadNum' && load.loadNum) {
+                            inner = <CopyChip value={load.loadNum} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-1)' }} />;
+                          } else if (col.id === 'customer' && customer) {
+                            inner = (
+                              <button
+                                type="button"
+                                onClick={e => { e.stopPropagation(); setBrokerProfileId(customer.id); }}
+                                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
+                                onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
+                                onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                              >
+                                {customer.name}
+                              </button>
+                            );
+                          }
+
+                          return (
+                            <td
+                              key={col.id}
+                              style={{
+                                padding: '10px 12px',
+                                textAlign: col.align === 'right' ? 'right' : 'left',
+                                color: 'var(--gc-text-1)',
+                                maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              }}
+                              title={display}
+                            >
+                              {inner}
+                            </td>
+                          );
+                        })}
+                        <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(load.id)}
+                            title="Open load"
                             style={{
-                              padding: '10px 12px',
-                              textAlign: col.align === 'right' ? 'right' : 'left',
-                              color: 'var(--gc-text-1)',
-                              maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              display: 'inline-flex', alignItems: 'center', gap: 4,
+                              fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 5,
+                              border: '1px solid var(--gc-border)', background: 'transparent',
+                              color: 'var(--gc-text-2)', cursor: 'pointer',
                             }}
-                            title={String(v)}
+                            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
                           >
-                            {display || <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+                            <Eye size={11} />
+                            View
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -590,10 +848,144 @@ export default function LoadsReport() {
         </>
       )}
 
-      {/* Initial empty hint */}
-      {loads === null && !loading && !error && (
-        <div style={{ padding: '40px 20px', textAlign: 'center', fontSize: 13, color: 'var(--gc-text-3)' }}>
-          Choose filters above and click <strong style={{ color: 'var(--gc-text-2)' }}>Run Report</strong> to load matching loads.
+      {/* Customer profile modal — opened from a customer-cell click */}
+      {brokerProfileId && (
+        <BrokerProfileModal
+          initialBrokerId={brokerProfileId}
+          onClose={() => setBrokerProfileId(null)}
+        />
+      )}
+
+      {/* Column-filter popup (portal) */}
+      {openFilterCol && filterCoords && typeof document !== 'undefined' && createPortal(
+        (() => {
+          const colDef = COLUMNS.find(c => c.id === openFilterCol);
+          if (!colDef) return null;
+          const excluded = columnFilters[openFilterCol] ?? new Set<string>();
+          const search = colFilterSearch.toLowerCase();
+          const items = search
+            ? distinctForOpenCol.filter(d => d.value.toLowerCase().includes(search))
+            : distinctForOpenCol;
+          return (
+            <div
+              ref={filterPopupRef}
+              style={{
+                position: 'fixed', top: filterCoords.top, left: filterCoords.left,
+                zIndex: 9999, width: 260, maxHeight: 380,
+                background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+                borderRadius: 8, boxShadow: 'var(--shadow-3)',
+                display: 'flex', flexDirection: 'column',
+              }}
+            >
+              <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--gc-border-light)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--gc-text-3)', marginBottom: 6 }}>
+                  Filter · {colDef.label}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', background: 'var(--gc-bg)', borderRadius: 6 }}>
+                  <Search size={12} style={{ color: 'var(--gc-text-3)' }} />
+                  <input
+                    autoFocus
+                    value={colFilterSearch}
+                    onChange={e => setColFilterSearch(e.target.value)}
+                    placeholder="Search values…"
+                    style={{ flex: 1, fontSize: 12, border: 'none', background: 'transparent', outline: 'none', color: 'var(--gc-text-1)' }}
+                  />
+                </div>
+              </div>
+              <div style={{ overflowY: 'auto', flex: 1 }}>
+                {items.length === 0 ? (
+                  <div style={{ padding: 12, fontSize: 12, color: 'var(--gc-text-3)', textAlign: 'center' }}>No values</div>
+                ) : items.map(({ value, count }) => {
+                  const checked = !excluded.has(value);
+                  const display = value === '' ? <em style={{ color: 'var(--gc-text-3)' }}>(empty)</em> : value;
+                  return (
+                    <label key={value} style={{
+                      display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
+                      fontSize: 13, cursor: 'pointer', color: 'var(--gc-text-1)',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleColFilterValue(openFilterCol, value)}
+                      />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                        {display}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>{count}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid var(--gc-border-light)' }}>
+                <button
+                  type="button"
+                  onClick={() => clearColumnFilter(openFilterCol)}
+                  disabled={excluded.size === 0}
+                  style={{
+                    flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 8px', borderRadius: 5,
+                    border: '1px solid var(--gc-border)', background: 'transparent',
+                    color: excluded.size === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
+                    cursor: excluded.size === 0 ? 'default' : 'pointer',
+                  }}
+                >
+                  Show all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Hide all currently visible values (matching the search)
+                    setColumnFilters(prev => {
+                      const next = { ...prev };
+                      const set = new Set(next[openFilterCol] ?? []);
+                      for (const it of items) set.add(it.value);
+                      next[openFilterCol] = set;
+                      return next;
+                    });
+                  }}
+                  style={{
+                    flex: 1, fontSize: 11, fontWeight: 600, padding: '6px 8px', borderRadius: 5,
+                    border: '1px solid var(--gc-border)', background: 'transparent',
+                    color: 'var(--gc-text-2)', cursor: 'pointer',
+                  }}
+                >
+                  Hide all{search ? ' shown' : ''}
+                </button>
+              </div>
+            </div>
+          );
+        })(),
+        document.body,
+      )}
+
+      {/* Initial empty state — illustrative placeholder */}
+      {loads === null && !error && (
+        <div style={{ padding: '60px 28px 72px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 18 }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: '50%',
+            background: 'linear-gradient(135deg, #e8f0fe 0%, #c2dafe 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <FileSpreadsheet size={32} style={{ color: '#1a73e8' }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+              No report yet
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--gc-text-2)', marginTop: 6, maxWidth: 460 }}>
+              Set a date range and pick any customer, driver, or asset filters above. The matching loads show up here, ready to export.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 24, marginTop: 8, fontSize: 12, color: 'var(--gc-text-3)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Calendar size={13} /> Any date range
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Download size={13} /> CSV / Excel export
+            </span>
+          </div>
         </div>
       )}
     </div>
