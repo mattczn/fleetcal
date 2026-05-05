@@ -84,9 +84,31 @@ export default function RealtimeSync() {
       )
       .subscribe();
 
+    // Loads table — load-level fields (accessorials, broker, load_price,
+    // notes, internal_note, customer_id, …) live here and don't bump the
+    // events row, so we need a separate channel. On change we refetch
+    // every event in the local cache tied to that load_id.
+    const loadsChannel = supabase
+      .channel(`org-${orgId}-loads`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'loads', filter: `org_id=eq.${orgId}` },
+        (payload) => {
+          const row = (payload.new ?? payload.old) as { id?: string };
+          if (!row?.id) return;
+          const loadId = row.id;
+          const events = useCalendarStore.getState().events;
+          for (const ev of events) {
+            if (ev.loadId === loadId) void refetchEvent(ev.id);
+          }
+        },
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
       supabase.removeChannel(stopsChannel);
+      supabase.removeChannel(loadsChannel);
     };
   }, [orgId, updateFromRemote, removeFromRemote]);
 
