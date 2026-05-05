@@ -117,6 +117,15 @@ export interface GetLoadResponse {
   loads: Load[]; // 1 entry for single-event load, 2 for relay
 }
 
+// ── GET /v1/events/:id (single event by event id, with its load + stops) ─
+//
+// The mobile dispatch app navigates by event id (its URL param). This
+// returns the same shape as GetLoadResponse: 1 entry for a single load,
+// 2 entries when the event is part of a relay (the partner is included
+// via the shared loads.id grouping).
+
+export type GetEventResponse = GetLoadResponse;
+
 // ── PATCH /v1/loads/:id (update load-level fields) ──────────────────────
 
 export interface UpdateLoadRequest {

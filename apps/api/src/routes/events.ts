@@ -25,6 +25,7 @@ import {
   type ReplaceStopsRequest,
   type ReplaceStopsResponse,
   type GetAuditLogResponse,
+  type GetEventResponse,
   type ApiErrorResponse,
   type Load,
   type LoadAuditEntry,
@@ -139,6 +140,45 @@ function badRequest(c: AnyHonoContext, errors: string[]) {
   const res: ApiErrorResponse = { error: "validation_failed", errors };
   return c.json(res, 400);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /v1/events/:id — fetch a single event with its load + stops (relay-aware)
+// ─────────────────────────────────────────────────────────────────────────
+
+events.get("/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+
+  const joined = await fetchEventJoined(id, orgId);
+  if (!joined) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  // For relay events, also pull the partner leg (events sharing the same load_id).
+  if (joined.loadId && joined.relayRole) {
+    const { data: partnerRowsRaw } = await supabase
+      .from("events")
+      .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
+      .eq("load_id", joined.loadId)
+      .eq("org_id", orgId)
+      .neq("id", id)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (partnerRowsRaw) {
+      const pRow = partnerRowsRaw as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null; id: string };
+      const pLoadRow = Array.isArray(pRow.load) ? (pRow.load[0] ?? null) : (pRow.load ?? null);
+      const partnerJoined = joinEventLoadToApp(pRow, pLoadRow);
+      const { data: pStopsRaw } = await supabase
+        .from("stops")
+        .select(STOP_COLS)
+        .eq("event_id", pRow.id);
+      partnerJoined.stops = ((pStopsRaw ?? []) as unknown as StopRow[])
+        .map(rowToStop)
+        .sort((a, b) => a.sequence - b.sequence);
+      return c.json({ loads: [joined, partnerJoined] } satisfies GetEventResponse);
+    }
+  }
+
+  return c.json({ loads: [joined] } satisfies GetEventResponse);
+});
 
 // ─────────────────────────────────────────────────────────────────────────
 // POST /v1/events — create a non-revenue event

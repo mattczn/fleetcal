@@ -44,6 +44,7 @@ import type {
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
+  GetEventResponse,
 } from "@fleetcal/types";
 
 import { env } from "./env";
@@ -127,6 +128,9 @@ class RailwayClient {
 
   // ── Events (non-revenue + load-id-agnostic ops) ──────────────────────
   createEvent(req: CreateEventRequest)            { return this.req<CreateEventResponse>("POST",     "/v1/events", req); }
+  /** Fetch a single event by id, with its load + stops. Returns 1 entry
+   *  for a single load, 2 entries for a relay (this leg + partner). */
+  getEvent(id: string)                            { return this.req<GetEventResponse>("GET",        `/v1/events/${id}`); }
   updateEvent(id: string, body: UpdateEventByIdRequest) {
     return this.req<UpdateEventByIdResponse>("PATCH",   `/v1/events/${id}`, body);
   }

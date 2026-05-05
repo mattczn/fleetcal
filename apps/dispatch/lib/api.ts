@@ -1,5 +1,8 @@
 import { supabase } from "./supabase";
-import type { Accessorial, Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType } from "./types";
+import { railway } from "./railway";
+import type { Accessorial, Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer as ApiCustomer } from "./types";
+// Note: writes still hit Supabase directly. Reads have been ported to Railway —
+// see Phase 2 of the dispatch migration.
 
 interface DbAssetRow {
   id:                 number;
@@ -110,58 +113,47 @@ function parseAccessorials(raw: unknown): Accessorial[] | undefined {
 /**
  * Returns the preferred driver_id keyed by asset_id for this org.
  * (Schema enforces one preferred driver per asset.)
+ *
+ * `orgId` is unused — kept in the signature for caller compatibility; the
+ * Railway endpoint reads it from the JWT.
  */
-export async function fetchDriverAssetPrefs(orgId: string): Promise<Map<number, number>> {
-  const { data, error } = await supabase
-    .from("driver_asset_prefs")
-    .select("asset_id,driver_id")
-    .eq("org_id", orgId);
-  if (error) { console.error("fetchDriverAssetPrefs:", error); return new Map(); }
-  const map = new Map<number, number>();
-  for (const row of (data ?? []) as { asset_id: number; driver_id: number }[]) {
-    map.set(row.asset_id, row.driver_id);
+export async function fetchDriverAssetPrefs(_orgId: string): Promise<Map<number, number>> {
+  try {
+    const { prefs } = await railway.listDriverAssetPrefs();
+    const map = new Map<number, number>();
+    for (const p of prefs) map.set(p.assetId, p.driverId);
+    return map;
+  } catch (err) {
+    console.error("fetchDriverAssetPrefs:", err);
+    return new Map();
   }
-  return map;
 }
 
-export async function fetchDrivers(orgId: string): Promise<Driver[]> {
-  const { data, error } = await supabase
-    .from("drivers")
-    .select("id,name,phone")
-    .eq("org_id", orgId)
-    .order("name", { ascending: true });
-  if (error) { console.error("fetchDrivers:", error); return []; }
-  return ((data ?? []) as { id: number; name: string; phone: string | null }[]).map((d) => ({
-    id:    d.id,
-    name:  d.name,
-    phone: d.phone ?? undefined,
-  }));
+export async function fetchDrivers(_orgId: string): Promise<Driver[]> {
+  try {
+    const { drivers } = await railway.listDrivers();
+    return drivers;
+  } catch (err) {
+    console.error("fetchDrivers:", err);
+    return [];
+  }
 }
 
-export interface Customer {
-  id:           string;
-  name:         string;
-  aliases:      string[];
-  shortName?:   string;
-  contactName?: string;
-  contactPhone?: string;
-}
+/**
+ * Backwards-compat type — historically the dispatch app exported a slimmer
+ * Customer shape. The shared @fleetcal/types Customer is a superset, so we
+ * just re-export it under the same name.
+ */
+export type Customer = ApiCustomer;
 
-export async function fetchCustomers(orgId: string): Promise<Customer[]> {
-  const { data, error } = await supabase
-    .from("customers")
-    .select("id,name,aliases,short_name,contact_name,contact_phone")
-    .eq("org_id", orgId)
-    .order("name", { ascending: true });
-  if (error) { console.error("fetchCustomers:", error); return []; }
-  return (data ?? []).map((c) => ({
-    id:           c.id as string,
-    name:         c.name as string,
-    aliases:      (c.aliases as string[] | null) ?? [],
-    shortName:    (c.short_name as string | null) ?? undefined,
-    contactName:  (c.contact_name as string | null) ?? undefined,
-    contactPhone: (c.contact_phone as string | null) ?? undefined,
-  }));
+export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
+  try {
+    const { customers } = await railway.listCustomers();
+    return customers;
+  } catch (err) {
+    console.error("fetchCustomers:", err);
+    return [];
+  }
 }
 
 /**
@@ -344,41 +336,34 @@ export async function purgeLoad(id: string, orgId: string): Promise<void> {
 /**
  * Recently deleted loads for this org, newest first. Filters to last `days` days.
  */
-export async function fetchDeletedLoads(orgId: string, days = 30): Promise<DeletedLoadRow[]> {
-  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from("events")
-    .select("id,title,load_num,broker,start,end,asset_id,driver_name,deleted_at")
-    .eq("org_id", orgId)
-    .not("deleted_at", "is", null)
-    .gte("deleted_at", cutoff)
-    .order("deleted_at", { ascending: false })
-    .limit(100);
-  if (error) { console.error("fetchDeletedLoads:", error); return []; }
-  const rows = (data ?? []) as Array<{
-    id: string; title: string; load_num: string | null; broker: string | null;
-    start: string; end: string; asset_id: number; driver_name: string | null;
-    deleted_at: string;
-  }>;
-  if (rows.length === 0) return [];
-  // Resolve asset names in one query.
-  const assetIds = Array.from(new Set(rows.map((r) => r.asset_id)));
-  const ar = await supabase.from("assets").select("id,name,unit").in("id", assetIds).eq("org_id", orgId);
-  const assetMap = new Map<number, string>();
-  for (const a of ((ar.data ?? []) as Array<{ id: number; name: string; unit: string | null }>)) {
-    assetMap.set(a.id, `${a.name}${a.unit ? ` #${a.unit}` : ""}`);
+export async function fetchDeletedLoads(_orgId: string, days = 30): Promise<DeletedLoadRow[]> {
+  try {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().slice(0, 16); // YYYY-MM-DDTHH:mm
+    const { loads } = await railway.listLoads({
+      from:           fmt(cutoff),
+      to:             fmt(new Date()),
+      includeDeleted: "true",
+    });
+    return loads
+      .filter(l => l.deletedAt)
+      .sort((a, b) => (b.deletedAt ?? "") > (a.deletedAt ?? "") ? 1 : -1)
+      .slice(0, 100)
+      .map(l => ({
+        id:         l.id,
+        title:      l.title,
+        loadNum:    l.loadNum,
+        broker:     l.broker,
+        start:      l.start,
+        end:        l.end,
+        assetName:  l.assetName,
+        driverName: l.driverName,
+        deletedAt:  l.deletedAt!,
+      }));
+  } catch (err) {
+    console.error("fetchDeletedLoads:", err);
+    return [];
   }
-  return rows.map((r) => ({
-    id:         r.id,
-    title:      r.title,
-    loadNum:    r.load_num ?? undefined,
-    broker:     r.broker ?? undefined,
-    start:      r.start,
-    end:        r.end,
-    assetName:  assetMap.get(r.asset_id),
-    driverName: r.driver_name ?? undefined,
-    deletedAt:  r.deleted_at,
-  }));
 }
 
 /**
@@ -504,24 +489,14 @@ export interface SavedLocation {
   timezone?: string;
 }
 
-export async function fetchSavedLocations(orgId: string): Promise<SavedLocation[]> {
-  const { data, error } = await supabase
-    .from("saved_locations")
-    .select("id,name,address,lat,lng,timezone")
-    .eq("org_id", orgId)
-    .order("name", { ascending: true });
-  if (error) { console.error("fetchSavedLocations:", error); return []; }
-  return ((data ?? []) as Array<{
-    id: string; name: string; address: string | null;
-    lat: number | null; lng: number | null; timezone: string | null;
-  }>).map((r) => ({
-    id:       r.id,
-    name:     r.name,
-    address:  r.address ?? undefined,
-    lat:      r.lat ?? undefined,
-    lng:      r.lng ?? undefined,
-    timezone: r.timezone ?? undefined,
-  }));
+export async function fetchSavedLocations(_orgId: string): Promise<SavedLocation[]> {
+  try {
+    const { locations } = await railway.listSavedLocations();
+    return locations;
+  } catch (err) {
+    console.error("fetchSavedLocations:", err);
+    return [];
+  }
 }
 
 export interface PlaceSuggestion {
@@ -577,352 +552,102 @@ export async function placeDetails(
   }
 }
 
-export async function fetchAssets(orgId: string): Promise<Asset[]> {
-  const { data, error } = await supabase
-    .from("assets")
-    .select("id,name,type,unit,color,hidden,sort_order,motive_vehicle_id")
-    .eq("org_id", orgId)
-    .order("sort_order", { ascending: true });
-  if (error) {
-    console.error("fetchAssets:", error);
+export async function fetchAssets(_orgId: string): Promise<Asset[]> {
+  try {
+    const { assets } = await railway.listAssets();
+    return assets;
+  } catch (err) {
+    console.error("fetchAssets:", err);
     return [];
   }
-  return ((data ?? []) as DbAssetRow[]).map((r) => ({
-    id:              r.id,
-    name:            r.name,
-    type:            r.type,
-    unit:            r.unit ?? undefined,
-    color:           r.color,
-    hidden:          !!r.hidden,
-    sortOrder:       r.sort_order,
-    motiveVehicleId: r.motive_vehicle_id ?? undefined,
-  }));
 }
 
-export async function fetchLoadsForDay(orgId: string, dateKey: string): Promise<Load[]> {
-  const dayStart = `${dateKey}T00:00`;
-  const dayEnd   = `${dateKey}T23:59`;
-
-  const { data: events, error } = await supabase
-    .from("events")
-    .select(EVENT_LIST_COLS)
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .lte("start", dayEnd)
-    .gte("end", dayStart)
-    .order("start", { ascending: true });
-  if (error) {
-    console.error("fetchLoadsForDay:", error);
+/**
+ * Loads whose start/end overlaps the given local date. The Railway endpoint
+ * uses naive start/end strings so YYYY-MM-DDTHH:mm bounds match the same
+ * semantics as the previous direct query.
+ */
+export async function fetchLoadsForDay(_orgId: string, dateKey: string): Promise<Load[]> {
+  try {
+    const { loads } = await railway.listLoads({
+      from: `${dateKey}T00:00`,
+      to:   `${dateKey}T23:59`,
+    });
+    // listLoads already sorts and excludes soft-deleted by default.
+    return loads;
+  } catch (err) {
+    console.error("fetchLoadsForDay:", err);
     return [];
   }
-
-  const rows = (events ?? []) as DbEventRow[];
-  if (rows.length === 0) return [];
-
-  const eventIds = rows.map((r) => r.id);
-  const assetIds = Array.from(new Set(rows.map((r) => r.asset_id)));
-
-  const [stopsRes, assetsRes] = await Promise.all([
-    supabase.from("stops").select(STOP_COLS).in("event_id", eventIds),
-    supabase.from("assets").select("id,name,unit").in("id", assetIds),
-  ]);
-
-  const stopsByEvent = new Map<string, Stop[]>();
-  for (const s of (stopsRes.data ?? []) as DbStopRow[]) {
-    const arr = stopsByEvent.get(s.event_id) ?? [];
-    arr.push(rowToStop(s));
-    stopsByEvent.set(s.event_id, arr);
-  }
-
-  const assetsById = new Map<number, { name: string; unit: string | null }>();
-  for (const a of (assetsRes.data ?? []) as { id: number; name: string; unit: string | null }[]) {
-    assetsById.set(a.id, a);
-  }
-
-  return rows.map((r): Load => {
-    const asset = assetsById.get(r.asset_id);
-    return {
-      id:              r.id,
-      internalLoadId:  r.internal_load_id ?? undefined,
-      loadNum:         r.load_num ?? undefined,
-      title:           r.title,
-      start:           r.start,
-      end:             r.end,
-      status:          (r.status as LoadStatus) ?? "scheduled",
-      broker:          r.broker        ?? undefined,
-      trailerType:  r.trailer_type  ?? undefined,
-      driverPay:    r.driver_pay    ?? undefined,
-      notes:        r.notes         ?? undefined,
-      specialInstructions: r.special_instructions ?? undefined,
-      assetId:      r.asset_id,
-      assetName:    asset ? `${asset.name}${asset.unit ? ` #${asset.unit}` : ""}` : undefined,
-      driverId:     r.driver_id ?? undefined,
-      driverName:   r.driver_name ?? undefined,
-      stops:        (stopsByEvent.get(r.id) ?? []).sort((a, b) => a.sequence - b.sequence),
-    };
-  });
 }
 
 /**
  * For each asset, return the load it's currently working — the most recent
  * event with status in (dispatched, en_route, picked_up). Keyed by asset_id.
+ *
+ * The Railway endpoint doesn't expose status filtering directly; we fetch a
+ * recent window and filter client-side. Mobile dispatchers usually look at a
+ * day's worth of activity at most, so a 7-day window is plenty.
  */
-export async function fetchActiveLoadsByAsset(orgId: string): Promise<Map<number, Load>> {
-  const { data: events, error } = await supabase
-    .from("events")
-    .select(EVENT_LIST_COLS)
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .in("status", ["dispatched", "en_route", "picked_up"])
-    .order("start", { ascending: false });
-  if (error) {
-    console.error("fetchActiveLoadsByAsset:", error);
+export async function fetchActiveLoadsByAsset(_orgId: string): Promise<Map<number, Load>> {
+  try {
+    const today = new Date();
+    const sevenAgo = new Date(today); sevenAgo.setDate(today.getDate() - 7);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T00:00`;
+    const { loads } = await railway.listLoads({ from: fmt(sevenAgo), to: `${fmt(today).slice(0, 10)}T23:59` });
+    const active = loads.filter(l => l.status === "dispatched" || l.status === "en_route" || l.status === "picked_up");
+    // Sort newest first, then take the most recent per asset.
+    active.sort((a, b) => (b.start > a.start ? 1 : -1));
+    const map = new Map<number, Load>();
+    for (const l of active) {
+      if (!map.has(l.assetId)) map.set(l.assetId, l);
+    }
+    return map;
+  } catch (err) {
+    console.error("fetchActiveLoadsByAsset:", err);
     return new Map();
   }
-  const rows = (events ?? []) as DbEventRow[];
-  if (rows.length === 0) return new Map();
-
-  // Pick the latest in-progress event per asset (rows already sorted by start desc)
-  const seen = new Set<number>();
-  const picked: DbEventRow[] = [];
-  for (const r of rows) {
-    if (seen.has(r.asset_id)) continue;
-    seen.add(r.asset_id);
-    picked.push(r);
-  }
-
-  const eventIds = picked.map((r) => r.id);
-  const assetIds = Array.from(seen);
-  const [stopsRes, assetsRes] = await Promise.all([
-    supabase.from("stops").select(STOP_COLS).in("event_id", eventIds),
-    supabase.from("assets").select("id,name,unit").in("id", assetIds),
-  ]);
-  const stopsByEvent = new Map<string, Stop[]>();
-  for (const s of (stopsRes.data ?? []) as DbStopRow[]) {
-    const arr = stopsByEvent.get(s.event_id) ?? [];
-    arr.push(rowToStop(s));
-    stopsByEvent.set(s.event_id, arr);
-  }
-  const assetsById = new Map<number, { name: string; unit: string | null }>();
-  for (const a of (assetsRes.data ?? []) as { id: number; name: string; unit: string | null }[]) {
-    assetsById.set(a.id, a);
-  }
-
-  const map = new Map<number, Load>();
-  for (const r of picked) {
-    const asset = assetsById.get(r.asset_id);
-    map.set(r.asset_id, {
-      id:              r.id,
-      internalLoadId:  r.internal_load_id ?? undefined,
-      loadNum:         r.load_num ?? undefined,
-      title:        r.title,
-      start:        r.start,
-      end:          r.end,
-      status:       (r.status as LoadStatus) ?? "scheduled",
-      broker:       r.broker        ?? undefined,
-      trailerType:  r.trailer_type  ?? undefined,
-      driverPay:    r.driver_pay    ?? undefined,
-      notes:        r.notes         ?? undefined,
-      specialInstructions: r.special_instructions ?? undefined,
-      assetId:      r.asset_id,
-      assetName:    asset ? `${asset.name}${asset.unit ? ` #${asset.unit}` : ""}` : undefined,
-      driverId:     r.driver_id ?? undefined,
-      driverName:   r.driver_name ?? undefined,
-      stops:        (stopsByEvent.get(r.id) ?? []).sort((a, b) => a.sequence - b.sequence),
-    });
-  }
-  return map;
 }
 
 /**
  * Search loads across all dates by load #, title, broker, or driver name.
- * Returns recent matches first (newest start date). Capped to 50 results.
+ * Returns recent matches first (newest start date). Capped server-side at 50.
  */
-export async function searchLoads(orgId: string, query: string): Promise<Load[]> {
+export async function searchLoads(_orgId: string, query: string): Promise<Load[]> {
   const q = query.trim();
   if (!q) return [];
-  // Escape postgrest special chars in the pattern.
-  const safe = q.replace(/[%,()]/g, "\\$&");
-  const pattern = `%${safe}%`;
-
-  const numericId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
-  const orFilter = numericId !== null
-    ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},title.ilike.${pattern},broker.ilike.${pattern},driver_name.ilike.${pattern}`
-    : `load_num.ilike.${pattern},title.ilike.${pattern},broker.ilike.${pattern},driver_name.ilike.${pattern}`;
-
-  const { data: events, error } = await supabase
-    .from("events")
-    .select(EVENT_LIST_COLS)
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .or(orFilter)
-    .order("start", { ascending: false })
-    .limit(50);
-  if (error) {
-    console.error("searchLoads:", error);
+  try {
+    const { loads } = await railway.searchLoads(q, 50);
+    return loads;
+  } catch (err) {
+    console.error("searchLoads:", err);
     return [];
   }
-  const rows = (events ?? []) as DbEventRow[];
-  if (rows.length === 0) return [];
+}
 
-  const eventIds = rows.map((r) => r.id);
-  const assetIds = Array.from(new Set(rows.map((r) => r.asset_id)));
+export async function fetchLoad(id: string, _orgId: string): Promise<Load | null> {
+  try {
+    const { loads } = await railway.getEvent(id);
+    if (loads.length === 0) return null;
+    const self = loads.find(l => l.id === id) ?? loads[0];
+    const partner = loads.find(l => l.id !== self.id);
 
-  const [stopsRes, assetsRes] = await Promise.all([
-    supabase.from("stops").select(STOP_COLS).in("event_id", eventIds),
-    supabase.from("assets").select("id,name,unit").in("id", assetIds),
-  ]);
+    if (!partner) return self;
 
-  const stopsByEvent = new Map<string, Stop[]>();
-  for (const s of (stopsRes.data ?? []) as DbStopRow[]) {
-    const arr = stopsByEvent.get(s.event_id) ?? [];
-    arr.push(rowToStop(s));
-    stopsByEvent.set(s.event_id, arr);
-  }
-
-  const assetsById = new Map<number, { name: string; unit: string | null }>();
-  for (const a of (assetsRes.data ?? []) as { id: number; name: string; unit: string | null }[]) {
-    assetsById.set(a.id, a);
-  }
-
-  return rows.map((r): Load => {
-    const asset = assetsById.get(r.asset_id);
+    // Pull the partner-derived fields onto the returned Load so existing UI
+    // code (that reads load.partnerStops, load.partnerDriverName, etc.) keeps
+    // working without changes.
     return {
-      id:              r.id,
-      internalLoadId:  r.internal_load_id ?? undefined,
-      loadNum:         r.load_num ?? undefined,
-      title:           r.title,
-      start:           r.start,
-      end:             r.end,
-      status:          (r.status as LoadStatus) ?? "scheduled",
-      broker:          r.broker        ?? undefined,
-      trailerType:  r.trailer_type  ?? undefined,
-      driverPay:    r.driver_pay    ?? undefined,
-      notes:        r.notes         ?? undefined,
-      specialInstructions: r.special_instructions ?? undefined,
-      assetId:      r.asset_id,
-      assetName:    asset ? `${asset.name}${asset.unit ? ` #${asset.unit}` : ""}` : undefined,
-      driverId:     r.driver_id ?? undefined,
-      driverName:   r.driver_name ?? undefined,
-      stops:        (stopsByEvent.get(r.id) ?? []).sort((a, b) => a.sequence - b.sequence),
-    };
-  });
-}
-
-interface DbTrailerRow {
-  id:             number;
-  name:           string;
-  trailer_number: string | null;
-}
-
-export async function fetchLoad(id: string, orgId: string): Promise<Load | null> {
-  const { data, error } = await supabase
-    .from("events")
-    .select(EVENT_FULL_COLS)
-    .eq("id", id)
-    .eq("org_id", orgId)
-    .is("deleted_at", null)
-    .maybeSingle();
-  if (error || !data) {
-    if (error) console.error("fetchLoad:", error);
+      ...self,
+      partnerEventId:    partner.id,
+      partnerStops:      partner.stops,
+      partnerDriverName: partner.driverName,
+      partnerAssetName:  partner.assetName,
+    } as Load;
+  } catch (err) {
+    console.error("fetchLoad:", err);
     return null;
   }
-  const r = data as DbEventRow;
-
-  const [stopsRes, assetRes, trailerRes, driverRes] = await Promise.all([
-    supabase.from("stops").select(STOP_COLS).eq("event_id", id).eq("org_id", orgId),
-    supabase.from("assets").select("id,name,unit,motive_vehicle_id").eq("id", r.asset_id).maybeSingle(),
-    r.trailer_id != null
-      ? supabase.from("trailers").select("id,name,trailer_number").eq("id", r.trailer_id).maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
-    r.driver_id != null
-      ? supabase.from("drivers").select("id,phone").eq("id", r.driver_id).maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
-  ]);
-
-  const stops: Stop[] = ((stopsRes.data ?? []) as DbStopRow[])
-    .map(rowToStop)
-    .sort((a, b) => a.sequence - b.sequence);
-
-  const asset   = assetRes.data   as { id: number; name: string; unit: string | null; motive_vehicle_id: string | null } | null;
-  const trailer = trailerRes.data as DbTrailerRow | null;
-  const driver  = driverRes.data  as { id: number; phone: string | null } | null;
-
-  // Relay partner — fetch the other event in the same relay_group_id
-  let partnerEventId:    string | undefined;
-  let partnerStops:      Stop[] | undefined;
-  let partnerDriverName: string | undefined;
-  let partnerAssetName:  string | undefined;
-  if (r.relay_group_id) {
-    const { data: partnerRow } = await supabase
-      .from("events")
-      .select("id,asset_id,driver_name")
-      .eq("relay_group_id", r.relay_group_id)
-      .eq("org_id", orgId)
-      .neq("id", r.id)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (partnerRow) {
-      const pr = partnerRow as { id: string; asset_id: number; driver_name: string | null };
-      partnerEventId    = pr.id;
-      partnerDriverName = pr.driver_name ?? undefined;
-      const [pStopsRes, pAssetRes] = await Promise.all([
-        supabase.from("stops").select(STOP_COLS).eq("event_id", pr.id).eq("org_id", orgId),
-        supabase.from("assets").select("id,name,unit").eq("id", pr.asset_id).maybeSingle(),
-      ]);
-      partnerStops = ((pStopsRes.data ?? []) as DbStopRow[])
-        .map(rowToStop)
-        .sort((a, b) => a.sequence - b.sequence);
-      const pAsset = pAssetRes.data as { id: number; name: string; unit: string | null } | null;
-      partnerAssetName = pAsset ? `${pAsset.name}${pAsset.unit ? ` #${pAsset.unit}` : ""}` : undefined;
-    }
-  }
-
-  return {
-    id:              r.id,
-    internalLoadId:  r.internal_load_id ?? undefined,
-    loadNum:         r.load_num ?? undefined,
-    title:           r.title,
-    start:           r.start,
-    end:             r.end,
-    status:          (r.status as LoadStatus) ?? "scheduled",
-
-    driverId:     r.driver_id ?? undefined,
-    driverName:   r.driver_name ?? undefined,
-    driverPhone:  driver?.phone ?? undefined,
-    dispatcher:   r.dispatcher ?? undefined,
-    createdByName: r.created_by_name ?? undefined,
-
-    assetId:          r.asset_id,
-    assetName:        asset ? `${asset.name}${asset.unit ? ` #${asset.unit}` : ""}` : undefined,
-    motiveVehicleId:  asset?.motive_vehicle_id ?? undefined,
-    trailerId:    r.trailer_id ?? undefined,
-    trailerNum:   trailer
-      ? `${trailer.trailer_number ?? trailer.name}`
-      : undefined,
-    trailerType:  r.trailer_type ?? undefined,
-
-    refNums:      parseRefNums(r.ref_nums),
-
-    broker:       r.broker    ?? undefined,
-
-    loadPrice:    r.load_price ?? undefined,
-    driverPay:    r.driver_pay ?? undefined,
-
-    notes:                r.notes                ?? undefined,
-    specialInstructions:  r.special_instructions ?? undefined,
-    accessorials:         parseAccessorials(r.accessorials),
-    rateConPdf:           r.rate_con_pdf         ?? undefined,
-
-    relayGroupId: r.relay_group_id ?? undefined,
-    relayRole:    (r.relay_role as "pickup" | "delivery" | null) ?? undefined,
-    partnerEventId,
-    partnerStops,
-    partnerDriverName,
-    partnerAssetName,
-
-    stops,
-  };
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────────
@@ -947,6 +672,10 @@ interface DbDocRow {
   uploaded_at: string; notes: string | null;
 }
 
+// Documents stays on direct Supabase for now — the API's DocumentSummary
+// shape doesn't expose storagePath, which DocumentsView still needs to
+// build signed URLs via supabase storage. Phase 3 will move this together
+// with getDocumentSignedUrl / getRateConSignedUrl over to the API.
 export async function fetchDocuments(eventId: string, orgId: string): Promise<LoadDocument[]> {
   const { data, error } = await supabase
     .from("load_documents")
@@ -980,19 +709,19 @@ export interface Trailer {
   category:       TrailerCategory;
 }
 
-export async function fetchTrailers(orgId: string): Promise<Trailer[]> {
-  const { data, error } = await supabase
-    .from("trailers")
-    .select("id,name,trailer_number,category,sort_order")
-    .eq("org_id", orgId)
-    .order("sort_order", { ascending: true });
-  if (error) { console.error("fetchTrailers:", error); return []; }
-  return (data ?? []).map((t) => ({
-    id:            t.id as number,
-    name:          t.name as string,
-    trailerNumber: (t.trailer_number as string | null) ?? undefined,
-    category:      t.category as TrailerCategory,
-  }));
+export async function fetchTrailers(_orgId: string): Promise<Trailer[]> {
+  try {
+    const { trailers } = await railway.listTrailers();
+    return trailers.map(t => ({
+      id:            t.id,
+      name:          t.name,
+      trailerNumber: t.trailerNumber,
+      category:      t.category as TrailerCategory,
+    }));
+  } catch (err) {
+    console.error("fetchTrailers:", err);
+    return [];
+  }
 }
 
 export async function updateLoadTrailer(id: string, orgId: string, trailerId: number | null): Promise<void> {
