@@ -12,7 +12,10 @@ import { fetchMotiveLocations, type MotiveLocation } from "@/lib/motive";
 import { ActiveLoadsSheet } from "@/components/ActiveLoadsSheet";
 import { env } from "@/lib/env";
 import { txt } from "@/lib/font";
-import type { Asset, Load, LoadStatus, Stop } from "@/lib/types";
+import {
+  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+} from "@/lib/loadCard";
+import type { Asset, Load, Stop } from "@/lib/types";
 
 interface TruckPin {
   vehicleId: string;
@@ -29,30 +32,6 @@ interface FocusedRoute {
   vehicleId: string | null;
   stops:     { lat: number; lng: number; type: string; sequence: number }[];
 }
-
-const STATUS_TINT: Record<LoadStatus, { bg: string; fg: string }> = {
-  scheduled:  { bg: "#f1f3f4", fg: "#5f6368" },
-  assigned:   { bg: "#ede9fe", fg: "#5b21b6" },
-  dispatched: { bg: "#e8f0fe", fg: "#1558d6" },
-  en_route:   { bg: "#fef3c7", fg: "#92400e" },
-  picked_up:  { bg: "#f3e8fd", fg: "#6b21a8" },
-  delivered:  { bg: "#e6f4ea", fg: "#15803d" },
-  cancelled:  { bg: "#fce8e6", fg: "#b91c1c" },
-  tonu:       { bg: "#fef3c7", fg: "#92400e" },
-  problem:    { bg: "#fef0e6", fg: "#b85c00" },
-};
-
-const STATUS_LABEL: Record<LoadStatus, string> = {
-  scheduled:  "Scheduled",
-  assigned:   "Assigned",
-  dispatched: "Dispatched",
-  en_route:   "En Route",
-  picked_up:  "Picked Up",
-  delivered:  "Delivered",
-  cancelled:  "Cancelled",
-  tonu:       "TONU",
-  problem:    "Problem",
-};
 
 const STOP_COLOR: Record<string, string> = {
   pickup:    "#16a34a",
@@ -601,7 +580,7 @@ export default function MapScreen() {
                     key={l.id}
                     style={{
                       flexDirection: "row", alignItems: "center", gap: 8,
-                      paddingVertical: 8, paddingHorizontal: 10,
+                      paddingVertical: 10, paddingHorizontal: 10,
                       marginBottom: 4,
                       borderRadius: 10,
                       backgroundColor: isFocused ? "#e8f0fe" : "transparent",
@@ -612,24 +591,33 @@ export default function MapScreen() {
                       onPress={() => setFocusedLoadId(l.id)}
                       style={{ flex: 1 }}
                     >
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                        <View style={{
-                          paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
-                          backgroundColor: tint.bg,
-                        }}>
-                          <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
-                            {STATUS_LABEL[l.status]}
-                          </Text>
-                        </View>
-                        <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]} numberOfLines={1}>
-                          {l.loadNum ? `Load #${l.loadNum}` : `Load #${l.internalLoadId ?? "—"}`}
-                        </Text>
-                      </View>
-                      {l.title ? (
-                        <Text style={[txt(600), { fontSize: 13, color: "#202124" }]} numberOfLines={1}>
-                          {l.title}
+                      <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
+                        {l.title}
+                      </Text>
+                      {l.driverName ? (
+                        <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
+                          {l.driverName}
                         </Text>
                       ) : null}
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
+                        <Text style={[txt(700), { fontSize: 11, color: "#1a73e8" }]} numberOfLines={1}>
+                          {loadNumLabel(l)}
+                        </Text>
+                        <Text style={[txt(600), { fontSize: 11, color: "#9aa0a6" }]}>·</Text>
+                        <Text style={[txt(600), { fontSize: 11, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
+                          {fmtTimeRange(l)}
+                        </Text>
+                        {showStatusPill(l.status) ? (
+                          <View style={{
+                            paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
+                            backgroundColor: tint.bg,
+                          }}>
+                            <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
+                              {STATUS_LABEL[l.status]}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => router.push({ pathname: "/load/[id]", params: { id: l.id } })}

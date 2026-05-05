@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { useUser, useAuth, useOrganization } from "@clerk/clerk-expo";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, ArrowLeft, List as ListIcon, Clock as ClockIcon, MapPin } from "lucide-react-native";
+import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, ArrowLeft, List as ListIcon } from "lucide-react-native";
 import { fetchAssets, fetchLoadsForDay, searchLoads } from "@/lib/api";
 import { txt } from "@/lib/font";
 import { lighten, readableOn } from "@/lib/color";
@@ -17,27 +17,13 @@ import { useDebounce } from "@/lib/useDebounce";
 import { AssetSidePanel } from "@/components/AssetSidePanel";
 import { DatePickerModal } from "@/components/DatePickerModal";
 import { LoadResultCard } from "@/components/LoadResultCard";
-import type { Asset, Load, LoadStatus } from "@/lib/types";
+import {
+  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+} from "@/lib/loadCard";
+import type { Asset, Load } from "@/lib/types";
 
 type ViewMode = "calendar" | "schedule";
 const VIEW_MODE_KEY = "fleetcal.dispatch.calendar.viewMode";
-
-const STATUS_TINT: Record<LoadStatus, { bg: string; fg: string }> = {
-  scheduled:  { bg: "#f1f3f4", fg: "#5f6368" },
-  assigned:   { bg: "#ede9fe", fg: "#5b21b6" },
-  dispatched: { bg: "#e8f0fe", fg: "#1558d6" },
-  en_route:   { bg: "#fef3c7", fg: "#92400e" },
-  picked_up:  { bg: "#f3e8fd", fg: "#6b21a8" },
-  delivered:  { bg: "#e6f4ea", fg: "#15803d" },
-  cancelled:  { bg: "#fce8e6", fg: "#b91c1c" },
-  tonu:       { bg: "#fef3c7", fg: "#92400e" },
-  problem:    { bg: "#fef0e6", fg: "#b85c00" },
-};
-const STATUS_LABEL: Record<LoadStatus, string> = {
-  scheduled: "Scheduled", assigned: "Assigned", dispatched: "Dispatched",
-  en_route: "En Route", picked_up: "Picked Up", delivered: "Delivered",
-  cancelled: "Cancelled", tonu: "TONU", problem: "Problem",
-};
 
 const HOUR_HEIGHT      = 60;
 const HOUR_LABEL_WIDTH = 56;
@@ -67,18 +53,6 @@ function fmtHeader(dateKey: string): string {
   if (same(d, tomorrow)) return `Tomorrow · ${date}`;
   if (same(d, yest))     return `Yesterday · ${date}`;
   return date;
-}
-
-function fmtTime(iso: string): string {
-  if (!iso) return "";
-  const t = iso.slice(11, 16);
-  if (!t) return "";
-  const [hStr, mStr] = t.split(":");
-  const h = parseInt(hStr, 10);
-  const m = parseInt(mStr, 10);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hh = h % 12 || 12;
-  return m === 0 ? `${hh} ${ampm}` : `${hh}:${pad(m)} ${ampm}`;
 }
 
 interface PositionedLoad {
@@ -182,8 +156,7 @@ function LoadBlock({
   const stripe   = assetColor ?? "#1a73e8";
   const bg       = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg  = readableOn(assetColor);
-  const startLabel = p.spansBefore ? "Continues" : fmtTime(p.load.start);
-  const endLabel   = p.spansAfter  ? "Continues" : fmtTime(p.load.end);
+  const spans    = p.spansBefore || p.spansAfter;
 
   // Lay loads out across the available canvas. With one lane we just use
   // full width; with N>1 lanes each lane is 1/N of the canvas with a small
@@ -207,13 +180,15 @@ function LoadBlock({
         borderRadius: 8, padding: 6, overflow: "hidden",
       }}
     >
-      <Text style={[txt(800), { fontSize: 11, color: stripe, letterSpacing: 0.2 }]} numberOfLines={1}>
-        {startLabel}{startLabel !== endLabel ? ` – ${endLabel}` : ""}
-      </Text>
-      <Text style={[txt(800), { fontSize: 13, color: titleFg, marginTop: 1 }]} numberOfLines={2}>
+      {spans ? (
+        <Text style={[txt(800), { fontSize: 10, color: stripe, letterSpacing: 0.4, marginBottom: 1 }]} numberOfLines={1}>
+          CONTINUES
+        </Text>
+      ) : null}
+      <Text style={[txt(800), { fontSize: 13, color: titleFg }]} numberOfLines={2}>
         {p.load.title}
       </Text>
-      {p.height >= 64 && p.load.driverName ? (
+      {p.height >= 48 && p.load.driverName ? (
         <Text style={[txt(600), { fontSize: 11, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
           {p.load.driverName}
         </Text>
@@ -222,57 +197,51 @@ function LoadBlock({
   );
 }
 
-/** Compact card for the schedule view — one per load, sorted by start time. */
+/**
+ * Schedule view card. Per-asset (so we don't repeat the asset name); shows
+ * Title → Driver → Load # · Times. Status pill only when status diverges
+ * from the default "scheduled".
+ */
 function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string }) {
   const router = useRouter();
   const stripe = assetColor ?? "#1a73e8";
   const bg     = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg = readableOn(assetColor);
   const tint   = STATUS_TINT[load.status];
-  const pickup   = load.stops.find((s) => s.type === "pickup");
-  const delivery = [...load.stops].reverse().find(
-    (s) => s.type === "delivery" || s.type === "drop_hook",
-  );
-  const locLabel = (s?: typeof pickup) =>
-    s ? (s.city ?? s.facilityName ?? s.address ?? "—") : "—";
   return (
     <TouchableOpacity
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
       activeOpacity={0.85}
       style={{
-        flexDirection: "row",
         backgroundColor: bg,
         borderLeftWidth: 4, borderLeftColor: stripe,
         borderRadius: 10,
         marginBottom: 10,
-        overflow: "hidden",
+        padding: 12,
       }}
     >
-      <View style={{ flex: 1, padding: 12 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <ClockIcon size={12} color={stripe} strokeWidth={2.4} />
-          <Text style={[txt(800), { fontSize: 12, color: stripe, letterSpacing: 0.2 }]} numberOfLines={1}>
-            {fmtTime(load.start)} – {fmtTime(load.end ?? load.start)}
-          </Text>
+      <Text style={[txt(800), { fontSize: 14, color: titleFg }]} numberOfLines={1}>
+        {load.title}
+      </Text>
+      {load.driverName ? (
+        <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 3 }]} numberOfLines={1}>
+          {load.driverName}
+        </Text>
+      ) : null}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
+        <Text style={[txt(700), { fontSize: 11, color: stripe }]} numberOfLines={1}>
+          {loadNumLabel(load)}
+        </Text>
+        <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]}>·</Text>
+        <Text style={[txt(600), { fontSize: 11, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
+          {fmtTimeRange(load)}
+        </Text>
+        {showStatusPill(load.status) ? (
           <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
             <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
               {STATUS_LABEL[load.status]}
             </Text>
           </View>
-        </View>
-        <Text style={[txt(800), { fontSize: 14, color: titleFg }]} numberOfLines={1}>
-          {load.title}
-        </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
-          <MapPin size={11} color="#3c4043" strokeWidth={2.2} />
-          <Text style={[txt(600), { fontSize: 12, color: "#3c4043", flex: 1 }]} numberOfLines={1}>
-            {locLabel(pickup)} → {locLabel(delivery)}
-          </Text>
-        </View>
-        {load.driverName ? (
-          <Text style={[txt(600), { fontSize: 11, color: "#3c4043", marginTop: 4 }]} numberOfLines={1}>
-            Driver: {load.driverName}
-          </Text>
         ) : null}
       </View>
     </TouchableOpacity>
