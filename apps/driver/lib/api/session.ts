@@ -1,5 +1,9 @@
-import { supabase } from "@/lib/supabase";
-import { normalizePhone } from "@/lib/phone";
+/**
+ * Driver session lookup — calls /v1/driver/me with the active Supabase
+ * access token. The API verifies the JWT, resolves the phone claim to a
+ * drivers row, and returns the driver identity.
+ */
+import { railway } from "@/lib/railway";
 
 export interface DriverSession {
   driverId: number;
@@ -8,39 +12,24 @@ export interface DriverSession {
   phone:    string;
 }
 
-/**
- * Look up the driver record matching the given phone number.
- * Returns null if no driver has that phone in any org.
- *
- * Phone is normalized first (E.164 +1XXXXXXXXXX) so it matches whatever
- * the web app stored — see lib/phone.ts.
- */
 export async function fetchDriverByPhone(
-  rawPhone: string,
+  // Param kept for back-compat with the old call site; ignored — the
+  // server now resolves identity from the JWT, not a client-supplied phone.
+  _rawPhone: string,
 ): Promise<DriverSession | null> {
-  const normalized = normalizePhone(rawPhone);
-  console.log("[driver-lookup] raw=", rawPhone, "normalized=", normalized);
-  if (!normalized) return null;
-
-  const { data, error } = await supabase
-    .from("drivers")
-    .select("id, org_id, name, phone")
-    .eq("phone", normalized)
-    .limit(1)
-    .maybeSingle();
-
-  console.log("[driver-lookup] query result:", { data, error });
-
-  if (error) {
-    console.error("fetchDriverByPhone:", error);
+  try {
+    const me = await railway.me();
+    return {
+      driverId: me.driverId,
+      orgId:    me.orgId,
+      name:     me.name,
+      phone:    me.phone,
+    };
+  } catch (err) {
+    const status = (err as { status?: number } | undefined)?.status;
+    // 404 means the auth'd phone isn't bound to any drivers row yet.
+    if (status === 404) return null;
+    console.error("fetchDriverByPhone:", err);
     return null;
   }
-  if (!data) return null;
-
-  return {
-    driverId: data.id,
-    orgId:    data.org_id,
-    name:     data.name,
-    phone:    data.phone,
-  };
 }
