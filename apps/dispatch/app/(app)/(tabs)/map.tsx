@@ -5,7 +5,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useOrganization } from "@clerk/clerk-expo";
 import WebView from "react-native-webview";
-import { ArrowLeft, Truck, Clock, Route as RouteIcon, X } from "lucide-react-native";
+import { ArrowLeft, Truck, Clock, Route as RouteIcon, X, ChevronDown, ChevronUp } from "lucide-react-native";
 import { fetchAssets } from "@/lib/api";
 import { railway } from "@/lib/railway";
 import { fetchMotiveLocations, type MotiveLocation } from "@/lib/motive";
@@ -262,6 +262,13 @@ export default function MapScreen() {
   const [routesSheetOpen,   setRoutesSheetOpen]   = useState(false);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [focusedLoadId,     setFocusedLoadId]     = useState<string | null>(null);
+  const [loadsCollapsed,    setLoadsCollapsed]    = useState(false);
+
+  // Reset to expanded whenever the user picks a different asset, so the
+  // 24h loads list is visible the first time the bottom card pops open.
+  React.useEffect(() => {
+    setLoadsCollapsed(false);
+  }, [selectedVehicleId]);
 
   const { data: assets = [] } = useQuery({
     queryKey: ["assets", orgId],
@@ -562,13 +569,26 @@ export default function MapScreen() {
             marginTop: 12, paddingTop: 12,
             borderTopWidth: 1, borderTopColor: "#f1f3f4",
           }}>
-            <Text style={[txt(800), {
-              fontSize: 11, letterSpacing: 0.6, color: "#5f6368",
-              textTransform: "uppercase", marginBottom: 8,
-            }]}>
-              Loads (24h)
-            </Text>
-            {selectedAssetLoads.length === 0 ? (
+            <TouchableOpacity
+              activeOpacity={0.6}
+              onPress={() => setLoadsCollapsed((c) => !c)}
+              hitSlop={6}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 6,
+                marginBottom: loadsCollapsed ? 0 : 8,
+              }}
+            >
+              <Text style={[txt(800), {
+                fontSize: 11, letterSpacing: 0.6, color: "#5f6368",
+                textTransform: "uppercase", flex: 1,
+              }]}>
+                Loads (24h){selectedAssetLoads.length ? ` · ${selectedAssetLoads.length}` : ""}
+              </Text>
+              {loadsCollapsed
+                ? <ChevronUp   size={16} color="#5f6368" strokeWidth={2.4} />
+                : <ChevronDown size={16} color="#5f6368" strokeWidth={2.4} />}
+            </TouchableOpacity>
+            {loadsCollapsed ? null : selectedAssetLoads.length === 0 ? (
               <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6" }]}>
                 No loads scheduled in the next 12 hours.
               </Text>
@@ -592,7 +612,12 @@ export default function MapScreen() {
                     {isNonRev ? <DiagonalStripes /> : null}
                     <TouchableOpacity
                       activeOpacity={0.7}
-                      onPress={() => setFocusedLoadId(l.id)}
+                      onPress={() => {
+                        setFocusedLoadId(l.id);
+                        // Collapse the list once they've picked one — gives the
+                        // map back. Chevron in the header re-opens it.
+                        setLoadsCollapsed(true);
+                      }}
                       style={{ flex: 1 }}
                     >
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
