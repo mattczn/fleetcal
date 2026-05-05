@@ -346,11 +346,10 @@ const ACCESSORIAL_STATUS_TINT: Record<string, { bg: string; fg: string }> = {
 };
 
 function AccessorialCard({
-  acc, editable, onEdit,
+  acc, onEdit,
 }: {
-  acc:      Accessorial;
-  editable: boolean;
-  onEdit:   () => void;
+  acc:    Accessorial;
+  onEdit: () => void;
 }) {
   const label = ACCESSORIAL_CATEGORY_LABEL[acc.category] ?? "Accessorial";
   const statusTint = acc.status ? ACCESSORIAL_STATUS_TINT[acc.status] : null;
@@ -368,9 +367,7 @@ function AccessorialCard({
         <Text style={[txt(800), { fontSize: 14, color: "#15803d" }]}>
           {fmtMoney(acc.amount ?? 0)}
         </Text>
-        {editable ? (
-          <Pencil size={13} color="#9aa0a6" strokeWidth={2.2} />
-        ) : null}
+        <Pencil size={13} color="#9aa0a6" strokeWidth={2.2} />
       </View>
       {acc.description ? (
         <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 3 }]} numberOfLines={2}>
@@ -420,11 +417,11 @@ function AccessorialCard({
       </View>
     </View>
   );
-  return editable ? (
+  return (
     <TouchableOpacity onPress={onEdit} activeOpacity={0.7}>
       {inner}
     </TouchableOpacity>
-  ) : inner;
+  );
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -1152,24 +1149,22 @@ function DetailsTab({
             }]}>
               Financial
             </Text>
-            {editMode ? (
-              <TouchableOpacity
-                onPress={onAddAccessorial}
-                activeOpacity={0.7}
-                hitSlop={6}
-                style={{
-                  flexDirection: "row", alignItems: "center", gap: 4,
-                  paddingHorizontal: 10, paddingVertical: 6,
-                  borderRadius: 999,
-                  backgroundColor: "#e8f0fe",
-                }}
-              >
-                <Plus size={12} color="#1a73e8" strokeWidth={2.6} />
-                <Text style={[txt(800), { fontSize: 11, color: "#1a73e8", letterSpacing: 0.3 }]}>
-                  Accessorial
-                </Text>
-              </TouchableOpacity>
-            ) : null}
+            <TouchableOpacity
+              onPress={onAddAccessorial}
+              activeOpacity={0.7}
+              hitSlop={6}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 10, paddingVertical: 6,
+                borderRadius: 999,
+                backgroundColor: "#e8f0fe",
+              }}
+            >
+              <Plus size={12} color="#1a73e8" strokeWidth={2.6} />
+              <Text style={[txt(800), { fontSize: 11, color: "#1a73e8", letterSpacing: 0.3 }]}>
+                Accessorial
+              </Text>
+            </TouchableOpacity>
           </View>
 
           {hasFin || editMode ? (
@@ -1229,7 +1224,6 @@ function DetailsTab({
                 <AccessorialCard
                   key={a.id}
                   acc={a}
-                  editable={editMode}
                   onEdit={() => onEditAccessorial(a)}
                 />
               ))}
@@ -1588,6 +1582,22 @@ export default function LoadDetail() {
     onError: (err) => Alert.alert("Couldn't save stops", err instanceof Error ? err.message : "Unknown error"),
   });
 
+  // Accessorials save immediately on Add/Edit/Delete from the sheet — they
+  // don't wait for the editMode "Done" save flow, since the sheet is
+  // available outside edit mode.
+  const { mutate: saveAccessorialsM, isPending: isSavingAcc } = useMutation({
+    mutationFn: (next: Accessorial[]) => updateLoadFields(id!, orgId!, { accessorials: next }),
+    onMutate: stampSelf,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["load", id] });
+      queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
+      showToast("Accessorial saved");
+      setRemoteUpdate(false);
+      setAccSheetState(null);
+    },
+    onError: (err) => Alert.alert("Couldn't save accessorial", err instanceof Error ? err.message : "Unknown error"),
+  });
+
   function enterStopsEditMode() {
     setStopsDraft(load?.stops ? [...load.stops] : []);
     setStopsEditMode(true);
@@ -1816,14 +1826,10 @@ export default function LoadDetail() {
     setDraft((prev) => ({ ...prev, ...patch }));
   }
 
-  // Accessorials — current state pulls from draft if dirty, else from the
-  // server load. Mutations set the full `accessorials` array on the draft so
-  // the existing save-on-Done path picks it up via LOAD_FIELD_MAP.
-  const accessorialsCurrent: Accessorial[] = (
-    (draft.accessorials as Accessorial[] | undefined)
-    ?? load?.accessorials
-    ?? []
-  );
+  // Accessorials — always read from the server load and write through the
+  // dedicated mutation; they're independent of the editMode draft so users
+  // can add/edit/remove them without entering edit mode.
+  const accessorialsCurrent: Accessorial[] = load?.accessorials ?? [];
   const accPayOpts: string[] = useMemo(() => {
     const opts: string[] = [];
     if (load?.driverName) opts.push(load.driverName);
@@ -1837,14 +1843,12 @@ export default function LoadDetail() {
     const next = idx >= 0
       ? accessorialsCurrent.map((a) => a.id === acc.id ? acc : a)
       : [...accessorialsCurrent, acc];
-    patchDraft({ accessorials: next });
-    setAccSheetState(null);
+    saveAccessorialsM(next);
   }
   function deleteAccessorialFromSheet() {
     const initial = accSheetState?.initial;
     if (!initial) { setAccSheetState(null); return; }
-    patchDraft({ accessorials: accessorialsCurrent.filter((a) => a.id !== initial.id) });
-    setAccSheetState(null);
+    saveAccessorialsM(accessorialsCurrent.filter((a) => a.id !== initial.id));
   }
 
   // Loaded miles — Google Directions road distance through this load's geocoded stops.

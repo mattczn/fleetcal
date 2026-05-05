@@ -26,6 +26,10 @@ import type { Asset, Load } from "@/lib/types";
 type ViewMode = "calendar" | "schedule";
 const VIEW_MODE_KEY = "fleetcal.dispatch.calendar.viewMode";
 
+/** Stable empty-loads ref — handed to assets with nothing scheduled so the
+ *  AssetPage React.memo doesn't see a fresh `[]` every render. */
+const EMPTY_LOADS: Load[] = [];
+
 const HOUR_HEIGHT      = 60;
 const HOUR_LABEL_WIDTH = 56;
 
@@ -324,7 +328,10 @@ function NowLine({ dateKey }: { dateKey: string }) {
 interface AssetPageProps {
   asset:    Asset;
   dateKey:  string;
-  loads:    Load[];
+  /** Pre-sliced — only this asset's loads. Stable reference across renders
+   *  when the parent's `loads` query result hasn't changed, so React.memo
+   *  below skips re-rendering off-screen pages during a swipe. */
+  assetLoads: Load[];
   width:    number;
   viewMode: ViewMode;
   /** Mutable Y offset shared across all pages — updated on scroll, applied on swipe-in. */
@@ -333,24 +340,21 @@ interface AssetPageProps {
   registerRef:   (id: number, ref: ScrollView | null) => void;
 }
 
-function AssetPage({
-  asset, dateKey, loads, width, viewMode, sharedScrollY, registerRef,
+const AssetPage = React.memo(function AssetPage({
+  asset, dateKey, assetLoads, width, viewMode, sharedScrollY, registerRef,
 }: AssetPageProps) {
   const positioned = useMemo(
     () => assignLanes(
-      loads
-        .filter((l) => l.assetId === asset.id)
+      assetLoads
         .map((l) => positionFor(l, dateKey))
         .filter((p): p is PositionedLoad => p !== null),
     ),
-    [loads, asset.id, dateKey],
+    [assetLoads, dateKey],
   );
 
   const scheduleList = useMemo(
-    () => loads
-      .filter((l) => l.assetId === asset.id)
-      .sort((a, b) => a.start.localeCompare(b.start)),
-    [loads, asset.id],
+    () => [...assetLoads].sort((a, b) => a.start.localeCompare(b.start)),
+    [assetLoads],
   );
 
   if (viewMode === "schedule") {
@@ -397,7 +401,7 @@ function AssetPage({
       </ScrollView>
     </View>
   );
-}
+});
 
 export default function CalendarScreen() {
   const router = useRouter();
@@ -476,6 +480,19 @@ export default function CalendarScreen() {
     queryFn:  () => fetchLoadsForDay(orgId!, dateKey),
     enabled:  !!orgId,
   });
+
+  // Pre-slice loads by asset id once per fetch — gives each AssetPage a
+  // stable array reference so the React.memo wrapper actually skips
+  // re-rendering off-screen pages during a horizontal swipe.
+  const loadsByAsset = useMemo(() => {
+    const m = new Map<number, Load[]>();
+    for (const l of loads) {
+      const arr = m.get(l.assetId);
+      if (arr) arr.push(l);
+      else m.set(l.assetId, [l]);
+    }
+    return m;
+  }, [loads]);
 
   // Server-side search across ALL dates. Debounced so we don't spam Supabase
   // on every keystroke. Empty query = no search.
@@ -681,7 +698,7 @@ export default function CalendarScreen() {
               key={asset.id}
               asset={asset}
               dateKey={dateKey}
-              loads={loads}
+              assetLoads={loadsByAsset.get(asset.id) ?? EMPTY_LOADS}
               width={SCREEN_W}
               viewMode={viewMode}
               sharedScrollY={sharedScrollY}
