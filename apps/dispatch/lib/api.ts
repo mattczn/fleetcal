@@ -357,33 +357,8 @@ export async function fetchLoadsForDay(_orgId: string, dateKey: string): Promise
   }
 }
 
-/**
- * For each asset, return the load it's currently working — the most recent
- * event with status in (dispatched, en_route, picked_up). Keyed by asset_id.
- *
- * The Railway endpoint doesn't expose status filtering directly; we fetch a
- * recent window and filter client-side. Mobile dispatchers usually look at a
- * day's worth of activity at most, so a 7-day window is plenty.
- */
-export async function fetchActiveLoadsByAsset(_orgId: string): Promise<Map<number, Load>> {
-  try {
-    const today = new Date();
-    const sevenAgo = new Date(today); sevenAgo.setDate(today.getDate() - 7);
-    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T00:00`;
-    const { loads } = await railway.listLoads({ from: fmt(sevenAgo), to: `${fmt(today).slice(0, 10)}T23:59` });
-    const active = loads.filter(l => l.status === "dispatched" || l.status === "en_route" || l.status === "picked_up");
-    // Sort newest first, then take the most recent per asset.
-    active.sort((a, b) => (b.start > a.start ? 1 : -1));
-    const map = new Map<number, Load>();
-    for (const l of active) {
-      if (!map.has(l.assetId)) map.set(l.assetId, l);
-    }
-    return map;
-  } catch (err) {
-    console.error("fetchActiveLoadsByAsset:", err);
-    return new Map();
-  }
-}
+// fetchActiveLoadsByAsset removed — the map view now derives in-transit
+// loads inline by clock time (pickup ≤ now ≤ delivery), not by status.
 
 /**
  * Search loads across all dates by load #, title, broker, or driver name.

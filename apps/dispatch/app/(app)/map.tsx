@@ -6,7 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth, useOrganization } from "@clerk/clerk-expo";
 import WebView from "react-native-webview";
 import { ArrowLeft, Truck, Clock, ChevronRight, Route as RouteIcon, X } from "lucide-react-native";
-import { fetchAssets, fetchActiveLoadsByAsset } from "@/lib/api";
+import { fetchAssets } from "@/lib/api";
+import { railway } from "@/lib/railway";
 import { fetchMotiveLocations, type MotiveLocation } from "@/lib/motive";
 import { ActiveLoadsSheet } from "@/components/ActiveLoadsSheet";
 import { env } from "@/lib/env";
@@ -291,12 +292,47 @@ export default function MapScreen() {
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
-  const { data: activeLoadsByAsset = new Map<number, Load>() } = useQuery({
-    queryKey: ["active-loads-by-asset", orgId],
-    queryFn:  () => fetchActiveLoadsByAsset(orgId!),
+  // Loads currently in transit by clock time: pickup <= now <= delivery.
+  // We pull a 24-hour window (now ± 12h) which covers all overnight runs
+  // touching now, then filter precisely client-side. The query persists
+  // through the normal cache so it's available offline.
+  const { data: inTransitWindow = [] } = useQuery<Load[]>({
+    queryKey: ["loads-in-transit-window", orgId],
+    queryFn:  async () => {
+      const now = new Date();
+      const back = new Date(now); back.setHours(now.getHours() - 12);
+      const fwd  = new Date(now); fwd.setHours(now.getHours() + 12);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const fmt = (d: Date) =>
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+        `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const { loads } = await railway.listLoads({ from: fmt(back), to: fmt(fwd) });
+      return loads;
+    },
     enabled:  !!orgId,
     staleTime: 60 * 1000,
   });
+
+  // Re-filter on each render so the cached data is still correct as time
+  // passes (e.g. a load whose end was 11:59 should drop off at noon).
+  const activeLoadsArr = useMemo<Load[]>(() => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const nowNaive = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+                     `T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    return inTransitWindow
+      .filter((l) => l.start <= nowNaive && (l.end ?? l.start) >= nowNaive)
+      .sort((a, b) => (a.assetName ?? "").localeCompare(b.assetName ?? ""));
+  }, [inTransitWindow]);
+
+  // Asset-id → in-transit load. Used by the truck-click flow to focus a
+  // route when the user taps a truck pin. If a single asset somehow has
+  // two loads in flight (rare), keep the first one (already sorted).
+  const activeLoadsByAsset = useMemo<Map<number, Load>>(() => {
+    const m = new Map<number, Load>();
+    for (const l of activeLoadsArr) if (!m.has(l.assetId)) m.set(l.assetId, l);
+    return m;
+  }, [activeLoadsArr]);
 
   const allTrucks: TruckPin[] = useMemo(
     () => locations
@@ -330,12 +366,6 @@ export default function MapScreen() {
     }
   }, [focusAssetId, assets, activeLoadsByAsset, focusedLoadId, selectedVehicleId]);
 
-  // Compute the focused route once we have the load + asset color
-  const activeLoadsArr: Load[] = useMemo(
-    () => Array.from(activeLoadsByAsset.values())
-      .sort((a, b) => (a.assetName ?? "").localeCompare(b.assetName ?? "")),
-    [activeLoadsByAsset],
-  );
   const assetColorById = useMemo(() => {
     const m = new Map<number, string>();
     for (const a of assets) m.set(a.id, a.color ?? "#1a73e8");
