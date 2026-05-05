@@ -91,9 +91,9 @@ export function fmtCardDate(iso?: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-/** Standard load-number label. Falls back to internal id, then em-dash. */
+/** Standard load-number label, "#45280". Falls back to internal id, then em-dash. */
 export function loadNumLabel(load: Pick<Load, "loadNum" | "internalLoadId">): string {
-  return `Load #${load.loadNum ?? load.internalLoadId ?? "—"}`;
+  return `#${load.loadNum ?? load.internalLoadId ?? "—"}`;
 }
 
 /** Money: "$1,200" — empty string when unset, no cents on whole dollars. */

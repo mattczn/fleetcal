@@ -159,9 +159,6 @@ function LoadBlock({
   const titleFg  = readableOn(assetColor);
   const spans    = p.spansBefore || p.spansAfter;
   const price    = fmtPrice(p.load.loadPrice);
-  const meta     = [loadNumLabel(p.load), fmtTimeRangeShort(p.load), price]
-    .filter((s) => s && s.length > 0)
-    .join(" · ");
 
   // Lay loads out across the available canvas. With one lane we just use
   // full width; with N>1 lanes each lane is 1/N of the canvas with a small
@@ -203,10 +200,20 @@ function LoadBlock({
           {p.load.driverName}
         </Text>
       ) : null}
-      {p.height >= 64 ? (
-        <Text style={[txt(600), { fontSize: 10, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
-          {meta}
-        </Text>
+      {p.height >= 60 ? (
+        <>
+          <Text style={[txt(600), { fontSize: 10, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
+            {fmtTimeRangeShort(p.load)}
+          </Text>
+          <Text style={[txt(600), { fontSize: 10, color: "#3c4043" }]} numberOfLines={1}>
+            {loadNumLabel(p.load)}
+          </Text>
+          {price ? (
+            <Text style={[txt(700), { fontSize: 10, color: "#15803d" }]} numberOfLines={1}>
+              {price}
+            </Text>
+          ) : null}
+        </>
       ) : null}
     </TouchableOpacity>
   );
@@ -247,23 +254,20 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
           {load.driverName}
         </Text>
       ) : null}
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
-        <Text style={[txt(700), { fontSize: 11, color: stripe }]} numberOfLines={1}>
-          {loadNumLabel(load)}
-        </Text>
-        <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]}>·</Text>
-        <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]} numberOfLines={1}>
-          {fmtTimeRangeShort(load)}
-        </Text>
-        {price ? (
-          <>
-            <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]}>·</Text>
-            <Text style={[txt(700), { fontSize: 11, color: "#15803d" }]} numberOfLines={1}>
+      <View style={{ flexDirection: "row", alignItems: "flex-end", marginTop: 6 }}>
+        <View style={{ flex: 1 }}>
+          <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]} numberOfLines={1}>
+            {fmtTimeRangeShort(load)}
+          </Text>
+          <Text style={[txt(700), { fontSize: 11, color: stripe, marginTop: 2 }]} numberOfLines={1}>
+            {loadNumLabel(load)}
+          </Text>
+          {price ? (
+            <Text style={[txt(700), { fontSize: 11, color: "#15803d", marginTop: 2 }]} numberOfLines={1}>
               {price}
             </Text>
-          </>
-        ) : null}
-        <View style={{ flex: 1 }} />
+          ) : null}
+        </View>
         {showStatusPill(load.status) ? (
           <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
             <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
