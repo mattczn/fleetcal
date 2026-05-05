@@ -726,7 +726,7 @@ export default function CalendarScreen() {
         onSelect={(d) => setDateKey(d)}
       />
 
-      {/* Floating search FAB — bottom-right when collapsed */}
+      {/* Floating search FAB — sits just above the bottom tab bar */}
       {!searchOpen ? (
         <TouchableOpacity
           onPress={() => {
@@ -736,7 +736,7 @@ export default function CalendarScreen() {
           activeOpacity={0.85}
           style={{
             position: "absolute",
-            bottom: insets.bottom + 18, right: 18,
+            bottom: 8, right: 14,
             width: 52, height: 52, borderRadius: 26,
             backgroundColor: "#1a73e8",
             alignItems: "center", justifyContent: "center",
@@ -747,11 +747,11 @@ export default function CalendarScreen() {
         </TouchableOpacity>
       ) : null}
 
-      {/* Floating search pill — bottom-anchored when expanded */}
+      {/* Floating search pill — sits just above the bottom tab bar when open */}
       {searchOpen ? (
         <View style={{
           position: "absolute",
-          bottom: insets.bottom + 14,
+          bottom: 8,
           left: 14, right: 14,
           flexDirection: "row", alignItems: "center", gap: 10,
           paddingHorizontal: 16, paddingVertical: 12,
