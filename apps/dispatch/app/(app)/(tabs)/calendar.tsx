@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { useUser, useAuth, useOrganization } from "@clerk/clerk-expo";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, Plus, ArrowLeft, List as ListIcon, Clock as ClockIcon, MapPin } from "lucide-react-native";
+import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, ArrowLeft, List as ListIcon, Clock as ClockIcon, MapPin } from "lucide-react-native";
 import { fetchAssets, fetchLoadsForDay, searchLoads } from "@/lib/api";
 import { txt } from "@/lib/font";
 import { lighten, readableOn } from "@/lib/color";
@@ -226,6 +226,8 @@ function LoadBlock({
 function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string }) {
   const router = useRouter();
   const stripe = assetColor ?? "#1a73e8";
+  const bg     = lighten(assetColor ?? "#1a73e8", 0.82);
+  const titleFg = readableOn(assetColor);
   const tint   = STATUS_TINT[load.status];
   const pickup   = load.stops.find((s) => s.type === "pickup");
   const delivery = [...load.stops].reverse().find(
@@ -236,21 +238,20 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
   return (
     <TouchableOpacity
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
-      activeOpacity={0.7}
+      activeOpacity={0.85}
       style={{
-        flexDirection: "row", gap: 12,
-        backgroundColor: "#ffffff",
-        borderRadius: 12,
-        borderWidth: 1, borderColor: "#e8eaed",
+        flexDirection: "row",
+        backgroundColor: bg,
+        borderLeftWidth: 4, borderLeftColor: stripe,
+        borderRadius: 10,
         marginBottom: 10,
         overflow: "hidden",
       }}
     >
-      <View style={{ width: 5, backgroundColor: stripe }} />
-      <View style={{ flex: 1, paddingVertical: 12, paddingRight: 12 }}>
+      <View style={{ flex: 1, padding: 12 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <ClockIcon size={12} color="#5f6368" strokeWidth={2.2} />
-          <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
+          <ClockIcon size={12} color={stripe} strokeWidth={2.4} />
+          <Text style={[txt(800), { fontSize: 12, color: stripe, letterSpacing: 0.2 }]} numberOfLines={1}>
             {fmtTime(load.start)} – {fmtTime(load.end ?? load.start)}
           </Text>
           <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
@@ -259,17 +260,17 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
             </Text>
           </View>
         </View>
-        <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
+        <Text style={[txt(800), { fontSize: 14, color: titleFg }]} numberOfLines={1}>
           {load.title}
         </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
-          <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
-          <Text style={[txt(500), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
+          <MapPin size={11} color="#3c4043" strokeWidth={2.2} />
+          <Text style={[txt(600), { fontSize: 12, color: "#3c4043", flex: 1 }]} numberOfLines={1}>
             {locLabel(pickup)} → {locLabel(delivery)}
           </Text>
         </View>
         {load.driverName ? (
-          <Text style={[txt(600), { fontSize: 11, color: "#5f6368", marginTop: 4 }]} numberOfLines={1}>
+          <Text style={[txt(600), { fontSize: 11, color: "#3c4043", marginTop: 4 }]} numberOfLines={1}>
             Driver: {load.driverName}
           </Text>
         ) : null}
@@ -553,13 +554,6 @@ export default function CalendarScreen() {
             </Text>
             <CalendarIcon size={14} color="rgba(255,255,255,0.7)" strokeWidth={2.2} />
           </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => router.push("/new-load")}
-            hitSlop={10}
-            style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" }}
-          >
-            <Plus size={18} color="#ffffff" strokeWidth={2.6} />
-          </TouchableOpacity>
         </View>
 
         {/* Date stepper */}
@@ -588,38 +582,28 @@ export default function CalendarScreen() {
             <TouchableOpacity
               onPress={() => setViewMode("calendar")}
               activeOpacity={0.85}
+              hitSlop={6}
+              accessibilityLabel="Calendar view"
               style={{
-                flexDirection: "row", alignItems: "center", gap: 4,
-                paddingHorizontal: 10, paddingVertical: 5,
-                borderRadius: 999,
+                width: 28, height: 28, borderRadius: 999,
+                alignItems: "center", justifyContent: "center",
                 backgroundColor: viewMode === "calendar" ? "#ffffff" : "transparent",
               }}
             >
-              <CalendarIcon size={12} color={viewMode === "calendar" ? "#1a73e8" : "#ffffff"} strokeWidth={2.4} />
-              <Text style={[txt(800), {
-                fontSize: 11, letterSpacing: 0.3,
-                color: viewMode === "calendar" ? "#1a73e8" : "#ffffff",
-              }]}>
-                Calendar
-              </Text>
+              <CalendarIcon size={14} color={viewMode === "calendar" ? "#1a73e8" : "#ffffff"} strokeWidth={2.4} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setViewMode("schedule")}
               activeOpacity={0.85}
+              hitSlop={6}
+              accessibilityLabel="Schedule view"
               style={{
-                flexDirection: "row", alignItems: "center", gap: 4,
-                paddingHorizontal: 10, paddingVertical: 5,
-                borderRadius: 999,
+                width: 28, height: 28, borderRadius: 999,
+                alignItems: "center", justifyContent: "center",
                 backgroundColor: viewMode === "schedule" ? "#ffffff" : "transparent",
               }}
             >
-              <ListIcon size={12} color={viewMode === "schedule" ? "#1a73e8" : "#ffffff"} strokeWidth={2.4} />
-              <Text style={[txt(800), {
-                fontSize: 11, letterSpacing: 0.3,
-                color: viewMode === "schedule" ? "#1a73e8" : "#ffffff",
-              }]}>
-                Schedule
-              </Text>
+              <ListIcon size={14} color={viewMode === "schedule" ? "#1a73e8" : "#ffffff"} strokeWidth={2.4} />
             </TouchableOpacity>
           </View>
         </View>
