@@ -157,34 +157,11 @@ export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
 }
 
 /**
- * Replace all stops for an event (matches dispatch-next/lib/db.ts pattern):
- * delete existing then insert the new ordered set. Sequence is rewritten to
- * 1..N from array order so the caller never has to manage sequence numbers.
+ * Replace all stops for an event. Server-side handles the delete+insert
+ * transactionally and rewrites sequence numbers from array order.
  */
-export async function saveStops(eventId: string, orgId: string, stops: Stop[]): Promise<void> {
-  const del = await supabase.from("stops").delete().eq("event_id", eventId).eq("org_id", orgId);
-  if (del.error) throw new Error(del.error.message);
-  if (stops.length === 0) return;
-  const rows = stops.map((s, i) => ({
-    event_id:      eventId,
-    org_id:        orgId,
-    sequence:      i + 1,
-    type:          s.type,
-    facility_name: s.facilityName ?? null,
-    address:       s.address      ?? null,
-    city:          s.city         ?? null,
-    timezone:      s.timezone     ?? null,
-    appt_start:    s.apptStart    ?? null,
-    appt_end:      s.apptEnd      ?? null,
-    lat:           s.lat          ?? null,
-    lng:           s.lng          ?? null,
-    instructions:  s.instructions ?? null,
-    arrived_at:    s.arrivedAt    ?? null,
-    arrived_lat:   s.arrivedLat   ?? null,
-    arrived_lng:   s.arrivedLng   ?? null,
-  }));
-  const ins = await supabase.from("stops").insert(rows);
-  if (ins.error) throw new Error(ins.error.message);
+export async function saveStops(eventId: string, _orgId: string, stops: Stop[]): Promise<void> {
+  await railway.replaceStops(eventId, { stops });
 }
 
 export interface GeocodeResult {
@@ -222,72 +199,44 @@ export async function geocodeAddress(
   }
 }
 
-/** RFC4122-ish UUID — fine for relay-group/event ids; not crypto-strong. */
-function uuid(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
 export interface SplitRelayOptions {
   eventId:            string;
   orgId:              string;
-  pickupEnd:          string; // ISO — when Driver 1 drops at relay
-  deliveryStart:      string; // ISO — when Driver 2 picks up
-  deliveryEnd:        string; // ISO — end of delivery leg (usually = original end)
+  pickupEnd:          string; // YYYY-MM-DDTHH:mm — when Driver 1 drops at relay
+  deliveryStart:      string;
+  deliveryEnd:        string;
   deliveryAssetId:    number;
   deliveryDriverId?:  number | null;
   deliveryDriverName?: string | null;
-  mergedStops:        Stop[];  // full stops list including the relay-type stop
+  /** Full ordered stops list including the relay-type stop. */
+  mergedStops:        Stop[];
 }
 
 /**
- * Split a single load into a relay pair: this event becomes the pickup leg,
- * a new event row is created for the delivery leg. Both events share the
- * same `relay_group_id`. Stops are written identically to both events
- * (matching dispatch-next's pattern in createRelayPair).
- *
+ * Convert this single-event load into a relay pair via POST /v1/loads/:id/split-relay.
  * Returns the new delivery-leg event id.
  */
 export async function splitIntoRelay(opts: SplitRelayOptions): Promise<string> {
-  const groupId    = uuid();
-  const deliveryId = uuid();
+  const { loads } = await railway.getEvent(opts.eventId);
+  const self = loads.find(l => l.id === opts.eventId) ?? loads[0];
+  if (!self?.loadId) throw new Error("Cannot split: event has no loadId");
 
-  const cur = await supabase.from("events").select("*").eq("id", opts.eventId).eq("org_id", opts.orgId).single();
-  if (cur.error || !cur.data) throw new Error(cur.error?.message ?? "Event not found");
+  const relayStopIndex = opts.mergedStops.findIndex(s => s.type === "relay");
+  if (relayStopIndex < 0) throw new Error("mergedStops must include a stop with type='relay'");
 
-  const row = cur.data as Record<string, unknown>;
-  // Clone — drop PK and timestamps, override per-leg fields.
-  const { id: _id, created_at: _ca, updated_at: _ua, ...rest } = row;
-  void _id; void _ca; void _ua;
-  const deliveryRow: Record<string, unknown> = {
-    ...rest,
-    id:              deliveryId,
-    asset_id:        opts.deliveryAssetId,
-    driver_id:       opts.deliveryDriverId ?? null,
-    driver_name:     opts.deliveryDriverName ?? null,
-    start:           opts.deliveryStart,
-    end:             opts.deliveryEnd,
-    status:          "scheduled",
-    relay_group_id:  groupId,
-    relay_role:      "delivery",
-  };
-  const ins = await supabase.from("events").insert(deliveryRow);
-  if (ins.error) throw new Error(`Couldn't create delivery leg: ${ins.error.message}`);
-
-  const upd = await supabase.from("events").update({
-    end:            opts.pickupEnd,
-    relay_group_id: groupId,
-    relay_role:     "pickup",
-  }).eq("id", opts.eventId).eq("org_id", opts.orgId);
-  if (upd.error) throw new Error(`Couldn't update pickup leg: ${upd.error.message}`);
-
-  await saveStops(opts.eventId, opts.orgId, opts.mergedStops);
-  await saveStops(deliveryId,   opts.orgId, opts.mergedStops);
-
-  return deliveryId;
+  const res = await railway.splitRelay(self.loadId, {
+    pickupEnd:          opts.pickupEnd,
+    deliveryStart:      opts.deliveryStart,
+    deliveryEnd:        opts.deliveryEnd,
+    deliveryAssetId:    opts.deliveryAssetId,
+    deliveryDriverId:   opts.deliveryDriverId ?? null,
+    deliveryDriverName: opts.deliveryDriverName ?? null,
+    mergedStops:        opts.mergedStops,
+    relayStopIndex,
+  });
+  const delivery = res.loads.find(l => l.relayRole === "delivery");
+  if (!delivery) throw new Error("Server didn't return a delivery leg");
+  return delivery.id;
 }
 
 export interface DeletedLoadRow {
@@ -303,32 +252,40 @@ export interface DeletedLoadRow {
 }
 
 /**
- * Soft-delete a load. If the load is part of a relay, the partner leg is
- * unmarked (relay_group_id/relay_role cleared) so it stands alone afterward.
+ * Soft-delete a load. The dispatch UI passes an event id, but the API soft-
+ * delete operates on loadId, so resolve once first. For non-revenue events
+ * (no loadId), there's no soft-delete endpoint — fall back to event delete.
  */
-export async function softDeleteLoad(id: string, orgId: string): Promise<void> {
-  const cur = await supabase.from("events").select("relay_group_id").eq("id", id).eq("org_id", orgId).single();
-  if (cur.error || !cur.data) throw new Error(cur.error?.message ?? "Load not found");
-  const groupId = (cur.data as { relay_group_id: string | null }).relay_group_id;
-
-  const deletedAt = new Date().toISOString();
-  const upd = await supabase.from("events").update({ deleted_at: deletedAt }).eq("id", id).eq("org_id", orgId);
-  if (upd.error) throw new Error(upd.error.message);
-
-  if (groupId) {
-    const partnerUpd = await supabase.from("events").update({ relay_group_id: null, relay_role: null })
-      .eq("relay_group_id", groupId).eq("org_id", orgId).neq("id", id).is("deleted_at", null);
-    if (partnerUpd.error) console.warn("softDeleteLoad partner clear:", partnerUpd.error.message);
+export async function softDeleteLoad(id: string, _orgId: string): Promise<void> {
+  const { loads } = await railway.getEvent(id);
+  const self = loads.find(l => l.id === id) ?? loads[0];
+  if (self?.loadId) {
+    await railway.deleteLoad(self.loadId);
+  } else {
+    await railway.deleteEvent(id);
   }
 }
 
-export async function restoreLoad(id: string, orgId: string): Promise<void> {
-  const upd = await supabase.from("events").update({ deleted_at: null }).eq("id", id).eq("org_id", orgId);
-  if (upd.error) throw new Error(upd.error.message);
+export async function restoreLoad(id: string, _orgId: string): Promise<void> {
+  // Restore needs loadId; for non-revenue events, deleteEvent above wasn't
+  // reached so this should always resolve via the event row even when soft-
+  // deleted (the API's GET event-by-id excludes soft-deleted rows so we
+  // can't fetch then). Cleaner path: call the existing soft-delete listing
+  // to find the load id, but for v1 the dispatch trash screen passes the
+  // event id which we treat as loadId fallback if direct lookup fails.
+  try {
+    const { loads } = await railway.getEvent(id);
+    const self = loads.find(l => l.id === id) ?? loads[0];
+    if (self?.loadId) { await railway.restoreLoad(self.loadId); return; }
+  } catch { /* event likely soft-deleted — try direct */ }
+  // Fallback: assume the id passed IS the loadId (legacy callers).
+  await railway.restoreLoad(id);
 }
 
+// Hard delete (purge after 30 days) stays on direct Supabase — no API
+// endpoint yet, and it's only ever invoked by the dispatcher to clean up
+// expired soft-deleted rows.
 export async function purgeLoad(id: string, orgId: string): Promise<void> {
-  // Hard delete: stops cascade via FK ON DELETE CASCADE.
   const del = await supabase.from("events").delete().eq("id", id).eq("org_id", orgId);
   if (del.error) throw new Error(del.error.message);
 }
@@ -367,64 +324,16 @@ export async function fetchDeletedLoads(_orgId: string, days = 30): Promise<Dele
 }
 
 /**
- * Undo a relay split. Must be called from the pickup-leg event id.
- * - Merges stops back (drops the relay-type stop)
- * - Pickup leg keeps its id, end = delivery.end, relay fields cleared
- * - Delivery leg is soft-deleted (deleted_at = now)
+ * Undo a relay split via POST /v1/loads/:id/unsplit-relay. Must be called
+ * from the pickup-leg event id; the server merges stops, keeps the pickup,
+ * soft-deletes the delivery leg.
  */
-export async function removeRelay(pickupEventId: string, orgId: string): Promise<void> {
-  const cur = await supabase.from("events").select("id,relay_group_id,relay_role,end").eq("id", pickupEventId).eq("org_id", orgId).single();
-  if (cur.error || !cur.data) throw new Error(cur.error?.message ?? "Pickup leg not found");
-  const pickupRow = cur.data as { id: string; relay_group_id: string | null; relay_role: string | null; end: string };
-  if (!pickupRow.relay_group_id) throw new Error("Not part of a relay");
-  if (pickupRow.relay_role !== "pickup") throw new Error("Call removeRelay from the pickup leg");
-
-  const partner = await supabase.from("events").select("id,end").eq("relay_group_id", pickupRow.relay_group_id).eq("org_id", orgId).neq("id", pickupEventId).maybeSingle();
-  if (partner.error) throw new Error(partner.error.message);
-  if (!partner.data) throw new Error("Delivery partner not found");
-  const partnerRow = partner.data as { id: string; end: string };
-
-  // Merge stops: take pickup's stops, drop the relay marker.
-  const stopsRes = await supabase.from("stops").select("*").eq("event_id", pickupEventId).eq("org_id", orgId).order("sequence");
-  if (stopsRes.error) throw new Error(stopsRes.error.message);
-  const merged: Stop[] = ((stopsRes.data ?? []) as Array<{
-    id: string; sequence: number; type: string; facility_name: string | null; address: string | null;
-    city: string | null; timezone: string | null; appt_start: string | null; appt_end: string | null;
-    lat: number | null; lng: number | null; instructions: string | null;
-    arrived_at: string | null; arrived_lat: number | null; arrived_lng: number | null;
-  }>)
-    .filter((r) => r.type !== "relay")
-    .map((r) => ({
-      id:           r.id,
-      sequence:     r.sequence,
-      type:         r.type as Stop["type"],
-      facilityName: r.facility_name ?? undefined,
-      address:      r.address       ?? undefined,
-      city:         r.city          ?? undefined,
-      timezone:     r.timezone      ?? undefined,
-      apptStart:    r.appt_start    ?? undefined,
-      apptEnd:      r.appt_end      ?? undefined,
-      lat:          r.lat           ?? undefined,
-      lng:          r.lng           ?? undefined,
-      instructions: r.instructions  ?? undefined,
-      arrivedAt:    r.arrived_at    ?? undefined,
-      arrivedLat:   r.arrived_lat   ?? undefined,
-      arrivedLng:   r.arrived_lng   ?? undefined,
-    }));
-
-  const upd = await supabase.from("events").update({
-    end:            partnerRow.end,
-    relay_group_id: null,
-    relay_role:     null,
-  }).eq("id", pickupEventId).eq("org_id", orgId);
-  if (upd.error) throw new Error(`Couldn't clear pickup leg: ${upd.error.message}`);
-
-  const del = await supabase.from("events").update({
-    deleted_at: new Date().toISOString(),
-  }).eq("id", partnerRow.id).eq("org_id", orgId);
-  if (del.error) throw new Error(`Couldn't remove delivery leg: ${del.error.message}`);
-
-  await saveStops(pickupEventId, orgId, merged);
+export async function removeRelay(pickupEventId: string, _orgId: string): Promise<void> {
+  const { loads } = await railway.getEvent(pickupEventId);
+  const self = loads.find(l => l.id === pickupEventId) ?? loads[0];
+  if (!self?.loadId) throw new Error("Cannot unsplit: event has no loadId");
+  if (self.relayRole !== "pickup") throw new Error("Call removeRelay from the pickup leg");
+  await railway.unsplitRelay(self.loadId, { keepEventId: pickupEventId });
 }
 
 export interface RecentStop {
@@ -724,48 +633,91 @@ export async function fetchTrailers(_orgId: string): Promise<Trailer[]> {
   }
 }
 
-export async function updateLoadTrailer(id: string, orgId: string, trailerId: number | null): Promise<void> {
-  const { error } = await supabase
-    .from("events")
-    .update({ trailer_id: trailerId })
-    .eq("id", id)
-    .eq("org_id", orgId);
-  if (error) {
-    console.error("updateLoadTrailer:", error);
-    throw error;
-  }
+export async function updateLoadTrailer(id: string, _orgId: string, trailerId: number | null): Promise<void> {
+  await railway.updateEvent(id, { trailerId });
 }
 
+// snake_case → camelCase, scoped by which row the field lives on after 2.5c.
+// Anything not listed below is ignored.
+const EVENT_FIELD_MAP: Record<string, string> = {
+  asset_id:      "assetId",
+  driver_id:     "driverId",
+  driver_name:   "driverName",
+  driver_pay:    "driverPay",
+  trailer_id:    "trailerId",
+  trailer_type:  "trailerType",
+  start:         "start",
+  end:           "end",
+  status:        "status",
+  priority:      "priority",
+  title:         "title",
+};
+const LOAD_FIELD_MAP: Record<string, string> = {
+  load_num:      "loadNum",
+  broker:        "broker",
+  load_price:    "loadPrice",
+  dispatcher:    "dispatcher",
+  notes:         "notes",
+  accessorials:  "accessorials",
+  ref_nums:      "refNums",
+  customer_id:   "customerId",
+  commodity:     "commodity",
+  weight:        "weight",
+  internal_note: "internalNote",
+  rate_con_pdf:  "rateConPdf",
+};
+
 /**
- * Partial event update. Caller passes the snake_case columns to change.
- * Validated server-side; we don't whitelist here.
+ * Partial event update. Caller passes the snake_case columns to change;
+ * we map them to the API's camelCase request shape and dispatch to the
+ * right endpoint(s). Load-level changes need the parent loadId; we fetch
+ * it once when needed.
+ *
+ * `special_instructions` is legacy (pre-2.5c). Map it to load.notes for
+ * revenue events to match the web app's convention.
  */
 export async function updateLoadFields(
   id:    string,
-  orgId: string,
+  _orgId: string,
   fields: Record<string, unknown>,
 ): Promise<void> {
-  const { error } = await supabase
-    .from("events")
-    .update(fields)
-    .eq("id", id)
-    .eq("org_id", orgId);
-  if (error) {
-    console.error("updateLoadFields:", error);
-    throw error;
+  const eventBody: Record<string, unknown> = {};
+  const loadBody:  Record<string, unknown> = {};
+
+  for (const [k, v] of Object.entries(fields)) {
+    const evKey = EVENT_FIELD_MAP[k];
+    if (evKey) { eventBody[evKey] = v; continue; }
+    const loadKey = LOAD_FIELD_MAP[k];
+    if (loadKey) { loadBody[loadKey] = v; continue; }
+    if (k === "special_instructions") {
+      // Legacy field — fold into load.notes (revenue) or eventNotes (non-rev).
+      // If both special_instructions and notes are sent, notes wins below.
+      if (loadBody.notes === undefined) loadBody.notes = v;
+      continue;
+    }
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[updateLoadFields] unknown column "${k}" — ignored`);
+    }
   }
+
+  const tasks: Promise<unknown>[] = [];
+  if (Object.keys(eventBody).length) tasks.push(railway.updateEvent(id, eventBody));
+  if (Object.keys(loadBody).length) {
+    // Resolve loadId from the event. Non-revenue events have no load — drop
+    // load-level fields with a warning.
+    const { loads } = await railway.getEvent(id);
+    const self = loads.find(l => l.id === id) ?? loads[0];
+    const loadId = self?.loadId;
+    if (loadId) tasks.push(railway.updateLoad(loadId, loadBody));
+    else if (process.env.NODE_ENV !== "production") {
+      console.warn("[updateLoadFields] event has no loadId; load-level fields skipped");
+    }
+  }
+  await Promise.all(tasks);
 }
 
-export async function updateLoadStatus(id: string, orgId: string, status: LoadStatus): Promise<void> {
-  const { error } = await supabase
-    .from("events")
-    .update({ status })
-    .eq("id", id)
-    .eq("org_id", orgId);
-  if (error) {
-    console.error("updateLoadStatus:", error);
-    throw error;
-  }
+export async function updateLoadStatus(id: string, _orgId: string, status: LoadStatus): Promise<void> {
+  await railway.updateEvent(id, { status });
 }
 
 export async function getDocumentSignedUrl(storagePath: string, expiresInSec = 3600): Promise<string | null> {
@@ -850,34 +802,32 @@ export interface NewLoadInput {
 }
 
 export async function createLoad(input: NewLoadInput): Promise<string | null> {
-  const { data, error } = await supabase
-    .from("events")
-    .insert({
-      org_id:               input.orgId,
-      asset_id:             input.assetId,
-      title:                input.title,
-      start:                input.start,
-      end:                  input.end,
-      status:               "scheduled",
-      load_num:             input.loadNum ?? null,
-      broker:               input.broker  ?? null,
-      driver_id:            input.driverId ?? null,
-      driver_name:          input.driverName ?? null,
-      notes:                input.notes ?? null,
-      special_instructions: input.specialInstructions ?? null,
-      ref_nums:             input.refNums ? JSON.stringify(input.refNums) : null,
-      load_price:           input.loadPrice ?? null,
-      driver_pay:           input.driverPay ?? null,
-      rate_con_pdf:         input.rateConPdf ?? null,
-      created_by_name:      input.createdByName ?? null,
-    })
-    .select("id")
-    .single();
-  if (error) {
-    console.error("createLoad:", error);
-    throw error;
-  }
-  return (data as { id: string } | null)?.id ?? null;
+  // Notes go to load.notes (broker context); legacy specialInstructions
+  // is folded in if notes isn't already set.
+  const mergedNotes = input.notes ?? input.specialInstructions;
+  const { loads } = await railway.createLoad({
+    load: {
+      loadNum:       input.loadNum,
+      broker:        input.broker,
+      loadPrice:     input.loadPrice,
+      rateConPdf:    input.rateConPdf,
+      refNums:       input.refNums,
+      notes:         mergedNotes,
+      createdByName: input.createdByName,
+    },
+    events: [{
+      title:      input.title,
+      start:      input.start,
+      end:        input.end,
+      assetId:    input.assetId,
+      driverId:   input.driverId ?? undefined,
+      driverName: input.driverName,
+      driverPay:  input.driverPay,
+      status:     "scheduled",
+      stops:      [],
+    }],
+  });
+  return loads[0]?.id ?? null;
 }
 
 export interface ParsedRateCon {
