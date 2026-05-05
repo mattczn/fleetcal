@@ -345,10 +345,13 @@ interface AssetPageProps {
   sharedScrollY: React.MutableRefObject<number>;
   /** Register this page's ScrollView ref so the parent can scroll it on swipe-in. */
   registerRef:   (id: number, ref: ScrollView | null) => void;
+  /** Push this page's vertical scroll position to all other pages so the
+   *  next asset is already at the same time of day before the swipe completes. */
+  syncScrollY:   (sourceId: number, y: number) => void;
 }
 
 const AssetPage = React.memo(function AssetPage({
-  asset, dateKey, assetLoads, width, viewMode, sharedScrollY, registerRef,
+  asset, dateKey, assetLoads, width, viewMode, sharedScrollY, registerRef, syncScrollY,
 }: AssetPageProps) {
   const positioned = useMemo(
     () => assignLanes(
@@ -395,7 +398,13 @@ const AssetPage = React.memo(function AssetPage({
         style={{ flex: 1, backgroundColor: "#ffffff" }}
         contentContainerStyle={{ paddingBottom: 40 }}
         scrollEventThrottle={16}
-        onScroll={(e) => { sharedScrollY.current = e.nativeEvent.contentOffset.y; }}
+        onScroll={(e) => {
+          const y = e.nativeEvent.contentOffset.y;
+          sharedScrollY.current = y;
+          // Mirror to every other page so the next asset is already at
+          // the right time of day before the horizontal swipe finishes.
+          syncScrollY(asset.id, y);
+        }}
         contentOffset={{ x: 0, y: sharedScrollY.current }}
       >
         <View style={{ position: "relative" }}>
@@ -449,6 +458,16 @@ export default function CalendarScreen() {
   const pageScrollRefs = useRef<Map<number, ScrollView | null>>(new Map());
   const registerPageRef = React.useCallback((id: number, ref: ScrollView | null) => {
     pageScrollRefs.current.set(id, ref);
+  }, []);
+  // Live propagator — when the active page scrolls vertically, mirror the
+  // offset onto every other registered page so the new one is already at
+  // the right time of day before the user finishes a horizontal swipe.
+  const syncScrollY = React.useCallback((sourceId: number, y: number) => {
+    for (const [id, ref] of pageScrollRefs.current) {
+      if (id !== sourceId && ref) {
+        ref.scrollTo({ x: 0, y, animated: false });
+      }
+    }
   }, []);
 
   const { data: assets = [], isLoading: assetsLoading, refetch: refetchAssets } = useQuery({
@@ -719,6 +738,7 @@ export default function CalendarScreen() {
               viewMode={viewMode}
               sharedScrollY={sharedScrollY}
               registerRef={registerPageRef}
+              syncScrollY={syncScrollY}
             />
           ))}
         </ScrollView>
