@@ -323,4 +323,416 @@ driver.get("/trailers", async (c) => {
   return c.json({ trailers });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Audit-log helper — read-modify-write append on events.audit_log JSONB.
+// Driver-paced edits are sequential per device, so optimistic update is
+// fine; high-contention writes would need a postgres function instead.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface AuditEntry {
+  changedAt:    string;
+  changedByName: string;
+  prevStatus?:  string;
+  newStatus?:   string;
+  trailerChanged?: { prev?: string; next?: string };
+  documentUploaded?: { fileName: string; kind: string };
+  documentDeleted?:  { fileName: string; kind: string };
+  stopCheckedIn?:    { stopFacility?: string; stopType?: string; distanceMi?: number };
+  stopCheckInUndone?: { stopFacility?: string; stopType?: string };
+}
+
+async function appendAudit(
+  eventId: string,
+  orgId:   string,
+  entry:   AuditEntry,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("events")
+    .select("audit_log")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) { console.error("[driver/appendAudit] read:", error); return; }
+  const existing = ((data as { audit_log: AuditEntry[] | null } | null)?.audit_log) ?? [];
+  const next = [...existing, entry];
+  const { error: writeErr } = await supabase
+    .from("events")
+    .update({ audit_log: next as never })
+    .eq("id", eventId)
+    .eq("org_id", orgId);
+  if (writeErr) console.error("[driver/appendAudit] write:", writeErr);
+}
+
+// Fetch the event ensuring it belongs to the auth'd driver. Used as a
+// pre-check before mutating writes — refuses 404 / 403 explicitly so
+// the driver app can show a clear error rather than a silent no-op.
+async function loadDriverEvent(eventId: string, driverId: number, orgId: string) {
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, driver_id, org_id, status, trailer_id, deleted_at")
+    .eq("id", eventId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as { id: string; driver_id: number | null; org_id: string; status: string; trailer_id: number | null; deleted_at: string | null };
+  if (row.org_id !== orgId)        return { row: null, reason: "wrong_org"   as const };
+  if (row.driver_id !== driverId)  return { row: null, reason: "not_driver"  as const };
+  if (row.deleted_at)              return { row: null, reason: "deleted"     as const };
+  return { row, reason: null };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Write endpoints
+// ─────────────────────────────────────────────────────────────────────────
+
+// PATCH /v1/driver/loads/:id — partial update for the fields a driver can
+// change: status and trailer. Both audit-logged with the driver's name.
+driver.patch("/loads/:id", async (c) => {
+  const driverId   = c.get("driverId");
+  const orgId      = c.get("orgId");
+  const driverName = c.get("driverName");
+  const id   = c.req.param("id");
+  const body = await c.req.json<{ status?: string; trailerId?: number | null }>();
+
+  const found = await loadDriverEvent(id, driverId, orgId);
+  if (!found) return c.json({ error: "not_found" }, 404);
+  if (found.row === null) return c.json({ error: "forbidden", reason: found.reason }, 403);
+  const prev = found.row;
+
+  const update: Record<string, unknown> = {};
+  if (body.status !== undefined)    update.status     = body.status;
+  if (body.trailerId !== undefined) update.trailer_id = body.trailerId;
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["nothing to update"] }, 400);
+  }
+
+  const { error } = await supabase
+    .from("events")
+    .update(update as never)
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[PATCH /v1/driver/loads/:id] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message }, 500);
+  }
+
+  // Audit each kind of change separately so the timeline reads cleanly.
+  if (body.status !== undefined && body.status !== prev.status) {
+    await appendAudit(id, orgId, {
+      changedAt:    new Date().toISOString(),
+      changedByName: driverName,
+      prevStatus:   prev.status,
+      newStatus:    body.status,
+    });
+  }
+  if (body.trailerId !== undefined && body.trailerId !== prev.trailer_id) {
+    await appendAudit(id, orgId, {
+      changedAt:    new Date().toISOString(),
+      changedByName: driverName,
+      trailerChanged: {
+        prev: prev.trailer_id != null ? String(prev.trailer_id) : undefined,
+        next: body.trailerId != null  ? String(body.trailerId)  : undefined,
+      },
+    });
+  }
+
+  return c.json({ ok: true });
+});
+
+// POST /v1/driver/stops/:id/check-in — record arrival at a stop. Body:
+// { lat, lng }. Server stamps arrived_at = now() so the device clock
+// can't drift the timeline.
+driver.post("/stops/:id/check-in", async (c) => {
+  const driverId   = c.get("driverId");
+  const orgId      = c.get("orgId");
+  const driverName = c.get("driverName");
+  const stopId = c.req.param("id");
+  const body = await c.req.json<{ lat: number; lng: number; distanceMi?: number }>();
+
+  if (typeof body.lat !== "number" || typeof body.lng !== "number") {
+    return c.json({ error: "validation_failed", errors: ["lat/lng required"] }, 400);
+  }
+
+  // Verify the stop belongs to a load assigned to the auth'd driver before
+  // letting them mark it. Fetches the stop + parent event in one nested
+  // select; rejects if the parent isn't theirs.
+  const { data: stopRow, error: stopErr } = await supabase
+    .from("stops")
+    .select("id, event_id, type, facility_name, org_id")
+    .eq("id", stopId)
+    .maybeSingle();
+  if (stopErr || !stopRow) return c.json({ error: "not_found" }, 404);
+  const stop = stopRow as { id: string; event_id: string; type: string; facility_name: string | null; org_id: string };
+  if (stop.org_id !== orgId) return c.json({ error: "forbidden" }, 403);
+
+  const found = await loadDriverEvent(stop.event_id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  const { error: writeErr } = await supabase
+    .from("stops")
+    .update({
+      arrived_at:  new Date().toISOString(),
+      arrived_lat: body.lat,
+      arrived_lng: body.lng,
+    })
+    .eq("id", stopId)
+    .eq("org_id", orgId);
+  if (writeErr) {
+    console.error("[POST /v1/driver/stops/:id/check-in] failed:", writeErr);
+    return c.json({ error: "update_failed", detail: writeErr.message }, 500);
+  }
+
+  await appendAudit(stop.event_id, orgId, {
+    changedAt:    new Date().toISOString(),
+    changedByName: driverName,
+    stopCheckedIn: {
+      stopFacility: stop.facility_name ?? undefined,
+      stopType:     stop.type,
+      distanceMi:   body.distanceMi,
+    },
+  });
+
+  return c.json({ ok: true });
+});
+
+// POST /v1/driver/stops/:id/check-out — undo the check-in. Clears the
+// arrived_at/lat/lng triple and audits the undo.
+driver.post("/stops/:id/check-out", async (c) => {
+  const driverId   = c.get("driverId");
+  const orgId      = c.get("orgId");
+  const driverName = c.get("driverName");
+  const stopId = c.req.param("id");
+
+  const { data: stopRow, error: stopErr } = await supabase
+    .from("stops")
+    .select("id, event_id, type, facility_name, org_id")
+    .eq("id", stopId)
+    .maybeSingle();
+  if (stopErr || !stopRow) return c.json({ error: "not_found" }, 404);
+  const stop = stopRow as { id: string; event_id: string; type: string; facility_name: string | null; org_id: string };
+  if (stop.org_id !== orgId) return c.json({ error: "forbidden" }, 403);
+
+  const found = await loadDriverEvent(stop.event_id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  const { error: writeErr } = await supabase
+    .from("stops")
+    .update({ arrived_at: null, arrived_lat: null, arrived_lng: null })
+    .eq("id", stopId)
+    .eq("org_id", orgId);
+  if (writeErr) {
+    console.error("[POST /v1/driver/stops/:id/check-out] failed:", writeErr);
+    return c.json({ error: "update_failed", detail: writeErr.message }, 500);
+  }
+
+  await appendAudit(stop.event_id, orgId, {
+    changedAt:    new Date().toISOString(),
+    changedByName: driverName,
+    stopCheckInUndone: {
+      stopFacility: stop.facility_name ?? undefined,
+      stopType:     stop.type,
+    },
+  });
+
+  return c.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Documents — list, upload, delete, signed URL
+// ─────────────────────────────────────────────────────────────────────────
+
+const DOC_BUCKET = "load-documents";
+
+interface DocRow {
+  id: string;
+  event_id: string;
+  storage_path: string;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  kind: string;
+  uploaded_at: string;
+  uploaded_by_driver_id: number | null;
+  notes: string | null;
+}
+
+function rowToDoc(r: DocRow) {
+  return {
+    id:           r.id,
+    eventId:      r.event_id,
+    storagePath:  r.storage_path,
+    fileName:     r.file_name,
+    mimeType:     r.mime_type ?? undefined,
+    sizeBytes:    r.size_bytes ?? undefined,
+    kind:         r.kind,
+    uploadedAt:   r.uploaded_at,
+    uploadedByDriverId: r.uploaded_by_driver_id ?? undefined,
+    notes:        r.notes ?? undefined,
+  };
+}
+
+// GET /v1/driver/loads/:id/documents — list documents for a load assigned
+// to the auth'd driver, newest first.
+driver.get("/loads/:id/documents", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id = c.req.param("id");
+
+  const found = await loadDriverEvent(id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  const { data, error } = await supabase
+    .from("load_documents")
+    .select("*")
+    .eq("event_id", id)
+    .eq("org_id", orgId)
+    .order("uploaded_at", { ascending: false });
+  if (error) {
+    console.error("[GET /v1/driver/loads/:id/documents] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+  const documents = (data ?? []).map((r) => rowToDoc(r as DocRow));
+  return c.json({ documents });
+});
+
+// POST /v1/driver/loads/:id/documents — multipart upload. Form fields:
+//   file (binary), kind ("bol" | "pod" | "scale" | "other")
+// Server writes to the load-documents bucket with the service role key
+// and inserts a load_documents row, then audits.
+driver.post("/loads/:id/documents", async (c) => {
+  const driverId   = c.get("driverId");
+  const orgId      = c.get("orgId");
+  const driverName = c.get("driverName");
+  const id = c.req.param("id");
+
+  const found = await loadDriverEvent(id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  let body: { file?: File; kind?: string };
+  try { body = await c.req.parseBody() as { file?: File; kind?: string }; }
+  catch (err) {
+    console.error("[POST /v1/driver/loads/:id/documents] parseBody:", err);
+    return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400);
+  }
+  const file = body.file;
+  const kind = (body.kind ?? "other").toString();
+  if (!file || typeof file === "string") {
+    return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
+  }
+  if (!["bol", "pod", "scale", "other"].includes(kind)) {
+    return c.json({ error: "validation_failed", errors: ["kind must be bol|pod|scale|other"] }, 400);
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const ext   = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const random = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${id}/${Date.now()}_${random}.${ext}`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from(DOC_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[POST /v1/driver/loads/:id/documents] storage upload:", uploadErr);
+    return c.json({ error: "upload_failed", detail: uploadErr.message }, 500);
+  }
+
+  const { data, error } = await supabase
+    .from("load_documents")
+    .insert({
+      event_id:              id,
+      org_id:                orgId,
+      storage_path:          storagePath,
+      file_name:             file.name,
+      mime_type:             file.type || null,
+      size_bytes:            bytes.length,
+      kind,
+      uploaded_by_driver_id: driverId,
+    } as never)
+    .select("*")
+    .single();
+  if (error || !data) {
+    // Attempt to clean up the orphaned blob; not critical if it fails.
+    void supabase.storage.from(DOC_BUCKET).remove([storagePath]);
+    console.error("[POST /v1/driver/loads/:id/documents] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  const doc = rowToDoc(data as DocRow);
+
+  await appendAudit(id, orgId, {
+    changedAt:    new Date().toISOString(),
+    changedByName: driverName,
+    documentUploaded: { fileName: doc.fileName, kind: doc.kind },
+  });
+
+  return c.json({ document: doc });
+});
+
+// DELETE /v1/driver/documents/:id — remove a document the driver uploaded.
+// Storage object + DB row come down together; audit logged.
+driver.delete("/documents/:id", async (c) => {
+  const driverId   = c.get("driverId");
+  const orgId      = c.get("orgId");
+  const driverName = c.get("driverName");
+  const id = c.req.param("id");
+
+  const { data, error } = await supabase
+    .from("load_documents")
+    .select("*")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error || !data) return c.json({ error: "not_found" }, 404);
+  const doc = data as DocRow;
+
+  // Authorize: parent event must be assigned to this driver.
+  const found = await loadDriverEvent(doc.event_id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  const [storageRes, dbRes] = await Promise.all([
+    supabase.storage.from(DOC_BUCKET).remove([doc.storage_path]),
+    supabase.from("load_documents").delete().eq("id", id).eq("org_id", orgId),
+  ]);
+  if (storageRes.error) console.error("[DELETE /v1/driver/documents/:id] storage:", storageRes.error);
+  if (dbRes.error)      console.error("[DELETE /v1/driver/documents/:id] db:",      dbRes.error);
+
+  await appendAudit(doc.event_id, orgId, {
+    changedAt:    new Date().toISOString(),
+    changedByName: driverName,
+    documentDeleted: { fileName: doc.file_name, kind: doc.kind },
+  });
+
+  return c.json({ ok: true });
+});
+
+// GET /v1/driver/documents/:id/url — short-lived signed URL for viewing.
+// Same authorization as DELETE — must be the driver's load.
+driver.get("/documents/:id/url", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id = c.req.param("id");
+
+  const { data, error } = await supabase
+    .from("load_documents")
+    .select("event_id, storage_path")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error || !data) return c.json({ error: "not_found" }, 404);
+  const row = data as { event_id: string; storage_path: string };
+
+  const found = await loadDriverEvent(row.event_id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  const { data: signed, error: signErr } = await supabase.storage
+    .from(DOC_BUCKET)
+    .createSignedUrl(row.storage_path, 3600);
+  if (signErr || !signed) {
+    console.error("[GET /v1/driver/documents/:id/url] sign:", signErr);
+    return c.json({ error: "sign_failed", detail: signErr?.message }, 500);
+  }
+  return c.json({ url: signed.signedUrl });
+});
+
 export default driver;
