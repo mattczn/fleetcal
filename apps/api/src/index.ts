@@ -33,6 +33,7 @@ import orgSettingsRoute from "./routes/org-settings.js";
 import assistantRoute from "./routes/assistant.js";
 import checkCallsRoute from "./routes/check-calls.js";
 import stopsRoute from "./routes/stops.js";
+import driverRoute from "./routes/driver.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -110,6 +111,12 @@ const bot = new Hono<{ Variables: AuthVariables }>();
 bot.use("*", botAuth);
 bot.route("/loads", botLoadsRoute);
 app.route("/v1/bot", bot);
+
+// ── Driver routes (Supabase-JWT auth, scoped to one driver) ─────────────
+// Mounted before /v1 to avoid the Clerk middleware. Driver app passes the
+// Supabase access_token from its phone-OTP session; driverAuth middleware
+// verifies it and resolves to the drivers row.
+app.route("/v1/driver", driverRoute);
 
 app.route("/v1", authed);
 

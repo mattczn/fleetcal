@@ -37,6 +37,11 @@ export const env = {
   supabaseUrl:            required("SUPABASE_URL"),
   supabaseServiceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
   anthropicApiKey:        required("ANTHROPIC_API_KEY"),
+  // Drivers authenticate via Supabase phone-OTP and pass their Supabase
+  // session token to /v1/driver/*. We verify HS256-signed tokens against
+  // this secret. Find it in Supabase Dashboard → Settings → API → JWT
+  // Settings → "JWT Secret".
+  supabaseJwtSecret:      required("SUPABASE_JWT_SECRET"),
   // Optional — only needed when the Telegram bot is connected.
   botApiKey:              process.env.BOT_API_KEY || undefined,
   botOrgId:               process.env.BOT_ORG_ID || undefined,
