@@ -460,9 +460,14 @@ export default function CalendarScreen() {
     pageScrollRefs.current.set(id, ref);
   }, []);
   // Live propagator — when the active page scrolls vertically, mirror the
-  // offset onto every other registered page so the new one is already at
+  // offset onto every other registered page so the new asset is already at
   // the right time of day before the user finishes a horizontal swipe.
+  // Only the page id matching `activeAssetIdRef` is allowed to propagate;
+  // otherwise the programmatic scrollTo on each receiver fires its own
+  // onScroll which calls back into us → infinite scroll battle.
+  const activeAssetIdRef = useRef<number | null>(null);
   const syncScrollY = React.useCallback((sourceId: number, y: number) => {
+    if (sourceId !== activeAssetIdRef.current) return;
     for (const [id, ref] of pageScrollRefs.current) {
       if (id !== sourceId && ref) {
         ref.scrollTo({ x: 0, y, animated: false });
@@ -545,6 +550,12 @@ export default function CalendarScreen() {
   React.useEffect(() => {
     if (assetIdx >= visibleAssets.length) setAssetIdx(0);
   }, [visibleAssets.length, assetIdx]);
+
+  // Keep the propagator's "who's allowed to broadcast" pointer up to
+  // date with whichever asset is currently centered in the pager.
+  React.useEffect(() => {
+    activeAssetIdRef.current = visibleAssets[assetIdx]?.id ?? null;
+  }, [assetIdx, visibleAssets]);
 
   function selectAsset(idx: number) {
     setAssetIdx(idx);
