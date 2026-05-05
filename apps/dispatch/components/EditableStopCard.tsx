@@ -1,6 +1,6 @@
 import React from "react";
-import { View, Text, TouchableOpacity } from "react-native";
-import { ChevronUp, ChevronDown, Pencil, Trash2 } from "lucide-react-native";
+import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
+import { ChevronUp, ChevronDown, Pencil, Trash2, AlertTriangle, CheckCircle2 } from "lucide-react-native";
 import { txt } from "@/lib/font";
 import type { Stop, StopType } from "@/lib/types";
 
@@ -18,6 +18,8 @@ interface Props {
   index:    number;
   isFirst:  boolean;
   isLast:   boolean;
+  /** True while geocoding is in flight for this stop. */
+  verifying?: boolean;
   onTap:    () => void;
   onUp:     () => void;
   onDown:   () => void;
@@ -25,7 +27,7 @@ interface Props {
 }
 
 export function EditableStopCard({
-  stop, index, isFirst, isLast, onTap, onUp, onDown, onDelete,
+  stop, index, isFirst, isLast, verifying, onTap, onUp, onDown, onDelete,
 }: Props) {
   const tint = STOP_TINT[stop.type] ?? STOP_TINT.stop;
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "Untitled stop";
@@ -81,15 +83,47 @@ export function EditableStopCard({
           <Text style={[txt(800), { color: "#ffffff", fontSize: 14 }]}>{index + 1}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
               <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.4 }]}>
                 {tint.label.toUpperCase()}
               </Text>
             </View>
-            {!hasCoords ? (
-              <Text style={[txt(700), { fontSize: 10, color: "#b91c1c" }]}>· unverified</Text>
-            ) : null}
+            {verifying ? (
+              <View style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999,
+                backgroundColor: "#e8f0fe",
+              }}>
+                <ActivityIndicator size="small" color="#1a73e8" />
+                <Text style={[txt(800), { fontSize: 9, color: "#1558d6", letterSpacing: 0.3 }]}>
+                  VERIFYING
+                </Text>
+              </View>
+            ) : hasCoords ? (
+              <View style={{
+                flexDirection: "row", alignItems: "center", gap: 3,
+                paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999,
+                backgroundColor: "#dcfce7",
+              }}>
+                <CheckCircle2 size={9} color="#15803d" strokeWidth={2.6} />
+                <Text style={[txt(800), { fontSize: 9, color: "#15803d", letterSpacing: 0.3 }]}>
+                  VERIFIED
+                </Text>
+              </View>
+            ) : (
+              <View style={{
+                flexDirection: "row", alignItems: "center", gap: 3,
+                paddingHorizontal: 6, paddingVertical: 1, borderRadius: 999,
+                backgroundColor: "#fef3c7",
+                borderWidth: 1, borderColor: "#fde68a",
+              }}>
+                <AlertTriangle size={9} color="#92400e" strokeWidth={2.6} />
+                <Text style={[txt(800), { fontSize: 9, color: "#92400e", letterSpacing: 0.3 }]}>
+                  UNVERIFIED
+                </Text>
+              </View>
+            )}
           </View>
           <Text style={[txt(800), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={1}>
             {facility}

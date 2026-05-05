@@ -664,8 +664,13 @@ export async function createLoad(input: NewLoadInput): Promise<string | null> {
 
 export interface ParsedRateCon {
   title?:     string;
+  summary?:   string;
   loadNum?:   string;
   broker?:    string;
+  trailerType?: string;
+  dispatcher?: string;
+  commodity?: string;
+  weight?:    number;
   start?:     string;
   end?:       string;
   refNums?:   RefNum[];
@@ -679,15 +684,37 @@ export interface ParsedRateCon {
     facilityName?: string;
     address?:     string;
     city?:        string;
+    lat?:         number;
+    lng?:         number;
+    timezone?:    string;
+    geocodeStatus?: string;
+    scheduleType?: string;
     apptStart?:   string;
     apptEnd?:     string;
     instructions?: string;
   }[];
 }
 
+/**
+ * Default field set extracted by the AI when the org hasn't configured
+ * a custom list. Mirrors the `defaultEnabled: true` fields in
+ * apps/web/lib/fields.ts plus specialInstructions which dispatchers
+ * almost always want pulled from a rate-con.
+ */
+export const DEFAULT_PARSE_FIELDS = [
+  "loadNum", "refNums", "trailerType", "broker", "dispatcher",
+  "commodity", "weight", "loadPrice", "driverPay",
+  "notes", "specialInstructions",
+];
+
 export async function parseRateConViaApi(
   base64: string,
   getToken: () => Promise<string | null>,
+  opts?: {
+    enabledFields?:      string[];
+    customInstructions?: string;
+    promptVariables?:    Record<string, string>;
+  },
 ): Promise<ParsedRateCon | null> {
   // Re-uses the existing dispatch-next /api/parse-ratecon endpoint.
   // Configure dispatchApiUrl in app.json `extra`.
@@ -702,7 +729,12 @@ export async function parseRateConViaApi(
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ data: base64 }),
+    body: JSON.stringify({
+      data:               base64,
+      enabledFields:      opts?.enabledFields      ?? DEFAULT_PARSE_FIELDS,
+      customInstructions: opts?.customInstructions ?? "",
+      promptVariables:    opts?.promptVariables    ?? {},
+    }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");

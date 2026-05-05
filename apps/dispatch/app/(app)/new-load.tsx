@@ -1,11 +1,11 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, TextInput,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useOrganization, useAuth, useUser } from "@clerk/clerk-expo";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import {
@@ -15,9 +15,10 @@ import {
 import {
   fetchAssets, fetchDrivers, fetchDriverAssetPrefs,
   parseRateConViaApi, uploadRateConPdf, createLoad, saveStops,
-  geocodeAddress,
-  type ParsedRateCon,
+  geocodeAddress, searchLoads, fetchCustomers,
+  type ParsedRateCon, type Customer,
 } from "@/lib/api";
+import { railway } from "@/lib/railway";
 import { useDriverPayPct } from "@/lib/settings";
 import { EditFieldSheet, type EditFieldKind } from "@/components/EditFieldSheet";
 import { AssetPickerSheet } from "@/components/AssetPickerSheet";
@@ -92,6 +93,16 @@ export default function NewLoadScreen() {
   });
   const visibleAssets = assets.filter((a) => !a.hidden);
 
+  // Default to the org's "Unassigned" asset (matches web's convention) once
+  // assets have loaded — saves the dispatcher a tap when the rate-con doesn't
+  // specify a truck yet. Only kicks in when the form is still in its initial
+  // empty state, so we don't blow away a user pick or a parse result.
+  useEffect(() => {
+    if (draft.assetId != null) return;
+    const unassigned = assets.find((a) => a.name === "Unassigned" || a.type === "Unassigned");
+    if (unassigned) setDraft((d) => ({ ...d, assetId: unassigned.id }));
+  }, [assets, draft.assetId]);
+
   const { data: drivers = [] } = useQuery({
     queryKey: ["drivers", orgId],
     queryFn:  () => fetchDrivers(orgId!),
@@ -105,6 +116,37 @@ export default function NewLoadScreen() {
     enabled:  !!orgId,
     staleTime: 10 * 60 * 1000,
   });
+
+  const { data: customers = [] } = useQuery({
+    queryKey: ["customers", orgId],
+    queryFn:  () => fetchCustomers(orgId!),
+    enabled:  !!orgId,
+    staleTime: 10 * 60 * 1000,
+  });
+  const qc = useQueryClient();
+  // Whether the parsed broker name lines up with any existing customer
+  // (matches name, shortName, or any alias). Used to nudge the dispatcher
+  // to add the customer when the AI extracted something brand new.
+  const brokerMatchesCustomer = (() => {
+    const q = draft.broker.trim().toLowerCase();
+    if (!q) return true; // nothing to match yet — banner stays hidden
+    return customers.some((c) => {
+      if (c.name.toLowerCase() === q) return true;
+      if ((c.shortName ?? "").toLowerCase() === q) return true;
+      return c.aliases.some((a) => a.toLowerCase() === q);
+    });
+  })();
+
+  async function addBrokerAsCustomer() {
+    const name = draft.broker.trim();
+    if (!name || !orgId) return;
+    try {
+      await railway.createCustomer({ name, aliases: [] });
+      await qc.invalidateQueries({ queryKey: ["customers", orgId] });
+    } catch (err) {
+      Alert.alert("Couldn't add customer", err instanceof Error ? err.message : "Unknown error");
+    }
+  }
 
   // ── Sheet state ────────────────────────────────────────────────────────────
   const [assetPickerVisible,  setAssetPickerVisible]  = useState(false);
@@ -177,13 +219,16 @@ export default function NewLoadScreen() {
 
   function applyParsed(p: ParsedRateCon) {
     patch({
-      loadNum:   p.loadNum   ?? "",
-      broker:    p.broker    ?? "",
-      start:     p.start     ?? "",
-      end:       p.end       ?? "",
-      loadPrice: p.loadPrice != null ? String(p.loadPrice) : "",
-      driverPay: p.driverPay != null ? String(p.driverPay) : "",
-      notes:     p.notes     ?? "",
+      loadNum:     p.loadNum     ?? "",
+      broker:      p.broker      ?? "",
+      trailerType: p.trailerType ?? "",
+      start:       p.start       ?? "",
+      end:         p.end         ?? "",
+      loadPrice:   p.loadPrice != null ? String(p.loadPrice) : "",
+      // driverPay parses through but the patch() recomputer auto-fills from
+      // org pct when loadPrice is set and the AI didn't return one.
+      driverPay:   p.driverPay != null ? String(p.driverPay) : "",
+      notes:       p.notes      ?? "",
       specialInstructions: p.specialInstructions ?? "",
     });
     if (p.stops?.length) {
@@ -194,13 +239,16 @@ export default function NewLoadScreen() {
         facilityName: s.facilityName,
         address:      s.address,
         city:         s.city,
+        // Server already geocoded — keep its coords/timezone if present.
+        lat:          s.lat,
+        lng:          s.lng,
+        timezone:     s.timezone,
         apptStart:    s.apptStart,
         apptEnd:      s.apptEnd,
         instructions: s.instructions,
       }));
       setStops(next);
-      // Kick off background geocoding for any stop that has an address but no
-      // coords. Updates roll in per-stop as the geocoder responds.
+      // Fall back to client geocoding for any stop the server didn't resolve.
       void geocodeAll(next);
     }
   }
@@ -300,9 +348,37 @@ export default function NewLoadScreen() {
     setStage("step2");
   }
 
+  // Tracks the load# the dispatcher has acknowledged as a duplicate so a
+  // second tap on Save proceeds without re-prompting.
+  const [ackDupLoadNum, setAckDupLoadNum] = useState<string | null>(null);
+
   async function handleCreate() {
     if (!orgId || draft.assetId == null) return;
     if (!draft.start || !draft.end) return;
+
+    // Duplicate-load# guard — searches the org's loads for an exact
+    // loadNum match and prompts before creating another. Mirrors the web
+    // app's behavior. Skipped when loadNum is empty or already acked.
+    const loadNum = draft.loadNum.trim();
+    if (loadNum && loadNum !== ackDupLoadNum) {
+      const matches = await searchLoads(orgId, loadNum);
+      const exact = matches.find((l) => (l.loadNum ?? "").trim() === loadNum);
+      if (exact) {
+        Alert.alert(
+          "Duplicate load #",
+          `Load #${loadNum} already exists. Create another with the same number?`,
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Create anyway",
+              style: "destructive",
+              onPress: () => { setAckDupLoadNum(loadNum); handleCreate(); },
+            },
+          ],
+        );
+        return;
+      }
+    }
 
     setStage("saving");
     try {
@@ -387,6 +463,8 @@ export default function NewLoadScreen() {
           draft={draft}
           selectedAssetName={selectedAsset?.name}
           selectedDriverName={selectedDriver?.name ?? draft.driverName ?? null}
+          brokerMatchesCustomer={brokerMatchesCustomer}
+          onAddBrokerAsCustomer={addBrokerAsCustomer}
           onPickAsset={() => setAssetPickerVisible(true)}
           onPickDriver={() => setDriverPickerVisible(true)}
           onEditBroker={() => setBrokerEditVisible(true)}
@@ -596,7 +674,10 @@ function ParsingStage() {
       <ActivityIndicator size="large" color="#1a73e8" />
       <Text style={[txt(700), { fontSize: 14, color: "#3c4043", marginTop: 16 }]}>Reading rate con…</Text>
       <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6", marginTop: 4, textAlign: "center" }]}>
-        Claude is extracting load details. Hang tight.
+        AI is extracting load details. Hang tight.
+      </Text>
+      <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", marginTop: 18, textAlign: "center", maxWidth: 320, lineHeight: 16 }]}>
+        AI can make mistakes — double-check broker, load #, prices, and stop addresses before saving.
       </Text>
     </View>
   );
@@ -667,11 +748,14 @@ function FormRow({
 
 function Step1({
   draft, selectedAssetName, selectedDriverName,
+  brokerMatchesCustomer, onAddBrokerAsCustomer,
   onPickAsset, onPickDriver, onEditBroker, onEditDate, onEditField,
 }: {
   draft: Draft;
   selectedAssetName: string | undefined;
   selectedDriverName: string | null;
+  brokerMatchesCustomer: boolean;
+  onAddBrokerAsCustomer: () => void;
   onPickAsset:  () => void;
   onPickDriver: () => void;
   onEditBroker: () => void;
@@ -706,6 +790,43 @@ function Step1({
           onEdit={() => onEditField({ title: "Trailer Type", column: "trailerType", initial: draft.trailerType, kind: "text", transform: (v) => v.trim() })}
           last />
       </Card>
+
+      {!brokerMatchesCustomer && draft.broker.trim() ? (
+        <TouchableOpacity
+          onPress={() => Alert.alert(
+            "Add to customers?",
+            `'${draft.broker.trim()}' isn't in your customer list. Add it now?`,
+            [
+              { text: "Not now", style: "cancel" },
+              { text: "Add", onPress: onAddBrokerAsCustomer },
+            ],
+          )}
+          activeOpacity={0.7}
+          style={{
+            flexDirection: "row", alignItems: "center", gap: 10,
+            backgroundColor: "#fef3c7", borderRadius: 12,
+            borderWidth: 1, borderColor: "#fde68a",
+            padding: 12, marginTop: 8,
+          }}
+        >
+          <View style={{
+            width: 28, height: 28, borderRadius: 8,
+            backgroundColor: "#fff", alignItems: "center", justifyContent: "center",
+            borderWidth: 1, borderColor: "#fde68a",
+          }}>
+            <Plus size={14} color="#92400e" strokeWidth={2.6} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[txt(800), { fontSize: 12, color: "#92400e" }]} numberOfLines={1}>
+              Broker not in your customers
+            </Text>
+            <Text style={[txt(500), { fontSize: 11, color: "#92400e", marginTop: 1 }]} numberOfLines={1}>
+              Tap to add &apos;{draft.broker.trim()}&apos;
+            </Text>
+          </View>
+          <ChevronRight size={14} color="#92400e" strokeWidth={2.4} />
+        </TouchableOpacity>
+      ) : null}
 
       <SectionLabel>Reference</SectionLabel>
       <Card>
@@ -830,6 +951,7 @@ function Step2({
           index={i}
           isFirst={i === 0}
           isLast={i === stops.length - 1}
+          verifying={verifyingIds.has(stop.id)}
           onTap={() => onTap(i)}
           onUp={() => onMove(i, -1)}
           onDown={() => onMove(i, 1)}
