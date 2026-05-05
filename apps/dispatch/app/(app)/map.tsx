@@ -5,7 +5,7 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useOrganization } from "@clerk/clerk-expo";
 import WebView from "react-native-webview";
-import { ArrowLeft, Truck, Clock, ChevronRight, Route as RouteIcon, X } from "lucide-react-native";
+import { ArrowLeft, Truck, Clock, Route as RouteIcon, X } from "lucide-react-native";
 import { fetchAssets } from "@/lib/api";
 import { railway } from "@/lib/railway";
 import { fetchMotiveLocations, type MotiveLocation } from "@/lib/motive";
@@ -628,8 +628,15 @@ export default function MapScreen() {
                       onPress={() => router.push({ pathname: "/load/[id]", params: { id: l.id } })}
                       hitSlop={8}
                       activeOpacity={0.7}
+                      style={{
+                        paddingHorizontal: 10, paddingVertical: 6,
+                        borderRadius: 8,
+                        backgroundColor: "#1a73e8",
+                      }}
                     >
-                      <ChevronRight size={16} color="#9aa0a6" strokeWidth={2.2} />
+                      <Text style={[txt(800), { fontSize: 11, color: "#ffffff", letterSpacing: 0.4 }]}>
+                        View
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 );
