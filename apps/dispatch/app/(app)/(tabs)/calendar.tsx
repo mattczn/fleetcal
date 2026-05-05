@@ -328,7 +328,12 @@ export default function CalendarScreen() {
       <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 16, paddingTop: insets.top + 6, paddingBottom: 12 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           {requestedAssetId ? (
-            <TouchableOpacity onPress={() => router.back()} hitSlop={10}
+            <TouchableOpacity
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace("/");
+              }}
+              hitSlop={10}
               style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" }}>
               <ArrowLeft size={16} color="#ffffff" strokeWidth={2.2} />
             </TouchableOpacity>

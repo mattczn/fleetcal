@@ -488,7 +488,14 @@ export default function MapScreen() {
 
       {isStandalone ? (
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => {
+            // The standalone view is entered via /map?assetId=… from the
+            // home asset picker (a tab-to-tab nav, not a stack push), so
+            // router.back() may have nothing to pop. Fall through to the
+            // home tab in that case.
+            if (router.canGoBack()) router.back();
+            else router.replace("/");
+          }}
           hitSlop={12}
           style={{
             position: "absolute",

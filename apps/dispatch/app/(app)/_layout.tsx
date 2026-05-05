@@ -1,59 +1,21 @@
 import React from "react";
-import { Tabs } from "expo-router";
-import { Home, CalendarDays, Map as MapIcon } from "lucide-react-native";
+import { Stack } from "expo-router";
 
+/**
+ * The signed-in app is a Stack so that pushing into a load detail (or
+ * profile / new-load / trash) layers on top of whichever tab the user
+ * was on, and `router.back()` returns there with state preserved.
+ * The bottom tab bar lives inside the `(tabs)` group as the root
+ * screen of this stack.
+ */
 export default function AppLayout() {
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: "#ffffff",
-          borderTopColor:  "#e8eaed",
-          height:          82,
-          paddingTop:      8,
-        },
-        tabBarActiveTintColor:   "#1a73e8",
-        tabBarInactiveTintColor: "#9aa0a6",
-        tabBarLabelStyle: {
-          fontFamily:    "PlusJakartaSans_700Bold",
-          fontSize:      11,
-          letterSpacing: 0.2,
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Home",
-          tabBarIcon: ({ color, focused }) => (
-            <Home size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="calendar"
-        options={{
-          title: "Calendar",
-          tabBarIcon: ({ color, focused }) => (
-            <CalendarDays size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="map"
-        options={{
-          title: "Map",
-          tabBarIcon: ({ color, focused }) => (
-            <MapIcon size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      {/* Non-tab routes — pushed via router.push, hidden from the tab bar */}
-      <Tabs.Screen name="profile"   options={{ href: null }} />
-      <Tabs.Screen name="new-load"  options={{ href: null }} />
-      <Tabs.Screen name="load/[id]" options={{ href: null }} />
-      <Tabs.Screen name="trash"     options={{ href: null }} />
-    </Tabs>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="profile" />
+      <Stack.Screen name="new-load" />
+      <Stack.Screen name="load/[id]" />
+      <Stack.Screen name="trash" />
+    </Stack>
   );
 }
