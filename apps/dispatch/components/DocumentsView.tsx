@@ -7,7 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import { useQuery } from "@tanstack/react-query";
 import { FileText, X } from "lucide-react-native";
-import { fetchDocuments, getDocumentSignedUrl, getRateConSignedUrl, type LoadDocument } from "@/lib/api";
+import { fetchDocuments, type LoadDocument } from "@/lib/api";
+import { railway } from "@/lib/railway";
 import { txt } from "@/lib/font";
 
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
@@ -35,7 +36,22 @@ function isImage(doc: LoadDocument): boolean {
     || /\.(jpg|jpeg|png|webp|heic)$/i.test(doc.fileName);
 }
 
-function DocumentRow({ doc, onPress, isRateCon }: { doc: LoadDocument; onPress: () => void; isRateCon?: boolean }) {
+async function fetchSignedUrl(doc: LoadDocument, isRateCon: boolean, loadId?: string): Promise<string | null> {
+  try {
+    if (isRateCon) {
+      if (!loadId) return null;
+      const { url } = await railway.getRateConUrl(loadId);
+      return url;
+    }
+    const { url } = await railway.getDocumentUrl(doc.id);
+    return url;
+  } catch (err) {
+    console.warn("fetchSignedUrl:", err);
+    return null;
+  }
+}
+
+function DocumentRow({ doc, onPress, isRateCon, loadId }: { doc: LoadDocument; onPress: () => void; isRateCon?: boolean; loadId?: string }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const tint = isRateCon
     ? { bg: "#fef3c7", fg: "#92400e" }
@@ -43,10 +59,9 @@ function DocumentRow({ doc, onPress, isRateCon }: { doc: LoadDocument; onPress: 
 
   React.useEffect(() => {
     if (isImage(doc)) {
-      const fetcher = isRateCon ? getRateConSignedUrl : getDocumentSignedUrl;
-      fetcher(doc.storagePath, 3600).then(setThumbUrl);
+      void fetchSignedUrl(doc, !!isRateCon, loadId).then(setThumbUrl);
     }
-  }, [doc.storagePath, doc, isRateCon]);
+  }, [doc, isRateCon, loadId]);
 
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.7}
@@ -81,17 +96,16 @@ function DocumentRow({ doc, onPress, isRateCon }: { doc: LoadDocument; onPress: 
   );
 }
 
-function ViewerModal({ doc, isRateCon, visible, onClose }: { doc: LoadDocument | null; isRateCon?: boolean; visible: boolean; onClose: () => void }) {
+function ViewerModal({ doc, isRateCon, loadId, visible, onClose }: { doc: LoadDocument | null; isRateCon?: boolean; loadId?: string; visible: boolean; onClose: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
 
   React.useEffect(() => {
     if (visible && doc) {
       setUrl(null);
-      const fetcher = isRateCon ? getRateConSignedUrl : getDocumentSignedUrl;
-      fetcher(doc.storagePath, 3600).then(setUrl);
+      void fetchSignedUrl(doc, !!isRateCon, loadId).then(setUrl);
     }
-  }, [visible, doc, isRateCon]);
+  }, [visible, doc, isRateCon, loadId]);
 
   if (!doc) return null;
 
@@ -133,12 +147,13 @@ function ViewerModal({ doc, isRateCon, visible, onClose }: { doc: LoadDocument |
 interface Props {
   eventId:     string;
   orgId:       string;
-  rateConPath?: string;
+  loadId?:     string;        // needed to resolve the rate-con signed URL
+  rateConPath?: string;       // null/missing means no rate con attached
   width:       number;
 }
 
 /** Read-only documents tab — list + tap to view. No upload UI. */
-export function DocumentsView({ eventId, orgId, rateConPath, width }: Props) {
+export function DocumentsView({ eventId, orgId, loadId, rateConPath, width }: Props) {
   const [viewerDoc, setViewerDoc] = useState<LoadDocument | null>(null);
   const [viewerIsRateCon, setViewerIsRateCon] = useState(false);
 
@@ -147,11 +162,11 @@ export function DocumentsView({ eventId, orgId, rateConPath, width }: Props) {
     queryFn:  () => fetchDocuments(eventId, orgId),
   });
 
-  // Synthesize a Rate Con "doc" from the event's rate_con_pdf storage path.
+  // Synthesize a Rate Con "doc" so the row UI can render it. The id is
+  // never used for URL resolution (we look up via loadId instead).
   const rateConDoc: LoadDocument | null = rateConPath ? {
     id:          "rate-con",
     eventId,
-    storagePath: rateConPath,
     fileName:    rateConPath.split("/").pop() ?? "Rate Con",
     kind:        "other",
     uploadedAt:  "",
@@ -188,6 +203,7 @@ export function DocumentsView({ eventId, orgId, rateConPath, width }: Props) {
               <DocumentRow
                 doc={rateConDoc}
                 isRateCon
+                loadId={loadId}
                 onPress={() => { setViewerIsRateCon(true); setViewerDoc(rateConDoc); }}
               />
             ) : null}
@@ -205,6 +221,7 @@ export function DocumentsView({ eventId, orgId, rateConPath, width }: Props) {
       <ViewerModal
         doc={viewerDoc}
         isRateCon={viewerIsRateCon}
+        loadId={loadId}
         visible={!!viewerDoc}
         onClose={() => { setViewerDoc(null); setViewerIsRateCon(false); }}
       />

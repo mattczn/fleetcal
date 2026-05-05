@@ -282,12 +282,11 @@ export async function restoreLoad(id: string, _orgId: string): Promise<void> {
   await railway.restoreLoad(id);
 }
 
-// Hard delete (purge after 30 days) stays on direct Supabase — no API
-// endpoint yet, and it's only ever invoked by the dispatcher to clean up
-// expired soft-deleted rows.
-export async function purgeLoad(id: string, orgId: string): Promise<void> {
-  const del = await supabase.from("events").delete().eq("id", id).eq("org_id", orgId);
-  if (del.error) throw new Error(del.error.message);
+// Mobile no longer hard-deletes loads. Expired soft-deletes are purged
+// from the web (or via a future scheduled job). Calling this throws so
+// stale callers fail fast.
+export async function purgeLoad(_id: string, _orgId: string): Promise<void> {
+  throw new Error("purgeLoad is not available on mobile. Use the web Trash view to permanently delete loads.");
 }
 
 /**
@@ -347,46 +346,22 @@ export interface RecentStop {
 
 /**
  * Returns recently-used distinct facility/address combos from the org's stops
- * history. Ordered by recency, deduped by (facility_name, address). Useful as
- * a third source of suggestions alongside saved_locations and Google Places.
+ * history. Ordered by recency, deduped server-side by (facility_name, address).
  */
 export async function fetchRecentStops(
-  orgId: string,
+  _orgId: string,
   query: string,
   limit = 8,
 ): Promise<RecentStop[]> {
   const q = query.trim();
   if (!q) return [];
-  // Pull a generous batch and dedupe in JS — Supabase JS client doesn't support
-  // distinct/GROUP BY directly, so this is the simplest path.
-  const { data, error } = await supabase
-    .from("stops")
-    .select("facility_name,address,city,lat,lng,timezone,created_at")
-    .eq("org_id", orgId)
-    .or(`facility_name.ilike.%${q}%,address.ilike.%${q}%`)
-    .order("created_at", { ascending: false })
-    .limit(80);
-  if (error) { console.warn("fetchRecentStops:", error.message); return []; }
-  const seen = new Set<string>();
-  const out: RecentStop[] = [];
-  for (const r of (data ?? []) as Array<{
-    facility_name: string | null; address: string | null; city: string | null;
-    lat: number | null; lng: number | null; timezone: string | null;
-  }>) {
-    const key = `${(r.facility_name ?? "").toLowerCase()}|${(r.address ?? "").toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      facilityName: r.facility_name ?? undefined,
-      address:      r.address       ?? undefined,
-      city:         r.city          ?? undefined,
-      lat:          r.lat           ?? undefined,
-      lng:          r.lng           ?? undefined,
-      timezone:     r.timezone      ?? undefined,
-    });
-    if (out.length >= limit) break;
+  try {
+    const { recentStops } = await railway.listRecentStops({ q, limit });
+    return recentStops;
+  } catch (err) {
+    console.warn("fetchRecentStops:", err);
+    return [];
   }
-  return out;
 }
 
 export interface SavedLocation {
@@ -566,7 +541,6 @@ export type DocumentKind = "bol" | "pod" | "scale" | "other";
 export interface LoadDocument {
   id:          string;
   eventId:     string;
-  storagePath: string;
   fileName:    string;
   mimeType?:   string;
   sizeBytes?:  number;
@@ -575,38 +549,31 @@ export interface LoadDocument {
   notes?:      string;
 }
 
-interface DbDocRow {
-  id: string; event_id: string; storage_path: string; file_name: string;
-  mime_type: string | null; size_bytes: number | null; kind: string;
-  uploaded_at: string; notes: string | null;
-}
-
-// Documents stays on direct Supabase for now — the API's DocumentSummary
-// shape doesn't expose storagePath, which DocumentsView still needs to
-// build signed URLs via supabase storage. Phase 3 will move this together
-// with getDocumentSignedUrl / getRateConSignedUrl over to the API.
-export async function fetchDocuments(eventId: string, orgId: string): Promise<LoadDocument[]> {
-  const { data, error } = await supabase
-    .from("load_documents")
-    .select("id,event_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at,notes")
-    .eq("event_id", eventId)
-    .eq("org_id",   orgId)
-    .order("uploaded_at", { ascending: false });
-  if (error) {
-    if (error.code !== "42P01") console.error("fetchDocuments:", error);
+/**
+ * List documents for the load this event belongs to. Returns [] for non-
+ * revenue events (no parent load). Use `railway.getDocumentUrl(doc.id)` to
+ * resolve a signed URL when you need to view/download.
+ */
+export async function fetchDocuments(eventId: string, _orgId: string): Promise<LoadDocument[]> {
+  try {
+    const { loads } = await railway.getEvent(eventId);
+    const loadId = loads.find(l => l.id === eventId)?.loadId ?? loads[0]?.loadId;
+    if (!loadId) return [];
+    const { documents } = await railway.listLoadDocuments(loadId);
+    return documents.map((d) => ({
+      id:         d.id,
+      eventId,
+      fileName:   d.fileName,
+      mimeType:   d.mimeType,
+      sizeBytes:  d.sizeBytes,
+      kind:       d.kind as DocumentKind,
+      uploadedAt: d.uploadedAt,
+      notes:      undefined, // DocumentSummary doesn't expose notes; rare anyway
+    }));
+  } catch (err) {
+    console.error("fetchDocuments:", err);
     return [];
   }
-  return ((data ?? []) as DbDocRow[]).map((r) => ({
-    id:          r.id,
-    eventId:     r.event_id,
-    storagePath: r.storage_path,
-    fileName:    r.file_name,
-    mimeType:    r.mime_type ?? undefined,
-    sizeBytes:   r.size_bytes ?? undefined,
-    kind:        (r.kind as DocumentKind) ?? "other",
-    uploadedAt:  r.uploaded_at,
-    notes:       r.notes ?? undefined,
-  }));
 }
 
 export type TrailerCategory = "Swing" | "Roll Up" | "Flat Bed" | "Other";
@@ -720,17 +687,9 @@ export async function updateLoadStatus(id: string, _orgId: string, status: LoadS
   await railway.updateEvent(id, { status });
 }
 
-export async function getDocumentSignedUrl(storagePath: string, expiresInSec = 3600): Promise<string | null> {
-  const { data, error } = await supabase.storage.from("load-documents").createSignedUrl(storagePath, expiresInSec);
-  if (error) { console.error("getDocumentSignedUrl:", error); return null; }
-  return data?.signedUrl ?? null;
-}
-
-export async function getRateConSignedUrl(storagePath: string, expiresInSec = 3600): Promise<string | null> {
-  const { data, error } = await supabase.storage.from("rate-cons").createSignedUrl(storagePath, expiresInSec);
-  if (error) { console.error("getRateConSignedUrl:", error); return null; }
-  return data?.signedUrl ?? null;
-}
+// getDocumentSignedUrl / getRateConSignedUrl removed — callers now go
+// through railway.getDocumentUrl(documentId) and railway.getRateConUrl(loadId)
+// directly (see DocumentsView).
 
 // ── Create new load + upload rate con PDF ─────────────────────────────────────
 

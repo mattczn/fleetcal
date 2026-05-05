@@ -540,6 +540,25 @@ export interface UpdateOrgSettingsRequest {
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 
+// ── /v1/stops/recent ────────────────────────────────────────────────────
+//
+// Returns recently-used distinct facility / address combos from the org's
+// stops history, matching `q` (ilike facility_name or address). Deduped by
+// (facility_name, address); ordered by most-recent stop first.
+
+export interface RecentStop {
+  facilityName?: string;
+  address?:      string;
+  city?:         string;
+  lat?:          number;
+  lng?:          number;
+  timezone?:     string;
+}
+
+export interface ListRecentStopsResponse {
+  recentStops: RecentStop[];
+}
+
 // ── /v1/loads/:loadId/check-calls ───────────────────────────────────────
 
 export interface ListCheckCallsResponse { checkCalls: CheckCall[]; }

@@ -1953,6 +1953,7 @@ export default function LoadDetail() {
           <DocumentsView
             eventId={load.id}
             orgId={orgId}
+            loadId={load.loadId}
             rateConPath={load.rateConPdf}
             width={SCREEN_W}
           />

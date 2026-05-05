@@ -47,6 +47,7 @@ import type {
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
   GetEventResponse,
+  ListRecentStopsResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -234,6 +235,13 @@ class RailwayClient {
   getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }
   updateOrgSettings(body: UpdateOrgSettingsRequest) {
     return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
+  }
+
+  // ── Stops ─────────────────────────────────────────────────────────────
+  listRecentStops(query: { q: string; limit?: number }) {
+    const qs = new URLSearchParams({ q: query.q });
+    if (query.limit != null) qs.set('limit', String(query.limit));
+    return this.req<ListRecentStopsResponse>('GET', `/v1/stops/recent?${qs.toString()}`);
   }
 
   // ── Check calls ───────────────────────────────────────────────────────
