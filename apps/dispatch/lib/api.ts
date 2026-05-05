@@ -13,15 +13,21 @@ import type { Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer 
  * `orgId` is unused — kept in the signature for caller compatibility; the
  * Railway endpoint reads it from the JWT.
  */
-export async function fetchDriverAssetPrefs(_orgId: string): Promise<Map<number, number>> {
+/**
+ * Map<assetId, driverId> shape used to be a real `Map` here, but the
+ * React Query AsyncStorage persister round-trips through JSON.stringify
+ * which silently turns a Map into `{}` on the way back. Use a plain
+ * record so it survives persistence.
+ */
+export async function fetchDriverAssetPrefs(_orgId: string): Promise<Record<number, number>> {
   try {
     const { prefs } = await railway.listDriverAssetPrefs();
-    const map = new Map<number, number>();
-    for (const p of prefs) map.set(p.assetId, p.driverId);
-    return map;
+    const out: Record<number, number> = {};
+    for (const p of prefs) out[p.assetId] = p.driverId;
+    return out;
   } catch (err) {
     console.error("fetchDriverAssetPrefs:", err);
-    return new Map();
+    return {};
   }
 }
 

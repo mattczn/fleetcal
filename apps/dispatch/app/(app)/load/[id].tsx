@@ -2236,7 +2236,7 @@ export default function LoadDetail() {
             if (a.id === currentAssetId) return;
             const patch: Record<string, unknown> = { asset_id: a.id };
             // Auto-stage preferred driver for the new asset (silent — user can override).
-            const prefDriverId = driverPrefs?.get(a.id);
+            const prefDriverId = driverPrefs?.[a.id];
             if (prefDriverId != null) {
               const prefDriver = drivers.find((d) => d.id === prefDriverId);
               if (prefDriver) {

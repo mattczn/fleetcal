@@ -463,7 +463,7 @@ export default function NewLoadScreen() {
             setAssetPickerVisible(false);
             const next: Partial<Draft> = { assetId: a.id };
             // Auto-fill preferred driver
-            const prefId = driverPrefs?.get(a.id);
+            const prefId = driverPrefs?.[a.id];
             if (prefId != null) {
               const d = drivers.find((x) => x.id === prefId);
               if (d) { next.driverId = d.id; next.driverName = d.name; }

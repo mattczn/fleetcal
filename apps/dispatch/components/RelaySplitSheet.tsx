@@ -27,7 +27,7 @@ interface Props {
   stops:         Stop[];      // current stops list (used for position picker)
   assets:        Asset[];
   drivers:       Driver[];
-  driverPrefs?:  Map<number, number>;
+  driverPrefs?:  Record<number, number>;
   pickupAssetId: number;
   saving:        boolean;
   onClose:       () => void;
@@ -261,7 +261,7 @@ export function RelaySplitSheet({
   function pickAsset(a: Asset) {
     setAssetPickerVisible(false);
     setDelivAssetId(a.id);
-    const prefId = driverPrefs?.get(a.id);
+    const prefId = driverPrefs?.[a.id];
     if (prefId != null) {
       const d = drivers.find((x) => x.id === prefId);
       if (d) {
