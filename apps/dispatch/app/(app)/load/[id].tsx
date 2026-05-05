@@ -1524,8 +1524,11 @@ export default function LoadDetail() {
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
-  const truckLoc = load?.motiveVehicleId
-    ? motiveLocations.find((l) => l.vehicleId === load.motiveVehicleId) ?? null
+  // Resolve the motive vehicle id off the load's asset, not the load — the
+  // events/loads tables don't carry motive_vehicle_id; it lives on assets.
+  const loadAsset = load ? assetsForPicker.find((a) => a.id === load.assetId) ?? null : null;
+  const truckLoc = loadAsset?.motiveVehicleId
+    ? motiveLocations.find((l) => l.vehicleId === loadAsset.motiveVehicleId) ?? null
     : null;
 
   // Tracks the wall-clock time of our most recent local save so we can ignore
