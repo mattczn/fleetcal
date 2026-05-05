@@ -313,16 +313,34 @@ export default function MapScreen() {
     staleTime: 60 * 1000,
   });
 
-  // Re-filter on each render so the cached data is still correct as time
-  // passes (e.g. a load whose end was 11:59 should drop off at noon).
-  const activeLoadsArr = useMemo<Load[]>(() => {
+  // Bucket the now±12h window into three groups for the Today's Loads sheet:
+  //   - In transit:     start ≤ now ≤ end
+  //   - Pickups soon:   now < start ≤ now + 4h
+  //   - Just delivered: now − 4h ≤ end < now
+  // Re-derive on every render so a load slides between buckets as time passes.
+  const { inTransitArr, pickupsSoonArr, justDeliveredArr } = useMemo(() => {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
-    const nowNaive = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
-                     `T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    return inTransitWindow
-      .filter((l) => l.start <= nowNaive && (l.end ?? l.start) >= nowNaive)
-      .sort((a, b) => (a.assetName ?? "").localeCompare(b.assetName ?? ""));
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+      `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const nowNaive = fmt(now);
+    const fourFwd  = fmt(new Date(now.getTime() + 4 * 60 * 60 * 1000));
+    const fourBack = fmt(new Date(now.getTime() - 4 * 60 * 60 * 1000));
+
+    const inTransit:     Load[] = [];
+    const pickupsSoon:   Load[] = [];
+    const justDelivered: Load[] = [];
+    for (const l of inTransitWindow) {
+      const end = l.end ?? l.start;
+      if (l.start <= nowNaive && end >= nowNaive)        inTransit.push(l);
+      else if (l.start > nowNaive && l.start <= fourFwd) pickupsSoon.push(l);
+      else if (end < nowNaive && end >= fourBack)        justDelivered.push(l);
+    }
+    inTransit.sort((a, b)     => (a.assetName ?? "").localeCompare(b.assetName ?? ""));
+    pickupsSoon.sort((a, b)   => a.start.localeCompare(b.start));   // soonest first
+    justDelivered.sort((a, b) => (b.end ?? b.start).localeCompare(a.end ?? a.start)); // most recent first
+    return { inTransitArr: inTransit, pickupsSoonArr: pickupsSoon, justDeliveredArr: justDelivered };
   }, [inTransitWindow]);
 
   // Asset-id → in-transit load. Used by the truck-click flow to focus a
@@ -330,9 +348,9 @@ export default function MapScreen() {
   // two loads in flight (rare), keep the first one (already sorted).
   const activeLoadsByAsset = useMemo<Map<number, Load>>(() => {
     const m = new Map<number, Load>();
-    for (const l of activeLoadsArr) if (!m.has(l.assetId)) m.set(l.assetId, l);
+    for (const l of inTransitArr) if (!m.has(l.assetId)) m.set(l.assetId, l);
     return m;
-  }, [activeLoadsArr]);
+  }, [inTransitArr]);
 
   const allTrucks: TruckPin[] = useMemo(
     () => locations
@@ -372,9 +390,12 @@ export default function MapScreen() {
     return m;
   }, [assets]);
 
+  // Focused load can come from any of the three buckets (in transit, pickups
+  // soon, just delivered) — fall back to the full window so a load tapped
+  // from the sheet always resolves.
   const focusedLoad: Load | null = useMemo(
-    () => focusedLoadId ? activeLoadsArr.find((l) => l.id === focusedLoadId) ?? null : null,
-    [focusedLoadId, activeLoadsArr],
+    () => focusedLoadId ? inTransitWindow.find((l) => l.id === focusedLoadId) ?? null : null,
+    [focusedLoadId, inTransitWindow],
   );
 
   const focused: FocusedRoute | null = useMemo(() => {
@@ -485,7 +506,7 @@ export default function MapScreen() {
       >
         <RouteIcon size={14} color="#ffffff" strokeWidth={2.4} />
         <Text style={[txt(800), { fontSize: 12, color: "#ffffff", letterSpacing: 0.3 }]}>
-          Routes ({activeLoadsArr.length})
+          Today's Loads ({inTransitArr.length + pickupsSoonArr.length + justDeliveredArr.length})
         </Text>
       </TouchableOpacity>
 
@@ -570,7 +591,9 @@ export default function MapScreen() {
 
       <ActiveLoadsSheet
         visible={routesSheetOpen}
-        loads={activeLoadsArr}
+        inTransit={inTransitArr}
+        pickupsSoon={pickupsSoonArr}
+        justDelivered={justDeliveredArr}
         assetById={assetById}
         onClose={() => setRoutesSheetOpen(false)}
         onSelect={(load) => {

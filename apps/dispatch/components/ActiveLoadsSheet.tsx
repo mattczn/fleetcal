@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, View, Text, TouchableOpacity, Pressable, FlatList } from "react-native";
+import { Modal, View, Text, TouchableOpacity, Pressable, SectionList } from "react-native";
 import { X, Truck } from "lucide-react-native";
 import { txt } from "@/lib/font";
 import type { Asset, Load, LoadStatus } from "@/lib/types";
@@ -29,15 +29,27 @@ const STATUS_LABEL: Record<LoadStatus, string> = {
 };
 
 interface Props {
-  visible:  boolean;
-  loads:    Load[];
+  visible:    boolean;
+  inTransit:  Load[];
+  pickupsSoon: Load[];
+  justDelivered: Load[];
   /** Asset lookup keyed by assetId, for color + unit number on each row. */
-  assetById: Map<number, Asset>;
-  onClose:  () => void;
-  onSelect: (load: Load) => void;
+  assetById:  Map<number, Asset>;
+  onClose:    () => void;
+  onSelect:   (load: Load) => void;
 }
 
-export function ActiveLoadsSheet({ visible, loads, assetById, onClose, onSelect }: Props) {
+export function ActiveLoadsSheet({
+  visible, inTransit, pickupsSoon, justDelivered, assetById, onClose, onSelect,
+}: Props) {
+  const sections = [
+    { title: "In transit",      data: inTransit },
+    { title: "Pickups soon",    data: pickupsSoon },
+    { title: "Just delivered",  data: justDelivered },
+  ].filter((s) => s.data.length > 0);
+
+  const total = inTransit.length + pickupsSoon.length + justDelivered.length;
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable
@@ -60,10 +72,10 @@ export function ActiveLoadsSheet({ visible, loads, assetById, onClose, onSelect 
           }}>
             <View style={{ flex: 1 }}>
               <Text style={[txt(800), { fontSize: 16, color: "#202124" }]}>
-                Active Routes
+                Today's Loads
               </Text>
               <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 2 }]}>
-                Tap a load to map its route.
+                In transit, pickups in next 4h, deliveries in last 4h.
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
@@ -71,22 +83,37 @@ export function ActiveLoadsSheet({ visible, loads, assetById, onClose, onSelect 
             </TouchableOpacity>
           </View>
 
-          {loads.length === 0 ? (
+          {total === 0 ? (
             <View style={{ paddingVertical: 50, alignItems: "center" }}>
               <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
-                No loads in progress right now.
+                Nothing on the clock right now.
               </Text>
             </View>
           ) : (
-            <FlatList
-              data={loads}
+            <SectionList
+              sections={sections}
               keyExtractor={(l) => l.id}
               keyboardShouldPersistTaps="handled"
+              stickySectionHeadersEnabled={false}
+              renderSectionHeader={({ section: { title } }) => (
+                <View style={{
+                  paddingHorizontal: 18, paddingTop: 16, paddingBottom: 6,
+                  backgroundColor: "#ffffff",
+                }}>
+                  <Text style={[txt(800), {
+                    fontSize: 11, letterSpacing: 0.6, color: "#5f6368",
+                    textTransform: "uppercase",
+                  }]}>
+                    {title}
+                  </Text>
+                </View>
+              )}
               renderItem={({ item: load }) => {
                 const tint = STATUS_TINT[load.status];
                 const asset = assetById.get(load.assetId);
                 const color = asset?.color ?? "#1a73e8";
-                const assetName = asset?.name ?? load.assetName ?? "—";
+                const driver = load.driverName?.trim() || "Unassigned";
+                const truckNum = asset?.unit ? `#${asset.unit}` : asset?.name ?? "—";
                 const loadNumLabel = load.loadNum
                   ? `Load #${load.loadNum}`
                   : `Load #${load.internalLoadId ?? "—"}`;
@@ -110,7 +137,7 @@ export function ActiveLoadsSheet({ visible, loads, assetById, onClose, onSelect 
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
                         <Text style={[txt(800), { fontSize: 14, color: "#202124", flexShrink: 1 }]} numberOfLines={1}>
-                          {assetName}{asset?.unit ? ` · #${asset.unit}` : ""}
+                          {driver} · {truckNum}
                         </Text>
                         <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
                           <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
