@@ -449,6 +449,8 @@ interface StopsTabProps {
   load:        Load;
   width:       number;
   truckLoc?:   MotiveLocation | null;
+  /** Asset color used to tint the live truck pin on the route map. */
+  assetColor?: string | null;
   onCopied:    (msg: string) => void;
   editMode:    boolean;
   draftStops?: Stop[]; // when editing, rendered list comes from draft
@@ -725,7 +727,7 @@ function RelayHandoffBanner({ mode, partnerName }: { mode: "pickup" | "delivery"
 }
 
 function StopsTab({
-  load, width, truckLoc, onCopied,
+  load, width, truckLoc, assetColor, onCopied,
   editMode, draftStops, dirty, isSaving,
   onMoveStop, onDeleteStop, onTapStop, onAddStop, onSplitRelay, canSplitRelay,
   onRemoveRelay, removingRelay, onOpenPartner,
@@ -884,7 +886,12 @@ function StopsTab({
   return (
     <ScrollView style={{ width, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
       <View style={{ marginBottom: 14 }}>
-        <RouteMap stops={combined.map((e) => e.stop)} />
+        <RouteMap
+          stops={combined.map((e) => e.stop)}
+          truckLat={truckLoc?.lat}
+          truckLng={truckLoc?.lon}
+          assetColor={assetColor ?? undefined}
+        />
       </View>
 
       <RelayDisclaimer load={load} onOpenPartner={onOpenPartner} />
@@ -2123,6 +2130,7 @@ export default function LoadDetail() {
           load={load}
           width={SCREEN_W}
           truckLoc={truckLoc}
+          assetColor={loadAsset?.color}
           onCopied={showToast}
           editMode={stopsEditMode}
           draftStops={stopsDraft ?? undefined}

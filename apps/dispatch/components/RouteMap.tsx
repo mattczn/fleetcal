@@ -45,12 +45,19 @@ function fmtTime(iso?: string): string {
   return `${h12}:${mStr} ${ampm}`;
 }
 
+interface TruckPos { lat: number; lon: number; color: string }
+
 /**
  * Build the HTML for a Google Maps JavaScript API map. Receives stops via
  * embedded JSON, posts marker clicks back to RN via window.ReactNativeWebView.
  * `interactive=false` is used for the thumbnail (gestures off).
  */
-function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): string {
+function buildMapHtml(
+  stops: Stop[],
+  apiKey: string,
+  interactive: boolean,
+  truck: TruckPos | null,
+): string {
   const geocoded = stops.filter((s) => typeof s.lat === "number" && typeof s.lng === "number");
   const stopsJson = JSON.stringify(
     geocoded.map((s) => ({
@@ -65,6 +72,7 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
   );
   const colorsJson = JSON.stringify(STOP_COLOR);
   const interactiveStr = interactive ? "true" : "false";
+  const truckJson = JSON.stringify(truck);
 
   return `<!DOCTYPE html>
 <html>
@@ -89,6 +97,14 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
     background: #fff; border: 2.5px solid #16a34a;
     box-shadow: 0 1px 3px rgba(0,0,0,.25);
   }
+  .truck-pin {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--c, #1a73e8);
+    border: 3px solid #fff;
+    box-shadow: 0 3px 7px rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .truck-pin svg { stroke: #fff; }
 </style>
 </head>
 <body>
@@ -97,6 +113,8 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
   const stops      = ${stopsJson};
   const COLORS     = ${colorsJson};
   const interactive = ${interactiveStr};
+  const truck      = ${truckJson};
+  const truckSvg   = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></svg>';
   const post = (msg) => { try { window.ReactNativeWebView.postMessage(JSON.stringify(msg)); } catch(e){} };
   const markersById = {};
   const checkinMarkersById = {};
@@ -104,11 +122,12 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
   let pendingFocusIndex = null;
 
   window.initMap = function() {
-    if (stops.length === 0) {
+    if (stops.length === 0 && !truck) {
       document.getElementById('map').innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;color:#9aa0a6;font-family:-apple-system;font-size:13px">No coordinates available</div>';
       return;
     }
     const lats = stops.map(s => s.lat), lngs = stops.map(s => s.lng);
+    if (truck) { lats.push(truck.lat); lngs.push(truck.lon); }
     const minLat = Math.min(...lats), maxLat = Math.max(...lats);
     const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
 
@@ -169,6 +188,13 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
       }
     });
 
+    // Live truck marker — colored circle (asset color) with a white truck
+    // glyph. Sits above stops so a co-located pin doesn't fully hide it.
+    if (truck) {
+      const truckHtml = '<div class="truck-pin" style="--c:' + truck.color + '">' + truckSvg + '</div>';
+      makeOverlay({ lat: truck.lat, lng: truck.lon }, truckHtml, null);
+    }
+
     // Road-following polyline via Directions Service (chained for >2 stops)
     if (stops.length >= 2) {
       const directionsService = new google.maps.DirectionsService();
@@ -196,9 +222,15 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
 
       const bounds = new google.maps.LatLngBounds();
       stops.forEach(s => bounds.extend({ lat: s.lat, lng: s.lng }));
+      if (truck) bounds.extend({ lat: truck.lat, lng: truck.lon });
       map.fitBounds(bounds, 50);
-    } else {
-      map.setCenter({ lat: stops[0].lat, lng: stops[0].lng });
+    } else if (stops.length === 1) {
+      const bounds = new google.maps.LatLngBounds();
+      bounds.extend({ lat: stops[0].lat, lng: stops[0].lng });
+      if (truck) bounds.extend({ lat: truck.lat, lng: truck.lon });
+      map.fitBounds(bounds, 80);
+    } else if (truck) {
+      map.setCenter({ lat: truck.lat, lng: truck.lon });
       map.setZoom(10);
     }
 
@@ -232,9 +264,14 @@ function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): stri
 interface Props {
   stops:   Stop[];
   height?: number;
+  /** Live truck position to overlay on the route. Hidden when null. */
+  truckLat?:   number | null;
+  truckLng?:   number | null;
+  /** Asset color to tint the truck pin. Falls back to brand blue. */
+  assetColor?: string | null;
 }
 
-export function RouteMap({ stops, height = 220 }: Props) {
+export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }: Props) {
   const [fullscreen, setFullscreen]   = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const insets = useSafeAreaInsets();
@@ -247,8 +284,19 @@ export function RouteMap({ stops, height = 220 }: Props) {
 
   const apiKey = env.googleMapsKey ?? "";
 
-  const thumbnailHtml  = useMemo(() => buildMapHtml(stops, apiKey, false), [stops, apiKey]);
-  const fullscreenHtml = useMemo(() => buildMapHtml(stops, apiKey, true),  [stops, apiKey]);
+  const thumbnailHtml = useMemo(() => {
+    const truck: TruckPos | null = (truckLat != null && truckLng != null)
+      ? { lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8" }
+      : null;
+    return buildMapHtml(stops, apiKey, false, truck);
+  }, [stops, apiKey, truckLat, truckLng, assetColor]);
+
+  const fullscreenHtml = useMemo(() => {
+    const truck: TruckPos | null = (truckLat != null && truckLng != null)
+      ? { lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8" }
+      : null;
+    return buildMapHtml(stops, apiKey, true, truck);
+  }, [stops, apiKey, truckLat, truckLng, assetColor]);
 
   function focusStopInWebview(index: number) {
     const js = `document.dispatchEvent(new CustomEvent('rn:focus-stop',{detail:{index:${index}}})); true;`;
