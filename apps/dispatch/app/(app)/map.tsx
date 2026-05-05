@@ -366,9 +366,9 @@ export default function MapScreen() {
     }
   }, [focusAssetId, assets, activeLoadsByAsset, focusedLoadId, selectedVehicleId]);
 
-  const assetColorById = useMemo(() => {
-    const m = new Map<number, string>();
-    for (const a of assets) m.set(a.id, a.color ?? "#1a73e8");
+  const assetById = useMemo(() => {
+    const m = new Map<number, Asset>();
+    for (const a of assets) m.set(a.id, a);
     return m;
   }, [assets]);
 
@@ -571,7 +571,7 @@ export default function MapScreen() {
       <ActiveLoadsSheet
         visible={routesSheetOpen}
         loads={activeLoadsArr}
-        assetColorById={assetColorById}
+        assetById={assetById}
         onClose={() => setRoutesSheetOpen(false)}
         onSelect={(load) => {
           setRoutesSheetOpen(false);

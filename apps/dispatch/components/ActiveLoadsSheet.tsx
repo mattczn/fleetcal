@@ -1,8 +1,8 @@
 import React from "react";
 import { Modal, View, Text, TouchableOpacity, Pressable, FlatList } from "react-native";
-import { X, Truck, MapPin } from "lucide-react-native";
+import { X, Truck } from "lucide-react-native";
 import { txt } from "@/lib/font";
-import type { Load, LoadStatus, Stop } from "@/lib/types";
+import type { Asset, Load, LoadStatus } from "@/lib/types";
 
 const STATUS_TINT: Record<LoadStatus, { bg: string; fg: string }> = {
   scheduled:  { bg: "#f1f3f4", fg: "#5f6368" },
@@ -28,27 +28,16 @@ const STATUS_LABEL: Record<LoadStatus, string> = {
   problem:    "Problem",
 };
 
-function pickupOf(load: Load): Stop | undefined {
-  return load.stops.find((s) => s.type === "pickup");
-}
-function deliveryOf(load: Load): Stop | undefined {
-  return [...load.stops].reverse().find((s) => s.type === "delivery" || s.type === "drop_hook");
-}
-function locLabel(s?: Stop): string {
-  if (!s) return "—";
-  return s.city ?? s.facilityName ?? s.address ?? "—";
-}
-
 interface Props {
   visible:  boolean;
   loads:    Load[];
-  /** Asset color lookup keyed by assetId, for the leading swatch. */
-  assetColorById: Map<number, string>;
+  /** Asset lookup keyed by assetId, for color + unit number on each row. */
+  assetById: Map<number, Asset>;
   onClose:  () => void;
   onSelect: (load: Load) => void;
 }
 
-export function ActiveLoadsSheet({ visible, loads, assetColorById, onClose, onSelect }: Props) {
+export function ActiveLoadsSheet({ visible, loads, assetById, onClose, onSelect }: Props) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable
@@ -95,9 +84,12 @@ export function ActiveLoadsSheet({ visible, loads, assetColorById, onClose, onSe
               keyboardShouldPersistTaps="handled"
               renderItem={({ item: load }) => {
                 const tint = STATUS_TINT[load.status];
-                const color = assetColorById.get(load.assetId) ?? "#1a73e8";
-                const pickup = pickupOf(load);
-                const delivery = deliveryOf(load);
+                const asset = assetById.get(load.assetId);
+                const color = asset?.color ?? "#1a73e8";
+                const assetName = asset?.name ?? load.assetName ?? "—";
+                const loadNumLabel = load.loadNum
+                  ? `Load #${load.loadNum}`
+                  : `Load #${load.internalLoadId ?? "—"}`;
                 return (
                   <TouchableOpacity
                     activeOpacity={0.7}
@@ -118,7 +110,7 @@ export function ActiveLoadsSheet({ visible, loads, assetColorById, onClose, onSe
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
                         <Text style={[txt(800), { fontSize: 14, color: "#202124", flexShrink: 1 }]} numberOfLines={1}>
-                          {load.assetName ?? "—"}
+                          {assetName}{asset?.unit ? ` · #${asset.unit}` : ""}
                         </Text>
                         <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
                           <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
@@ -126,17 +118,14 @@ export function ActiveLoadsSheet({ visible, loads, assetColorById, onClose, onSe
                           </Text>
                         </View>
                       </View>
-                      <Text style={[txt(700), { fontSize: 12, color: "#1a73e8", marginBottom: 2 }]} numberOfLines={1}>
-                        {load.loadNum ? `Load #${load.loadNum}` : `Load #${load.internalLoadId ?? "—"}`}
-                      </Text>
-                      {pickup || delivery ? (
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 1 }}>
-                          <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
-                          <Text style={[txt(500), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-                            {locLabel(pickup)} → {locLabel(delivery)}
-                          </Text>
-                        </View>
+                      {load.title ? (
+                        <Text style={[txt(600), { fontSize: 13, color: "#202124", marginBottom: 2 }]} numberOfLines={1}>
+                          {load.title}
+                        </Text>
                       ) : null}
+                      <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]} numberOfLines={1}>
+                        {loadNumLabel}
+                      </Text>
                     </View>
                   </TouchableOpacity>
                 );
