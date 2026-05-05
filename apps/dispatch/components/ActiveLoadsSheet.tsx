@@ -43,9 +43,9 @@ export function ActiveLoadsSheet({
   visible, inTransit, pickupsSoon, justDelivered, assetById, onClose, onSelect,
 }: Props) {
   const sections = [
-    { title: "In transit",      data: inTransit },
-    { title: "Pickups soon",    data: pickupsSoon },
-    { title: "Just delivered",  data: justDelivered },
+    { title: "In Transit",                       data: inTransit },
+    { title: "Picks Up Soon (Next 4 Hours)",     data: pickupsSoon },
+    { title: "Just Delivered (Past 4 Hours)",    data: justDelivered },
   ].filter((s) => s.data.length > 0);
 
   const total = inTransit.length + pickupsSoon.length + justDelivered.length;

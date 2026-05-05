@@ -435,6 +435,15 @@ export default function MapScreen() {
     ? allTrucks.find((t) => t.vehicleId === selectedVehicleId) ?? null
     : null;
 
+  // Every load in the now±12h window assigned to the selected asset, sorted
+  // by start time. Powers the clickable list inside the bottom card.
+  const selectedAssetLoads: Load[] = useMemo(() => {
+    if (!selectedAsset) return [];
+    return inTransitWindow
+      .filter((l) => l.assetId === selectedAsset.id)
+      .sort((a, b) => a.start.localeCompare(b.start));
+  }, [selectedAsset, inTransitWindow]);
+
   const isStandalone = !!focusAssetId;
 
   return (
@@ -555,35 +564,65 @@ export default function MapScreen() {
             marginTop: 12, paddingTop: 12,
             borderTopWidth: 1, borderTopColor: "#f1f3f4",
           }}>
-            {focusedLoad ? (
-              <TouchableOpacity
-                onPress={() => router.push({ pathname: "/load/[id]", params: { id: focusedLoad.id } })}
-                activeOpacity={0.7}
-              >
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                  <Text style={[txt(800), { fontSize: 11, letterSpacing: 0.6, color: "#5f6368", textTransform: "uppercase" }]}>
-                    Current Load
-                  </Text>
-                  <View style={{
-                    paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
-                    backgroundColor: STATUS_TINT[focusedLoad.status].bg,
-                  }}>
-                    <Text style={[txt(800), { fontSize: 9, color: STATUS_TINT[focusedLoad.status].fg, letterSpacing: 0.3 }]}>
-                      {STATUS_LABEL[focusedLoad.status]}
-                    </Text>
-                  </View>
-                </View>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Text style={[txt(700), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
-                    {focusedLoad.title}
-                  </Text>
-                  <ChevronRight size={14} color="#9aa0a6" strokeWidth={2.2} />
-                </View>
-              </TouchableOpacity>
-            ) : (
+            <Text style={[txt(800), {
+              fontSize: 11, letterSpacing: 0.6, color: "#5f6368",
+              textTransform: "uppercase", marginBottom: 8,
+            }]}>
+              Loads (24h)
+            </Text>
+            {selectedAssetLoads.length === 0 ? (
               <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6" }]}>
-                No active load right now.
+                No loads scheduled in the next 12 hours.
               </Text>
+            ) : (
+              selectedAssetLoads.map((l) => {
+                const isFocused = l.id === focusedLoadId;
+                const tint = STATUS_TINT[l.status];
+                return (
+                  <View
+                    key={l.id}
+                    style={{
+                      flexDirection: "row", alignItems: "center", gap: 8,
+                      paddingVertical: 8, paddingHorizontal: 10,
+                      marginBottom: 4,
+                      borderRadius: 10,
+                      backgroundColor: isFocused ? "#e8f0fe" : "transparent",
+                    }}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      onPress={() => setFocusedLoadId(l.id)}
+                      style={{ flex: 1 }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                        <View style={{
+                          paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
+                          backgroundColor: tint.bg,
+                        }}>
+                          <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
+                            {STATUS_LABEL[l.status]}
+                          </Text>
+                        </View>
+                        <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]} numberOfLines={1}>
+                          {l.loadNum ? `Load #${l.loadNum}` : `Load #${l.internalLoadId ?? "—"}`}
+                        </Text>
+                      </View>
+                      {l.title ? (
+                        <Text style={[txt(600), { fontSize: 13, color: "#202124" }]} numberOfLines={1}>
+                          {l.title}
+                        </Text>
+                      ) : null}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => router.push({ pathname: "/load/[id]", params: { id: l.id } })}
+                      hitSlop={8}
+                      activeOpacity={0.7}
+                    >
+                      <ChevronRight size={16} color="#9aa0a6" strokeWidth={2.2} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })
             )}
           </View>
         </View>
