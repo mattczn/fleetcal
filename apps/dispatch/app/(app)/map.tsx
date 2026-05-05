@@ -392,9 +392,13 @@ export default function MapScreen() {
     };
   }, [focusedLoad, assets]);
 
-  // Always show every truck. Focusing a route just adds the polyline + stop
-  // markers; other trucks stay visible.
-  const trucks = allTrucks;
+  // When a route is focused, hide every other truck so the user is looking at
+  // just the asset on that route. The X on the bottom card clears focus and
+  // brings everyone back. If the focused load's asset has no Motive vehicle,
+  // there'll simply be no truck pins — the route polyline still renders.
+  const trucks = focused
+    ? allTrucks.filter((t) => t.vehicleId === focused.vehicleId)
+    : allTrucks;
 
   const html = useMemo(
     () => buildHtml(trucks, focused, env.googleMapsKey ?? ""),
@@ -572,6 +576,8 @@ export default function MapScreen() {
         onSelect={(load) => {
           setRoutesSheetOpen(false);
           setFocusedLoadId(load.id);
+          const asset = assets.find((a) => a.id === load.assetId);
+          setSelectedVehicleId(asset?.motiveVehicleId ?? null);
         }}
       />
     </View>
