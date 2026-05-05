@@ -27,6 +27,7 @@ import { BrokerEditSheet } from "@/components/BrokerEditSheet";
 import { StopEditSheet } from "@/components/StopEditSheet";
 import { RelaySplitSheet } from "@/components/RelaySplitSheet";
 import { EditableStopCard } from "@/components/EditableStopCard";
+import { AccessorialSheet } from "@/components/AccessorialSheet";
 import { Toast } from "@/components/Toast";
 import type { Accessorial, Load, LoadStatus, Stop, StopType } from "@/lib/types";
 import { txt } from "@/lib/font";
@@ -328,6 +329,102 @@ function LinkMetaRow({
       <ChevronRight size={14} color="#9aa0a6" strokeWidth={2.2} />
     </TouchableOpacity>
   );
+}
+
+const ACCESSORIAL_CATEGORY_LABEL: Record<string, string> = {
+  detention:    "Detention",
+  lumper:       "Lumper",
+  layover:      "Layover",
+  scale_ticket: "Scale Ticket",
+  other:        "Other",
+};
+
+const ACCESSORIAL_STATUS_TINT: Record<string, { bg: string; fg: string }> = {
+  requested: { bg: "#fef3c7", fg: "#92400e" },
+  approved:  { bg: "#e6f4ea", fg: "#15803d" },
+  denied:    { bg: "#fce8e6", fg: "#b91c1c" },
+};
+
+function AccessorialCard({
+  acc, editable, onEdit,
+}: {
+  acc:      Accessorial;
+  editable: boolean;
+  onEdit:   () => void;
+}) {
+  const label = ACCESSORIAL_CATEGORY_LABEL[acc.category] ?? "Accessorial";
+  const statusTint = acc.status ? ACCESSORIAL_STATUS_TINT[acc.status] : null;
+  const inner = (
+    <View style={{
+      backgroundColor: "#ffffff",
+      borderRadius: 12,
+      borderWidth: 1, borderColor: "#e8eaed",
+      padding: 12,
+    }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Text style={[txt(800), { fontSize: 13, color: "#202124", flex: 1 }]} numberOfLines={1}>
+          {label}
+        </Text>
+        <Text style={[txt(800), { fontSize: 14, color: "#15803d" }]}>
+          {fmtMoney(acc.amount ?? 0)}
+        </Text>
+        {editable ? (
+          <Pencil size={13} color="#9aa0a6" strokeWidth={2.2} />
+        ) : null}
+      </View>
+      {acc.description ? (
+        <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 3 }]} numberOfLines={2}>
+          {acc.description}
+        </Text>
+      ) : null}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+        {acc.billable ? (
+          <View style={{
+            paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
+            backgroundColor: "#e8f0fe",
+          }}>
+            <Text style={[txt(800), { fontSize: 9, color: "#1558d6", letterSpacing: 0.3 }]}>
+              BILLABLE
+            </Text>
+          </View>
+        ) : (
+          <View style={{
+            paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
+            backgroundColor: "#f1f3f4",
+          }}>
+            <Text style={[txt(800), { fontSize: 9, color: "#5f6368", letterSpacing: 0.3 }]}>
+              NOT BILLABLE
+            </Text>
+          </View>
+        )}
+        {acc.payToDriver ? (
+          <View style={{
+            paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
+            backgroundColor: "#e6f4ea",
+          }}>
+            <Text style={[txt(800), { fontSize: 9, color: "#15803d", letterSpacing: 0.3 }]}>
+              PAY DRIVER{acc.payDriverName ? ` · ${acc.payDriverName.toUpperCase()}` : ""}
+            </Text>
+          </View>
+        ) : null}
+        {statusTint ? (
+          <View style={{
+            paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999,
+            backgroundColor: statusTint.bg,
+          }}>
+            <Text style={[txt(800), { fontSize: 9, color: statusTint.fg, letterSpacing: 0.3 }]}>
+              {(acc.status ?? "").toUpperCase()}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+  return editable ? (
+    <TouchableOpacity onPress={onEdit} activeOpacity={0.7}>
+      {inner}
+    </TouchableOpacity>
+  ) : inner;
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -873,6 +970,8 @@ function DetailsTab({
   loadedMiles, editMode, onEditField, dirty,
   onCancelEdit, onSaveEdit, isSaving,
   onDeleteLoad, isDeleting,
+  accessorials,
+  onAddAccessorial, onEditAccessorial,
 }: {
   load: Load;
   width: number;
@@ -891,12 +990,19 @@ function DetailsTab({
   isSaving: boolean;
   onDeleteLoad: () => void;
   isDeleting:   boolean;
+  /** Current accessorials list — draft when editing, otherwise from the load. */
+  accessorials:        Accessorial[];
+  onAddAccessorial:    () => void;
+  onEditAccessorial:   (acc: Accessorial) => void;
 }) {
   const refs   = load.refNums?.filter((r) => r.value) ?? [];
   const hasRef = !!load.loadNum || refs.length > 0;
   const hasFin = load.loadPrice != null || load.driverPay != null;
-  const accessorials: Accessorial[] = load.accessorials ?? [];
   const hasNotes = !!load.specialInstructions || !!load.notes;
+  const totalBillable = useMemo(
+    () => accessorials.filter((a) => a.billable).reduce((sum, a) => sum + (a.amount || 0), 0),
+    [accessorials],
+  );
   const ratePerMile = (load.loadPrice != null && loadedMiles != null && loadedMiles > 0)
     ? load.loadPrice / loadedMiles
     : null;
@@ -1034,26 +1140,57 @@ function DetailsTab({
       </Card>
 
       {/* Financial */}
-      {hasFin || loadedMiles != null || editMode ? (
+      {hasFin || loadedMiles != null || editMode || accessorials.length > 0 ? (
         <>
-          <SectionLabel>Financial</SectionLabel>
-          <Card>
-            <EditableRow
-              Icon={DollarSign} label="Load Price"
-              value={load.loadPrice != null ? fmtMoney(load.loadPrice) : null}
-              color="#15803d"
-              editing={editMode} modified={dirty.has("load_price")}
-              onEdit={editLoadPrice}
-            />
-            <EditableRow
-              Icon={DollarSign} label="Driver Pay"
-              value={load.driverPay != null ? fmtMoney(load.driverPay) : null}
-              color="#15803d"
-              editing={editMode} modified={dirty.has("driver_pay")}
-              onEdit={editDriverPay}
-              last
-            />
-          </Card>
+          <View style={{
+            flexDirection: "row", alignItems: "center",
+            marginTop: 18, marginBottom: 10,
+          }}>
+            <Text style={[txt(800), {
+              fontSize: 11, letterSpacing: 1.1, color: "#5f6368",
+              textTransform: "uppercase", flex: 1,
+            }]}>
+              Financial
+            </Text>
+            {editMode ? (
+              <TouchableOpacity
+                onPress={onAddAccessorial}
+                activeOpacity={0.7}
+                hitSlop={6}
+                style={{
+                  flexDirection: "row", alignItems: "center", gap: 4,
+                  paddingHorizontal: 10, paddingVertical: 6,
+                  borderRadius: 999,
+                  backgroundColor: "#e8f0fe",
+                }}
+              >
+                <Plus size={12} color="#1a73e8" strokeWidth={2.6} />
+                <Text style={[txt(800), { fontSize: 11, color: "#1a73e8", letterSpacing: 0.3 }]}>
+                  Accessorial
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          {hasFin || editMode ? (
+            <Card>
+              <EditableRow
+                Icon={DollarSign} label="Load Price"
+                value={load.loadPrice != null ? fmtMoney(load.loadPrice) : null}
+                color="#15803d"
+                editing={editMode} modified={dirty.has("load_price")}
+                onEdit={editLoadPrice}
+              />
+              <EditableRow
+                Icon={DollarSign} label="Driver Pay"
+                value={load.driverPay != null ? fmtMoney(load.driverPay) : null}
+                color="#15803d"
+                editing={editMode} modified={dirty.has("driver_pay")}
+                onEdit={editDriverPay}
+                last
+              />
+            </Card>
+          ) : null}
 
           {(loadedMiles != null || ratePerMile != null) ? (
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: hasFin ? 10 : 0 }}>
@@ -1085,24 +1222,38 @@ function DetailsTab({
               ) : null}
             </View>
           ) : null}
-        </>
-      ) : null}
 
-      {accessorials.length > 0 ? (
-        <>
-          <SectionLabel>Accessorials</SectionLabel>
-          <Card>
-            {accessorials.map((a, i) => {
-              const label = a.category || a.description || "Accessorial";
-              const value = a.amount != null ? fmtMoney(a.amount) : "—";
-              return (
-                <MetaRow key={a.id ?? i} Icon={DollarSign}
-                  label={label} value={value}
-                  last={i === accessorials.length - 1}
+          {accessorials.length > 0 ? (
+            <View style={{ marginTop: 10, gap: 8 }}>
+              {accessorials.map((a) => (
+                <AccessorialCard
+                  key={a.id}
+                  acc={a}
+                  editable={editMode}
+                  onEdit={() => onEditAccessorial(a)}
                 />
-              );
-            })}
-          </Card>
+              ))}
+            </View>
+          ) : null}
+
+          {totalBillable > 0 && load.loadPrice != null ? (
+            <View style={{
+              marginTop: 10,
+              paddingHorizontal: 12, paddingVertical: 10,
+              borderRadius: 12,
+              backgroundColor: "#f0fdf4",
+              borderWidth: 1, borderColor: "#bbf7d0",
+            }}>
+              <Text style={[txt(700), { fontSize: 12, color: "#166534" }]}>
+                Total billable to broker: <Text style={txt(800)}>
+                  {fmtMoney((load.loadPrice ?? 0) + totalBillable)}
+                </Text>
+              </Text>
+              <Text style={[txt(500), { fontSize: 11, color: "#166534", marginTop: 2 }]}>
+                {fmtMoney(load.loadPrice ?? 0)} load + {fmtMoney(totalBillable)} accessorials
+              </Text>
+            </View>
+          ) : null}
         </>
       ) : null}
 
@@ -1275,6 +1426,7 @@ export default function LoadDetail() {
   const [scheduleEditOpen,    setScheduleEditOpen]    = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [accSheetState, setAccSheetState] = useState<{ initial: Accessorial | null } | null>(null);
   const [stopsEditMode, setStopsEditMode] = useState(false);
   const [stopsDraft, setStopsDraft]       = useState<Stop[] | null>(null);
   const [stopEditingIdx, setStopEditingIdx] = useState<number | null>(null);
@@ -1664,6 +1816,37 @@ export default function LoadDetail() {
     setDraft((prev) => ({ ...prev, ...patch }));
   }
 
+  // Accessorials — current state pulls from draft if dirty, else from the
+  // server load. Mutations set the full `accessorials` array on the draft so
+  // the existing save-on-Done path picks it up via LOAD_FIELD_MAP.
+  const accessorialsCurrent: Accessorial[] = (
+    (draft.accessorials as Accessorial[] | undefined)
+    ?? load?.accessorials
+    ?? []
+  );
+  const accPayOpts: string[] = useMemo(() => {
+    const opts: string[] = [];
+    if (load?.driverName) opts.push(load.driverName);
+    if (load?.partnerDriverName && !opts.includes(load.partnerDriverName)) {
+      opts.push(load.partnerDriverName);
+    }
+    return opts;
+  }, [load?.driverName, load?.partnerDriverName]);
+  function commitAccessorial(acc: Accessorial) {
+    const idx = accessorialsCurrent.findIndex((a) => a.id === acc.id);
+    const next = idx >= 0
+      ? accessorialsCurrent.map((a) => a.id === acc.id ? acc : a)
+      : [...accessorialsCurrent, acc];
+    patchDraft({ accessorials: next });
+    setAccSheetState(null);
+  }
+  function deleteAccessorialFromSheet() {
+    const initial = accSheetState?.initial;
+    if (!initial) { setAccSheetState(null); return; }
+    patchDraft({ accessorials: accessorialsCurrent.filter((a) => a.id !== initial.id) });
+    setAccSheetState(null);
+  }
+
   // Loaded miles — Google Directions road distance through this load's geocoded stops.
   const stopsKey = (load?.stops ?? [])
     .filter((s) => s.lat != null && s.lng != null)
@@ -1948,6 +2131,9 @@ export default function LoadDetail() {
           isSaving={isSavingDraft}
           onDeleteLoad={confirmDeleteLoad}
           isDeleting={isDeletingLoad}
+          accessorials={accessorialsCurrent}
+          onAddAccessorial={() => setAccSheetState({ initial: null })}
+          onEditAccessorial={(acc) => setAccSheetState({ initial: acc })}
         />
         {orgId ? (
           <DocumentsView
@@ -2075,6 +2261,15 @@ export default function LoadDetail() {
         stop={stopEditingIdx != null && stopsDraft ? stopsDraft[stopEditingIdx] ?? null : null}
         onClose={closeStopEdit}
         onSave={applyStopEdit}
+      />
+
+      <AccessorialSheet
+        visible={accSheetState !== null}
+        initial={accSheetState?.initial ?? null}
+        payOpts={accPayOpts}
+        onClose={() => setAccSheetState(null)}
+        onSave={commitAccessorial}
+        onDelete={accSheetState?.initial ? deleteAccessorialFromSheet : undefined}
       />
 
       <DateTimePickerSheet

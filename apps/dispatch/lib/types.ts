@@ -16,5 +16,6 @@ export type {
   TrailerCategory,
   RefNum,
   Accessorial,
+  AccessorialCategory,
   Customer,
 } from "@fleetcal/types";
