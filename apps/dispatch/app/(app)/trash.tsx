@@ -7,7 +7,7 @@ import { useRouter } from "expo-router";
 import { useOrganization } from "@clerk/clerk-expo";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Trash2, RotateCcw, Truck, User, Building2, Hash, Clock } from "lucide-react-native";
-import { fetchDeletedLoads, restoreLoad, purgeLoad, type DeletedLoadRow } from "@/lib/api";
+import { fetchDeletedLoads, restoreLoad, type DeletedLoadRow } from "@/lib/api";
 import { txt } from "@/lib/font";
 
 function fmtDate(iso: string): string {
@@ -53,23 +53,6 @@ export default function TrashScreen() {
     },
     onError: (err) => Alert.alert("Couldn't restore", err instanceof Error ? err.message : "Unknown error"),
   });
-
-  const { mutate: doPurge, isPending: purging } = useMutation({
-    mutationFn: (id: string) => purgeLoad(id, orgId!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deleted-loads", orgId] }),
-    onError: (err) => Alert.alert("Couldn't delete", err instanceof Error ? err.message : "Unknown error"),
-  });
-
-  function confirmPurge(row: DeletedLoadRow) {
-    Alert.alert(
-      "Delete forever?",
-      `"${row.title}" will be permanently removed. This cannot be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Delete forever", style: "destructive", onPress: () => doPurge(row.id) },
-      ],
-    );
-  }
 
   return (
     <View style={{ flex: 1, backgroundColor: "#f8f9fa" }}>
@@ -138,42 +121,23 @@ export default function TrashScreen() {
                 <RowLine Icon={Clock} text={`${fmtDate(r.start)} → ${fmtDate(r.end)}`} />
               </View>
 
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-                <TouchableOpacity
-                  onPress={() => doRestore(r.id)}
-                  activeOpacity={0.7}
-                  disabled={restoring}
-                  style={{
-                    flex: 1, paddingVertical: 11, borderRadius: 12,
-                    backgroundColor: "#e8f0fe",
-                    borderWidth: 1, borderColor: "#bfdbfe",
-                    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-                    opacity: restoring ? 0.5 : 1,
-                  }}
-                >
-                  <RotateCcw size={13} color="#1a73e8" strokeWidth={2.4} />
-                  <Text style={[txt(800), { fontSize: 12, color: "#1a73e8", letterSpacing: 0.3 }]}>
-                    Restore
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => confirmPurge(r)}
-                  activeOpacity={0.7}
-                  disabled={purging}
-                  style={{
-                    flex: 1, paddingVertical: 11, borderRadius: 12,
-                    backgroundColor: "#fef2f2",
-                    borderWidth: 1, borderColor: "#fecaca",
-                    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
-                    opacity: purging ? 0.5 : 1,
-                  }}
-                >
-                  <Trash2 size={13} color="#b91c1c" strokeWidth={2.4} />
-                  <Text style={[txt(800), { fontSize: 12, color: "#b91c1c", letterSpacing: 0.3 }]}>
-                    Delete forever
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                onPress={() => doRestore(r.id)}
+                activeOpacity={0.7}
+                disabled={restoring}
+                style={{
+                  marginTop: 12, paddingVertical: 11, borderRadius: 12,
+                  backgroundColor: "#e8f0fe",
+                  borderWidth: 1, borderColor: "#bfdbfe",
+                  flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+                  opacity: restoring ? 0.5 : 1,
+                }}
+              >
+                <RotateCcw size={13} color="#1a73e8" strokeWidth={2.4} />
+                <Text style={[txt(800), { fontSize: 12, color: "#1a73e8", letterSpacing: 0.3 }]}>
+                  Restore
+                </Text>
+              </TouchableOpacity>
             </View>
           ))}
         </ScrollView>

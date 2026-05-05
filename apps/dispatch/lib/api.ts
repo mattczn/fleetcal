@@ -1,114 +1,10 @@
 import { supabase } from "./supabase";
 import { railway } from "./railway";
-import type { Accessorial, Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer as ApiCustomer } from "./types";
-// Note: writes still hit Supabase directly. Reads have been ported to Railway —
-// see Phase 2 of the dispatch migration.
-
-interface DbAssetRow {
-  id:                 number;
-  name:               string;
-  type:               string;
-  unit:               string | null;
-  // assets.color is NOT NULL in the DB
-  color:              string;
-  hidden:             boolean;
-  sort_order:         number;
-  motive_vehicle_id:  string | null;
-}
-
-interface DbStopRow {
-  id:            string;
-  event_id:      string;
-  sequence:      number;
-  type:          string;
-  facility_name: string | null;
-  address:       string | null;
-  city:          string | null;
-  timezone:      string | null;
-  appt_start:    string | null;
-  appt_end:      string | null;
-  lat:           number | null;
-  lng:           number | null;
-  instructions:  string | null;
-  arrived_at:    string | null;
-  arrived_lat:   number | null;
-  arrived_lng:   number | null;
-}
-
-interface DbEventRow {
-  id:                    string;
-  internal_load_id:      number | null;
-  asset_id:              number;
-  driver_id:             number | null;
-  driver_name:           string | null;
-  load_num:              string | null;
-  title:                 string;
-  start:                 string;
-  end:                   string;
-  status:                string;
-  broker:                string | null;
-  trailer_type:          string | null;
-  trailer_id:            number | null;
-  driver_pay:            number | null;
-  load_price:            number | null;
-  notes:                 string | null;
-  special_instructions:  string | null;
-  ref_nums:              string | null;
-  dispatcher:            string | null;
-  accessorials:          unknown;
-  rate_con_pdf:          string | null;
-  relay_group_id:        string | null;
-  relay_role:            string | null;
-  created_by_name:       string | null;
-  deleted_at:            string | null;
-}
-
-const STOP_COLS = "id,event_id,sequence,type,facility_name,address,city,timezone,appt_start,appt_end,lat,lng,instructions,arrived_at,arrived_lat,arrived_lng";
-const EVENT_LIST_COLS = "id,internal_load_id,asset_id,driver_id,driver_name,load_num,title,start,end,status,broker,trailer_type,driver_pay,notes,special_instructions,deleted_at";
-const EVENT_FULL_COLS = "id,internal_load_id,asset_id,driver_id,driver_name,load_num,title,start,end,status,broker,trailer_type,trailer_id,driver_pay,load_price,notes,special_instructions,ref_nums,dispatcher,accessorials,rate_con_pdf,relay_group_id,relay_role,created_by_name,deleted_at";
-
-function rowToStop(r: DbStopRow): Stop {
-  return {
-    id:           r.id,
-    sequence:     r.sequence,
-    type:         r.type as StopType,
-    facilityName: r.facility_name ?? undefined,
-    address:      r.address       ?? undefined,
-    city:         r.city          ?? undefined,
-    timezone:     r.timezone      ?? undefined,
-    apptStart:    r.appt_start    ?? undefined,
-    apptEnd:      r.appt_end      ?? undefined,
-    lat:          r.lat           ?? undefined,
-    lng:          r.lng           ?? undefined,
-    instructions: r.instructions  ?? undefined,
-    arrivedAt:    r.arrived_at    ?? undefined,
-    arrivedLat:   r.arrived_lat   ?? undefined,
-    arrivedLng:   r.arrived_lng   ?? undefined,
-  };
-}
-
-function parseRefNums(raw: string | null): RefNum[] | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      if (typeof parsed[0] === "object" && parsed[0] !== null && "label" in parsed[0]) {
-        return parsed as RefNum[];
-      }
-      return (parsed as string[]).filter(Boolean).map((v) => ({ label: "", value: String(v) }));
-    }
-  } catch { /* legacy comma-separated */ }
-  return raw.split(",").map((s) => s.trim()).filter(Boolean).map((v) => ({ label: "", value: v }));
-}
-
-function parseAccessorials(raw: unknown): Accessorial[] | undefined {
-  if (!raw) return undefined;
-  if (Array.isArray(raw)) return raw as Accessorial[];
-  if (typeof raw === "string") {
-    try { const p = JSON.parse(raw); return Array.isArray(p) ? p : undefined; } catch { return undefined; }
-  }
-  return undefined;
-}
+import type { Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer as ApiCustomer } from "./types";
+// All reads + writes go through Railway. The only remaining direct
+// Supabase usage is the rate-con PDF upload (uploadRateConPdf), which
+// writes to Storage. Realtime subscriptions also use the Supabase client,
+// but those live in the load-detail screen, not here.
 
 /**
  * Returns the preferred driver_id keyed by asset_id for this org.
@@ -282,12 +178,8 @@ export async function restoreLoad(id: string, _orgId: string): Promise<void> {
   await railway.restoreLoad(id);
 }
 
-// Mobile no longer hard-deletes loads. Expired soft-deletes are purged
-// from the web (or via a future scheduled job). Calling this throws so
-// stale callers fail fast.
-export async function purgeLoad(_id: string, _orgId: string): Promise<void> {
-  throw new Error("purgeLoad is not available on mobile. Use the web Trash view to permanently delete loads.");
-}
+// Hard-delete is web-only. Mobile dispatchers restore from trash; expired
+// soft-deletes are purged via the web or a future scheduled job.
 
 /**
  * Recently deleted loads for this org, newest first. Filters to last `days` days.
