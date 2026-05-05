@@ -1382,8 +1382,17 @@ export default function LoadDetail() {
     ? motiveLocations.find((l) => l.vehicleId === load.motiveVehicleId) ?? null
     : null;
 
+  // Tracks the wall-clock time of our most recent local save so we can ignore
+  // the realtime echo of our own write. Anything within ~3s is treated as
+  // self. Stamped in `onMutate` (before the API call) — with Railway writes
+  // the realtime broadcast can arrive before `onSuccess` runs.
+  const lastSelfSaveAt = useRef(0);
+  const stampSelf = () => { lastSelfSaveAt.current = Date.now(); };
+  const [remoteUpdate, setRemoteUpdate] = useState(false);
+
   const { mutate: changeStatus, isPending: isUpdatingStatus } = useMutation({
     mutationFn: (s: LoadStatus) => updateLoadStatus(id!, orgId!, s),
+    onMutate: stampSelf,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
@@ -1393,19 +1402,15 @@ export default function LoadDetail() {
 
   const { mutate: changeTrailer } = useMutation({
     mutationFn: (trailerId: number | null) => updateLoadTrailer(id!, orgId!, trailerId),
+    onMutate: stampSelf,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["load", id] }),
     onError:   (err) => Alert.alert("Couldn't update trailer", err instanceof Error ? err.message : "Unknown error"),
   });
 
-  // Tracks the wall-clock time of our most recent local save so we can ignore
-  // the realtime echo of our own write. Anything within ~3s is treated as self.
-  const lastSelfSaveAt = useRef(0);
-  const [remoteUpdate, setRemoteUpdate] = useState(false);
-
   const { mutate: saveDraft, mutateAsync: saveDraftAsync, isPending: isSavingDraft } = useMutation({
     mutationFn: (fields: Record<string, unknown>) => updateLoadFields(id!, orgId!, fields),
+    onMutate: stampSelf,
     onSuccess: (_data, fields) => {
-      lastSelfSaveAt.current = Date.now();
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
       const count = Object.keys(fields).length;
@@ -1419,8 +1424,8 @@ export default function LoadDetail() {
 
   const { mutate: saveStopsM, mutateAsync: saveStopsAsync, isPending: isSavingStops } = useMutation({
     mutationFn: (next: Stop[]) => saveStops(id!, orgId!, next),
+    onMutate: stampSelf,
     onSuccess: () => {
-      lastSelfSaveAt.current = Date.now();
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
       showToast("Stops saved");
@@ -1528,8 +1533,8 @@ export default function LoadDetail() {
       });
       return deliveryId;
     },
+    onMutate: stampSelf,
     onSuccess: () => {
-      lastSelfSaveAt.current = Date.now();
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
       setRelaySplitOpen(false);
@@ -1542,8 +1547,8 @@ export default function LoadDetail() {
 
   const { mutate: deleteLoad, isPending: isDeletingLoad } = useMutation({
     mutationFn: () => softDeleteLoad(id!, orgId!),
+    onMutate: stampSelf,
     onSuccess: () => {
-      lastSelfSaveAt.current = Date.now();
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
       queryClient.invalidateQueries({ queryKey: ["deleted-loads", orgId] });
@@ -1565,8 +1570,8 @@ export default function LoadDetail() {
 
   const { mutate: undoRelay, isPending: isRemovingRelay } = useMutation({
     mutationFn: () => removeRelay(id!, orgId!),
+    onMutate: stampSelf,
     onSuccess: () => {
-      lastSelfSaveAt.current = Date.now();
       queryClient.invalidateQueries({ queryKey: ["load", id] });
       queryClient.invalidateQueries({ queryKey: ["loads", orgId] });
       setStopsDraft(null);
