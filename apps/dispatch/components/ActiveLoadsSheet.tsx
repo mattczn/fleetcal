@@ -3,7 +3,7 @@ import { Modal, View, Text, TouchableOpacity, Pressable, SectionList } from "rea
 import { X, Truck } from "lucide-react-native";
 import { txt } from "@/lib/font";
 import {
-  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel, RelayChip,
 } from "@/lib/loadCard";
 import type { Asset, Load } from "@/lib/types";
 
@@ -114,9 +114,12 @@ export function ActiveLoadsSheet({
                       <Truck size={16} color="#ffffff" strokeWidth={2.2} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
-                        {load.title}
-                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={[txt(800), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
+                          {load.title}
+                        </Text>
+                        {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
+                      </View>
                       <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
                         {line2}
                       </Text>

@@ -13,7 +13,7 @@ import { ActiveLoadsSheet } from "@/components/ActiveLoadsSheet";
 import { env } from "@/lib/env";
 import { txt } from "@/lib/font";
 import {
-  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel, RelayChip,
 } from "@/lib/loadCard";
 import type { Asset, Load, Stop } from "@/lib/types";
 
@@ -591,9 +591,12 @@ export default function MapScreen() {
                       onPress={() => setFocusedLoadId(l.id)}
                       style={{ flex: 1 }}
                     >
-                      <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
-                        {l.title}
-                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={[txt(800), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
+                          {l.title}
+                        </Text>
+                        {l.relayRole ? <RelayChip role={l.relayRole} size="small" /> : null}
+                      </View>
                       {l.driverName ? (
                         <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
                           {l.driverName}

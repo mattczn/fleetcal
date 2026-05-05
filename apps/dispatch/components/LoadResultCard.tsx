@@ -6,7 +6,7 @@ import type { Load } from "@/lib/types";
 import { txt } from "@/lib/font";
 import {
   STATUS_TINT, STATUS_LABEL, showStatusPill,
-  fmtTimeRange, fmtCardDate, loadNumLabel,
+  fmtTimeRange, fmtCardDate, loadNumLabel, RelayChip,
 } from "@/lib/loadCard";
 
 /**
@@ -29,9 +29,12 @@ export function LoadResultCard({ load }: { load: Load }) {
         borderWidth: 1, borderColor: "#e8eaed",
       }}
     >
-      <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
-        {load.title}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Text style={[txt(800), { fontSize: 14, color: "#202124", flex: 1 }]} numberOfLines={1}>
+          {load.title}
+        </Text>
+        {load.relayRole ? <RelayChip role={load.relayRole} /> : null}
+      </View>
 
       {load.assetName || load.driverName ? (
         <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 3 }]} numberOfLines={1}>

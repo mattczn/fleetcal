@@ -18,7 +18,8 @@ import { AssetSidePanel } from "@/components/AssetSidePanel";
 import { DatePickerModal } from "@/components/DatePickerModal";
 import { LoadResultCard } from "@/components/LoadResultCard";
 import {
-  STATUS_TINT, STATUS_LABEL, showStatusPill, fmtTimeRange, loadNumLabel,
+  STATUS_TINT, STATUS_LABEL, showStatusPill,
+  fmtTimeRangeShort, loadNumLabel, fmtPrice, RelayChip,
 } from "@/lib/loadCard";
 import type { Asset, Load } from "@/lib/types";
 
@@ -157,6 +158,10 @@ function LoadBlock({
   const bg       = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg  = readableOn(assetColor);
   const spans    = p.spansBefore || p.spansAfter;
+  const price    = fmtPrice(p.load.loadPrice);
+  const meta     = [loadNumLabel(p.load), fmtTimeRangeShort(p.load), price]
+    .filter((s) => s && s.length > 0)
+    .join(" · ");
 
   // Lay loads out across the available canvas. With one lane we just use
   // full width; with N>1 lanes each lane is 1/N of the canvas with a small
@@ -188,9 +193,19 @@ function LoadBlock({
       <Text style={[txt(800), { fontSize: 13, color: titleFg }]} numberOfLines={2}>
         {p.load.title}
       </Text>
+      {p.load.relayRole ? (
+        <View style={{ marginTop: 3, alignSelf: "flex-start" }}>
+          <RelayChip role={p.load.relayRole} size="small" />
+        </View>
+      ) : null}
       {p.height >= 48 && p.load.driverName ? (
         <Text style={[txt(600), { fontSize: 11, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
           {p.load.driverName}
+        </Text>
+      ) : null}
+      {p.height >= 64 ? (
+        <Text style={[txt(600), { fontSize: 10, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
+          {meta}
         </Text>
       ) : null}
     </TouchableOpacity>
@@ -199,8 +214,8 @@ function LoadBlock({
 
 /**
  * Schedule view card. Per-asset (so we don't repeat the asset name); shows
- * Title → Driver → Load # · Times. Status pill only when status diverges
- * from the default "scheduled".
+ * Title → relay (if any) → Driver → Load # · Times · Price. Status pill
+ * only when status diverges from the default "scheduled".
  */
 function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string }) {
   const router = useRouter();
@@ -208,6 +223,7 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
   const bg     = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg = readableOn(assetColor);
   const tint   = STATUS_TINT[load.status];
+  const price  = fmtPrice(load.loadPrice);
   return (
     <TouchableOpacity
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
@@ -220,9 +236,12 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
         padding: 12,
       }}
     >
-      <Text style={[txt(800), { fontSize: 14, color: titleFg }]} numberOfLines={1}>
-        {load.title}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <Text style={[txt(800), { fontSize: 14, color: titleFg, flex: 1 }]} numberOfLines={1}>
+          {load.title}
+        </Text>
+        {load.relayRole ? <RelayChip role={load.relayRole} /> : null}
+      </View>
       {load.driverName ? (
         <Text style={[txt(600), { fontSize: 12, color: "#3c4043", marginTop: 3 }]} numberOfLines={1}>
           {load.driverName}
@@ -233,9 +252,18 @@ function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string })
           {loadNumLabel(load)}
         </Text>
         <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]}>·</Text>
-        <Text style={[txt(600), { fontSize: 11, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-          {fmtTimeRange(load)}
+        <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]} numberOfLines={1}>
+          {fmtTimeRangeShort(load)}
         </Text>
+        {price ? (
+          <>
+            <Text style={[txt(600), { fontSize: 11, color: "#5f6368" }]}>·</Text>
+            <Text style={[txt(700), { fontSize: 11, color: "#15803d" }]} numberOfLines={1}>
+              {price}
+            </Text>
+          </>
+        ) : null}
+        <View style={{ flex: 1 }} />
         {showStatusPill(load.status) ? (
           <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
             <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
