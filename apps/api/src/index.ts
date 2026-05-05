@@ -101,14 +101,16 @@ authed.route("/stops", stopsRoute);
 // mounted from inside loadsRoute as /loads/:loadId/check-calls.
 authed.route("/check-calls", checkCallsRoute);
 
-app.route("/v1", authed);
-
 // ── Bot routes (API key auth, read-only load access) ────────────────────
+// Must be mounted before /v1 so Hono doesn't match /v1/bot/* against the
+// Clerk-authenticated group first.
 
 const bot = new Hono<{ Variables: AuthVariables }>();
 bot.use("*", botAuth);
 bot.route("/loads", loadsRoute);
 app.route("/v1/bot", bot);
+
+app.route("/v1", authed);
 
 // ── Error handler ───────────────────────────────────────────────────────
 
