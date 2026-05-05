@@ -3,11 +3,12 @@ import {
   View, Text, ScrollView, TouchableOpacity, Dimensions, ActivityIndicator,
   RefreshControl, TextInput,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { useUser, useAuth, useOrganization } from "@clerk/clerk-expo";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { ChevronLeft, ChevronRight, CalendarCheck, Truck, Menu, Calendar as CalendarIcon, Search, X, User as UserIcon, Plus, ArrowLeft } from "lucide-react-native";
+import { ChevronLeft, ChevronRight, CalendarCheck, Menu, Calendar as CalendarIcon, Search, X, Plus, ArrowLeft, List as ListIcon, Clock as ClockIcon, MapPin } from "lucide-react-native";
 import { fetchAssets, fetchLoadsForDay, searchLoads } from "@/lib/api";
 import { txt } from "@/lib/font";
 import { lighten, readableOn } from "@/lib/color";
@@ -16,7 +17,27 @@ import { useDebounce } from "@/lib/useDebounce";
 import { AssetSidePanel } from "@/components/AssetSidePanel";
 import { DatePickerModal } from "@/components/DatePickerModal";
 import { LoadResultCard } from "@/components/LoadResultCard";
-import type { Asset, Load } from "@/lib/types";
+import type { Asset, Load, LoadStatus } from "@/lib/types";
+
+type ViewMode = "calendar" | "schedule";
+const VIEW_MODE_KEY = "fleetcal.dispatch.calendar.viewMode";
+
+const STATUS_TINT: Record<LoadStatus, { bg: string; fg: string }> = {
+  scheduled:  { bg: "#f1f3f4", fg: "#5f6368" },
+  assigned:   { bg: "#ede9fe", fg: "#5b21b6" },
+  dispatched: { bg: "#e8f0fe", fg: "#1558d6" },
+  en_route:   { bg: "#fef3c7", fg: "#92400e" },
+  picked_up:  { bg: "#f3e8fd", fg: "#6b21a8" },
+  delivered:  { bg: "#e6f4ea", fg: "#15803d" },
+  cancelled:  { bg: "#fce8e6", fg: "#b91c1c" },
+  tonu:       { bg: "#fef3c7", fg: "#92400e" },
+  problem:    { bg: "#fef0e6", fg: "#b85c00" },
+};
+const STATUS_LABEL: Record<LoadStatus, string> = {
+  scheduled: "Scheduled", assigned: "Assigned", dispatched: "Dispatched",
+  en_route: "En Route", picked_up: "Picked Up", delivered: "Delivered",
+  cancelled: "Cancelled", tonu: "TONU", problem: "Problem",
+};
 
 const HOUR_HEIGHT      = 60;
 const HOUR_LABEL_WIDTH = 56;
@@ -66,11 +87,14 @@ interface PositionedLoad {
   height:      number;
   spansBefore: boolean; // event started yesterday or earlier
   spansAfter:  boolean; // event ends tomorrow or later
+  lane:        number;  // 0-indexed lane within the overlap cluster
+  laneCount:   number;  // total parallel lanes used by this load's cluster
 }
 
 /**
  * Map a load's start/end (naive YYYY-MM-DDTHH:mm) onto the 24h timeline of
- * `dateKey`, clipping if the load extends outside the day.
+ * `dateKey`, clipping if the load extends outside the day. `lane` and
+ * `laneCount` are filled in later by `assignLanes`.
  */
 function positionFor(load: Load, dateKey: string): PositionedLoad | null {
   const startKey = load.start.slice(0, 10);
@@ -93,23 +117,91 @@ function positionFor(load: Load, dateKey: string): PositionedLoad | null {
     load, top, height,
     spansBefore: dateKey !== startKey,
     spansAfter:  dateKey !== endKey,
+    lane: 0, laneCount: 1,
   };
 }
 
-function LoadBlock({ p, assetColor }: { p: PositionedLoad; assetColor?: string }) {
+/**
+ * Google-Calendar-style overlap layout: group transitively-overlapping loads
+ * into clusters, then greedily assign each load to the lowest free lane in
+ * its cluster. Each cluster's `laneCount` is the max lanes used so every
+ * load in a 3-way pile-up renders as a third-width column, while a 2-way
+ * overlap yields two half-width columns, and singletons stay full-width.
+ */
+function assignLanes(positions: PositionedLoad[]): PositionedLoad[] {
+  if (positions.length <= 1) return positions;
+  const sorted = [...positions].sort(
+    (a, b) => a.top - b.top || (b.height - a.height),
+  );
+
+  const clusters: PositionedLoad[][] = [];
+  let cur: PositionedLoad[] = [];
+  let curMaxBottom = -Infinity;
+  for (const p of sorted) {
+    if (cur.length > 0 && p.top < curMaxBottom) {
+      cur.push(p);
+      curMaxBottom = Math.max(curMaxBottom, p.top + p.height);
+    } else {
+      if (cur.length > 0) clusters.push(cur);
+      cur = [p];
+      curMaxBottom = p.top + p.height;
+    }
+  }
+  if (cur.length > 0) clusters.push(cur);
+
+  const out: PositionedLoad[] = [];
+  for (const cluster of clusters) {
+    const laneEnds: number[] = []; // bottom y of last item placed in each lane
+    const placed: { p: PositionedLoad; lane: number }[] = [];
+    for (const p of cluster) {
+      let lane = laneEnds.findIndex((end) => end <= p.top);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(p.top + p.height);
+      } else {
+        laneEnds[lane] = p.top + p.height;
+      }
+      placed.push({ p, lane });
+    }
+    const laneCount = laneEnds.length;
+    for (const { p, lane } of placed) {
+      out.push({ ...p, lane, laneCount });
+    }
+  }
+  return out;
+}
+
+function LoadBlock({
+  p, assetColor, pageWidth,
+}: {
+  p:         PositionedLoad;
+  assetColor?: string;
+  pageWidth: number;
+}) {
   const router = useRouter();
   const stripe   = assetColor ?? "#1a73e8";
   const bg       = lighten(assetColor ?? "#1a73e8", 0.82);
   const titleFg  = readableOn(assetColor);
   const startLabel = p.spansBefore ? "Continues" : fmtTime(p.load.start);
   const endLabel   = p.spansAfter  ? "Continues" : fmtTime(p.load.end);
+
+  // Lay loads out across the available canvas. With one lane we just use
+  // full width; with N>1 lanes each lane is 1/N of the canvas with a small
+  // gap between, so a 3-way overlap reads as three side-by-side columns.
+  const canvasLeft  = HOUR_LABEL_WIDTH + 6;
+  const canvasRight = 8;
+  const canvasW     = Math.max(0, pageWidth - canvasLeft - canvasRight);
+  const gap         = p.laneCount > 1 ? 3 : 0;
+  const laneWidth   = (canvasW - gap * (p.laneCount - 1)) / p.laneCount;
+  const left        = canvasLeft + p.lane * (laneWidth + gap);
+
   return (
     <TouchableOpacity
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: p.load.id } })}
       activeOpacity={0.85}
       style={{
         position: "absolute", top: p.top, height: p.height,
-        left: HOUR_LABEL_WIDTH + 6, right: 8,
+        left, width: laneWidth,
         backgroundColor: bg,
         borderLeftWidth: 4, borderLeftColor: stripe,
         borderRadius: 8, padding: 6, overflow: "hidden",
@@ -126,6 +218,62 @@ function LoadBlock({ p, assetColor }: { p: PositionedLoad; assetColor?: string }
           {p.load.driverName}
         </Text>
       ) : null}
+    </TouchableOpacity>
+  );
+}
+
+/** Compact card for the schedule view — one per load, sorted by start time. */
+function ScheduleCard({ load, assetColor }: { load: Load; assetColor?: string }) {
+  const router = useRouter();
+  const stripe = assetColor ?? "#1a73e8";
+  const tint   = STATUS_TINT[load.status];
+  const pickup   = load.stops.find((s) => s.type === "pickup");
+  const delivery = [...load.stops].reverse().find(
+    (s) => s.type === "delivery" || s.type === "drop_hook",
+  );
+  const locLabel = (s?: typeof pickup) =>
+    s ? (s.city ?? s.facilityName ?? s.address ?? "—") : "—";
+  return (
+    <TouchableOpacity
+      onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
+      activeOpacity={0.7}
+      style={{
+        flexDirection: "row", gap: 12,
+        backgroundColor: "#ffffff",
+        borderRadius: 12,
+        borderWidth: 1, borderColor: "#e8eaed",
+        marginBottom: 10,
+        overflow: "hidden",
+      }}
+    >
+      <View style={{ width: 5, backgroundColor: stripe }} />
+      <View style={{ flex: 1, paddingVertical: 12, paddingRight: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <ClockIcon size={12} color="#5f6368" strokeWidth={2.2} />
+          <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
+            {fmtTime(load.start)} – {fmtTime(load.end ?? load.start)}
+          </Text>
+          <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
+            <Text style={[txt(800), { fontSize: 9, color: tint.fg, letterSpacing: 0.3 }]}>
+              {STATUS_LABEL[load.status]}
+            </Text>
+          </View>
+        </View>
+        <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
+          {load.title}
+        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
+          <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
+          <Text style={[txt(500), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
+            {locLabel(pickup)} → {locLabel(delivery)}
+          </Text>
+        </View>
+        {load.driverName ? (
+          <Text style={[txt(600), { fontSize: 11, color: "#5f6368", marginTop: 4 }]} numberOfLines={1}>
+            Driver: {load.driverName}
+          </Text>
+        ) : null}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -176,20 +324,56 @@ interface AssetPageProps {
   dateKey:  string;
   loads:    Load[];
   width:    number;
+  viewMode: ViewMode;
   /** Mutable Y offset shared across all pages — updated on scroll, applied on swipe-in. */
   sharedScrollY: React.MutableRefObject<number>;
   /** Register this page's ScrollView ref so the parent can scroll it on swipe-in. */
   registerRef:   (id: number, ref: ScrollView | null) => void;
 }
 
-function AssetPage({ asset, dateKey, loads, width, sharedScrollY, registerRef }: AssetPageProps) {
+function AssetPage({
+  asset, dateKey, loads, width, viewMode, sharedScrollY, registerRef,
+}: AssetPageProps) {
   const positioned = useMemo(
-    () => loads
-      .filter((l) => l.assetId === asset.id)
-      .map((l) => positionFor(l, dateKey))
-      .filter((p): p is PositionedLoad => p !== null),
+    () => assignLanes(
+      loads
+        .filter((l) => l.assetId === asset.id)
+        .map((l) => positionFor(l, dateKey))
+        .filter((p): p is PositionedLoad => p !== null),
+    ),
     [loads, asset.id, dateKey],
   );
+
+  const scheduleList = useMemo(
+    () => loads
+      .filter((l) => l.assetId === asset.id)
+      .sort((a, b) => a.start.localeCompare(b.start)),
+    [loads, asset.id],
+  );
+
+  if (viewMode === "schedule") {
+    return (
+      <View style={{ width, flex: 1 }}>
+        <ScrollView
+          style={{ flex: 1, backgroundColor: "#f8f9fa" }}
+          contentContainerStyle={{ padding: 14, paddingBottom: 120 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {scheduleList.length === 0 ? (
+            <View style={{ paddingVertical: 60, alignItems: "center" }}>
+              <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
+                Nothing scheduled for this day.
+              </Text>
+            </View>
+          ) : (
+            scheduleList.map((l) => (
+              <ScheduleCard key={l.id} load={l} assetColor={asset.color} />
+            ))
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={{ width, flex: 1 }}>
@@ -203,7 +387,9 @@ function AssetPage({ asset, dateKey, loads, width, sharedScrollY, registerRef }:
       >
         <View style={{ position: "relative" }}>
           <HourGrid />
-          {positioned.map((p) => <LoadBlock key={p.load.id} p={p} assetColor={asset.color} />)}
+          {positioned.map((p) => (
+            <LoadBlock key={p.load.id} p={p} assetColor={asset.color} pageWidth={width} />
+          ))}
           <NowLine dateKey={dateKey} />
         </View>
       </ScrollView>
@@ -228,6 +414,21 @@ export default function CalendarScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<TextInput>(null);
   const pagerRef = useRef<ScrollView>(null);
+
+  // Calendar (hourly grid) vs Schedule (card list) — persisted in AsyncStorage
+  // so the user's choice survives app restarts.
+  const [viewMode, setViewMode] = useState<ViewMode>("calendar");
+  const viewLoaded = useRef(false);
+  React.useEffect(() => {
+    AsyncStorage.getItem(VIEW_MODE_KEY).then((v) => {
+      if (v === "calendar" || v === "schedule") setViewMode(v);
+      viewLoaded.current = true;
+    }).catch(() => { viewLoaded.current = true; });
+  }, []);
+  React.useEffect(() => {
+    if (!viewLoaded.current) return;
+    AsyncStorage.setItem(VIEW_MODE_KEY, viewMode).catch(() => {});
+  }, [viewMode]);
 
   // Shared vertical scroll position across all asset pages — preserves the
   // 6am-12pm view (or wherever the dispatcher is looking) when swiping assets.
@@ -377,11 +578,49 @@ export default function CalendarScreen() {
             <ChevronRight size={16} color="#ffffff" strokeWidth={2.4} />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Truck size={12} color="rgba(255,255,255,0.7)" strokeWidth={2.2} />
-            <Text style={[txt(700), { fontSize: 12, color: "rgba(255,255,255,0.7)" }]}>
-              {activeAsset ? `${assetIdx + 1} / ${visibleAssets.length}` : ""}
-            </Text>
+          {/* Calendar / Schedule view toggle */}
+          <View style={{
+            flexDirection: "row",
+            backgroundColor: "rgba(255,255,255,0.14)",
+            borderRadius: 999,
+            padding: 2,
+          }}>
+            <TouchableOpacity
+              onPress={() => setViewMode("calendar")}
+              activeOpacity={0.85}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 10, paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: viewMode === "calendar" ? "#ffffff" : "transparent",
+              }}
+            >
+              <CalendarIcon size={12} color={viewMode === "calendar" ? "#1a73e8" : "#ffffff"} strokeWidth={2.4} />
+              <Text style={[txt(800), {
+                fontSize: 11, letterSpacing: 0.3,
+                color: viewMode === "calendar" ? "#1a73e8" : "#ffffff",
+              }]}>
+                Calendar
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setViewMode("schedule")}
+              activeOpacity={0.85}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 10, paddingVertical: 5,
+                borderRadius: 999,
+                backgroundColor: viewMode === "schedule" ? "#ffffff" : "transparent",
+              }}
+            >
+              <ListIcon size={12} color={viewMode === "schedule" ? "#1a73e8" : "#ffffff"} strokeWidth={2.4} />
+              <Text style={[txt(800), {
+                fontSize: 11, letterSpacing: 0.3,
+                color: viewMode === "schedule" ? "#1a73e8" : "#ffffff",
+              }]}>
+                Schedule
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -459,6 +698,7 @@ export default function CalendarScreen() {
               dateKey={dateKey}
               loads={loads}
               width={SCREEN_W}
+              viewMode={viewMode}
               sharedScrollY={sharedScrollY}
               registerRef={registerPageRef}
             />
