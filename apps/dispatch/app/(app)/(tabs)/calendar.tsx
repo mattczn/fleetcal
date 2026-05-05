@@ -482,11 +482,20 @@ export default function CalendarScreen() {
     setTimeout(() => pagerRef.current?.scrollTo({ x: idx * SCREEN_W, animated: false }), 50);
   }, [requestedAssetId, assets, prefs.hidden, visibleAssets, SCREEN_W, setHidden]);
 
-  const { data: loads = [], isLoading: loadsLoading, isRefetching, refetch } = useQuery({
+  const { data: loads = [], isLoading: loadsLoading, refetch } = useQuery({
     queryKey: ["loads", orgId, dateKey],
     queryFn:  () => fetchLoadsForDay(orgId!, dateKey),
     enabled:  !!orgId,
   });
+  // Manual pull-to-refresh state — only flips true while the user is
+  // explicitly tugging the list, so background invalidations from realtime
+  // don't flash the "refreshing" tray.
+  const [pulling, setPulling] = useState(false);
+  async function pullToRefresh() {
+    setPulling(true);
+    try { await Promise.all([refetch(), refetchAssets()]); }
+    finally { setPulling(false); }
+  }
 
   // Pre-slice loads by asset id once per fetch — gives each AssetPage a
   // stable array reference so the React.memo wrapper actually skips
@@ -697,7 +706,7 @@ export default function CalendarScreen() {
               ref?.scrollTo({ x: 0, y: sharedScrollY.current, animated: false });
             }
           }}
-          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => { refetch(); refetchAssets(); }} tintColor="#1a73e8" />}
+          refreshControl={<RefreshControl refreshing={pulling} onRefresh={pullToRefresh} tintColor="#1a73e8" />}
           style={{ flex: 1 }}
         >
           {visibleAssets.map((asset) => (
