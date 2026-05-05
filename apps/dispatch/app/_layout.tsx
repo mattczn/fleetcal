@@ -15,6 +15,7 @@ import {
 } from "@expo-google-fonts/plus-jakarta-sans";
 import { tokenCache } from "@/lib/tokenCache";
 import { env } from "@/lib/env";
+import RailwayClientProvider from "@/components/RailwayClientProvider";
 
 const queryClient = new QueryClient();
 
@@ -64,10 +65,12 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ClerkProvider tokenCache={tokenCache} publishableKey={env.clerkPublishableKey}>
           <ClerkLoaded>
-            <QueryClientProvider client={queryClient}>
-              <StatusBar style="light" />
-              <AuthGate />
-            </QueryClientProvider>
+            <RailwayClientProvider>
+              <QueryClientProvider client={queryClient}>
+                <StatusBar style="light" />
+                <AuthGate />
+              </QueryClientProvider>
+            </RailwayClientProvider>
           </ClerkLoaded>
         </ClerkProvider>
       </SafeAreaProvider>

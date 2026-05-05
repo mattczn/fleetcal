@@ -34,6 +34,7 @@ import { txt } from "@/lib/font";
 const STOP_TINT: Record<StopType, { bg: string; fg: string; mark: string; label: string }> = {
   pickup:    { bg: "#dcfce7", fg: "#15803d", mark: "#16a34a", label: "Pickup" },
   delivery:  { bg: "#fee2e2", fg: "#b91c1c", mark: "#dc2626", label: "Delivery" },
+  drop:      { bg: "#cffafe", fg: "#0e7490", mark: "#0891b2", label: "Drop Trailer" },
   drop_hook: { bg: "#dbeafe", fg: "#1e40af", mark: "#2563eb", label: "Drop & Hook" },
   stop:      { bg: "#fef9c3", fg: "#854d0e", mark: "#eab308", label: "Stop" },
   relay:     { bg: "#f3e8fd", fg: "#6b21a8", mark: "#8b5cf6", label: "Relay" },

@@ -10,6 +10,7 @@ import type { Stop, StopType } from "@/lib/types";
 const STOP_COLOR: Record<StopType, string> = {
   pickup:    "#16a34a",
   delivery:  "#dc2626",
+  drop:      "#0891b2",
   drop_hook: "#2563eb",
   stop:      "#eab308",
   relay:     "#8b5cf6",
@@ -18,6 +19,7 @@ const STOP_COLOR: Record<StopType, string> = {
 const STOP_ACCENT: Record<StopType, { bg: string; fg: string }> = {
   pickup:    { bg: "#dcfce7", fg: "#15803d" },
   delivery:  { bg: "#fee2e2", fg: "#b91c1c" },
+  drop:      { bg: "#cffafe", fg: "#0e7490" },
   drop_hook: { bg: "#dbeafe", fg: "#1e40af" },
   stop:      { bg: "#fef9c3", fg: "#854d0e" },
   relay:     { bg: "#f3e8fd", fg: "#6b21a8" },
@@ -26,6 +28,7 @@ const STOP_ACCENT: Record<StopType, { bg: string; fg: string }> = {
 const STOP_LABEL: Record<StopType, string> = {
   pickup:    "Pickup",
   delivery:  "Delivery",
+  drop:      "Drop Trailer",
   drop_hook: "Drop & Hook",
   stop:      "Stop",
   relay:     "Relay",

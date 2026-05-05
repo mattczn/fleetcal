@@ -6,6 +6,7 @@ import type { LoadStatus } from "@/lib/types";
 
 const STATUS_META: Record<LoadStatus, { label: string; bg: string; fg: string }> = {
   scheduled:  { label: "Scheduled",  bg: "#f1f3f4", fg: "#5f6368" },
+  assigned:   { label: "Assigned",   bg: "#ede9fe", fg: "#5b21b6" },
   dispatched: { label: "Dispatched", bg: "#e8f0fe", fg: "#1558d6" },
   en_route:   { label: "En Route",   bg: "#fef3c7", fg: "#92400e" },
   picked_up:  { label: "Picked Up",  bg: "#f3e8fd", fg: "#6b21a8" },
@@ -15,7 +16,7 @@ const STATUS_META: Record<LoadStatus, { label: string; bg: string; fg: string }>
   problem:    { label: "Problem",    bg: "#fef0e6", fg: "#b85c00" },
 };
 
-const PROGRESS_ORDER:  LoadStatus[] = ["scheduled", "dispatched", "en_route", "picked_up", "delivered"];
+const PROGRESS_ORDER:  LoadStatus[] = ["scheduled", "assigned", "dispatched", "en_route", "picked_up", "delivered"];
 const EXCEPTION_ORDER: LoadStatus[] = ["problem", "tonu", "cancelled"];
 
 interface Props {

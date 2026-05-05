@@ -7,6 +7,7 @@ import { txt } from "@/lib/font";
 
 const STATUS_TINT: Record<LoadStatus, { bg: string; fg: string }> = {
   scheduled:  { bg: "#f1f3f4", fg: "#5f6368" },
+  assigned:   { bg: "#ede9fe", fg: "#5b21b6" },
   dispatched: { bg: "#e8f0fe", fg: "#1558d6" },
   en_route:   { bg: "#fef3c7", fg: "#92400e" },
   picked_up:  { bg: "#f3e8fd", fg: "#6b21a8" },
@@ -18,6 +19,7 @@ const STATUS_TINT: Record<LoadStatus, { bg: string; fg: string }> = {
 
 const STATUS_LABEL: Record<LoadStatus, string> = {
   scheduled:  "Scheduled",
+  assigned:   "Assigned",
   dispatched: "Dispatched",
   en_route:   "En Route",
   picked_up:  "Picked Up",

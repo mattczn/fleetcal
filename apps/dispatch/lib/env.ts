@@ -9,6 +9,8 @@ interface Extra {
   supabaseAnonKey:     string;
   googleMapsKey?:      string;
   dispatchApiUrl?:     string;
+  /** Railway API base URL (e.g. https://fleetcalapi-production.up.railway.app). */
+  railwayApiUrl?:      string;
 }
 
 interface ConstantsManifest { extra?: Partial<Extra> }
