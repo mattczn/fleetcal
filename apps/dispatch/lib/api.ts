@@ -707,6 +707,19 @@ export const DEFAULT_PARSE_FIELDS = [
   "notes", "specialInstructions",
 ];
 
+/**
+ * Mirrors apps/web/lib/prompt.ts DEFAULT_PROMPT_VARIABLES so the server
+ * builds a valid prompt even when nothing is passed. Sending {} would
+ * leave variables.titleFormat / .timezone / etc undefined inside
+ * buildRateConPrompt, producing a malformed schema.
+ */
+const DEFAULT_PROMPT_VARIABLES = {
+  systemRole:  "You are parsing a trucking rate confirmation (rate con) document.",
+  timezone:    "Mountain Time (America/Denver)",
+  titleFormat: 'Broker name first, then short route — e.g. "Echo: Salt Lake City to Denver". If there are intermediate stops list all cities in order separated by →. Always lead with the broker name followed by a colon.',
+  notesFormat: "Driver-essential information only — anything important the driver needs that is NOT already captured in the structured fields (load number, reference numbers, stops, addresses, appointment times, special instructions). Include things like: detention policy, weight or temperature requirements, fuel surcharge details, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, and any unusual broker requirements. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.",
+};
+
 export async function parseRateConViaApi(
   base64: string,
   getToken: () => Promise<string | null>,
@@ -733,7 +746,7 @@ export async function parseRateConViaApi(
       data:               base64,
       enabledFields:      opts?.enabledFields      ?? DEFAULT_PARSE_FIELDS,
       customInstructions: opts?.customInstructions ?? "",
-      promptVariables:    opts?.promptVariables    ?? {},
+      promptVariables:    opts?.promptVariables    ?? DEFAULT_PROMPT_VARIABLES,
     }),
   });
   if (!res.ok) {
