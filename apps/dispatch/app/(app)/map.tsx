@@ -553,7 +553,13 @@ export default function MapScreen() {
               ) : null}
             </View>
             <TouchableOpacity
-              onPress={() => { setSelectedVehicleId(null); setFocusedLoadId(null); }}
+              onPress={() => {
+                setSelectedVehicleId(null);
+                setFocusedLoadId(null);
+                // If we entered standalone via ?assetId=, drop the param so
+                // the auto-focus effect doesn't re-apply on the next render.
+                if (focusAssetId !== null) router.setParams({ assetId: "" });
+              }}
               hitSlop={10}
             >
               <X size={18} color="#9aa0a6" strokeWidth={2.4} />
