@@ -12,6 +12,7 @@ import DataLoader from '@/components/DataLoader';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import CopyChip from '@/components/ui/CopyChip';
+import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -1119,6 +1120,9 @@ export default function DashboardView() {
               </Link>
             </div>
           )}
+
+          {/* Custom loads report */}
+          <LoadsReport />
 
         </div>
       </div>

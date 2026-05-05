@@ -63,6 +63,7 @@ export default function CheckCallsSection({ loadId, currentUserName, accentColor
   const [body,        setBody]        = useState('');
   const [nextCheckAt, setNextCheckAt] = useState('');
   const [submitting,  setSubmitting]  = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +100,7 @@ export default function CheckCallsSection({ loadId, currentUserName, accentColor
   const remove = async (id: string) => {
     const prev = calls;
     setCalls(c => c.filter(x => x.id !== id));
+    setConfirmDeleteId(null);
     try { await railway.deleteCheckCall(id); }
     catch (err) {
       console.error('deleteCheckCall:', err);
@@ -226,16 +228,40 @@ export default function CheckCallsSection({ loadId, currentUserName, accentColor
                     {call.body}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => remove(call.id)}
-                  title="Delete entry"
-                  style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--gc-text-3)' }}
-                  onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; }}
-                >
-                  <Trash2 size={12} />
-                </button>
+                {confirmDeleteId === call.id ? (
+                  <div style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>Delete?</span>
+                    <button
+                      type="button"
+                      onClick={() => remove(call.id)}
+                      style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = '#fef2f2'; }}
+                    >
+                      Yes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      style={{ fontSize: 11, fontWeight: 600, padding: '2px 6px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--gc-text-2)' }}
+                      onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
+                      onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
+                    >
+                      No
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteId(call.id)}
+                    title="Delete entry"
+                    style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--gc-text-3)' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
             );
           })}

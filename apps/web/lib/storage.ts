@@ -12,15 +12,22 @@ export async function uploadRateCon(dataUrl: string, orgId: string, eventId: str
   for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
 
   const path = `${orgId}/${eventId}.pdf`;
-  const { error } = await db.storage.from(BUCKET).upload(path, arr.buffer, {
-    upsert: true,
-    contentType: 'application/pdf',
-  });
-  if (error) {
-    console.error('Storage upload error:', error.message, error);
-    throw error;
+  // Supabase Storage occasionally returns 5xx gateway errors — retry once.
+  // Caller is responsible for surfacing failures (don't double-log here).
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error } = await db.storage.from(BUCKET).upload(path, arr.buffer, {
+      upsert: true,
+      contentType: 'application/pdf',
+    });
+    if (!error) return path;
+    lastErr = error;
+    // Only retry on transient 5xx; bail immediately on validation errors.
+    const msg = error.message ?? '';
+    if (!/HTTP 5\d\d|gateway|timeout/i.test(msg)) break;
+    await new Promise(r => setTimeout(r, 500));
   }
-  return path;
+  throw lastErr ?? new Error('upload failed');
 }
 
 export async function getRateConSignedUrl(path: string): Promise<string | null> {

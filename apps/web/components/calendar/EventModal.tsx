@@ -1256,6 +1256,7 @@ export default function EventModal() {
       setStops(ev.stops ?? []);
       setEventKind(ev.eventKind ?? 'revenue');
       setNonRevenueType(ev.nonRevenueType ?? 'Maintenance');
+      setInternalNote(ev.internalNote ?? undefined);
 
       // Treat the leg as part of a relay if EITHER load_id grouping (post-2.5a)
       // OR legacy relayGroupId is present, AND relayRole is set.
@@ -2668,57 +2669,6 @@ export default function EventModal() {
                 e.target.value = '';
               }} />
 
-            {/* Internal note — pinned, internal-only */}
-            {internalNote === undefined ? (
-              <button
-                type="button"
-                onClick={() => { setInternalNote(''); markDirty(); }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5,
-                  fontSize: 12, fontWeight: 600, padding: '4px 10px',
-                  borderRadius: 6, border: '1px dashed #d4a017',
-                  background: 'transparent', color: '#a16207', cursor: 'pointer',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = '#fef9c3'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-              >
-                <Plus size={12} /> Internal Note
-              </button>
-            ) : (
-              <div style={{
-                display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8,
-                background: '#fef9c3', border: '1px solid #fde68a',
-              }}>
-                <Pin size={13} style={{ color: '#a16207', flexShrink: 0, marginTop: 2 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e', marginBottom: 3 }}>
-                    Internal Note
-                  </div>
-                  <textarea
-                    value={internalNote}
-                    onChange={e => { setInternalNote(e.target.value); markDirty(); }}
-                    placeholder="Pinned at the top of this load. Never sent to driver or broker."
-                    rows={2}
-                    style={{
-                      width: '100%', fontSize: 13, lineHeight: 1.4, color: '#78350f',
-                      background: 'transparent', border: 'none', outline: 'none', resize: 'vertical',
-                      fontFamily: 'inherit',
-                    }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setInternalNote(undefined); markDirty(); }}
-                  title="Remove internal note"
-                  style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#a16207' }}
-                  onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = '#a16207'; }}
-                >
-                  <X size={13} />
-                </button>
-              </div>
-            )}
-
             {/* Event kind toggle */}
             <div className="flex items-center justify-center gap-2 pb-3">
               {(['revenue', 'non_revenue'] as const).map(kind => (
@@ -2906,6 +2856,59 @@ export default function EventModal() {
                 })()}
               </Field>
             </div>
+
+            {/* Internal note — pinned just above Load Info; revenue only */}
+            {eventKind === 'revenue' && (
+              internalNote === undefined ? (
+                <button
+                  type="button"
+                  onClick={() => { setInternalNote(''); markDirty(); }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    fontSize: 12, fontWeight: 600, padding: '4px 10px',
+                    borderRadius: 6, border: '1px dashed #d4a017',
+                    background: 'transparent', color: '#a16207', cursor: 'pointer',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#fef9c3'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <Plus size={12} /> Internal Note
+                </button>
+              ) : (
+                <div style={{
+                  display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8,
+                  background: '#fef9c3', border: '1px solid #fde68a',
+                }}>
+                  <Pin size={13} style={{ color: '#a16207', flexShrink: 0, marginTop: 2 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e', marginBottom: 3 }}>
+                      Internal Note
+                    </div>
+                    <textarea
+                      value={internalNote}
+                      onChange={e => { setInternalNote(e.target.value); markDirty(); }}
+                      placeholder="Pinned at the top of this load. Never sent to driver or broker."
+                      rows={2}
+                      style={{
+                        width: '100%', fontSize: 13, lineHeight: 1.4, color: '#78350f',
+                        background: 'transparent', border: 'none', outline: 'none', resize: 'vertical',
+                        fontFamily: 'inherit',
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setInternalNote(undefined); markDirty(); }}
+                    title="Remove internal note"
+                    style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#a16207' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = '#a16207'; }}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              )
+            )}
 
             {/* ── Load Info (always pinned here, above relay + stops) — revenue only ── */}
             {eventKind === 'revenue' && (() => {
