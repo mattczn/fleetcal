@@ -117,7 +117,7 @@ export function ActiveLoadsSheet({ visible, loads, assetColorById, onClose, onSe
                     </View>
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                        <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]} numberOfLines={1}>
+                        <Text style={[txt(800), { fontSize: 14, color: "#202124", flexShrink: 1 }]} numberOfLines={1}>
                           {load.assetName ?? "—"}
                         </Text>
                         <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: tint.bg }}>
@@ -126,11 +126,11 @@ export function ActiveLoadsSheet({ visible, loads, assetColorById, onClose, onSe
                           </Text>
                         </View>
                       </View>
-                      <Text style={[txt(800), { fontSize: 14, color: "#202124" }]} numberOfLines={1}>
-                        {load.title}
+                      <Text style={[txt(700), { fontSize: 12, color: "#1a73e8", marginBottom: 2 }]} numberOfLines={1}>
+                        {load.loadNum ? `Load #${load.loadNum}` : `Load #${load.internalLoadId ?? "—"}`}
                       </Text>
                       {pickup || delivery ? (
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 1 }}>
                           <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
                           <Text style={[txt(500), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
                             {locLabel(pickup)} → {locLabel(delivery)}
