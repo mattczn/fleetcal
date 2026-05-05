@@ -4,7 +4,10 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@tanstack/react-query": ["../../node_modules/@tanstack/react-query/build/legacy/index.d.ts"],
+      "@tanstack/react-query-persist-client": ["../../node_modules/@tanstack/react-query-persist-client/build/legacy/index.d.ts"],
+      "@tanstack/query-async-storage-persister": ["../../node_modules/@tanstack/query-async-storage-persister/build/legacy/index.d.ts"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"]

@@ -3,25 +3,29 @@
  * inside `<ClerkLoaded>` in the root layout. Mirrors the web app's
  * RailwayClientProvider — same purpose, same singleton pattern.
  *
- * Renders no UI; children are passed through unchanged.
+ * The provider is updated synchronously during render (rather than in
+ * useEffect) so it's wired BEFORE any descendant effect can fire — which
+ * matters because child effects run before parent effects, and our
+ * CachePrefetcher would otherwise hit the API unauthenticated on its
+ * first mount.
  */
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { useAuth } from "@clerk/clerk-expo";
 import { setRailwayTokenProvider } from "@/lib/railway";
 
 export default function RailwayClientProvider({ children }: { children: ReactNode }) {
   const { getToken, isSignedIn } = useAuth();
 
-  useEffect(() => {
-    if (!isSignedIn) {
-      setRailwayTokenProvider(async () => null);
-      return;
-    }
+  // Set the singleton token provider on every render. It's idempotent
+  // (just stores a function ref) so the cost is negligible.
+  if (isSignedIn) {
     setRailwayTokenProvider(async () => {
       try { return (await getToken()) ?? null; }
       catch { return null; }
     });
-  }, [getToken, isSignedIn]);
+  } else {
+    setRailwayTokenProvider(async () => null);
+  }
 
   return <>{children}</>;
 }
