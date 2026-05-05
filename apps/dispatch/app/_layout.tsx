@@ -19,6 +19,7 @@ import { queryClient, persister, PERSIST_MAX_AGE } from "@/lib/queryClient";
 import RailwayClientProvider from "@/components/RailwayClientProvider";
 import CachePrefetcher from "@/components/CachePrefetcher";
 import OfflineBanner from "@/components/OfflineBanner";
+import RealtimeSync from "@/components/RealtimeSync";
 
 function AuthGate() {
   const { isLoaded, isSignedIn } = useAuth();
@@ -72,6 +73,7 @@ export default function RootLayout() {
                 persistOptions={{ persister, maxAge: PERSIST_MAX_AGE }}
               >
                 <CachePrefetcher />
+                <RealtimeSync />
                 <StatusBar style="light" />
                 <AuthGate />
                 <OfflineBanner />
