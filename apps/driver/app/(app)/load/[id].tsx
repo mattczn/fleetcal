@@ -1131,8 +1131,8 @@ export default function LoadDetailScreen() {
         </View>
 
 
-        {/* Notes */}
-        {(load.specialInstructions || load.notes) ? (
+        {/* Special Instructions — load.notes is canonical, specialInstructions is legacy fallback */}
+        {(load.notes || load.specialInstructions) ? (
           <>
             <Text
               style={[
@@ -1140,44 +1140,25 @@ export default function LoadDetailScreen() {
                 { fontSize: 11, letterSpacing: 1.1, color: "#5f6368", marginTop: 16, marginBottom: 10, textTransform: "uppercase" },
               ]}
             >
-              Notes
+              Special Instructions
             </Text>
-            {load.specialInstructions ? (
-              <View
-                style={{
-                  backgroundColor: "#fef3c7",
-                  borderRadius: 12,
-                  padding: 12,
-                  marginBottom: 8,
-                  flexDirection: "row",
-                  gap: 10,
-                  borderWidth: 1,
-                  borderColor: "#fde68a",
-                }}
-              >
-                <AlertTriangle size={15} color="#92400e" strokeWidth={2.2} style={{ marginTop: 2 }} />
-                <SelectableText
-                  value={load.specialInstructions}
-                  style={{ ...txt(600), fontSize: 13, color: "#92400e", flex: 1, lineHeight: 18 }}
-                />
-              </View>
-            ) : null}
-            {load.notes ? (
-              <View
-                style={{
-                  backgroundColor: "#ffffff",
-                  borderRadius: 12,
-                  padding: 12,
-                  borderWidth: 1,
-                  borderColor: "#e8eaed",
-                }}
-              >
-                <SelectableText
-                  value={load.notes}
-                  style={{ ...txt(500), fontSize: 13, color: "#3c4043", lineHeight: 18 }}
-                />
-              </View>
-            ) : null}
+            <View
+              style={{
+                backgroundColor: "#fef3c7",
+                borderRadius: 12,
+                padding: 12,
+                flexDirection: "row",
+                gap: 10,
+                borderWidth: 1,
+                borderColor: "#fde68a",
+              }}
+            >
+              <AlertTriangle size={15} color="#92400e" strokeWidth={2.2} style={{ marginTop: 2 }} />
+              <SelectableText
+                value={load.notes ?? load.specialInstructions ?? ""}
+                style={{ ...txt(600), fontSize: 13, color: "#92400e", flex: 1, lineHeight: 18 }}
+              />
+            </View>
           </>
         ) : null}
       </ScrollView>

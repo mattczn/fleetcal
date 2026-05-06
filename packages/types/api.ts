@@ -10,7 +10,7 @@
  * each section.
  */
 
-import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
+import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, InternalNote, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ export interface CreateLoadRequestLoad {
   accessorials?: Accessorial[];
   refNums?: RefNum[];
   notes?: string;               // load-level notes
-  internalNote?: string;        // internal-only dispatch note
+  internalNotes?: InternalNote[]; // internal-only dispatch note thread
   createdByName?: string;
 }
 
@@ -140,7 +140,8 @@ export interface UpdateLoadRequest {
   accessorials?:   Accessorial[] | null;
   refNums?:        RefNum[] | null;
   notes?:          string | null;
-  internalNote?:   string | null;
+  /** Full replacement of loads.internal_notes. Caller fetches, appends/edits, sends. */
+  internalNotes?:  InternalNote[] | null;
   /** Full replacement of loads.audit_log. Caller fetches, appends, sends. */
   auditLog?:       LoadAuditEntry[] | null;
 }

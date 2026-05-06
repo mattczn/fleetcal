@@ -546,9 +546,9 @@ const VARIABLE_DEFS: { key: keyof import('@/lib/prompt').PromptVariables; label:
     rows: 3,
   },
   {
-    key: 'notesFormat',
-    label: 'Notes format',
-    description: 'How the AI should structure the Notes field.',
+    key: 'specialInstructionsFormat',
+    label: 'Special instructions format',
+    description: 'How the AI should fill the Special Instructions field. Stop-level info (addresses, appointment times, gate codes for a specific stop) is already extracted into the stops array — this should focus on load-level broker requirements.',
     rows: 7,
   },
 ];

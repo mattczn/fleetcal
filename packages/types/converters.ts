@@ -11,6 +11,7 @@ import type { Database, Json } from "./database";
 import type {
   Load,
   Accessorial,
+  InternalNote,
   LoadAuditEntry,
   RefNum,
 } from "./domain";
@@ -103,7 +104,9 @@ export function joinEventLoadToApp(
     accessorials:   (l?.accessorials as Accessorial[] | null | undefined) ?? undefined,
     refNums:        parseRefNums(l?.ref_nums as string | null | undefined),
     notes:          (l?.notes as string | null | undefined) ?? undefined,
-    internalNote:   (l?.internal_note as string | null | undefined) ?? undefined,
+    internalNotes:  Array.isArray(l?.internal_notes)
+                      ? (l!.internal_notes as InternalNote[])
+                      : [],
     // relayGroupId aliases loadId for relay legs. Two events with the same
     // load_id and relay_role set ARE the relay; the alias keeps existing
     // relayGroupId-reading code working. Pre-2.5c, fall back to the
@@ -175,8 +178,8 @@ export function appLoadToLoadInsert(
     rate_con_pdf:     load.rateConPdf      ?? null,
     accessorials:     (load.accessorials ?? null) as unknown as Json | null,
     ref_nums:         load.refNums?.length ? JSON.stringify(load.refNums) : null,
-    notes:            load.notes           ?? null, // load-level notes
-    internal_note:    load.internalNote    ?? null,
+    notes:                 load.notes               ?? null, // load-level notes
+    internal_notes:        (load.internalNotes ?? []) as unknown as Json,
     audit_log:        (load.auditLog ?? null) as unknown as Json | null,
   } as LoadDbInsert;
 }

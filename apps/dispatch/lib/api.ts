@@ -624,7 +624,6 @@ export interface NewLoadInput {
   broker?:      string;
   driverName?:  string;
   driverId?:    number | null;
-  notes?:       string;
   specialInstructions?: string;
   refNums?:     RefNum[];
   loadPrice?:   number;
@@ -634,9 +633,6 @@ export interface NewLoadInput {
 }
 
 export async function createLoad(input: NewLoadInput): Promise<string | null> {
-  // Notes go to load.notes (broker context); legacy specialInstructions
-  // is folded in if notes isn't already set.
-  const mergedNotes = input.notes ?? input.specialInstructions;
   const { loads } = await railway.createLoad({
     load: {
       loadNum:       input.loadNum,
@@ -644,7 +640,7 @@ export async function createLoad(input: NewLoadInput): Promise<string | null> {
       loadPrice:     input.loadPrice,
       rateConPdf:    input.rateConPdf,
       refNums:       input.refNums,
-      notes:         mergedNotes,
+      notes:         input.specialInstructions,
       createdByName: input.createdByName,
     },
     events: [{
@@ -698,13 +694,12 @@ export interface ParsedRateCon {
 /**
  * Default field set extracted by the AI when the org hasn't configured
  * a custom list. Mirrors the `defaultEnabled: true` fields in
- * apps/web/lib/fields.ts plus specialInstructions which dispatchers
- * almost always want pulled from a rate-con.
+ * apps/web/lib/fields.ts.
  */
 export const DEFAULT_PARSE_FIELDS = [
   "loadNum", "refNums", "trailerType", "broker", "dispatcher",
   "commodity", "weight", "loadPrice", "driverPay",
-  "notes", "specialInstructions",
+  "specialInstructions",
 ];
 
 /**
@@ -717,7 +712,7 @@ const DEFAULT_PROMPT_VARIABLES = {
   systemRole:  "You are parsing a trucking rate confirmation (rate con) document.",
   timezone:    "Mountain Time (America/Denver)",
   titleFormat: 'Broker name first, then short route — e.g. "Echo: Salt Lake City to Denver". If there are intermediate stops list all cities in order separated by →. Always lead with the broker name followed by a colon.',
-  notesFormat: "Driver-essential information only — anything important the driver needs that is NOT already captured in the structured fields (load number, reference numbers, stops, addresses, appointment times, special instructions). Include things like: detention policy, weight or temperature requirements, fuel surcharge details, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, and any unusual broker requirements. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.",
+  specialInstructionsFormat: "Driver-essential broker requirements only. Do NOT repeat stop addresses, appointment times, gate-arrival windows, or anything that belongs on a specific stop — those are already captured in the structured stops array. Focus on load-level info that applies across the whole load: detention policy, weight or temperature requirements, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, lumper/dock fees, and any unusual broker requirements. Exclude insurance terms, payment terms, and broker/carrier legal language. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.",
 };
 
 export async function parseRateConViaApi(

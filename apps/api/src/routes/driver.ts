@@ -624,6 +624,16 @@ driver.post("/loads/:id/documents", async (c) => {
     return c.json({ error: "validation_failed", errors: ["kind must be bol|pod|scale|other"] }, 400);
   }
 
+  // Resolve load_id from the event so the document is reachable from
+  // load-scoped reads (web app queries by load_id post-2.5a). Non-revenue
+  // events have no load — load_id stays null, matching legacy behavior.
+  const { data: ev } = await supabase
+    .from("events")
+    .select("load_id")
+    .eq("id", id)
+    .maybeSingle();
+  const loadId = (ev as { load_id: string | null } | null)?.load_id ?? null;
+
   const bytes = new Uint8Array(await file.arrayBuffer());
   const ext   = (file.name.split(".").pop() ?? "bin").toLowerCase();
   const random = Math.random().toString(36).slice(2, 10);
@@ -644,6 +654,7 @@ driver.post("/loads/:id/documents", async (c) => {
     .from("load_documents")
     .insert({
       event_id:              id,
+      load_id:               loadId,
       org_id:                orgId,
       storage_path:          storagePath,
       file_name:             file.name,

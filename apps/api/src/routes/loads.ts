@@ -70,7 +70,8 @@ const EVENT_COLS =
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
-  "dispatcher,notes,internal_note,accessorials,rate_con_pdf,ref_nums," +
+  "dispatcher,notes,internal_notes," +
+  "accessorials,rate_con_pdf,ref_nums," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 interface StopRow {
@@ -626,9 +627,9 @@ loads.patch("/:id", async (c) => {
   if ("rateConPdf"   in body) update.rate_con_pdf   = body.rateConPdf   ?? null;
   if ("accessorials" in body) update.accessorials   = body.accessorials ?? null;
   if ("refNums"      in body) update.ref_nums       = body.refNums?.length ? JSON.stringify(body.refNums) : null;
-  if ("notes"        in body) update.notes          = body.notes        ?? null;
-  if ("internalNote" in body) update.internal_note  = body.internalNote ?? null;
-  if ("auditLog"     in body) update.audit_log      = body.auditLog     ?? null;
+  if ("notes"         in body) update.notes          = body.notes         ?? null;
+  if ("internalNotes" in body) update.internal_notes = body.internalNotes ?? [];
+  if ("auditLog"      in body) update.audit_log      = body.auditLog      ?? null;
 
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);

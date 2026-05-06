@@ -19,6 +19,13 @@ export interface RefNum {
   value: string;
 }
 
+export interface InternalNote {
+  id:     string;        // client-generated uuid for stable list keys
+  text:   string;
+  author: string | null; // display name of who wrote it
+  at:     string;        // ISO timestamp the entry was posted
+}
+
 export type AccessorialCategory =
   | "detention"
   | "lumper"
@@ -324,10 +331,11 @@ export interface Load {
   // Notes & meta
   notes?: string;              // loads.notes — load-level (broker instructions)
   /**
-   * Internal-only dispatch note pinned to the load. Never sent to driver/broker.
-   * `null` is sent on the wire to explicitly clear the column on update.
+   * Thread of internal-only dispatch notes pinned to the load. Each entry
+   * is authored independently so multiple dispatchers can leave context
+   * over time. Never sent to driver/broker.
    */
-  internalNote?: string | null;
+  internalNotes?: InternalNote[];
   eventNotes?: string;         // events.notes — event/leg-level; non-revenue's only notes home
   specialInstructions?: string; // legacy: events.special_instructions, merged into loads.notes by migration
   accessorials?: Accessorial[];

@@ -1002,7 +1002,7 @@ function DetailsTab({
   const refs   = load.refNums?.filter((r) => r.value) ?? [];
   const hasRef = !!load.loadNum || refs.length > 0;
   const hasFin = load.loadPrice != null || load.driverPay != null;
-  const hasNotes = !!load.specialInstructions || !!load.notes;
+  const hasNotes = !!load.notes || !!load.specialInstructions;
   const totalBillable = useMemo(
     () => accessorials.filter((a) => a.billable).reduce((sum, a) => sum + (a.amount || 0), 0),
     [accessorials],
@@ -1017,8 +1017,10 @@ function DetailsTab({
   const editTrailerTyp = () => onEditField({ title: "Trailer Type", column: "trailer_type", initial: load.trailerType ?? "", kind: "text", transform: (v) => v.trim() || null });
   const editLoadPrice  = () => onEditField({ title: "Load Price",   column: "load_price", initial: load.loadPrice != null ? String(load.loadPrice) : "", kind: "number", transform: (v) => v ? parseFloat(v) : null });
   const editDriverPay  = () => onEditField({ title: "Driver Pay",   column: "driver_pay", initial: load.driverPay != null ? String(load.driverPay) : "", kind: "number", transform: (v) => v ? parseFloat(v) : null });
-  const editNotes      = () => onEditField({ title: "Notes", column: "notes", initial: load.notes ?? "", kind: "multiline", transform: (v) => v.trim() || null });
-  const editSpecial    = () => onEditField({ title: "Special Instructions", column: "special_instructions", initial: load.specialInstructions ?? "", kind: "multiline", transform: (v) => v.trim() || null });
+  // Special Instructions writes to load.notes (the canonical column);
+  // load.specialInstructions is read-only legacy data we display as fallback.
+  const specialInstructionsValue = load.notes ?? load.specialInstructions ?? "";
+  const editSpecial    = () => onEditField({ title: "Special Instructions", column: "notes", initial: specialInstructionsValue, kind: "multiline", transform: (v) => v.trim() || null });
 
   return (
     <ScrollView style={{ width, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 100 }}>
@@ -1260,70 +1262,36 @@ function DetailsTab({
 
       {(hasNotes || editMode) ? (
         <>
-          <SectionLabel>Notes</SectionLabel>
-          {(load.specialInstructions || editMode) ? (
-            editMode ? (
-              <TouchableOpacity
-                onPress={editSpecial}
-                activeOpacity={0.7}
-                style={{
-                  backgroundColor: "#fef3c7", borderRadius: 12, padding: 12, marginBottom: 8,
-                  borderWidth: 1, borderColor: dirty.has("special_instructions") ? "#1a73e8" : "#fde68a",
-                  flexDirection: "row", alignItems: "flex-start", gap: 8,
-                }}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[txt(800), { fontSize: 11, color: "#92400e", letterSpacing: 0.4, marginBottom: 4 }]}>
-                    SPECIAL INSTRUCTIONS{dirty.has("special_instructions") ? " ·" : ""}
-                  </Text>
-                  <Text style={[txt(600), { fontSize: 13, color: load.specialInstructions ? "#92400e" : "#9aa0a6", lineHeight: 18 }]}>
-                    {load.specialInstructions || "Tap to add"}
-                  </Text>
-                </View>
-                <Pencil size={13} color={dirty.has("special_instructions") ? "#1a73e8" : "#92400e"} strokeWidth={2.4} style={{ marginTop: 2 }} />
-              </TouchableOpacity>
-            ) : load.specialInstructions ? (
-              <View style={{
-                backgroundColor: "#fef3c7", borderRadius: 12, padding: 12, marginBottom: 8,
-                borderWidth: 1, borderColor: "#fde68a",
-              }}>
-                <Text style={[txt(600), { fontSize: 13, color: "#92400e", lineHeight: 18 }]}>
-                  {load.specialInstructions}
+          <SectionLabel>Special Instructions</SectionLabel>
+          {editMode ? (
+            <TouchableOpacity
+              onPress={editSpecial}
+              activeOpacity={0.7}
+              style={{
+                backgroundColor: "#fef3c7", borderRadius: 12, padding: 12,
+                borderWidth: 1, borderColor: dirty.has("notes") ? "#1a73e8" : "#fde68a",
+                flexDirection: "row", alignItems: "flex-start", gap: 8,
+              }}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[txt(800), { fontSize: 11, color: "#92400e", letterSpacing: 0.4, marginBottom: 4 }]}>
+                  SPECIAL INSTRUCTIONS{dirty.has("notes") ? " ·" : ""}
+                </Text>
+                <Text style={[txt(600), { fontSize: 13, color: specialInstructionsValue ? "#92400e" : "#9aa0a6", lineHeight: 18 }]}>
+                  {specialInstructionsValue || "Tap to add"}
                 </Text>
               </View>
-            ) : null
-          ) : null}
-          {(load.notes || editMode) ? (
-            editMode ? (
-              <TouchableOpacity
-                onPress={editNotes}
-                activeOpacity={0.7}
-                style={{
-                  backgroundColor: "#ffffff", borderRadius: 12, padding: 12,
-                  borderWidth: 1, borderColor: dirty.has("notes") ? "#1a73e8" : "#e8eaed",
-                  flexDirection: "row", alignItems: "flex-start", gap: 8,
-                }}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4, marginBottom: 4 }]}>
-                    NOTES{dirty.has("notes") ? " ·" : ""}
-                  </Text>
-                  <Text style={[txt(500), { fontSize: 13, color: load.notes ? "#3c4043" : "#9aa0a6", lineHeight: 18 }]}>
-                    {load.notes || "Tap to add"}
-                  </Text>
-                </View>
-                <Pencil size={13} color="#1a73e8" strokeWidth={2.4} style={{ marginTop: 2 }} />
-              </TouchableOpacity>
-            ) : load.notes ? (
-              <View style={{
-                backgroundColor: "#ffffff", borderRadius: 12, padding: 12,
-                borderWidth: 1, borderColor: "#e8eaed",
-              }}>
-                <Text style={[txt(500), { fontSize: 13, color: "#3c4043", lineHeight: 18 }]}>
-                  {load.notes}
-                </Text>
-              </View>
-            ) : null
+              <Pencil size={13} color={dirty.has("notes") ? "#1a73e8" : "#92400e"} strokeWidth={2.4} style={{ marginTop: 2 }} />
+            </TouchableOpacity>
+          ) : specialInstructionsValue ? (
+            <View style={{
+              backgroundColor: "#fef3c7", borderRadius: 12, padding: 12,
+              borderWidth: 1, borderColor: "#fde68a",
+            }}>
+              <Text style={[txt(600), { fontSize: 13, color: "#92400e", lineHeight: 18 }]}>
+                {specialInstructionsValue}
+              </Text>
+            </View>
           ) : null}
         </>
       ) : null}

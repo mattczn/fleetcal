@@ -7,14 +7,14 @@ export interface PromptVariables {
   systemRole:  string;
   timezone:    string;
   titleFormat: string;
-  notesFormat: string;
+  specialInstructionsFormat: string;
 }
 
 export const DEFAULT_PROMPT_VARIABLES: PromptVariables = {
   systemRole:  'You are parsing a trucking rate confirmation (rate con) document.',
   timezone:    'Mountain Time (America/Denver)',
   titleFormat: 'Broker name first, then short route — e.g. "Echo: Salt Lake City to Denver". If there are intermediate stops list all cities in order separated by →. Always lead with the broker name followed by a colon.',
-  notesFormat: 'Driver-essential information only — anything important the driver needs that is NOT already captured in the structured fields (load number, reference numbers, stops, addresses, appointment times, special instructions). Include things like: detention policy, weight or temperature requirements, fuel surcharge details, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, and any unusual broker requirements. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.',
+  specialInstructionsFormat: 'Driver-essential broker requirements only. Do NOT repeat stop addresses, appointment times, gate-arrival windows, or anything that belongs on a specific stop — those are already captured in the structured stops array. Focus on load-level info that applies across the whole load: detention policy, weight or temperature requirements, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, lumper/dock fees, and any unusual broker requirements. Exclude insurance terms, payment terms, and broker/carrier legal language. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.',
 };
 
 export function buildRateConPrompt(
@@ -35,17 +35,14 @@ export function buildRateConPrompt(
     schemaLines.push(`  "${id}": "${alwaysSchema[id]}"`);
   }
 
-  // Enabled optional fields
+  // Enabled optional fields. specialInstructions uses the user-customizable variable.
   for (const field of ALL_FIELDS) {
     if (!enabledFieldIds.includes(field.id)) continue;
     if (ALWAYS_EXTRACT.includes(field.id)) continue;
     if (!field.extractionHint) continue;
-    // notes field uses the user-configurable format variable — strip any "Special instructions" line
-    // that may be persisted from older versions so it only appears in the dedicated field
-    const rawHint = field.id === 'notes' ? variables.notesFormat : field.extractionHint;
-    const hint = field.id === 'notes'
-      ? rawHint.split('\n').filter(l => !/special instructions/i.test(l)).join('\n').trimEnd()
-      : rawHint;
+    const hint = field.id === 'specialInstructions'
+      ? variables.specialInstructionsFormat
+      : field.extractionHint;
     schemaLines.push(`  "${field.id}": "${hint}"`);
   }
 

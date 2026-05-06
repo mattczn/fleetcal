@@ -43,7 +43,6 @@ interface Draft {
   end:        string;
   loadPrice:  string;       // kept as string for entry
   driverPay:  string;
-  notes:      string;
   specialInstructions: string;
 }
 
@@ -52,7 +51,7 @@ const EMPTY: Draft = {
   loadNum: "", broker: "", trailerType: "",
   start: "", end: "",
   loadPrice: "", driverPay: "",
-  notes: "", specialInstructions: "",
+  specialInstructions: "",
 };
 
 function fmtFullDateTime(iso: string): string {
@@ -228,8 +227,8 @@ export default function NewLoadScreen() {
       // driverPay parses through but the patch() recomputer auto-fills from
       // org pct when loadPrice is set and the AI didn't return one.
       driverPay:   p.driverPay != null ? String(p.driverPay) : "",
-      notes:       p.notes      ?? "",
-      specialInstructions: p.specialInstructions ?? "",
+      // Legacy AI prompts may still emit `notes` — funnel into specialInstructions.
+      specialInstructions: p.specialInstructions ?? p.notes ?? "",
     });
     if (p.stops?.length) {
       const next: Stop[] = p.stops.map((s, i) => ({
@@ -407,7 +406,6 @@ export default function NewLoadScreen() {
         driverName: draft.driverName ?? undefined,
         loadPrice: draft.loadPrice ? parseFloat(draft.loadPrice) : undefined,
         driverPay: draft.driverPay ? parseFloat(draft.driverPay) : undefined,
-        notes:               draft.notes.trim()               || undefined,
         specialInstructions: draft.specialInstructions.trim() || undefined,
         rateConPdf:    pdfPath,
         createdByName: user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined,
@@ -847,12 +845,12 @@ function Step1({
           last />
       </Card>
 
-      <SectionLabel>Notes</SectionLabel>
+      <SectionLabel>Special Instructions</SectionLabel>
       <TouchableOpacity
         onPress={() => onEditField({ title: "Special Instructions", column: "specialInstructions", initial: draft.specialInstructions, kind: "multiline", transform: (v) => v.trim() })}
         activeOpacity={0.7}
         style={{
-          backgroundColor: "#fef3c7", borderRadius: 12, padding: 12, marginBottom: 8,
+          backgroundColor: "#fef3c7", borderRadius: 12, padding: 12,
           borderWidth: 1, borderColor: "#fde68a",
           flexDirection: "row", alignItems: "flex-start", gap: 8,
         }}
@@ -866,25 +864,6 @@ function Step1({
           </Text>
         </View>
         <Pencil size={13} color="#92400e" strokeWidth={2.4} style={{ marginTop: 2 }} />
-      </TouchableOpacity>
-      <TouchableOpacity
-        onPress={() => onEditField({ title: "Notes", column: "notes", initial: draft.notes, kind: "multiline", transform: (v) => v.trim() })}
-        activeOpacity={0.7}
-        style={{
-          backgroundColor: "#ffffff", borderRadius: 12, padding: 12,
-          borderWidth: 1, borderColor: "#e8eaed",
-          flexDirection: "row", alignItems: "flex-start", gap: 8,
-        }}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4, marginBottom: 4 }]}>
-            NOTES
-          </Text>
-          <Text style={[txt(500), { fontSize: 13, color: draft.notes ? "#3c4043" : "#9aa0a6", lineHeight: 18 }]}>
-            {draft.notes || "Tap to add"}
-          </Text>
-        </View>
-        <Pencil size={13} color="#1a73e8" strokeWidth={2.4} style={{ marginTop: 2 }} />
       </TouchableOpacity>
     </ScrollView>
   );

@@ -1365,6 +1365,16 @@ export const useCalendarStore = create<CalendarStore>()(
             Object.entries(p.fieldSettings).filter(([k]) => k in current.fieldSettings)
           );
         }
+        // notesFormat → specialInstructionsFormat: forward any saved customization
+        // so the user's prior wording isn't lost.
+        if (p.promptVariables) {
+          const pv = { ...(p.promptVariables as unknown as Record<string, string>) };
+          if (!pv.specialInstructionsFormat && pv.notesFormat) {
+            pv.specialInstructionsFormat = pv.notesFormat;
+          }
+          delete pv.notesFormat;
+          p.promptVariables = { ...current.promptVariables, ...pv } as typeof current.promptVariables;
+        }
         return { ...current, ...p };
       },
       partialize: (state) => ({

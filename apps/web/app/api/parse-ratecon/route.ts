@@ -3,6 +3,7 @@ import type { ContentBlockParam, DocumentBlockParam, TextBlockParam } from '@ant
 import { NextRequest, NextResponse } from 'next/server';
 import { buildRateConPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
 import { geocodeAll } from '@/lib/geocode';
+import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
 
 interface RawStop {
@@ -63,10 +64,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
+  // Strip legal/industry suffixes from the broker name AI returned so
+  // the title doesn't read "Direct Connect Logistics Inc: …".
+  if (typeof parsed.broker === 'string') {
+    parsed.broker = cleanBrokerName(parsed.broker);
+  }
+
   // ── Enrich stops with geocoding ─────────────────────────────────────────────
   const rawStops: RawStop[] = Array.isArray(parsed.stops) ? (parsed.stops as RawStop[]) : [];
 
-  let enrichedStops: object[] = [];
+  let enrichedStops: { city?: string; [k: string]: unknown }[] = [];
 
   if (rawStops.length > 0) {
     const sorted = [...rawStops].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
@@ -97,6 +104,21 @@ export async function POST(req: NextRequest) {
         geocodeStatus,
       };
     });
+  }
+
+  // Rebuild the title from geocoded cities when both ends are known —
+  // canonical city names beat whatever the AI inferred from the doc.
+  // Falls back to the AI's summary if either endpoint is missing a city.
+  if (
+    enrichedStops.length >= 2 &&
+    enrichedStops[0].city &&
+    enrichedStops[enrichedStops.length - 1].city
+  ) {
+    const cities = enrichedStops
+      .map(s => s.city)
+      .filter((c, i, arr): c is string => !!c && (i === 0 || c !== arr[i - 1]));
+    const broker = typeof parsed.broker === 'string' && parsed.broker ? `${parsed.broker}: ` : '';
+    parsed.summary = `${broker}${cities.join(' → ')}`;
   }
 
   return NextResponse.json({

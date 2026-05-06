@@ -1011,9 +1011,12 @@ export default function EventModal() {
   const [showBrokerProfile, setShowBrokerProfile] = useState(false);
   const brokerComboRef = useRef<HTMLInputElement | null>(null);
   const [linkedTrailerId, setLinkedTrailerId] = useState<number | undefined>(undefined);
-  // Internal note pinned to the load. undefined = not added (show button);
-  // any string (incl. '') = note exists (show editable field).
-  const [internalNote, setInternalNote] = useState<string | undefined>(undefined);
+  // Thread of internal notes pinned to the load. Composer text is held
+  // separately so an unposted draft doesn't get serialized into the array.
+  const [internalNotes, setInternalNotes] = useState<import('@fleetcal/types').InternalNote[]>([]);
+  const [originalInternalNotes, setOriginalInternalNotes] = useState<import('@fleetcal/types').InternalNote[]>([]);
+  const [noteComposer, setNoteComposer] = useState<string>('');
+  const [noteComposerOpen, setNoteComposerOpen] = useState<boolean>(false);
   const driverPayAutoSet = useRef(false); // true when driverPay was auto-filled from pct
   const [driverPayIsAuto, setDriverPayIsAuto] = useState(false);
   const [prevDriverPay, setPrevDriverPay] = useState<number | null>(null);
@@ -1206,17 +1209,22 @@ export default function EventModal() {
       const v = (ev as unknown as Record<string, unknown>)[f.id];
       if (v !== undefined) vals[f.id] = v as string | number | boolean;
     });
+    // load.notes is the canonical column for the consolidated notes field
+    if (vals['specialInstructions'] === undefined && ev.notes) vals['specialInstructions'] = ev.notes;
     setFieldValues(vals);
     setRateConPdf(ev.rateConPdf ?? undefined);
     setAccessorials(ev.accessorials ?? []);
     setStops(ev.stops ?? []);
     setEventKind(ev.eventKind ?? 'revenue');
     setNonRevenueType(ev.nonRevenueType ?? 'Maintenance');
-    setInternalNote(ev.internalNote ?? undefined);
+    setInternalNotes(ev.internalNotes ?? []);
+    setOriginalInternalNotes(ev.internalNotes ?? []);
+    setNoteComposer('');
+    setNoteComposerOpen(false);
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNote(undefined); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -1250,13 +1258,18 @@ export default function EventModal() {
         const v = (ev as unknown as Record<string, unknown>)[f.id];
         if (v !== undefined) vals[f.id] = v as string | number | boolean;
       });
+      // load.notes is the canonical column for the consolidated notes field
+      if (vals['specialInstructions'] === undefined && ev.notes) vals['specialInstructions'] = ev.notes;
       setFieldValues(vals);
       setRateConPdf(ev.rateConPdf ?? undefined);
       setAccessorials(ev.accessorials ?? []);
       setStops(ev.stops ?? []);
       setEventKind(ev.eventKind ?? 'revenue');
       setNonRevenueType(ev.nonRevenueType ?? 'Maintenance');
-      setInternalNote(ev.internalNote ?? undefined);
+      setInternalNotes(ev.internalNotes ?? []);
+      setOriginalInternalNotes(ev.internalNotes ?? []);
+      setNoteComposer('');
+      setNoteComposerOpen(false);
 
       // Treat the leg as part of a relay if EITHER load_id grouping (post-2.5a)
       // OR legacy relayGroupId is present, AND relayRole is set.
@@ -1539,7 +1552,20 @@ export default function EventModal() {
       catch (err) { console.error('PDF upload failed — rate con not saved, re-attach when editing:', err); }
     }
 
-    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, internalNote: internalNote ?? null };
+    // Flush any unposted draft in the composer so a user who typed and
+    // hit Save (without clicking Post) doesn't lose the note.
+    const authorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? null;
+    const draft = noteComposer.trim();
+    const finalNotes = draft
+      ? [...internalNotes, { id: crypto.randomUUID(), text: draft, author: authorName, at: new Date().toISOString() }]
+      : internalNotes;
+    const notesChanged =
+      finalNotes.length !== originalInternalNotes.length ||
+      finalNotes.some((n, i) => n.id !== originalInternalNotes[i]?.id || n.text !== originalInternalNotes[i]?.text);
+    const internalNoteFields: { internalNotes?: import('@fleetcal/types').InternalNote[] } = notesChanged
+      ? { internalNotes: finalNotes }
+      : {};
+    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, ...internalNoteFields };
 
     const relayStop = stops.find(s => s.type === 'relay');
     const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
@@ -1796,7 +1822,8 @@ export default function EventModal() {
             setDriverPayIsAuto(false);
           }
         }
-        if (parsed.notes)     setField('notes', parsed.notes);
+        // Legacy AI prompts may still emit `notes` — funnel into specialInstructions.
+        if (parsed.notes && !parsed.specialInstructions) parsed.specialInstructions = parsed.notes;
         if (parsed.broker) {
           const match = matchCustomer(String(parsed.broker), customers);
           if (match.status === 'auto') {
@@ -2857,12 +2884,12 @@ export default function EventModal() {
               </Field>
             </div>
 
-            {/* Internal note — pinned just above Load Info; revenue only */}
+            {/* Internal notes — thread of pinned notes; revenue only */}
             {eventKind === 'revenue' && (
-              internalNote === undefined ? (
+              internalNotes.length === 0 && !noteComposerOpen ? (
                 <button
                   type="button"
-                  onClick={() => { setInternalNote(''); markDirty(); }}
+                  onClick={() => { setNoteComposerOpen(true); }}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 5,
                     fontSize: 12, fontWeight: 600, padding: '4px 10px',
@@ -2876,36 +2903,92 @@ export default function EventModal() {
                 </button>
               ) : (
                 <div style={{
-                  display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 8,
+                  padding: '10px 12px', borderRadius: 8,
                   background: '#fef9c3', border: '1px solid #fde68a',
                 }}>
-                  <Pin size={13} style={{ color: '#a16207', flexShrink: 0, marginTop: 2 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e', marginBottom: 3 }}>
-                      Internal Note
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                    <Pin size={13} style={{ color: '#a16207', flexShrink: 0 }} />
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e' }}>
+                      Internal Notes
                     </div>
-                    <textarea
-                      value={internalNote}
-                      onChange={e => { setInternalNote(e.target.value); markDirty(); }}
-                      placeholder="Pinned at the top of this load. Never sent to driver or broker."
-                      rows={2}
-                      style={{
-                        width: '100%', fontSize: 13, lineHeight: 1.4, color: '#78350f',
-                        background: 'transparent', border: 'none', outline: 'none', resize: 'vertical',
-                        fontFamily: 'inherit',
-                      }}
-                    />
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => { setInternalNote(undefined); markDirty(); }}
-                    title="Remove internal note"
-                    style={{ alignSelf: 'flex-start', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#a16207' }}
-                    onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = '#a16207'; }}
-                  >
-                    <X size={13} />
-                  </button>
+                  {internalNotes.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: noteComposerOpen ? 10 : 0 }}>
+                      {internalNotes.map((n) => (
+                        <div key={n.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, lineHeight: 1.4, color: '#78350f', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {n.text}
+                            </div>
+                            <div style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
+                              {n.author ? `${n.author}` : 'Unknown'}
+                              {' · '}
+                              {new Date(n.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => { setInternalNotes(internalNotes.filter(x => x.id !== n.id)); markDirty(); }}
+                            title="Remove note"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#a16207' }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#a16207'; }}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {noteComposerOpen ? (
+                    <div style={{ borderTop: internalNotes.length > 0 ? '1px solid #fde68a' : 'none', paddingTop: internalNotes.length > 0 ? 10 : 0 }}>
+                      <textarea
+                        value={noteComposer}
+                        onChange={e => { setNoteComposer(e.target.value); markDirty(); }}
+                        placeholder="Add a note. Pinned to this load. Never sent to driver or broker."
+                        rows={2}
+                        autoFocus
+                        style={{
+                          width: '100%', fontSize: 13, lineHeight: 1.4, color: '#78350f',
+                          background: 'transparent', border: 'none', outline: 'none', resize: 'vertical',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() => { setNoteComposer(''); setNoteComposerOpen(false); }}
+                          style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 4, border: 'none', background: 'transparent', color: '#a16207', cursor: 'pointer' }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!noteComposer.trim()}
+                          onClick={() => {
+                            const text = noteComposer.trim();
+                            if (!text) return;
+                            const authorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? null;
+                            setInternalNotes([...internalNotes, { id: crypto.randomUUID(), text, author: authorName, at: new Date().toISOString() }]);
+                            setNoteComposer('');
+                            setNoteComposerOpen(false);
+                            markDirty();
+                          }}
+                          style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, border: 'none', background: noteComposer.trim() ? '#a16207' : '#fde68a', color: '#fff', cursor: noteComposer.trim() ? 'pointer' : 'default' }}
+                        >
+                          Post
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setNoteComposerOpen(true)}
+                      style={{ fontSize: 11, fontWeight: 600, padding: '3px 0', border: 'none', background: 'transparent', color: '#a16207', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <Plus size={11} /> Add note
+                    </button>
+                  )}
                 </div>
               )
             )}

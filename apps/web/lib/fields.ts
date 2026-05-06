@@ -36,9 +36,8 @@ export const ALL_FIELDS: FieldDef[] = [
   { id: 'loadPrice',     label: 'Load Price ($)',     section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00',    extractionHint: 'Total load rate or price — number only, no $ sign or commas, e.g. 1850.00' },
   { id: 'driverPay',     label: 'Driver Pay ($)',     section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00' },
 
-  // Notes
-  { id: 'specialInstructions', label: 'Special Instructions', section: 'notes', type: 'textarea', defaultEnabled: false, placeholder: 'Driver must check in at gate B…', extractionHint: 'Driver-relevant special instructions only — exclude insurance terms, payment terms, and broker/carrier legal language' },
-  { id: 'notes', label: 'Notes', section: 'notes', type: 'textarea', defaultEnabled: true, placeholder: 'Add notes…', extractionHint: 'Any additional notes about the load' },
+  // Special Instructions — extraction hint is overridden by promptVariables.specialInstructionsFormat
+  { id: 'specialInstructions', label: 'Special Instructions', section: 'notes', type: 'textarea', defaultEnabled: true, placeholder: 'Driver must check in at gate B…', extractionHint: 'Driver-essential broker requirements only — see prompt variable for full guidance.' },
 ];
 
 export function buildDefaultFieldSettings(): Record<string, boolean> {

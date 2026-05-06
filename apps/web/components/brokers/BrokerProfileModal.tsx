@@ -831,18 +831,11 @@ function LoadDetailPanel({ load, assets, onClose, onOpenEditor }: {
           )}
         </div>
 
-        {/* Notes */}
-        {(load.specialInstructions || load.notes) && (
+        {/* Special Instructions — load.notes is canonical; specialInstructions is legacy */}
+        {(load.notes || load.specialInstructions) && (
           <div>
-            <DetailSectionLabel>Notes</DetailSectionLabel>
-            <div className="space-y-3">
-              {load.specialInstructions && (
-                <NoteBlock label="Special Instructions" text={load.specialInstructions} />
-              )}
-              {load.notes && (
-                <NoteBlock label="Notes" text={load.notes} />
-              )}
-            </div>
+            <DetailSectionLabel>Special Instructions</DetailSectionLabel>
+            <NoteBlock label="Special Instructions" text={load.notes ?? load.specialInstructions ?? ''} />
           </div>
         )}
       </div>
