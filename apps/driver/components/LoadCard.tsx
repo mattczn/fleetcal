@@ -14,13 +14,32 @@ import {
 
 type Props = { load: Load };
 
-function pickupOf(load: Load): Stop | undefined {
-  return load.stops.find((s) => s.type === "pickup");
+/**
+ * The "from" / "to" of this driver's leg — handles relays correctly.
+ *
+ *   - Single load:    first stop is pickup, last is delivery.
+ *   - Pickup leg:     first stop is pickup, last is the relay handoff.
+ *   - Delivery leg:   first stop is the relay handoff, last is delivery.
+ *
+ * Looking up by stop.type === "pickup" missed relay-leg stops (which
+ * are typed "relay"), so empty cells appeared on the home cards.
+ */
+function originStop(load: Load): Stop | undefined {
+  return load.stops[0];
 }
-function deliveryOf(load: Load): Stop | undefined {
-  return [...load.stops]
-    .reverse()
-    .find((s) => s.type === "delivery" || s.type === "drop_hook");
+function destinationStop(load: Load): Stop | undefined {
+  return load.stops[load.stops.length - 1];
+}
+
+function originLabel(s: Stop | undefined, isRelayDelivery: boolean): string {
+  if (isRelayDelivery) return "RELAY HANDOFF";
+  if (s?.type === "pickup")   return "PICKUP";
+  return "ORIGIN";
+}
+function destLabel(s: Stop | undefined, isRelayPickup: boolean): string {
+  if (isRelayPickup) return "RELAY HANDOFF";
+  if (s?.type === "delivery" || s?.type === "drop_hook") return "DELIVERY";
+  return "DESTINATION";
 }
 
 function locLabel(s: Stop | undefined): string {
@@ -42,8 +61,10 @@ export function LoadCard({ load }: Props) {
   const router = useRouter();
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;
-  const pickup     = pickupOf(load);
-  const delivery   = deliveryOf(load);
+  const pickup     = originStop(load);
+  const delivery   = destinationStop(load);
+  const isRelayPickup   = load.relayRole === "pickup";
+  const isRelayDelivery = load.relayRole === "delivery";
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
   const { data: orgSettings } = useQuery({
@@ -114,28 +135,32 @@ export function LoadCard({ load }: Props) {
               <View
                 style={{
                   width: 20, height: 20, borderRadius: 10,
-                  backgroundColor: "#dcfce7",
+                  backgroundColor: isRelayDelivery ? "#ede9fe" : "#dcfce7",
                   alignItems: "center", justifyContent: "center",
                 }}
               >
-                <MapPin size={11} color="#16a34a" strokeWidth={2.5} />
+                <MapPin size={11} color={isRelayDelivery ? "#5b21b6" : "#16a34a"} strokeWidth={2.5} />
               </View>
               <View style={{ width: 2, flex: 1, backgroundColor: "#e8eaed", marginVertical: 4 }} />
               <View
                 style={{
                   width: 20, height: 20, borderRadius: 10,
-                  backgroundColor: "#fee2e2",
+                  backgroundColor: isRelayPickup ? "#ede9fe" : "#fee2e2",
                   alignItems: "center", justifyContent: "center",
                 }}
               >
-                <MapPin size={11} color="#dc2626" strokeWidth={2.5} />
+                <MapPin size={11} color={isRelayPickup ? "#5b21b6" : "#dc2626"} strokeWidth={2.5} />
               </View>
             </View>
 
             <View style={{ flex: 1 }}>
               <View style={{ marginBottom: 12 }}>
-                <Text style={[txt(700), { fontSize: 10, color: "#16a34a", letterSpacing: 0.6 }]}>
-                  PICKUP · {fmtShortDate(load.start)}
+                <Text style={[txt(700), {
+                  fontSize: 10,
+                  color: isRelayDelivery ? "#5b21b6" : "#16a34a",
+                  letterSpacing: 0.6,
+                }]}>
+                  {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}
                   {fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
@@ -144,8 +169,12 @@ export function LoadCard({ load }: Props) {
               </View>
 
               <View>
-                <Text style={[txt(700), { fontSize: 10, color: "#dc2626", letterSpacing: 0.6 }]}>
-                  DELIVERY · {fmtShortDate(load.end)}
+                <Text style={[txt(700), {
+                  fontSize: 10,
+                  color: isRelayPickup ? "#5b21b6" : "#dc2626",
+                  letterSpacing: 0.6,
+                }]}>
+                  {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}
                   {fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
