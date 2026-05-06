@@ -25,7 +25,9 @@ function deliveryOf(load: Load): Stop | undefined {
 
 function locLabel(s: Stop | undefined): string {
   if (!s) return "—";
-  return s.city ?? s.facilityName ?? s.address ?? "—";
+  // Drivers want the full street address — they're navigating to it.
+  // Fall through to facility / city only when no address was geocoded.
+  return s.address ?? s.facilityName ?? s.city ?? "—";
 }
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -136,7 +138,7 @@ export function LoadCard({ load }: Props) {
                   PICKUP · {fmtShortDate(load.start)}
                   {fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}
                 </Text>
-                <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={1}>
+                <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(pickup)}
                 </Text>
               </View>
@@ -146,7 +148,7 @@ export function LoadCard({ load }: Props) {
                   DELIVERY · {fmtShortDate(load.end)}
                   {fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}
                 </Text>
-                <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={1}>
+                <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(delivery)}
                 </Text>
               </View>

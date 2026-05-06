@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,10 +10,10 @@ import {
   Dimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, AlertTriangle } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
-import { fetchLoadsForDriver } from "@/lib/api/loads";
+import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { LoadCard } from "@/components/LoadCard";
 import { EmptyState } from "@/components/EmptyState";
 import { useDriverSession } from "@/lib/useDriverSession";
@@ -23,8 +23,14 @@ import type { Load } from "@/lib/types";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
-const ACTIVE_STATUSES   = new Set(["en_route", "picked_up"]);
-const UPCOMING_STATUSES = new Set(["scheduled", "dispatched"]);
+/** "YYYY-MM-DDTHH:mm" naive local timestamp at `now + hours`. Loads
+ *  carry start/end in this same naive shape so plain string compare
+ *  works without parsing into Date objects. */
+function naiveAtOffset(hours: number): string {
+  const d = new Date(Date.now() + hours * 3600_000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -46,6 +52,7 @@ export default function LoadsScreen() {
   const [activeTab, setActiveTab] = useState<TabIdx>(0);
   const pagerRef = useRef<ScrollView>(null);
 
+  const queryClient = useQueryClient();
   const {
     data: loads,
     isLoading,
@@ -58,13 +65,51 @@ export default function LoadsScreen() {
     enabled:  !!driver,
   });
 
-  const activeLoads:   Load[] = loads?.filter((l) => ACTIVE_STATUSES.has(l.status))   ?? [];
-  const upcomingLoads: Load[] = loads?.filter((l) => UPCOMING_STATUSES.has(l.status)) ?? [];
-  const otherLoads:    Load[] = loads?.filter(
-    (l) => !ACTIVE_STATUSES.has(l.status) && !UPCOMING_STATUSES.has(l.status),
-  ) ?? [];
+  // Time-based bucketing — string-compare naive YYYY-MM-DDTHH:mm
+  // timestamps against ±6h / ±24h offsets from now.
+  //   Active   = overlapping the ±6h window (in transit, just delivered,
+  //              or picking up soon)
+  //   Recent   = end fell between 6 h and 24 h ago
+  //   Upcoming = start lands between 6 h and 24 h ahead
+  // Anything older than 24 h ago or further than 24 h ahead drops off
+  // the home screen entirely (still surfaced via the schedule view).
+  const { activeLoads, upcomingLoads, recentLoads, within24h } = useMemo(() => {
+    const now    = naiveAtOffset(0);
+    const m6h    = naiveAtOffset(-6);
+    const p6h    = naiveAtOffset(6);
+    const m24h   = naiveAtOffset(-24);
+    const p24h   = naiveAtOffset(24);
+    const all = loads ?? [];
+    const active   = all.filter((l) => l.start <= p6h  && (l.end ?? l.start) >= m6h);
+    const recent   = all.filter((l) => (l.end ?? l.start) <  m6h && (l.end ?? l.start) >= m24h);
+    const upcoming = all.filter((l) => l.start > p6h && l.start <= p24h);
+    const within24 = all.filter((l) => l.start <= p24h && (l.end ?? l.start) >= m24h);
+    void now; // exposed for clarity even though unused
+    return {
+      activeLoads:   active,
+      upcomingLoads: upcoming,
+      recentLoads:   recent,
+      within24h:     within24,
+    };
+  }, [loads]);
 
-  const tabData: Load[][] = [activeLoads, upcomingLoads, otherLoads];
+  // Prefetch the full load detail (with relay partner stops, etc.) for
+  // every load in the ±24h window so tapping into one is instant and
+  // works offline if the device drops connectivity later. The list query
+  // already returns most fields, but the detail endpoint also surfaces
+  // relay partner info that the list omits.
+  useEffect(() => {
+    if (!driver) return;
+    for (const load of within24h) {
+      queryClient.prefetchQuery({
+        queryKey: ["load", load.id],
+        queryFn:  () => fetchLoad(load.id, driver.driverId, driver.orgId),
+        staleTime: 5 * 60 * 1000,
+      });
+    }
+  }, [within24h, driver, queryClient]);
+
+  const tabData: Load[][] = [activeLoads, upcomingLoads, recentLoads];
 
   function selectTab(idx: TabIdx) {
     setActiveTab(idx);
@@ -79,9 +124,9 @@ export default function LoadsScreen() {
   })();
 
   const emptyLabels = [
-    { title: "No active loads", subtitle: "Loads in progress will appear here" },
-    { title: "No upcoming loads", subtitle: "Check back when dispatch adds a load" },
-    { title: "No recent loads", subtitle: "Past loads will appear here" },
+    { title: "Nothing active",  subtitle: "Loads in transit, delivered in the last 6 h, or picking up in the next 6 h show here." },
+    { title: "Nothing upcoming", subtitle: "Loads picking up 6–24 h from now show here." },
+    { title: "Nothing recent",   subtitle: "Loads delivered 6–24 h ago show here." },
   ];
 
   return (
