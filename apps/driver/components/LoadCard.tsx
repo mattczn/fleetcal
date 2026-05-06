@@ -44,9 +44,11 @@ function destLabel(s: Stop | undefined, isRelayPickup: boolean): string {
 
 function locLabel(s: Stop | undefined): string {
   if (!s) return "—";
-  // Drivers want the full street address — they're navigating to it.
-  // Fall through to facility / city only when no address was geocoded.
-  return s.address ?? s.facilityName ?? s.city ?? "—";
+  // Loads-page rows want a quick "where" — city + state is the right
+  // grain. Fall through to facility / address only when geocoding
+  // hasn't filled in the city yet.
+  if (s.city && s.state) return `${s.city}, ${s.state}`;
+  return s.city ?? s.facilityName ?? s.address ?? "—";
 }
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
