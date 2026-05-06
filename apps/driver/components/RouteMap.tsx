@@ -1,11 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { View, Text, TouchableOpacity, Modal, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
-import { useQuery } from "@tanstack/react-query";
-import { fetchRoadPolyline } from "@/lib/api/directions";
+import WebView from "react-native-webview";
 import { Maximize2, X, MapPin, Clock } from "lucide-react-native";
-import type { Stop } from "@/lib/types";
+import type { Stop, StopType } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -15,29 +13,34 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
-const STOP_COLOR: Record<Stop["type"], string> = {
+const STOP_COLOR: Record<StopType, string> = {
   pickup:    "#16a34a",
   delivery:  "#dc2626",
+  drop:      "#0891b2",
   drop_hook: "#2563eb",
   stop:      "#eab308",
   relay:     "#8b5cf6",
 };
 
-const STOP_ACCENT: Record<Stop["type"], { bg: string; fg: string }> = {
+const STOP_ACCENT: Record<StopType, { bg: string; fg: string }> = {
   pickup:    { bg: "#dcfce7", fg: "#15803d" },
   delivery:  { bg: "#fee2e2", fg: "#b91c1c" },
+  drop:      { bg: "#cffafe", fg: "#0e7490" },
   drop_hook: { bg: "#dbeafe", fg: "#1e40af" },
   stop:      { bg: "#fef9c3", fg: "#854d0e" },
   relay:     { bg: "#f3e8fd", fg: "#6b21a8" },
 };
 
-const STOP_LABEL: Record<Stop["type"], string> = {
+const STOP_LABEL: Record<StopType, string> = {
   pickup:    "Pickup",
   delivery:  "Delivery",
+  drop:      "Drop Trailer",
   drop_hook: "Drop & Hook",
   stop:      "Stop",
   relay:     "Relay",
 };
+
+const GOOGLE_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
 
 function fmtTime(iso?: string): string {
   if (!iso) return "";
@@ -50,6 +53,188 @@ function fmtTime(iso?: string): string {
   return `${h12}:${mStr} ${ampm}`;
 }
 
+/**
+ * Build a Google Maps JS API HTML page with numbered stop markers, a
+ * road-following polyline (Directions API), and white check-in dots
+ * at any stop the driver has already arrived at. Marker clicks post
+ * back to React Native via `window.ReactNativeWebView.postMessage`.
+ *
+ * `interactive=false` is used for the inline thumbnail to disable
+ * gestures and chrome.
+ */
+function buildMapHtml(stops: Stop[], apiKey: string, interactive: boolean): string {
+  const geocoded = stops.filter((s) => typeof s.lat === "number" && typeof s.lng === "number");
+  const stopsJson = JSON.stringify(
+    geocoded.map((s) => ({
+      id: s.id,
+      type: s.type,
+      lat: s.lat,
+      lng: s.lng,
+      arrivedLat: s.arrivedLat ?? null,
+      arrivedLng: s.arrivedLng ?? null,
+      arrivedAt:  s.arrivedAt  ?? null,
+    })),
+  );
+  const colorsJson = JSON.stringify(STOP_COLOR);
+  const interactiveStr = interactive ? "true" : "false";
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+<style>
+  html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #fff; }
+  .pin {
+    position: relative;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--pin-color, #5f6368);
+    border: 3px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 11px; font-weight: 800;
+    font-family: -apple-system,BlinkMacSystemFont,sans-serif;
+    cursor: pointer;
+  }
+  .pin.active { width: 36px; height: 36px; font-size: 13px; box-shadow: 0 4px 10px rgba(0,0,0,0.55); }
+  .checkin {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; border: 2.5px solid #16a34a;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25);
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  const stops      = ${stopsJson};
+  const COLORS     = ${colorsJson};
+  const interactive = ${interactiveStr};
+  const post = (msg) => { try { window.ReactNativeWebView.postMessage(JSON.stringify(msg)); } catch(e){} };
+  const markersById = {};
+  let mapInstance = null;
+  let pendingFocusIndex = null;
+
+  window.initMap = function() {
+    if (stops.length === 0) {
+      document.getElementById('map').innerHTML = '<div style="display:flex;height:100%;align-items:center;justify-content:center;color:#9aa0a6;font-family:-apple-system;font-size:13px">No coordinates available</div>';
+      return;
+    }
+    const lats = stops.map(s => s.lat), lngs = stops.map(s => s.lng);
+    const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+
+    const map = new google.maps.Map(document.getElementById('map'), {
+      center: { lat: (minLat + maxLat) / 2, lng: (minLng + maxLng) / 2 },
+      zoom: 5,
+      disableDefaultUI: !interactive,
+      zoomControl: interactive,
+      gestureHandling: interactive ? 'greedy' : 'none',
+      clickableIcons: false,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+      styles: [
+        { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
+        { featureType: 'transit.station.bus', stylers: [{ visibility: 'off' }] },
+      ],
+    });
+    mapInstance = map;
+
+    function makeOverlay(position, html, onClick) {
+      const overlay = new google.maps.OverlayView();
+      let div = null;
+      overlay.onAdd = function() {
+        div = document.createElement('div');
+        div.style.position = 'absolute';
+        div.style.transform = 'translate(-50%, -50%)';
+        div.innerHTML = html;
+        if (onClick) div.firstElementChild.addEventListener('click', onClick);
+        this.getPanes().overlayMouseTarget.appendChild(div);
+      };
+      overlay.draw = function() {
+        if (!div) return;
+        const proj = this.getProjection();
+        if (!proj) return;
+        const p = proj.fromLatLngToDivPixel(new google.maps.LatLng(position.lat, position.lng));
+        div.style.left = p.x + 'px';
+        div.style.top  = p.y + 'px';
+      };
+      overlay.onRemove = function() { if (div && div.parentNode) div.parentNode.removeChild(div); div = null; };
+      overlay.getElement = function() { return div ? div.firstElementChild : null; };
+      overlay.setMap(map);
+      return overlay;
+    }
+
+    stops.forEach((s, i) => {
+      const color = COLORS[s.type] || '#5f6368';
+      const html = '<div class="pin" style="--pin-color:' + color + '">' + (i + 1) + '</div>';
+      const ov = makeOverlay({ lat: s.lat, lng: s.lng }, html, interactive ? () => post({ type: 'stop:select', index: i }) : null);
+      markersById[s.id] = ov;
+
+      if (s.arrivedLat != null && s.arrivedLng != null) {
+        makeOverlay({ lat: s.arrivedLat, lng: s.arrivedLng }, '<div class="checkin"></div>', null);
+      }
+    });
+
+    if (stops.length >= 2) {
+      const directionsService = new google.maps.DirectionsService();
+      const renderer = new google.maps.DirectionsRenderer({
+        map,
+        suppressMarkers: true,
+        preserveViewport: true,
+        polylineOptions: { strokeColor: '#1a73e8', strokeWeight: 4, strokeOpacity: 0.9 },
+      });
+      const origin      = { lat: stops[0].lat, lng: stops[0].lng };
+      const destination = { lat: stops[stops.length - 1].lat, lng: stops[stops.length - 1].lng };
+      const waypoints   = stops.slice(1, -1).map(s => ({ location: { lat: s.lat, lng: s.lng }, stopover: true }));
+      directionsService.route(
+        { origin, destination, waypoints, travelMode: google.maps.TravelMode.DRIVING },
+        (result, status) => {
+          if (status === 'OK' && result) {
+            renderer.setDirections(result);
+          } else {
+            // Fallback to a straight polyline through the stops.
+            const path = stops.map(s => ({ lat: s.lat, lng: s.lng }));
+            new google.maps.Polyline({ path, strokeColor: '#1a73e8', strokeWeight: 4, strokeOpacity: 0.9, map });
+          }
+        },
+      );
+      const bounds = new google.maps.LatLngBounds();
+      stops.forEach(s => bounds.extend({ lat: s.lat, lng: s.lng }));
+      map.fitBounds(bounds, 50);
+    } else {
+      map.setCenter({ lat: stops[0].lat, lng: stops[0].lng });
+      map.setZoom(10);
+    }
+
+    post({ type: 'ready' });
+    if (pendingFocusIndex !== null) { focusStop(pendingFocusIndex); pendingFocusIndex = null; }
+  };
+
+  function focusStop(index) {
+    const s = stops[index];
+    if (!s || !mapInstance) return;
+    mapInstance.panTo({ lat: s.lat, lng: s.lng });
+    mapInstance.setZoom(13);
+    Object.keys(markersById).forEach(id => {
+      const el = markersById[id].getElement();
+      if (el) el.classList.remove('active');
+    });
+    const activeEl = markersById[s.id] && markersById[s.id].getElement();
+    if (activeEl) activeEl.classList.add('active');
+  }
+
+  document.addEventListener('rn:focus-stop', (e) => {
+    if (!mapInstance) { pendingFocusIndex = e.detail.index; return; }
+    focusStop(e.detail.index);
+  });
+</script>
+<script src="https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initMap&libraries=geometry&v=quarterly" async defer></script>
+</body>
+</html>`;
+}
+
 type Props = {
   stops:   Stop[];
   height?: number;
@@ -57,46 +242,41 @@ type Props = {
 
 export function RouteMap({ stops, height = 220 }: Props) {
   const [fullscreen, setFullscreen]   = useState(false);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const insets = useSafeAreaInsets();
+  const fullscreenWebRef = useRef<WebView | null>(null);
 
   const geocoded = useMemo(
     () => stops.filter((s) => typeof s.lat === "number" && typeof s.lng === "number"),
     [stops],
   );
 
-  const waypoints = useMemo(
-    () => geocoded.map((s) => ({ lat: s.lat!, lng: s.lng! })),
-    [geocoded],
-  );
+  const thumbnailHtml  = useMemo(() => buildMapHtml(stops, GOOGLE_KEY, false), [stops]);
+  const fullscreenHtml = useMemo(() => buildMapHtml(stops, GOOGLE_KEY, true),  [stops]);
 
-  const { data: route } = useQuery({
-    queryKey: ["road-polyline", waypoints.map((w) => `${w.lat},${w.lng}`).join("|")],
-    queryFn:  () => fetchRoadPolyline(waypoints),
-    enabled:  waypoints.length >= 2,
-    staleTime: 60 * 60 * 1000,
-  });
+  function focusStopInWebview(index: number) {
+    const js = `document.dispatchEvent(new CustomEvent('rn:focus-stop',{detail:{index:${index}}})); true;`;
+    fullscreenWebRef.current?.injectJavaScript(js);
+  }
 
-  const lineCoords = route?.coords
-    ?? geocoded.map((s) => ({ latitude: s.lat!, longitude: s.lng! }));
+  React.useEffect(() => {
+    if (fullscreen) {
+      const t = setTimeout(() => focusStopInWebview(selectedIdx), 350);
+      return () => clearTimeout(t);
+    }
+  }, [fullscreen, selectedIdx]);
 
-  const region = useMemo(() => {
-    if (lineCoords.length === 0) return null;
-    const lats = lineCoords.map((c) => c.latitude);
-    const lngs = lineCoords.map((c) => c.longitude);
-    const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
-    const latDelta = Math.max((maxLat - minLat) * 1.5, 0.4);
-    const lngDelta = Math.max((maxLng - minLng) * 1.5, 0.4);
-    return {
-      latitude:       (minLat + maxLat) / 2,
-      longitude:      (minLng + maxLng) / 2,
-      latitudeDelta:  latDelta,
-      longitudeDelta: lngDelta,
-    };
-  }, [lineCoords]);
+  if (!GOOGLE_KEY) {
+    return (
+      <View style={{ height, backgroundColor: "#fef3c7", borderRadius: 14, alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <Text style={[txt(700), { fontSize: 13, color: "#92400e", textAlign: "center" }]}>
+          Google Maps key not configured (EXPO_PUBLIC_GOOGLE_MAPS_API_KEY)
+        </Text>
+      </View>
+    );
+  }
 
-  if (geocoded.length === 0 || !region) {
+  if (geocoded.length === 0) {
     return (
       <View
         style={{
@@ -115,228 +295,167 @@ export function RouteMap({ stops, height = 220 }: Props) {
     );
   }
 
-  const selectedStop = selectedIdx !== null ? geocoded[selectedIdx] : null;
+  const selectedStop = geocoded[selectedIdx] ?? null;
   const globalIdx    = selectedStop ? stops.indexOf(selectedStop) : -1;
 
   return (
     <>
-      {/* ── Thumbnail ── */}
+      {/* Thumbnail */}
       <TouchableOpacity
         activeOpacity={0.95}
         onPress={() => { setSelectedIdx(0); setFullscreen(true); }}
         style={{ height, borderRadius: 14, overflow: "hidden", borderWidth: 1, borderColor: "#e8eaed" }}
       >
-        <MapView
-          provider={PROVIDER_DEFAULT}
-          style={{ flex: 1 }}
-          initialRegion={region}
+        <WebView
+          source={{ html: thumbnailHtml }}
+          originWhitelist={["*"]}
+          javaScriptEnabled
+          domStorageEnabled
           scrollEnabled={false}
-          zoomEnabled={false}
-          pitchEnabled={false}
-          rotateEnabled={false}
-          showsCompass={false}
-          showsPointsOfInterests={false}
-          pointerEvents="none"
-        >
-          <Polyline coordinates={lineCoords} strokeColor="#1a73e8" strokeWidth={4} />
-          {geocoded.map((s, i) => (
-            <Marker
-              key={s.id}
-              coordinate={{ latitude: s.lat!, longitude: s.lng! }}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={{
-                width: 26, height: 26, borderRadius: 13,
-                backgroundColor: STOP_COLOR[s.type] ?? "#5f6368",
-                borderWidth: 3, borderColor: "#ffffff",
-                alignItems: "center", justifyContent: "center",
-                shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 4,
-                shadowOffset: { width: 0, height: 2 },
-              }}>
-                <Text style={[txt(800), { fontSize: 11, color: "#ffffff" }]}>{i + 1}</Text>
-              </View>
-            </Marker>
-          ))}
-        </MapView>
-
-        {/* Expand badge */}
-        <View style={{
+          style={{ flex: 1, backgroundColor: "#ffffff" }}
+        />
+        <View pointerEvents="none" style={{
           position: "absolute", top: 10, right: 10,
-          backgroundColor: "rgba(0,0,0,0.5)",
-          borderRadius: 8, padding: 6,
+          backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 8, padding: 6,
         }}>
           <Maximize2 size={14} color="#ffffff" strokeWidth={2.2} />
         </View>
       </TouchableOpacity>
 
-      {/* ── Fullscreen modal ── */}
+      {/* Fullscreen */}
       <Modal
         visible={fullscreen}
         animationType="slide"
         statusBarTranslucent
+        presentationStyle="overFullScreen"
         onRequestClose={() => setFullscreen(false)}
       >
         <View style={{ flex: 1, backgroundColor: "#1a73e8" }}>
-        {/* Map fills entire screen */}
-        <MapView
-          provider={PROVIDER_DEFAULT}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={region}
-          showsCompass={false}
-          showsPointsOfInterests={false}
-          pitchEnabled={false}
-          rotateEnabled={false}
-        >
-          <Polyline coordinates={lineCoords} strokeColor="#1a73e8" strokeWidth={5} />
-          {geocoded.map((s, i) => {
-            const color    = STOP_COLOR[s.type] ?? "#5f6368";
-            const isActive = selectedIdx === i;
-            return (
-              <Marker
-                key={s.id}
-                coordinate={{ latitude: s.lat!, longitude: s.lng! }}
-                anchor={{ x: 0.5, y: 0.5 }}
-                onPress={() => setSelectedIdx(i)}
-                tracksViewChanges={false}
-              >
-                <View style={{
-                  width: isActive ? 42 : 32,
-                  height: isActive ? 42 : 32,
-                  borderRadius: isActive ? 21 : 16,
-                  backgroundColor: color,
-                  borderWidth: isActive ? 4 : 3,
-                  borderColor: "#ffffff",
-                  alignItems: "center", justifyContent: "center",
-                  shadowColor: "#000",
-                  shadowOpacity: isActive ? 0.45 : 0.25,
-                  shadowRadius: isActive ? 8 : 4,
-                  shadowOffset: { width: 0, height: 2 },
-                }}>
-                  <Text style={[txt(800), { fontSize: isActive ? 15 : 12, color: "#ffffff" }]}>
-                    {i + 1}
-                  </Text>
-                </View>
-              </Marker>
-            );
-          })}
-        </MapView>
+          <WebView
+            ref={fullscreenWebRef}
+            source={{ html: fullscreenHtml }}
+            originWhitelist={["*"]}
+            javaScriptEnabled
+            domStorageEnabled
+            style={StyleSheet.absoluteFillObject}
+            onMessage={(e) => {
+              try {
+                const msg = JSON.parse(e.nativeEvent.data);
+                if (msg.type === "stop:select" && typeof msg.index === "number") {
+                  setSelectedIdx(msg.index);
+                }
+              } catch { /* ignore */ }
+            }}
+          />
 
-        {/*
-          Overlay column: flex: 1 with pointerEvents="box-none" so the map
-          behind it receives all touches except on the actual UI elements.
-          Flex column pushes controls to the bottom via a touch-transparent spacer.
-        */}
-        <View style={{ flex: 1 }} pointerEvents="box-none">
-          {/* Touch-transparent spacer — map shows through here */}
-          <View style={{ flex: 1 }} pointerEvents="box-none" />
+          <TouchableOpacity
+            onPress={() => setFullscreen(false)}
+            hitSlop={12}
+            style={{
+              position: "absolute",
+              top: Math.max(insets.top, 44) + 14,
+              right: 14,
+              width: 40, height: 40, borderRadius: 20,
+              backgroundColor: "rgba(0,0,0,0.6)",
+              alignItems: "center", justifyContent: "center",
+              shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+            }}
+          >
+            <X size={20} color="#ffffff" strokeWidth={2.6} />
+          </TouchableOpacity>
 
-          {/* Close button — top right, inside spacer via absolute */}
-          <View pointerEvents="box-none" style={{ position: "absolute", top: insets.top + 8, right: 12 }}>
-            <TouchableOpacity
-              onPress={() => setFullscreen(false)}
-              style={{
-                width: 38, height: 38, borderRadius: 19,
-                backgroundColor: "rgba(0,0,0,0.55)",
-                alignItems: "center", justifyContent: "center",
-              }}
-            >
-              <X size={18} color="#ffffff" strokeWidth={2.4} />
-            </TouchableOpacity>
+          <View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              bottom: insets.bottom + 12 + 92,
+              left: 0, right: 0,
+              alignItems: "center",
+            }}
+          >
+            <View style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 999 }}>
+              <Text style={[txt(700), { fontSize: 12, color: "#ffffff" }]}>
+                {geocoded.length} stop{geocoded.length !== 1 ? "s" : ""}
+              </Text>
+            </View>
           </View>
 
-          {/* Bottom controls — normal flow, only as tall as content */}
-          <View style={{ paddingBottom: insets.bottom }}>
-            {/* Stop count pill */}
-            <View pointerEvents="box-none" style={{ flexDirection: "row", justifyContent: "center", paddingBottom: 6 }}>
-              <View style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 999 }}>
-                <Text style={[txt(700), { fontSize: 12, color: "#ffffff" }]}>
-                  {geocoded.length} stop{geocoded.length !== 1 ? "s" : ""}
-                </Text>
-              </View>
-            </View>
-
-            {selectedStop ? (
-              <View style={{
-                margin: 12, marginTop: 0,
+          {selectedStop ? (
+            <View
+              style={{
+                position: "absolute",
+                left: 12, right: 12,
+                bottom: insets.bottom + 12,
                 backgroundColor: "#ffffff",
                 borderRadius: 16,
-                padding: 16,
-                shadowColor: "#000",
-                shadowOpacity: 0.18,
-                shadowRadius: 12,
-                shadowOffset: { width: 0, height: -2 },
-              }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                  <View style={{
-                    width: 44, height: 44, borderRadius: 12,
-                    backgroundColor: STOP_COLOR[selectedStop.type] ?? "#5f6368",
-                    alignItems: "center", justifyContent: "center",
-                    flexShrink: 0,
-                  }}>
-                    <Text style={[txt(800), { fontSize: 18, color: "#ffffff" }]}>{globalIdx + 1}</Text>
-                  </View>
-
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                      <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: STOP_ACCENT[selectedStop.type].bg }}>
-                        <Text style={[txt(800), { fontSize: 10, color: STOP_ACCENT[selectedStop.type].fg, letterSpacing: 0.5 }]}>
-                          {STOP_LABEL[selectedStop.type].toUpperCase()}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <Text style={[txt(700), { fontSize: 15, color: "#202124" }]} numberOfLines={1}>
-                      {selectedStop.facilityName ?? selectedStop.city ?? selectedStop.address ?? "—"}
-                    </Text>
-
-                    {(selectedStop.address || selectedStop.city) ? (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
-                        <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
-                        <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]} numberOfLines={1}>
-                          {selectedStop.address ?? selectedStop.city}
-                        </Text>
-                      </View>
-                    ) : null}
-
-                    {selectedStop.apptStart ? (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
-                        <Clock size={11} color="#5f6368" strokeWidth={2.2} />
-                        <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]}>
-                          {selectedStop.apptEnd && selectedStop.apptEnd !== selectedStop.apptStart
-                            ? `${fmtTime(selectedStop.apptStart)} – ${fmtTime(selectedStop.apptEnd)}`
-                            : fmtTime(selectedStop.apptStart)}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-
-                  <View style={{ flexDirection: "row", gap: 6 }}>
-                    <TouchableOpacity
-                      onPress={() => setSelectedIdx((i) => (i !== null && i > 0 ? i - 1 : i))}
-                      disabled={selectedIdx === 0}
-                      style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === 0 ? "#f1f3f4" : "#e8f0fe", alignItems: "center", justifyContent: "center" }}
-                    >
-                      <Text style={[txt(800), { fontSize: 16, color: selectedIdx === 0 ? "#c0c4c8" : "#1a73e8" }]}>‹</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setSelectedIdx((i) => (i !== null && i < geocoded.length - 1 ? i + 1 : i))}
-                      disabled={selectedIdx === geocoded.length - 1}
-                      style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === geocoded.length - 1 ? "#f1f3f4" : "#e8f0fe", alignItems: "center", justifyContent: "center" }}
-                    >
-                      <Text style={[txt(800), { fontSize: 16, color: selectedIdx === geocoded.length - 1 ? "#c0c4c8" : "#1a73e8" }]}>›</Text>
-                    </TouchableOpacity>
-                  </View>
+                padding: 14,
+                shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 14, shadowOffset: { width: 0, height: -2 },
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <View style={{
+                  width: 44, height: 44, borderRadius: 12,
+                  backgroundColor: STOP_COLOR[selectedStop.type] ?? "#5f6368",
+                  alignItems: "center", justifyContent: "center",
+                  flexShrink: 0,
+                }}>
+                  <Text style={[txt(800), { fontSize: 18, color: "#ffffff" }]}>{globalIdx + 1}</Text>
                 </View>
 
-                {selectedStop.instructions ? (
-                  <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 10, lineHeight: 18 }]}>
-                    {selectedStop.instructions}
+                <View style={{ flex: 1 }}>
+                  <View style={{ alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: STOP_ACCENT[selectedStop.type].bg, marginBottom: 3 }}>
+                    <Text style={[txt(800), { fontSize: 10, color: STOP_ACCENT[selectedStop.type].fg, letterSpacing: 0.5 }]}>
+                      {STOP_LABEL[selectedStop.type].toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={[txt(700), { fontSize: 15, color: "#202124" }]} numberOfLines={1}>
+                    {selectedStop.facilityName ?? selectedStop.city ?? selectedStop.address ?? "—"}
                   </Text>
-                ) : null}
+                  {(selectedStop.address || selectedStop.city) ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
+                      <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
+                      <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]} numberOfLines={1}>
+                        {selectedStop.address ?? selectedStop.city}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {selectedStop.apptStart ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
+                      <Clock size={11} color="#5f6368" strokeWidth={2.2} />
+                      <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]}>
+                        {selectedStop.apptEnd && selectedStop.apptEnd !== selectedStop.apptStart
+                          ? `${fmtTime(selectedStop.apptStart)} – ${fmtTime(selectedStop.apptEnd)}`
+                          : fmtTime(selectedStop.apptStart)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  <TouchableOpacity
+                    onPress={() => setSelectedIdx((i) => (i > 0 ? i - 1 : i))}
+                    disabled={selectedIdx === 0}
+                    style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === 0 ? "#f1f3f4" : "#e8f0fe", alignItems: "center", justifyContent: "center" }}
+                  >
+                    <Text style={[txt(800), { fontSize: 16, color: selectedIdx === 0 ? "#c0c4c8" : "#1a73e8" }]}>‹</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setSelectedIdx((i) => (i < geocoded.length - 1 ? i + 1 : i))}
+                    disabled={selectedIdx === geocoded.length - 1}
+                    style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: selectedIdx === geocoded.length - 1 ? "#f1f3f4" : "#e8f0fe", alignItems: "center", justifyContent: "center" }}
+                  >
+                    <Text style={[txt(800), { fontSize: 16, color: selectedIdx === geocoded.length - 1 ? "#c0c4c8" : "#1a73e8" }]}>›</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            ) : null}
-          </View>
-        </View>
+
+              {selectedStop.instructions ? (
+                <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 10, lineHeight: 18 }]}>
+                  {selectedStop.instructions}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </Modal>
     </>

@@ -99,8 +99,8 @@ export function LoadCard({ load }: Props) {
           {isNonRev ? <DiagonalStripes /> : null}
 
           {/* Title row — title + relay/non-rev chips */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1 }]} numberOfLines={1}>
+          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
+            <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1, lineHeight: 20 }]} numberOfLines={2}>
               {load.title}
             </Text>
             {isNonRev ? <NonRevChip size="small" /> : null}
