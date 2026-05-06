@@ -791,7 +791,7 @@ export default function LoadDetailScreen() {
         <TouchableOpacity
           onPress={() => {
             if (router.canGoBack()) router.back();
-            else router.replace("/(app)");
+            else router.replace("/");
           }}
           activeOpacity={0.7}
           style={{

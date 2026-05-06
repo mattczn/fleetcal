@@ -38,7 +38,7 @@ function RootNavigator({ session }: { session: DriverSessionState }) {
       return;
     }
     if (session.status === "matched") {
-      if (inAuth) router.replace("/(app)");
+      if (inAuth) router.replace("/");
       return;
     }
   }, [session.status, segments]);

@@ -1,58 +1,19 @@
 import React from "react";
-import { Tabs } from "expo-router";
-import { Truck, User, Calendar } from "lucide-react-native";
-import { useNotificationDeepLink } from "@/lib/useNotificationDeepLink";
+import { Stack } from "expo-router";
 
+/**
+ * The signed-in driver app is a Stack so that pushing into a load
+ * detail or upload screen layers on top of whichever tab the driver
+ * was on, and `router.back()` returns there with state preserved.
+ * The bottom tab bar lives inside the `(tabs)` group as the root
+ * screen of this stack.
+ */
 export default function AppLayout() {
-  useNotificationDeepLink();
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: "#ffffff",
-          borderTopColor:  "#e8eaed",
-          height:          82,
-          paddingTop:      8,
-        },
-        tabBarActiveTintColor:   "#1a73e8",
-        tabBarInactiveTintColor: "#9aa0a6",
-        tabBarLabelStyle: {
-          fontFamily: "PlusJakartaSans_700Bold",
-          fontSize:   11,
-          letterSpacing: 0.2,
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="schedule"
-        options={{
-          title: "Schedule",
-          tabBarIcon: ({ color, focused }) => (
-            <Calendar size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Loads",
-          tabBarIcon: ({ color, focused }) => (
-            <Truck size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: "Profile",
-          tabBarIcon: ({ color, focused }) => (
-            <User size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      <Tabs.Screen name="load/[id]"   options={{ href: null }} />
-      <Tabs.Screen name="upload/[id]" options={{ href: null }} />
-    </Tabs>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="load/[id]" />
+      <Stack.Screen name="upload/[id]" />
+    </Stack>
   );
 }
