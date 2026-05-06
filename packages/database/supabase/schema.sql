@@ -148,6 +148,8 @@ CREATE TABLE stops (
   type           text NOT NULL,          -- pickup | delivery | stop | drop_hook
   facility_name  text,
   address        text,
+  city           text,                   -- locality from Google geocoder
+  state          text,                   -- 2-letter administrative_area_level_1
   lat            double precision,
   lng            double precision,
   appt_start     text,                   -- YYYY-MM-DDTHH:mm or time string

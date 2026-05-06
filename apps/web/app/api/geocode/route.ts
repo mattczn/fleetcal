@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { geocodeAddress } from '@/lib/geocode';
-import { find as tzFind } from 'geo-tz';
+import { geocodeAddress, reverseGeocode } from '@/lib/geocode';
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as { address?: string; lat?: number; lng?: number };
 
-  // Direct coordinate lookup — just need timezone
+  // Reverse lookup — coords in, address_components out (city + state + tz).
   if (body.lat != null && body.lng != null) {
-    const timezone = tzFind(body.lat, body.lng)[0] ?? undefined;
-    return NextResponse.json({ result: { lat: body.lat, lng: body.lng, timezone } });
+    const result = await reverseGeocode(body.lat, body.lng);
+    return NextResponse.json({ result });
   }
 
   if (!body.address?.trim()) return NextResponse.json({ result: null });

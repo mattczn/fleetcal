@@ -707,6 +707,7 @@ export type Database = {
           arrived_lat: number | null
           arrived_lng: number | null
           city: string | null
+          state: string | null
           created_at: string
           event_id: string
           facility_name: string | null
@@ -730,6 +731,7 @@ export type Database = {
           arrived_lat?: number | null
           arrived_lng?: number | null
           city?: string | null
+          state?: string | null
           created_at?: string
           event_id: string
           facility_name?: string | null
@@ -753,6 +755,7 @@ export type Database = {
           arrived_lat?: number | null
           arrived_lng?: number | null
           city?: string | null
+          state?: string | null
           created_at?: string
           event_id?: string
           facility_name?: string | null

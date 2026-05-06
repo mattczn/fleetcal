@@ -550,6 +550,7 @@ export interface RecentStop {
   facilityName?: string;
   address?:      string;
   city?:         string;
+  state?:        string;
   lat?:          number;
   lng?:          number;
   timezone?:     string;

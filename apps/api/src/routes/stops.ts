@@ -25,6 +25,7 @@ interface StopsRow {
   facility_name: string | null;
   address:       string | null;
   city:          string | null;
+  state:         string | null;
   lat:           number | null;
   lng:           number | null;
   timezone:      string | null;
@@ -50,7 +51,7 @@ stops.get("/recent", async (c) => {
   // dispatcher autocomplete usage.
   const { data, error } = await supabase
     .from("stops")
-    .select("facility_name,address,city,lat,lng,timezone,created_at")
+    .select("facility_name,address,city,state,lat,lng,timezone,created_at")
     .eq("org_id", orgId)
     .or(`facility_name.ilike.${pattern},address.ilike.${pattern}`)
     .order("created_at", { ascending: false })
@@ -71,6 +72,7 @@ stops.get("/recent", async (c) => {
       facilityName: r.facility_name ?? undefined,
       address:      r.address       ?? undefined,
       city:         r.city          ?? undefined,
+      state:        r.state         ?? undefined,
       lat:          r.lat           ?? undefined,
       lng:          r.lng           ?? undefined,
       timezone:     r.timezone      ?? undefined,

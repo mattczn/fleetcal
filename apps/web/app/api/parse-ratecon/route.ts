@@ -82,7 +82,11 @@ export async function POST(req: NextRequest) {
         type:          (stop.type ?? 'stop') as StopType,
         facilityName:  stop.facilityName || undefined,
         address:       stop.address       || undefined,
-        city:          stop.city          || undefined,
+        // Prefer Google's structured address_components (locality /
+        // administrative_area_level_1) over whatever the AI guessed —
+        // those are the canonical city / state for the geocoded address.
+        city:          geo?.city          ?? stop.city ?? undefined,
+        state:         geo?.state         ?? undefined,
         lat:           geo?.lat           ?? undefined,
         lng:           geo?.lng           ?? undefined,
         timezone:      geo?.timezone      ?? undefined,

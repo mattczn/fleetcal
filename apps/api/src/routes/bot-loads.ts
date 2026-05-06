@@ -21,7 +21,7 @@ const LOAD_COLS =
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 const STOP_COLS =
-  "id,event_id,sequence,type,facility_name,address,city,timezone," +
+  "id,event_id,sequence,type,facility_name,address,city,state,timezone," +
   "appt_start,appt_end,schedule_type,lat,lng,instructions,geocode_status," +
   "arrived_at,arrived_lat,arrived_lng";
 
@@ -33,6 +33,7 @@ interface StopRow {
   facility_name: string | null;
   address: string | null;
   city: string | null;
+  state: string | null;
   lat: number | null;
   lng: number | null;
   timezone: string | null;
@@ -55,6 +56,7 @@ function rowToStop(s: StopRow): Stop {
     facilityName: s.facility_name ?? undefined,
     address: s.address ?? undefined,
     city: s.city ?? undefined,
+    state: s.state ?? undefined,
     lat: s.lat ?? undefined,
     lng: s.lng ?? undefined,
     timezone: s.timezone ?? undefined,

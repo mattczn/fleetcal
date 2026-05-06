@@ -50,6 +50,10 @@ export interface Stop {
   facilityName?: string;
   address?: string;
   city?: string;
+  /** Two-letter state / province code (e.g. "UT", "CA") from Google's
+   *  administrative_area_level_1 component. Set whenever the stop is
+   *  geocoded; null on legacy rows until backfilled. */
+  state?: string;
   lat?: number;
   lng?: number;
   timezone?: string;

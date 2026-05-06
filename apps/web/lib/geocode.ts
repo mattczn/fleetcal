@@ -5,26 +5,73 @@ const MAPBOX_TOKEN  = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 const GOOGLE_KEY    = process.env.GOOGLE_MAPS_API_KEY ?? '';
 
 export interface GeoResult {
-  lat: number;
-  lng: number;
+  lat:       number;
+  lng:       number;
+  /** City — prefer Google's `locality`, then `postal_town`, then `sublocality`. */
+  city?:     string;
+  /** Two-letter state / province code from `administrative_area_level_1`. */
+  state?:    string;
   timezone?: string;
 }
 
-/** Geocode a single address string → lat/lng + IANA timezone. Returns null on failure. */
+interface GoogleAddressComponent {
+  long_name:  string;
+  short_name: string;
+  types:      string[];
+}
+
+/**
+ * Pull city + state out of Google's structured address_components in a
+ * way that's stable across countries (US locality, UK postal_town, etc.).
+ */
+function extractCityState(components: GoogleAddressComponent[] | undefined):
+  { city?: string; state?: string }
+{
+  if (!components?.length) return {};
+  const find = (...types: string[]) =>
+    components.find((c) => types.some((t) => c.types.includes(t)));
+  const cityComp =
+    find("locality") ??
+    find("postal_town") ??
+    find("sublocality_level_1") ??
+    find("sublocality") ??
+    find("administrative_area_level_3");
+  const stateComp = find("administrative_area_level_1");
+  return {
+    city:  cityComp?.long_name,
+    state: stateComp?.short_name,
+  };
+}
+
+/** Geocode a single address string → lat/lng + city/state + IANA timezone. */
 export async function geocodeAddress(address: string): Promise<GeoResult | null> {
   if (!address?.trim()) return null;
   const trimmed = address.trim();
 
-  // 1️⃣ Google Maps Geocoding (most reliable)
+  // 1️⃣ Google Maps Geocoding (most reliable, gives us address_components)
   if (GOOGLE_KEY) {
     try {
       const encoded = encodeURIComponent(trimmed);
       const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${GOOGLE_KEY}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
       if (res.ok) {
-        const json = await res.json() as { status: string; results: { geometry: { location: { lat: number; lng: number } } }[] };
-        const loc = json.results?.[0]?.geometry?.location;
-        if (loc) return { lat: loc.lat, lng: loc.lng, timezone: tzFind(loc.lat, loc.lng)[0] ?? undefined };
+        const json = await res.json() as {
+          status:  string;
+          results: {
+            geometry:           { location: { lat: number; lng: number } };
+            address_components: GoogleAddressComponent[];
+          }[];
+        };
+        const r = json.results?.[0];
+        const loc = r?.geometry?.location;
+        if (loc) {
+          const { city, state } = extractCityState(r?.address_components);
+          return {
+            lat: loc.lat, lng: loc.lng,
+            city, state,
+            timezone: tzFind(loc.lat, loc.lng)[0] ?? undefined,
+          };
+        }
       }
     } catch { /* fall through */ }
   }
@@ -62,6 +109,34 @@ export async function geocodeAddress(address: string): Promise<GeoResult | null>
   } catch { /* all failed */ }
 
   return null;
+}
+
+/**
+ * Reverse-geocode lat/lng → city + state + timezone via Google's
+ * Geocoding API. Used when we already have coordinates (existing stop
+ * with no city/state, or a stop entered as raw coords) and just need
+ * the address_components.
+ */
+export async function reverseGeocode(lat: number, lng: number): Promise<GeoResult | null> {
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+  if (!GOOGLE_KEY) {
+    // Fall back to just timezone — better than nothing.
+    return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+  }
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_KEY}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+    const json = await res.json() as {
+      status:  string;
+      results: { address_components: GoogleAddressComponent[] }[];
+    };
+    const components = json.results?.[0]?.address_components;
+    const { city, state } = extractCityState(components);
+    return { lat, lng, city, state, timezone: tzFind(lat, lng)[0] ?? undefined };
+  } catch {
+    return { lat, lng, timezone: tzFind(lat, lng)[0] ?? undefined };
+  }
 }
 
 /**
