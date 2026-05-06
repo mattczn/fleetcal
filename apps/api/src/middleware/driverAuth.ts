@@ -1,9 +1,12 @@
 /**
  * Driver-app auth middleware. Drivers authenticate against Supabase via
  * phone-OTP, then send the resulting Supabase access token to the API.
- * We verify the HS256 signature against SUPABASE_JWT_SECRET, pull the
- * verified phone off the claims, and resolve to the corresponding row in
- * the `drivers` table.
+ *
+ * Verification uses Supabase's JWKS endpoint, which handles both the
+ * legacy HS256 path and the newer asymmetric (ES256) path automatically
+ * — modern Supabase projects sign with rotating asymmetric keys and
+ * publish the public keys at /auth/v1/.well-known/jwks.json. The HS256
+ * legacy secret is no longer used for tokens minted after the migration.
  *
  * Sets:
  *   c.driverId — bigint id from drivers.id
@@ -17,7 +20,7 @@
  *   404 — token is valid but no drivers row matches that phone
  */
 import type { MiddlewareHandler } from "hono";
-import { jwtVerify } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { supabase } from "../lib/supabase.js";
 import { env } from "../lib/env.js";
 
@@ -28,7 +31,9 @@ export type DriverAuthVariables = {
   phone:      string;
 };
 
-const SUPABASE_JWT_KEY = new TextEncoder().encode(env.supabaseJwtSecret);
+const SUPABASE_JWKS = createRemoteJWKSet(
+  new URL(`${env.supabaseUrl}/auth/v1/.well-known/jwks.json`),
+);
 
 interface SupabaseJwtClaims {
   sub:    string;
@@ -51,9 +56,7 @@ export const driverAuth: MiddlewareHandler<{ Variables: DriverAuthVariables }> =
 
     let claims: SupabaseJwtClaims;
     try {
-      const { payload } = await jwtVerify(token, SUPABASE_JWT_KEY, {
-        algorithms: ["HS256"],
-      });
+      const { payload } = await jwtVerify(token, SUPABASE_JWKS);
       claims = payload as unknown as SupabaseJwtClaims;
     } catch (err) {
       const message = err instanceof Error ? err.message : "verification_failed";
