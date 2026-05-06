@@ -14,7 +14,12 @@ const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "";
 
 class ApiError extends Error {
   constructor(public status: number, public detail?: unknown) {
-    super(`api ${status}`);
+    const tail = typeof detail === "string"
+      ? detail
+      : detail
+        ? JSON.stringify(detail)
+        : "";
+    super(`api ${status}${tail ? ` — ${tail.slice(0, 300)}` : ""}`);
   }
 }
 
