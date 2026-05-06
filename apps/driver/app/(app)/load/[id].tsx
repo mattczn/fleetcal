@@ -576,7 +576,7 @@ function StopCard({
                 {fmtDate(stop.apptStart)} · {window}
               </Text>
             </View>
-            {stop.scheduleType ? <ScheduleTypeChip scheduleType={stop.scheduleType} size="small" /> : null}
+            <ScheduleTypeChip stop={stop} size="small" />
           </View>
         </View>
       </View>

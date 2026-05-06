@@ -162,7 +162,7 @@ export function LoadCard({ load }: Props) {
                 }]}>
                   {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}
                   {fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}
-                  {fmtScheduleType(pickup?.scheduleType) ? ` · ${fmtScheduleType(pickup?.scheduleType)}` : ""}
+                  {fmtScheduleType(pickup) ? ` · ${fmtScheduleType(pickup)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(pickup)}
@@ -177,7 +177,7 @@ export function LoadCard({ load }: Props) {
                 }]}>
                   {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}
                   {fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}
-                  {fmtScheduleType(delivery?.scheduleType) ? ` · ${fmtScheduleType(delivery?.scheduleType)}` : ""}
+                  {fmtScheduleType(delivery) ? ` · ${fmtScheduleType(delivery)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(delivery)}

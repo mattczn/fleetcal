@@ -111,15 +111,40 @@ export function fmtShortDate(iso?: string): string {
 }
 
 /**
- * "APPT" / "WINDOW" / "FCFS" — short schedule-type label drivers can
- * scan at a glance. Returns null when the field isn't set so callers
- * can fall back to the default formatting.
+ * Infer the schedule type from the appointment fields when the explicit
+ * column is null — older stops in the database don't have schedule_type
+ * populated, but they still have apptStart/apptEnd and the type is
+ * usually obvious from those:
+ *
+ *   - both apptStart and apptEnd, with end > start  → "window"
+ *   - apptStart only (or end == start)              → "appointment"
+ *   - neither                                       → "fcfs"
+ *
+ * Returns the explicit field unchanged when set.
  */
-export function fmtScheduleType(scheduleType?: Stop["scheduleType"]): string | null {
-  if (!scheduleType) return null;
-  if (scheduleType === "appointment") return "APPT";
-  if (scheduleType === "window")      return "WINDOW";
-  if (scheduleType === "fcfs")        return "FCFS";
+export function inferScheduleType(stop?: Pick<Stop, "scheduleType" | "apptStart" | "apptEnd">): Stop["scheduleType"] {
+  if (!stop) return undefined;
+  if (stop.scheduleType) return stop.scheduleType;
+  if (stop.apptStart && stop.apptEnd && stop.apptEnd !== stop.apptStart) return "window";
+  if (stop.apptStart) return "appointment";
+  return "fcfs";
+}
+
+/**
+ * "APPT" / "WINDOW" / "FCFS" — short schedule-type label drivers can
+ * scan at a glance. Accepts either the raw scheduleType value or a stop
+ * to infer from. Returns null when nothing meaningful is available.
+ */
+export function fmtScheduleType(
+  arg?: Stop["scheduleType"] | Pick<Stop, "scheduleType" | "apptStart" | "apptEnd">,
+): string | null {
+  const t = typeof arg === "object" && arg !== null
+    ? inferScheduleType(arg)
+    : (arg as Stop["scheduleType"]);
+  if (!t) return null;
+  if (t === "appointment") return "APPT";
+  if (t === "window")      return "WINDOW";
+  if (t === "fcfs")        return "FCFS";
   return null;
 }
 
@@ -130,12 +155,14 @@ export function fmtScheduleType(scheduleType?: Stop["scheduleType"]): string | n
  * this distinction.
  */
 export function ScheduleTypeChip({
-  scheduleType, size = "default",
+  stop, size = "default",
 }: {
-  scheduleType: Stop["scheduleType"];
+  /** Pass the whole stop so the helper can infer when scheduleType is null. */
+  stop:  Pick<Stop, "scheduleType" | "apptStart" | "apptEnd">;
   size?: "default" | "small";
 }) {
-  const label = fmtScheduleType(scheduleType);
+  const inferred = inferScheduleType(stop);
+  const label    = fmtScheduleType(inferred);
   if (!label) return null;
   const fontSize = size === "small" ? 9 : 10;
   const padH     = size === "small" ? 5 : 6;
@@ -143,9 +170,9 @@ export function ScheduleTypeChip({
   // appointment = strict (red-ish), window = flexible (blue),
   // fcfs = no appt (neutral gray)
   const tint =
-    scheduleType === "appointment"
+    inferred === "appointment"
       ? { bg: "#fee2e2", fg: "#b91c1c" }
-      : scheduleType === "window"
+      : inferred === "window"
       ? { bg: "#e8f0fe", fg: "#1558d6" }
       : { bg: "#f1f3f4", fg: "#5f6368" };
   return (
