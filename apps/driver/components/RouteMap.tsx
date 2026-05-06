@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, Modal, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import { Maximize2, X, MapPin, Clock } from "lucide-react-native";
+import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import type { Stop, StopType } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -492,9 +493,12 @@ export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }
               </View>
 
               {selectedStop.instructions ? (
-                <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 10, lineHeight: 18 }]}>
-                  {selectedStop.instructions}
-                </Text>
+                <View style={{ marginTop: 10 }}>
+                  <ExpandableInstructions
+                    value={selectedStop.instructions}
+                    textStyle={{ ...txt(500), fontSize: 12, color: "#5f6368", lineHeight: 18 }}
+                  />
+                </View>
               ) : null}
             </View>
           ) : null}

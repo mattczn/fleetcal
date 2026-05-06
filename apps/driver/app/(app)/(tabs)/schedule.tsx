@@ -46,9 +46,15 @@ function fmtDateHeader(dateStr: string): string {
   return dateLabel;
 }
 
-function pickupOf(load: Load) { return load.stops.find(s => s.type === "pickup"); }
-function deliveryOf(load: Load) {
-  return [...load.stops].reverse().find(s => s.type === "delivery" || s.type === "drop_hook");
+// First / last stop of the driver's leg — handles relays (where the
+// type lookup misses the relay handoff). Mirrors the LoadCard helper.
+function originStop(load: Load) { return load.stops[0]; }
+function destinationStop(load: Load) { return load.stops[load.stops.length - 1]; }
+
+function locLabel(s: Load["stops"][number] | undefined): string {
+  if (!s) return "—";
+  if (s.city && s.state) return `${s.city}, ${s.state}`;
+  return s.city ?? s.facilityName ?? s.address ?? "—";
 }
 
 interface DayEntry {
@@ -60,8 +66,8 @@ interface DayEntry {
 function ScheduleCard({ entry }: { entry: DayEntry }) {
   const router = useRouter();
   const { load, dayIndex, totalDays } = entry;
-  const pickup   = pickupOf(load);
-  const delivery = deliveryOf(load);
+  const pickup   = originStop(load);
+  const delivery = destinationStop(load);
   const isMulti  = totalDays > 1;
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
@@ -117,9 +123,9 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
           <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
           <Text style={[txt(600), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-            {(pickup?.city ?? pickup?.facilityName) ?? "—"}
+            {locLabel(pickup)}
             {"  →  "}
-            {(delivery?.city ?? delivery?.facilityName) ?? "—"}
+            {locLabel(delivery)}
           </Text>
         </View>
 

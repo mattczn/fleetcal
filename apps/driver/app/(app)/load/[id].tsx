@@ -44,6 +44,7 @@ import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap } from "@/components/RouteMap";
 import { Toast } from "@/components/Toast";
 import { DocumentsView } from "@/components/DocumentsView";
+import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
 import type { LoadStatus, Stop } from "@/lib/types";
@@ -611,9 +612,10 @@ function StopCard({
         <View style={{ paddingHorizontal: 14, paddingVertical: 12, backgroundColor: "#fff7ed", borderTopWidth: 1, borderTopColor: "#f1f3f4" }}>
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
             <Info size={13} color="#9a3412" strokeWidth={2.2} style={{ marginTop: 2 }} />
-            <SelectableText
+            <ExpandableInstructions
               value={stop.instructions}
-              style={{ ...txt(600), fontSize: 13, color: "#9a3412", flex: 1, lineHeight: 18 }}
+              textStyle={{ ...txt(600), fontSize: 13, color: "#9a3412", lineHeight: 18 }}
+              toggleColor="#9a3412"
             />
           </View>
         </View>
