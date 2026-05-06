@@ -70,12 +70,26 @@ export const driverAuth: MiddlewareHandler<{ Variables: DriverAuthVariables }> =
       return c.json({ error: "unauthorized", reason: "no_phone_claim" }, 401);
     }
 
-    // Drivers are scoped to one org and one phone, so an exact match is enough.
-    // We don't trust client-supplied org_id — derive it from the row.
+    // Phones can be stored a few different ways depending on when they were
+    // entered ("+15551234567", "15551234567", "5551234567", "(555) 123-4567").
+    // Match on the last 10 digits (the US mobile number) so any historical
+    // format works without manual cleanup.
+    const digits   = phone.replace(/\D/g, "");
+    const last10   = digits.slice(-10);
+    if (last10.length !== 10) {
+      return c.json({ error: "unauthorized", reason: "phone_too_short", phone }, 401);
+    }
+    // Try the obvious variants; PostgREST .or() splits on commas.
+    const variants = [
+      `+1${last10}`,
+      `1${last10}`,
+      last10,
+    ];
+    const orFilter = variants.map((v) => `phone.eq.${v}`).join(",");
     const { data: row, error } = await supabase
       .from("drivers")
       .select("id, org_id, name, phone")
-      .eq("phone", phone)
+      .or(orFilter)
       .limit(1)
       .maybeSingle();
     if (error) {
@@ -83,7 +97,12 @@ export const driverAuth: MiddlewareHandler<{ Variables: DriverAuthVariables }> =
       return c.json({ error: "lookup_failed", detail: error.message }, 500);
     }
     if (!row) {
-      return c.json({ error: "not_found", reason: "no_driver_for_phone" }, 404);
+      return c.json({
+        error:  "not_found",
+        reason: "no_driver_for_phone",
+        // Echo what we tried so it's obvious from the error which row to add.
+        triedPhones: variants,
+      }, 404);
     }
     const driver = row as { id: number; org_id: string; name: string; phone: string };
 
