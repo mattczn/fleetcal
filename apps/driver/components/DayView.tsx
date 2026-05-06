@@ -57,6 +57,7 @@ function fmtHourLabel(hour: number): string {
 interface PositionedEvent {
   load: Load; top: number; height: number;
   spansBefore: boolean; spansAfter: boolean;
+  lane: number; laneCount: number;
 }
 
 function positionFor(load: Load, dateKey: string): PositionedEvent | null {
@@ -81,7 +82,57 @@ function positionFor(load: Load, dateKey: string): PositionedEvent | null {
     height: Math.max((endHours - startHours) * HOUR_HEIGHT, 28),
     spansBefore: startsBefore,
     spansAfter:  endsAfter,
+    lane: 0, laneCount: 1,
   };
+}
+
+/**
+ * Google-Calendar-style overlap layout: group transitively-overlapping
+ * events into clusters, then greedily assign each to the lowest free
+ * lane. Two overlapping events render as 50/50 columns; three pile up
+ * as thirds. Singletons stay full-width.
+ */
+function assignLanes(events: PositionedEvent[]): PositionedEvent[] {
+  if (events.length <= 1) return events;
+  const sorted = [...events].sort(
+    (a, b) => a.top - b.top || (b.height - a.height),
+  );
+
+  const clusters: PositionedEvent[][] = [];
+  let cur: PositionedEvent[] = [];
+  let curMaxBottom = -Infinity;
+  for (const ev of sorted) {
+    if (cur.length > 0 && ev.top < curMaxBottom) {
+      cur.push(ev);
+      curMaxBottom = Math.max(curMaxBottom, ev.top + ev.height);
+    } else {
+      if (cur.length > 0) clusters.push(cur);
+      cur = [ev];
+      curMaxBottom = ev.top + ev.height;
+    }
+  }
+  if (cur.length > 0) clusters.push(cur);
+
+  const out: PositionedEvent[] = [];
+  for (const cluster of clusters) {
+    const laneEnds: number[] = [];
+    const placed: { ev: PositionedEvent; lane: number }[] = [];
+    for (const ev of cluster) {
+      let lane = laneEnds.findIndex((end) => end <= ev.top);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(ev.top + ev.height);
+      } else {
+        laneEnds[lane] = ev.top + ev.height;
+      }
+      placed.push({ ev, lane });
+    }
+    const laneCount = laneEnds.length;
+    for (const { ev, lane } of placed) {
+      out.push({ ...ev, lane, laneCount });
+    }
+  }
+  return out;
 }
 
 function HourGrid() {
@@ -117,13 +168,23 @@ function NowLine({ dateKey }: { dateKey: string }) {
   );
 }
 
-function EventBlock({ ev }: { ev: PositionedEvent }) {
+function EventBlock({ ev, paneWidth }: { ev: PositionedEvent; paneWidth: number }) {
   const router = useRouter();
-  const { load, top, height, spansBefore, spansAfter } = ev;
+  const { load, top, height, spansBefore, spansAfter, lane, laneCount } = ev;
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
   const spans      = spansBefore || spansAfter;
   const stripeColor = needsAction ? "#dc2626" : "#1a73e8";
+
+  // Lane geometry — full width when there's no overlap, equal-width
+  // columns with a small gap when 2+ events overlap (Google Calendar
+  // pattern). `paneWidth` is the SCREEN_W passed in from DayPane.
+  const canvasLeft  = HOUR_LABEL_WIDTH + 6;
+  const canvasRight = 8;
+  const canvasW     = Math.max(0, paneWidth - canvasLeft - canvasRight);
+  const gap         = laneCount > 1 ? 3 : 0;
+  const laneWidth   = (canvasW - gap * (laneCount - 1)) / laneCount;
+  const left        = canvasLeft + lane * (laneWidth + gap);
 
   return (
     <TouchableOpacity
@@ -131,7 +192,7 @@ function EventBlock({ ev }: { ev: PositionedEvent }) {
       activeOpacity={0.85}
       style={{
         position: "absolute", top, height,
-        left: HOUR_LABEL_WIDTH + 6, right: 8,
+        left, width: laneWidth,
         backgroundColor: needsAction ? "#fee2e2" : "#e8f0fe",
         borderLeftWidth: 4, borderLeftColor: stripeColor,
         borderRadius: 8, padding: 6, overflow: "hidden",
@@ -168,7 +229,9 @@ function EventBlock({ ev }: { ev: PositionedEvent }) {
 
 function DayPane({ dateKey, loads }: { dateKey: string; loads: Load[] }) {
   const events = useMemo(
-    () => loads.map((l) => positionFor(l, dateKey)).filter((p): p is PositionedEvent => p !== null),
+    () => assignLanes(
+      loads.map((l) => positionFor(l, dateKey)).filter((p): p is PositionedEvent => p !== null),
+    ),
     [loads, dateKey],
   );
   const scrollRef = useRef<ScrollView>(null);
@@ -191,7 +254,7 @@ function DayPane({ dateKey, loads }: { dateKey: string; loads: Load[] }) {
     >
       <HourGrid />
       <NowLine dateKey={dateKey} />
-      {events.map((ev) => <EventBlock key={ev.load.id} ev={ev} />)}
+      {events.map((ev) => <EventBlock key={ev.load.id} ev={ev} paneWidth={SCREEN_W} />)}
     </ScrollView>
   );
 }
