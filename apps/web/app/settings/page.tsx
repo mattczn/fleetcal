@@ -236,8 +236,19 @@ function FieldSectionCard({
 }
 
 function LoadFieldsPanel() {
-  const { fieldSettings, sectionOrder, setFieldEnabled, setSectionOrder, driverPayPct, setDriverPayPct } = useCalendarStore();
+  const { fieldSettings, sectionOrder, setFieldEnabled, setSectionOrder, driverPayPct, setDriverPayPct, hasHydratedOrgSettings } = useCalendarStore();
   const [pctInput, setPctInput] = useState(driverPayPct != null ? String(driverPayPct) : '');
+
+  // Field toggles are org-scoped; write through to the server so other
+  // dispatchers see the same field set.
+  const onFieldToggle = (id: string, on: boolean) => {
+    setFieldEnabled(id, on);
+    if (!hasHydratedOrgSettings) return; // pre-hydration toggles are noise
+    const next = { ...fieldSettings, [id]: on };
+    void import('@/lib/railway').then(({ railway }) =>
+      railway.updateOrgSettings({ rateConSettings: { fieldSettings: next } }),
+    ).catch((err) => console.error('[settings] field toggle sync failed:', err));
+  };
 
   const dragIdx = useRef<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
@@ -327,7 +338,7 @@ function LoadFieldsPanel() {
               fieldSettings={fieldSettings} atLimit={atLimit} isOver={overIdx === idx}
               onDragStart={() => handleDragStart(idx)} onDragOver={e => handleDragOver(e, idx)}
               onDrop={() => handleDrop(idx)} onDragEnd={handleDragEnd}
-              onToggle={(id, on) => setFieldEnabled(id, !on)}
+              onToggle={(id, on) => onFieldToggle(id, !on)}
             />
           ))}
         </div>
@@ -476,7 +487,15 @@ function DriverAppPanel() {
 }
 
 function TimezonePanel() {
-  const { promptVariables, setPromptVariable, calendarTimezone, setCalendarTimezone } = useCalendarStore();
+  const { promptVariables, setPromptVariable, calendarTimezone, setCalendarTimezone, hasHydratedOrgSettings } = useCalendarStore();
+  // Timezone affects the rate-con prompt; sync to org settings so all
+  // dispatchers parse with the same TZ.
+  const syncTimezone = (value: string) => {
+    if (!hasHydratedOrgSettings) return;
+    void import('@/lib/railway').then(({ railway }) =>
+      railway.updateOrgSettings({ rateConSettings: { promptVariables: { ...promptVariables, timezone: value } } }),
+    ).catch((err) => console.error('[settings] timezone sync failed:', err));
+  };
   return (
     <div style={{ width: 560 }} className="space-y-6">
       <div>
@@ -497,6 +516,7 @@ function TimezonePanel() {
                 <button key={tz.value} onClick={() => {
                   setCalendarTimezone(tz.iana);
                   setPromptVariable('timezone', tz.value);
+                  syncTimezone(tz.value);
                 }}
                   className="px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors"
                   style={{
@@ -517,6 +537,7 @@ function TimezonePanel() {
               onChange={e => {
                 setCalendarTimezone(e.target.value);
                 setPromptVariable('timezone', e.target.value);
+                syncTimezone(e.target.value);
               }}
               className="w-full rounded-lg text-sm outline-none"
               style={{ border: '1px solid var(--gc-border)', padding: '8px 12px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }}
@@ -582,7 +603,7 @@ function VarTextarea({ label, description, value, rows, onChange }: {
 }
 
 function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
-  const { fieldSettings, promptInstructions, setPromptInstructions, promptVariables, setPromptVariable } = useCalendarStore();
+  const { fieldSettings, promptInstructions, setPromptInstructions, promptVariables, setPromptVariable, hasHydratedOrgSettings } = useCalendarStore();
   const [showCompiled, setShowCompiled] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -593,6 +614,19 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
     : promptVariables;
   const compiled = buildRateConPrompt(enabledFieldIds, promptInstructions, previewVars as typeof promptVariables);
 
+  // Debounced sync of promptInstructions (freeform textarea) to the server.
+  // Skip the first render after hydration so we don't echo back the value
+  // we just received.
+  useEffect(() => {
+    if (!hasHydratedOrgSettings) return;
+    const t = setTimeout(() => {
+      void import('@/lib/railway').then(({ railway }) =>
+        railway.updateOrgSettings({ rateConSettings: { promptInstructions } }),
+      ).catch((err) => console.error('[settings] promptInstructions sync failed:', err));
+    }, 700);
+    return () => clearTimeout(t);
+  }, [promptInstructions, hasHydratedOrgSettings]);
+
   const startEdit = () => {
     const d: Record<string, string> = {};
     VARIABLE_DEFS.forEach(def => { d[def.key] = promptVariables[def.key]; });
@@ -601,11 +635,18 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
   };
 
   const confirmEdit = () => {
+    const nextVars = { ...promptVariables };
     VARIABLE_DEFS.forEach(def => {
-      if (draft[def.key] !== undefined) setPromptVariable(def.key, draft[def.key]);
+      if (draft[def.key] !== undefined) {
+        setPromptVariable(def.key, draft[def.key]);
+        nextVars[def.key] = draft[def.key];
+      }
     });
     setEditing(false);
     setDraft({});
+    void import('@/lib/railway').then(({ railway }) =>
+      railway.updateOrgSettings({ rateConSettings: { promptVariables: nextVars } }),
+    ).catch((err) => console.error('[settings] promptVariables sync failed:', err));
   };
 
   const cancelEdit = () => {
@@ -623,7 +664,7 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
       </div>
 
       {/* Formatting variables */}
-      <div className="rounded-2xl overflow-hidden" style={{ border: editing ? '1px solid #1a73e8' : '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', transition: 'border-color 150ms' }}>
+      <div className="rounded-2xl overflow-hidden" style={{ border: editing ? '1px solid #1a73e8' : '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)', transition: 'border-color 150ms' }}>
         <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div>
             <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>Formatting variables</div>

@@ -8,7 +8,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
-import { matchCustomer } from '@/lib/customerMatch';
+import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
@@ -1786,6 +1786,7 @@ export default function EventModal() {
             enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
             customInstructions: promptInstructions,
             promptVariables,
+            brokerRules: buildBrokerRules(customers),
           }),
         });
         const parsed = await res.json();

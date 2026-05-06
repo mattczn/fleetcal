@@ -118,6 +118,7 @@ export type Database = {
           name: string
           notes: string | null
           org_id: string
+          parse_hints: string | null
           short_name: string | null
         }
         Insert: {
@@ -131,6 +132,7 @@ export type Database = {
           name: string
           notes?: string | null
           org_id: string
+          parse_hints?: string | null
           short_name?: string | null
         }
         Update: {
@@ -144,6 +146,7 @@ export type Database = {
           name?: string
           notes?: string | null
           org_id?: string
+          parse_hints?: string | null
           short_name?: string | null
         }
         Relationships: []
@@ -591,14 +594,17 @@ export type Database = {
         Row: {
           motive_api_key: string | null
           org_id: string
+          rate_con_settings: Json
         }
         Insert: {
           motive_api_key?: string | null
           org_id: string
+          rate_con_settings?: Json
         }
         Update: {
           motive_api_key?: string | null
           org_id?: string
+          rate_con_settings?: Json
         }
         Relationships: []
       }

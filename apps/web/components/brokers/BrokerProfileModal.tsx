@@ -368,6 +368,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [contactEmail, setContactEmail] = useState(broker.contactEmail ?? '');
   const [contactPhone, setContactPhone] = useState(broker.contactPhone ?? '');
   const [notes,        setNotes]        = useState(broker.notes        ?? '');
+  const [parseHints,   setParseHints]   = useState(broker.parseHints   ?? '');
 
   const [search,           setSearch]           = useState('');
   const [sortField,        setSortField]        = useState<SortField>('date');
@@ -382,6 +383,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setContactEmail(broker.contactEmail ?? '');
     setContactPhone(broker.contactPhone ?? '');
     setNotes(broker.notes ?? '');
+    setParseHints(broker.parseHints ?? '');
     setSearch('');
     setShowAllCompleted(false);
     setShowAllUpcoming(false);
@@ -394,7 +396,8 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       contactName.trim()  !== (broker.contactName  ?? '') ||
       contactEmail.trim() !== (broker.contactEmail ?? '') ||
       contactPhone.trim() !== (broker.contactPhone ?? '') ||
-      notes.trim()        !== (broker.notes        ?? ''),
+      notes.trim()        !== (broker.notes        ?? '') ||
+      parseHints.trim()   !== (broker.parseHints   ?? ''),
     save: () => updateCustomer(broker.id, {
       shortName:    shortName.trim()    || undefined,
       mcNum:        mcNum.trim()        || undefined,
@@ -402,6 +405,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       contactEmail: contactEmail.trim() || undefined,
       contactPhone: contactPhone.trim() || undefined,
       notes:        notes.trim()        || undefined,
+      parseHints:   parseHints.trim()   || undefined,
     }),
     discard: () => {
       setShortName(broker.shortName ?? '');
@@ -410,8 +414,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setContactEmail(broker.contactEmail ?? '');
       setContactPhone(broker.contactPhone ?? '');
       setNotes(broker.notes ?? '');
+      setParseHints(broker.parseHints ?? '');
     },
-  }), [mcNum, contactName, contactEmail, contactPhone, notes, broker]);
+  }), [shortName, mcNum, contactName, contactEmail, contactPhone, notes, parseHints, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -514,6 +519,16 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
             <textarea value={notes} onChange={e => setNotes(e.target.value)}
               placeholder="Add notes…" rows={2}
               style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit' }}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+          </PField>
+        </div>
+        <div className="mt-3">
+          <PField label="Rate-con parse hints" icon={<FileText size={11} />}>
+            <textarea value={parseHints} onChange={e => setParseHints(e.target.value)}
+              placeholder={'Broker-specific guidance for the AI parser. e.g.\n• Load # always follows "Order:"\n• Pickup # is in the BOL field on page 2'}
+              rows={3}
+              style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
               onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
               onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
           </PField>

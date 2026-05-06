@@ -17,10 +17,17 @@ export const DEFAULT_PROMPT_VARIABLES: PromptVariables = {
   specialInstructionsFormat: 'Driver-essential broker requirements only. Do NOT repeat stop addresses, appointment times, gate-arrival windows, or anything that belongs on a specific stop — those are already captured in the structured stops array. Focus on load-level info that applies across the whole load: detention policy, weight or temperature requirements, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, lumper/dock fees, and any unusual broker requirements. Exclude insurance terms, payment terms, and broker/carrier legal language. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.',
 };
 
+export interface BrokerRule {
+  name:    string;     // canonical name
+  aliases: string[];   // additional names the broker may appear as
+  hints:   string;     // free-form guidance from the org's customer record
+}
+
 export function buildRateConPrompt(
   enabledFieldIds: string[],
   customInstructions: string,
   variables: PromptVariables = DEFAULT_PROMPT_VARIABLES,
+  brokerRules: BrokerRule[] = [],
 ): string {
   const alwaysSchema: Record<string, string> = {
     summary: variables.titleFormat,
@@ -52,6 +59,18 @@ export function buildRateConPrompt(
     ? `\nAdditional instructions:\n${customInstructions.trim()}\n`
     : '';
 
+  // Per-broker rules — pulled from the org's customer records. Each rule
+  // applies only when the rate-con's broker name (or an alias) matches.
+  // Skipped entirely when no customers have parse hints set.
+  const brokerRulesBlock = brokerRules.length > 0
+    ? `\nPer-broker rules — apply the matching rule when the rate-con's broker name (or any alias) matches a name below:\n${brokerRules
+        .map(r => {
+          const aliasPart = r.aliases.length > 0 ? ` (aliases: ${r.aliases.join(', ')})` : '';
+          return `- ${r.name}${aliasPart}: ${r.hints.trim()}`;
+        })
+        .join('\n')}\n`
+    : '';
+
   const stopsSchema = `  "stops": [
     {
       "sequence": <integer starting at 1, in order of occurrence in the document>,
@@ -74,6 +93,6 @@ The "stops" array is REQUIRED. Extract every pickup, delivery, and intermediate 
 
 ${schema},
 ${stopsSchema}
-${customBlock}
+${customBlock}${brokerRulesBlock}
 Convert all times to ${variables.timezone}.`;
 }

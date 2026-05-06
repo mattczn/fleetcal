@@ -148,8 +148,23 @@ export interface PayrollRecord {
 
 // ── Org settings ────────────────────────────────────────────────────────
 
+export interface RateConPromptVariables {
+  systemRole?:                string;
+  timezone?:                  string;
+  titleFormat?:               string;
+  specialInstructionsFormat?: string;
+}
+
+export interface RateConSettings {
+  promptVariables?:    RateConPromptVariables;
+  promptInstructions?: string;
+  fieldSettings?:      Record<string, boolean>;
+}
+
 export interface OrgSettings {
   showDriverPay: boolean;
+  /** Per-org rate-con AI parsing config. See RateConSettings for shape. */
+  rateConSettings?: RateConSettings;
 }
 
 // ── Customer ────────────────────────────────────────────────────────────
@@ -164,6 +179,11 @@ export interface Customer {
   contactEmail?: string;
   contactPhone?: string;
   notes?: string;
+  /**
+   * Broker-specific guidance appended to the rate-con prompt when this
+   * customer is detected. Free-form text, e.g. "Load # always follows 'Order:'."
+   */
+  parseHints?: string;
 }
 
 // ── Dispatcher ──────────────────────────────────────────────────────────

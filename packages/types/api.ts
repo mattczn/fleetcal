@@ -428,6 +428,7 @@ export interface CreateCustomerRequest {
   contactEmail?:  string | null;
   contactPhone?:  string | null;
   notes?:         string | null;
+  parseHints?:    string | null;
 }
 export interface CreateCustomerResponse { customer: Customer; }
 export interface UpdateCustomerRequest {
@@ -439,6 +440,7 @@ export interface UpdateCustomerRequest {
   contactEmail?:  string | null;
   contactPhone?:  string | null;
   notes?:         string | null;
+  parseHints?:    string | null;
 }
 export interface UpdateCustomerResponse { customer: Customer; }
 
@@ -537,7 +539,8 @@ export interface UpsertPayrollRecordResponse { record: PayrollRecord; }
 
 export interface GetOrgSettingsResponse { settings: OrgSettings; }
 export interface UpdateOrgSettingsRequest {
-  showDriverPay?: boolean;
+  showDriverPay?:    boolean;
+  rateConSettings?:  import("./domain").RateConSettings | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 

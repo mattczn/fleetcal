@@ -193,6 +193,7 @@ export async function updateCustomer(id: string, updates: Partial<Omit<Customer,
     ...(updates.contactEmail !== undefined ? { contactEmail: updates.contactEmail ?? null } : {}),
     ...(updates.contactPhone !== undefined ? { contactPhone: updates.contactPhone ?? null } : {}),
     ...(updates.notes !== undefined        ? { notes: updates.notes ?? null } : {}),
+    ...(updates.parseHints !== undefined   ? { parseHints: updates.parseHints ?? null } : {}),
   };
   if (Object.keys(body).length === 0) return;
   try { await railway.updateCustomer(id, body); }

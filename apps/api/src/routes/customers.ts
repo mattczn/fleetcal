@@ -29,6 +29,7 @@ interface DbCustomerRow {
   contact_email: string | null;
   contact_phone: string | null;
   notes: string | null;
+  parse_hints: string | null;
 }
 
 function rowToCustomer(r: DbCustomerRow): Customer {
@@ -42,10 +43,11 @@ function rowToCustomer(r: DbCustomerRow): Customer {
     contactEmail: r.contact_email ?? undefined,
     contactPhone: r.contact_phone ?? undefined,
     notes:        r.notes         ?? undefined,
+    parseHints:   r.parse_hints   ?? undefined,
   };
 }
 
-const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes";
+const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes,parse_hints";
 
 customers.get("/", async (c) => {
   const orgId = c.get("orgId");
@@ -78,6 +80,7 @@ customers.post("/", async (c) => {
     contact_email: body.contactEmail ?? null,
     contact_phone: body.contactPhone ?? null,
     notes:         body.notes        ?? null,
+    parse_hints:   body.parseHints   ?? null,
   };
   const { data, error } = await supabase
     .from("customers")
@@ -106,6 +109,7 @@ customers.patch("/:id", async (c) => {
   if ("contactEmail" in body) update.contact_email = body.contactEmail ?? null;
   if ("contactPhone" in body) update.contact_phone = body.contactPhone ?? null;
   if ("notes"        in body) update.notes         = body.notes        ?? null;
+  if ("parseHints"   in body) update.parse_hints   = body.parseHints   ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }

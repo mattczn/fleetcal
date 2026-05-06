@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam, DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { NextRequest, NextResponse } from 'next/server';
-import { buildRateConPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
+import { buildRateConPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables, BrokerRule } from '@/lib/prompt';
 import { geocodeAll } from '@/lib/geocode';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
@@ -29,15 +29,22 @@ export async function POST(req: NextRequest) {
   let enabledFields: string[] = [];
   let customInstructions = '';
   let promptVariables: PromptVariables = DEFAULT_PROMPT_VARIABLES;
+  let brokerRules: BrokerRule[] = [];
 
   try {
-    ({ data, enabledFields = [], customInstructions = '', promptVariables = DEFAULT_PROMPT_VARIABLES } = await req.json());
+    ({
+      data,
+      enabledFields = [],
+      customInstructions = '',
+      promptVariables = DEFAULT_PROMPT_VARIABLES,
+      brokerRules = [],
+    } = await req.json());
     if (!data) throw new Error('missing data');
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables);
+  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, brokerRules);
   const client = new Anthropic({ apiKey: key });
 
   let parsed: Record<string, unknown>;
@@ -106,20 +113,10 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Rebuild the title from geocoded cities when both ends are known —
-  // canonical city names beat whatever the AI inferred from the doc.
-  // Falls back to the AI's summary if either endpoint is missing a city.
-  if (
-    enrichedStops.length >= 2 &&
-    enrichedStops[0].city &&
-    enrichedStops[enrichedStops.length - 1].city
-  ) {
-    const cities = enrichedStops
-      .map(s => s.city)
-      .filter((c, i, arr): c is string => !!c && (i === 0 || c !== arr[i - 1]));
-    const broker = typeof parsed.broker === 'string' && parsed.broker ? `${parsed.broker}: ` : '';
-    parsed.summary = `${broker}${cities.join(' → ')}`;
-  }
+  // Title is built client-side by generateLoadTitle() so it can use
+  // customer.shortName + the org's customer roster. We just return the
+  // AI's summary (formatted per `titleFormat`) as a fallback for the rare
+  // case where the client can't synthesize one.
 
   return NextResponse.json({
     ...parsed,

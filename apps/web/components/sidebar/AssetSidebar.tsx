@@ -5,6 +5,7 @@ import { Plus, Layers, Truck, Users, Pencil, GripVertical, Menu, Settings } from
 import Link from 'next/link';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
+import { buildBrokerRules } from '@/lib/customerMatch';
 import EditAssetDialog from './EditAssetDialog';
 import DriversModal from './DriversModal';
 import AssetsModal from './AssetsModal';
@@ -68,6 +69,7 @@ export default function AssetSidebar() {
             enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
             customInstructions: promptInstructions,
             promptVariables,
+            brokerRules: buildBrokerRules(useCalendarStore.getState().customers),
           }),
         });
         const json = await res.json();

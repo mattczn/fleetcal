@@ -157,6 +157,11 @@ interface CalendarStore extends ModalState {
   setPromptInstructions: (s: string) => void;
   promptVariables: PromptVariables;
   setPromptVariable: (key: keyof PromptVariables, value: string) => void;
+  /** True once we've pulled rate-con settings from the server. Sync effects
+   *  in settings/page guard on this so initial hydration doesn't trigger a
+   *  write loop. */
+  hasHydratedOrgSettings: boolean;
+  hydrateRateConSettings: (settings: import('@fleetcal/types').RateConSettings | undefined) => void;
 
   theme: 'light' | 'dark' | 'system';
   setTheme: (t: 'light' | 'dark' | 'system') => void;
@@ -337,6 +342,17 @@ export const useCalendarStore = create<CalendarStore>()(
   promptVariables: DEFAULT_PROMPT_VARIABLES,
   setPromptVariable: (key, value) =>
     set((state) => ({ promptVariables: { ...state.promptVariables, [key]: value } })),
+  hasHydratedOrgSettings: false,
+  hydrateRateConSettings: (settings) =>
+    set((state) => ({
+      promptVariables: { ...DEFAULT_PROMPT_VARIABLES, ...(settings?.promptVariables ?? {}) },
+      promptInstructions: settings?.promptInstructions ?? '',
+      fieldSettings:
+        settings?.fieldSettings && Object.keys(settings.fieldSettings).length > 0
+          ? { ...state.fieldSettings, ...settings.fieldSettings }
+          : state.fieldSettings,
+      hasHydratedOrgSettings: true,
+    })),
 
   theme: 'light',
   setTheme: (t) => {
@@ -1381,11 +1397,10 @@ export const useCalendarStore = create<CalendarStore>()(
         // resourceWidth is computed dynamically from container size — not persisted
         rowHeight:          state.rowHeight,
         viewMode:           state.viewMode,
-        fieldSettings:      state.fieldSettings,
+        // fieldSettings, promptInstructions, promptVariables now live in
+        // org_settings server-side (hydrated on app mount), not localStorage.
         sectionOrder:       state.sectionOrder,
         driverPayPct:       state.driverPayPct,
-        promptInstructions: state.promptInstructions,
-        promptVariables:    state.promptVariables,
         theme:              state.theme,
         assetCategories:    state.assetCategories,
         showStatusOverlay:  state.showStatusOverlay,

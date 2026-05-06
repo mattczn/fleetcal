@@ -15,6 +15,7 @@ export default function DataLoader() {
   const loadDispatchers      = useCalendarStore((s) => s.fetchDispatchers);
   const loadCustomers        = useCalendarStore((s) => s.fetchCustomers);
   const loadTrailers         = useCalendarStore((s) => s.fetchTrailers);
+  const hydrateRateConSettings = useCalendarStore((s) => s.hydrateRateConSettings);
   const autoExpireTrash      = useCalendarStore((s) => s.autoExpireTrash);
   const { phase, completeOnboarding, setPhase } = useOnboardingStore();
   const loadedId = useRef<string | null>(null);
@@ -52,13 +53,19 @@ export default function DataLoader() {
         void loadDispatchers();
         void loadCustomers();
         void loadTrailers();
+        // Org-scoped rate-con AI settings — hydrate so /api/parse-ratecon
+        // calls and the EventModal field rendering see this org's config
+        // instead of localStorage defaults.
+        void import('@/lib/railway').then(({ railway }) => railway.getOrgSettings())
+          .then(({ settings }) => hydrateRateConSettings(settings.rateConSettings))
+          .catch((err) => console.error('[DataLoader] org settings fetch failed:', err));
         autoExpireTrash();
         // Stage 2: extend the events window in the background. Merges by id,
         // updates loadedStart/loadedEnd in the store.
         void extendLoadedRange(stage2Start, stage2End);
       })
       .catch((err) => console.error('[DataLoader] fetch failed:', err));
-  }, [orgId, hydrate, hydrateDemoMode, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, autoExpireTrash, phase, completeOnboarding, setPhase]);
+  }, [orgId, hydrate, hydrateDemoMode, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, autoExpireTrash, phase, completeOnboarding, setPhase]);
 
   return null;
 }
