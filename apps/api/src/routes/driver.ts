@@ -735,4 +735,99 @@ driver.get("/documents/:id/url", async (c) => {
   return c.json({ url: signed.signedUrl });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Live truck location for a load (Motive ELD lookup)
+// ─────────────────────────────────────────────────────────────────────────
+
+interface MotiveLocation { description: string; lat: number; lon: number; locatedAt: string; }
+
+// Per-org cache for Motive lookups — Motive's free tier has tight rate
+// limits and the location only updates every minute or so on their side
+// anyway. 10 min mirrors the dispatch app's cache.
+const motiveCache = new Map<string, { locations: Map<string, MotiveLocation>; fetchedAt: number }>();
+const MOTIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+
+async function fetchMotiveLocations(orgId: string): Promise<Map<string, MotiveLocation>> {
+  const cached = motiveCache.get(orgId);
+  if (cached && Date.now() - cached.fetchedAt < MOTIVE_CACHE_TTL_MS) return cached.locations;
+
+  const { data: settingsRow } = await supabase
+    .from("org_settings")
+    .select("motive_api_key")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const apiKey = (settingsRow as { motive_api_key: string | null } | null)?.motive_api_key;
+  if (!apiKey) {
+    const empty = new Map<string, MotiveLocation>();
+    motiveCache.set(orgId, { locations: empty, fetchedAt: Date.now() });
+    return empty;
+  }
+
+  try {
+    const res = await fetch("https://api.keeptruckin.com/v1/vehicle_locations?per_page=50", {
+      headers: { "X-Api-Key": apiKey, "Accept": "application/json" },
+    });
+    if (!res.ok) throw new Error(`Motive ${res.status}`);
+    const json = await res.json() as {
+      vehicles?: Array<{ vehicle: { id: number; current_location: { description: string; lat: number; lon: number; located_at: string } | null } }>;
+    };
+    const map = new Map<string, MotiveLocation>();
+    for (const v of json.vehicles ?? []) {
+      const cl = v.vehicle.current_location;
+      if (cl) map.set(String(v.vehicle.id), {
+        description: cl.description, lat: cl.lat, lon: cl.lon, locatedAt: cl.located_at,
+      });
+    }
+    motiveCache.set(orgId, { locations: map, fetchedAt: Date.now() });
+    return map;
+  } catch (err) {
+    console.warn("[driver/motive] fetch failed:", err);
+    return cached?.locations ?? new Map();
+  }
+}
+
+// GET /v1/driver/loads/:id/truck-location — current Motive position +
+// asset color for the load's bound vehicle. Returns 404 silently when
+// the asset has no Motive vehicle id, no location, or the org doesn't
+// have a Motive API key configured.
+driver.get("/loads/:id/truck-location", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id = c.req.param("id");
+
+  const found = await loadDriverEvent(id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  // Get the asset_id off the event, then look up its motive_vehicle_id + color.
+  const { data: ev } = await supabase
+    .from("events")
+    .select("asset_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const assetId = (ev as { asset_id: number } | null)?.asset_id;
+  if (!assetId) return c.json({ error: "not_found" }, 404);
+
+  const { data: asset } = await supabase
+    .from("assets")
+    .select("motive_vehicle_id, color")
+    .eq("id", assetId)
+    .maybeSingle();
+  const assetRow = asset as { motive_vehicle_id: string | null; color: string | null } | null;
+  const vehicleId = assetRow?.motive_vehicle_id;
+  if (!vehicleId) return c.json({ error: "not_found" }, 404);
+
+  const locations = await fetchMotiveLocations(orgId);
+  const loc = locations.get(vehicleId);
+  if (!loc) return c.json({ error: "not_found" }, 404);
+
+  return c.json({
+    lat:         loc.lat,
+    lon:         loc.lon,
+    locatedAt:   loc.locatedAt,
+    description: loc.description,
+    color:       assetRow?.color ?? null,
+  });
+});
+
 export default driver;

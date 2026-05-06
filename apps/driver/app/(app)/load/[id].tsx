@@ -34,6 +34,7 @@ import {
 import * as Location from "expo-location";
 import * as Clipboard from "expo-clipboard";
 import { fetchLoad, updateLoadStatus, updateLoadTrailer, checkInStop, undoCheckInStop } from "@/lib/api/loads";
+import { railway } from "@/lib/railway";
 import { fetchDocuments } from "@/lib/api/documents";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { needsConfirmation } from "@/lib/loadStatus";
@@ -654,6 +655,24 @@ export default function LoadDetailScreen() {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Live truck location for the asset bound to this load. 404s silently
+  // when the asset has no Motive vehicle id or the org has no Motive
+  // API key — RouteMap renders without the truck pin in that case.
+  const { data: truckLoc } = useQuery({
+    queryKey: ["truck-location", id],
+    queryFn:  async () => {
+      try { return await railway.getTruckLocation(id!); }
+      catch (err) {
+        const status = (err as { status?: number } | undefined)?.status;
+        if (status === 404 || status === 403) return null;
+        throw err;
+      }
+    },
+    enabled:  !!id && !!driver,
+    refetchInterval: 60 * 1000, // poll once a minute while open
+    staleTime: 30 * 1000,
+  });
+
   const { mutate: changeStatus, isPending } = useMutation({
     mutationFn: (newStatus: LoadStatus) =>
       updateLoadStatus(id!, driver!.orgId, newStatus, load?.status, driver?.name),
@@ -886,7 +905,12 @@ export default function LoadDetailScreen() {
       <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
         {/* Route map */}
         <View style={{ marginBottom: 14 }}>
-          <RouteMap stops={load.stops} />
+          <RouteMap
+            stops={load.stops}
+            truckLat={truckLoc?.lat}
+            truckLng={truckLoc?.lon}
+            assetColor={truckLoc?.color}
+          />
         </View>
 
         {/* Start time → stops → End time, joined by a vertical timeline rail. */}

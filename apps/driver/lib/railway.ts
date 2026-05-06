@@ -96,6 +96,14 @@ export const railway = {
     return req<{ ok: true }>("POST", `/v1/driver/stops/${stopId}/check-out`);
   },
 
+  // Truck location for a specific load (returns null when no ELD bound).
+  getTruckLocation(loadId: string) {
+    return req<{ lat: number; lon: number; locatedAt: string; description: string; color: string | null }>(
+      "GET",
+      `/v1/driver/loads/${loadId}/truck-location`,
+    );
+  },
+
   // Documents
   listDocuments(loadId: string) {
     return req<{ documents: unknown[] }>("GET", `/v1/driver/loads/${loadId}/documents`);
