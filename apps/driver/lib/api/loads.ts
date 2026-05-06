@@ -7,12 +7,22 @@
 import { railway } from "@/lib/railway";
 import type { Load, LoadStatus } from "@/lib/types";
 
+/**
+ * Fetch the driver's loads. By default, anything with `end >= 30 days ago`
+ * comes back — older loads stay in the system but never load into the
+ * driver app, keeping the cache + scroll length bounded.
+ */
 export async function fetchLoadsForDriver(
   _driverId: number,
   _orgId: string,
 ): Promise<Load[]> {
   try {
-    const { loads } = await railway.listLoads();
+    const oneMonthAgo = new Date(Date.now() - 30 * 24 * 3600_000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const from =
+      `${oneMonthAgo.getFullYear()}-${pad(oneMonthAgo.getMonth() + 1)}-${pad(oneMonthAgo.getDate())}` +
+      `T${pad(oneMonthAgo.getHours())}:${pad(oneMonthAgo.getMinutes())}`;
+    const { loads } = await railway.listLoads({ from });
     return loads as Load[];
   } catch (err) {
     console.error("fetchLoadsForDriver:", err);
