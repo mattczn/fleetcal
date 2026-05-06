@@ -54,7 +54,7 @@ function DocumentRow({ doc, onPress, onDelete }: { doc: LoadDocument; onPress: (
 
   React.useEffect(() => {
     if (isImage(doc)) {
-      getSignedUrl(doc.storagePath, 3600).then(setThumbUrl);
+      getSignedUrl(doc.id, 3600).then(setThumbUrl);
     }
   }, [doc.storagePath, doc]);
 
@@ -110,7 +110,7 @@ function ViewerModal({ doc, visible, onClose }: { doc: LoadDocument | null; visi
   React.useEffect(() => {
     if (visible && doc) {
       setUrl(null);
-      getSignedUrl(doc.storagePath, 3600).then(setUrl);
+      getSignedUrl(doc.id, 3600).then(setUrl);
     }
   }, [visible, doc]);
 
