@@ -806,6 +806,28 @@ export default function LoadDetailScreen() {
           <Text style={[txt(800), { fontSize: 16, color: "#ffffff" }]} numberOfLines={1}>
             {load.title}
           </Text>
+          {load.eventKind === "non_revenue" ? (
+            <View style={{
+              alignSelf: "flex-start",
+              flexDirection: "row", alignItems: "center", gap: 5,
+              paddingHorizontal: 7, paddingVertical: 2,
+              marginTop: 4,
+              borderRadius: 999,
+              backgroundColor: "rgba(255,255,255,0.18)",
+            }}>
+              <Text style={[txt(800), { fontSize: 9, color: "#ffffff", letterSpacing: 0.4 }]}>
+                NON-REVENUE
+              </Text>
+              {load.nonRevenueType ? (
+                <>
+                  <Text style={[txt(700), { fontSize: 9, color: "rgba(255,255,255,0.7)" }]}>·</Text>
+                  <Text style={[txt(800), { fontSize: 9, color: "#ffffff", letterSpacing: 0.3 }]} numberOfLines={1}>
+                    {load.nonRevenueType.toUpperCase()}
+                  </Text>
+                </>
+              ) : null}
+            </View>
+          ) : null}
         </View>
         <TouchableOpacity
           onPress={() => setStatusPickerVisible(true)}

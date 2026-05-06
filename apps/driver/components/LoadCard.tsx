@@ -4,10 +4,13 @@ import { useRouter } from "expo-router";
 import { MapPin, Truck, ChevronRight, Box } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { Load, Stop } from "@/lib/types";
-import { StatusBadge } from "./StatusBadge";
 import { needsConfirmation } from "@/lib/loadStatus";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { useDriverSession } from "@/lib/useDriverSession";
+import {
+  RelayChip, NonRevChip, StatusPill, DiagonalStripes,
+  fmtTimeRangeShort, fmtStopAppt, fmtShortDate, loadNumLabel,
+} from "@/lib/loadCard";
 
 type Props = { load: Load };
 
@@ -18,18 +21,6 @@ function deliveryOf(load: Load): Stop | undefined {
   return [...load.stops]
     .reverse()
     .find((s) => s.type === "delivery" || s.type === "drop_hook");
-}
-
-function fmtDate(iso: string | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso.replace(" ", "T"));
-  if (isNaN(d.getTime())) return iso.slice(0, 10);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function fmtTime(iso: string | undefined): string {
-  if (!iso) return "";
-  return iso.slice(11, 16);
 }
 
 function locLabel(s: Stop | undefined): string {
@@ -49,9 +40,10 @@ export function LoadCard({ load }: Props) {
   const router = useRouter();
   const session = useDriverSession();
   const driver = session.status === "matched" ? session.driver : null;
-  const pickup   = pickupOf(load);
-  const delivery = deliveryOf(load);
+  const pickup     = pickupOf(load);
+  const delivery   = deliveryOf(load);
   const needsAction = needsConfirmation(load);
+  const isNonRev   = load.eventKind === "non_revenue";
   const { data: orgSettings } = useQuery({
     queryKey: ["org-settings", driver?.orgId],
     queryFn:  () => fetchOrgSettings(driver!.orgId),
@@ -81,32 +73,41 @@ export function LoadCard({ load }: Props) {
         <View style={{ width: 4, backgroundColor: needsAction ? "#dc2626" : "#1a73e8" }} />
 
         <View style={{ flex: 1, padding: 14 }}>
-          {/* Header */}
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={[txt(800), { fontSize: 15, color: "#202124" }]} numberOfLines={1}>
-                {load.title}
-              </Text>
-              {load.loadNum ? (
-                <Text style={[txt(700), { fontSize: 12, color: "#1a73e8", marginTop: 1 }]} numberOfLines={1}>
-                  Load #{load.loadNum}
-                </Text>
-              ) : null}
-            </View>
-            <StatusBadge status={load.status} needsAction={needsAction} />
+          {isNonRev ? <DiagonalStripes /> : null}
+
+          {/* Title row — title + relay/non-rev chips */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1 }]} numberOfLines={1}>
+              {load.title}
+            </Text>
+            {isNonRev ? <NonRevChip size="small" /> : null}
+            {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
           </View>
 
-          {/* Time range */}
-          {(load.start || load.end) && (
-            <Text style={[txt(800), { fontSize: 12, color: "#1a73e8", letterSpacing: 0.2, marginBottom: 12 }]}>
-              {load.start && load.end && load.start !== load.end
-                ? `${fmtTime(load.start)} – ${fmtTime(load.end)}`
-                : fmtTime(load.start || load.end)}
-            </Text>
-          )}
+          {/* Equipment row — asset · trailer */}
+          {(load.assetName || load.trailerType) ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 6 }}>
+              {load.assetName ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <Truck size={11} color="#5f6368" strokeWidth={2.2} />
+                  <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
+                    {load.assetName}
+                  </Text>
+                </View>
+              ) : null}
+              {load.trailerType ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <Box size={11} color="#5f6368" strokeWidth={2.2} />
+                  <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
+                    {load.trailerType}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
-          {/* Route */}
-          <View style={{ flexDirection: "row", alignItems: "stretch" }}>
+          {/* Route timeline — pickup + delivery with date / appt window */}
+          <View style={{ flexDirection: "row", alignItems: "stretch", marginTop: 12 }}>
             <View style={{ alignItems: "center", paddingTop: 4, marginRight: 12 }}>
               <View
                 style={{
@@ -132,7 +133,8 @@ export function LoadCard({ load }: Props) {
             <View style={{ flex: 1 }}>
               <View style={{ marginBottom: 12 }}>
                 <Text style={[txt(700), { fontSize: 10, color: "#16a34a", letterSpacing: 0.6 }]}>
-                  PICKUP · {fmtDate(load.start)}
+                  PICKUP · {fmtShortDate(load.start)}
+                  {fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={1}>
                   {locLabel(pickup)}
@@ -141,7 +143,8 @@ export function LoadCard({ load }: Props) {
 
               <View>
                 <Text style={[txt(700), { fontSize: 10, color: "#dc2626", letterSpacing: 0.6 }]}>
-                  DELIVERY · {fmtDate(load.end)}
+                  DELIVERY · {fmtShortDate(load.end)}
+                  {fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={1}>
                   {locLabel(delivery)}
@@ -150,39 +153,33 @@ export function LoadCard({ load }: Props) {
             </View>
           </View>
 
-          {/* Footer */}
-          {(load.assetName || load.trailerType || showPay) && (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems:    "center",
-                marginTop:     12,
-                paddingTop:    12,
-                borderTopWidth: 1,
-                borderTopColor: "#f1f3f4",
-                gap:            14,
-              }}
-            >
-              {load.assetName ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Truck size={12} color="#5f6368" strokeWidth={2.2} />
-                  <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]}>{load.assetName}</Text>
-                </View>
-              ) : null}
-              {load.trailerType ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Box size={12} color="#5f6368" strokeWidth={2.2} />
-                  <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]}>{load.trailerType}</Text>
-                </View>
-              ) : null}
-              {showPay ? (
-                <Text style={[txt(800), { fontSize: 13, color: "#15803d", marginLeft: "auto" }]}>
-                  ${load.driverPay!.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                </Text>
-              ) : null}
-              <ChevronRight size={16} color="#9aa0a6" strokeWidth={2.2} />
-            </View>
-          )}
+          {/* Meta row — load # · time range · [status] · [pay] · chevron */}
+          <View
+            style={{
+              flexDirection:  "row",
+              alignItems:     "center",
+              marginTop:      12,
+              paddingTop:     12,
+              borderTopWidth: 1,
+              borderTopColor: "#f1f3f4",
+              gap:            6,
+            }}
+          >
+            <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]} numberOfLines={1}>
+              {loadNumLabel(load)}
+            </Text>
+            <Text style={[txt(600), { fontSize: 12, color: "#9aa0a6" }]}>·</Text>
+            <Text style={[txt(600), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
+              {fmtTimeRangeShort(load)}
+            </Text>
+            <StatusPill status={load.status} size="small" />
+            {showPay ? (
+              <Text style={[txt(800), { fontSize: 13, color: "#15803d" }]}>
+                ${load.driverPay!.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+              </Text>
+            ) : null}
+            <ChevronRight size={16} color="#9aa0a6" strokeWidth={2.2} />
+          </View>
         </View>
       </View>
     </TouchableOpacity>

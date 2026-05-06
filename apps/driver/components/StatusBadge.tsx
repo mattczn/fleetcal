@@ -2,23 +2,17 @@ import React from "react";
 import { View, Text } from "react-native";
 import { AlertCircle } from "lucide-react-native";
 import type { LoadStatus } from "@/lib/types";
+import { STATUS_TINT, STATUS_LABEL } from "@/lib/loadCard";
 
-const STATUS_CONFIG: Record<
-  LoadStatus,
-  { label: string; bg: string; fg: string }
-> = {
-  scheduled:  { label: "Scheduled",  bg: "#f1f3f4", fg: "#5f6368" },
-  dispatched: { label: "Dispatched", bg: "#e8f0fe", fg: "#1558d6" },
-  en_route:   { label: "En Route",   bg: "#fef3c7", fg: "#92400e" },
-  picked_up:  { label: "Picked Up",  bg: "#f3e8fd", fg: "#6b21a8" },
-  delivered:  { label: "Delivered",  bg: "#e6f4ea", fg: "#15803d" },
-  cancelled:  { label: "Cancelled",  bg: "#fce8e6", fg: "#b91c1c" },
-  tonu:       { label: "TONU",       bg: "#fef3c7", fg: "#92400e" },
-  problem:    { label: "Problem",    bg: "#fef0e6", fg: "#b85c00" },
-};
+const ACTION_TINT = { bg: "#dc2626", fg: "#ffffff" };
 
-const ACTION_CONFIG = { label: "Confirm", bg: "#dc2626", fg: "#ffffff" };
-
+/**
+ * Always-visible status pill used on the load-detail screen. Distinct
+ * from the smaller `StatusPill` in lib/loadCard (which hides on the
+ * "scheduled" default) — this one renders for every status because the
+ * load detail's source-of-truth slot can't be empty. When needsAction
+ * is set we swap to a red "Confirm" CTA so the driver sees it on entry.
+ */
 export function StatusBadge({
   status,
   needsAction,
@@ -26,7 +20,8 @@ export function StatusBadge({
   status: LoadStatus;
   needsAction?: boolean;
 }) {
-  const c = needsAction ? ACTION_CONFIG : (STATUS_CONFIG[status] ?? STATUS_CONFIG.scheduled);
+  const tint  = needsAction ? ACTION_TINT : (STATUS_TINT[status] ?? STATUS_TINT.scheduled);
+  const label = needsAction ? "Confirm"   : (STATUS_LABEL[status] ?? STATUS_LABEL.scheduled);
   return (
     <View
       style={{
@@ -34,21 +29,21 @@ export function StatusBadge({
         alignItems:         "center",
         gap:                4,
         paddingHorizontal:  needsAction ? 8 : 10,
-        paddingVertical:     4,
+        paddingVertical:    4,
         borderRadius:       999,
-        backgroundColor:    c.bg,
+        backgroundColor:    tint.bg,
       }}
     >
-      {needsAction ? <AlertCircle size={11} color={c.fg} strokeWidth={2.6} /> : null}
+      {needsAction ? <AlertCircle size={11} color={tint.fg} strokeWidth={2.6} /> : null}
       <Text
         style={{
           fontFamily:    "PlusJakartaSans_700Bold",
           fontSize:      11,
           letterSpacing: 0.3,
-          color:         c.fg,
+          color:         tint.fg,
         }}
       >
-        {c.label}
+        {label}
       </Text>
     </View>
   );

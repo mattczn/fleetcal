@@ -7,13 +7,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { Calendar, MapPin, CalendarCheck, Truck, CalendarDays, List } from "lucide-react-native";
 import { fetchLoadsForDriver } from "@/lib/api/loads";
-import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
 import { DayView, type DayViewHandle } from "@/components/DayView";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { needsConfirmation } from "@/lib/loadStatus";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
+import {
+  RelayChip, NonRevChip, StatusPill, DiagonalStripes,
+  fmtTimeRangeShort, loadNumLabel,
+} from "@/lib/loadCard";
 import type { Load } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -43,18 +46,6 @@ function fmtDateHeader(dateStr: string): string {
   return dateLabel;
 }
 
-function fmtTime(iso: string): string {
-  if (!iso) return "";
-  const t = iso.slice(11, 16);
-  if (!t) return "";
-  const [hStr, mStr] = t.split(":");
-  const h = parseInt(hStr, 10);
-  const m = parseInt(mStr, 10);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hh = h % 12 || 12;
-  return m === 0 ? `${hh} ${ampm}` : `${hh}:${String(m).padStart(2, "0")} ${ampm}`;
-}
-
 function pickupOf(load: Load) { return load.stops.find(s => s.type === "pickup"); }
 function deliveryOf(load: Load) {
   return [...load.stops].reverse().find(s => s.type === "delivery" || s.type === "drop_hook");
@@ -73,11 +64,7 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
   const delivery = deliveryOf(load);
   const isMulti  = totalDays > 1;
   const needsAction = needsConfirmation(load);
-
-  // Time range — full event start/end, shown as a header line above the title
-  const startT = fmtTime(load.start);
-  const endT   = fmtTime(load.end);
-  const timeRange = startT && endT && startT !== endT ? `${startT} – ${endT}` : (startT || endT || "—");
+  const isNonRev   = load.eventKind === "non_revenue";
 
   return (
     <TouchableOpacity
@@ -96,21 +83,38 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
       <View style={{ width: 4, backgroundColor: needsAction ? "#dc2626" : "#1a73e8" }} />
 
       <View style={{ flex: 1, padding: 12 }}>
-        {/* Top row: time range + status */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <Text style={[txt(800), { fontSize: 12, color: "#1a73e8", letterSpacing: 0.2, flex: 1 }]}>
-            {timeRange}
+        {isNonRev ? <DiagonalStripes /> : null}
+
+        {/* Title row — title + relay/non-rev chips */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1 }]} numberOfLines={1}>
+            {load.title}
           </Text>
-          <StatusBadge status={load.status} needsAction={needsAction} />
+          {isNonRev ? <NonRevChip size="small" /> : null}
+          {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
         </View>
 
-        {/* Title */}
-        <Text style={[txt(800), { fontSize: 15, color: "#202124", marginBottom: 6 }]} numberOfLines={2}>
-          {load.title}
-        </Text>
+        {/* Equipment row */}
+        {(load.assetName || load.trailerType) ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
+            {load.assetName ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Truck size={11} color="#5f6368" strokeWidth={2.2} />
+                <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
+                  {load.assetName}
+                </Text>
+              </View>
+            ) : null}
+            {load.trailerType ? (
+              <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
+                · {load.trailerType}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* Route */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
           <MapPin size={11} color="#5f6368" strokeWidth={2.2} />
           <Text style={[txt(600), { fontSize: 12, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
             {(pickup?.city ?? pickup?.facilityName) ?? "—"}
@@ -119,20 +123,20 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
           </Text>
         </View>
 
-        {/* Asset + multi-day chip */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          {load.assetName ? (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, flex: 1 }}>
-              <Truck size={11} color="#5f6368" strokeWidth={2.2} />
-              <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
-                {load.assetName}
-              </Text>
-            </View>
-          ) : <View style={{ flex: 1 }} />}
+        {/* Meta row — load # · time range · [status] · multi-day chip */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 }}>
+          <Text style={[txt(700), { fontSize: 11, color: "#1a73e8" }]} numberOfLines={1}>
+            {loadNumLabel(load)}
+          </Text>
+          <Text style={[txt(600), { fontSize: 11, color: "#9aa0a6" }]}>·</Text>
+          <Text style={[txt(600), { fontSize: 11, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
+            {fmtTimeRangeShort(load)}
+          </Text>
+          <StatusPill status={load.status} size="small" />
           {isMulti ? (
-            <View style={{ paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999, backgroundColor: "#e8f0fe" }}>
-              <Text style={[txt(800), { fontSize: 10, color: "#1558d6", letterSpacing: 0.4 }]}>
-                Day {dayIndex} of {totalDays}
+            <View style={{ paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999, backgroundColor: "#e8f0fe" }}>
+              <Text style={[txt(800), { fontSize: 9, color: "#1558d6", letterSpacing: 0.3 }]}>
+                DAY {dayIndex}/{totalDays}
               </Text>
             </View>
           ) : null}

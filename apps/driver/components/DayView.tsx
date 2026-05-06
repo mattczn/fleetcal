@@ -6,6 +6,10 @@ import { useRouter } from "expo-router";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
 import type { Load } from "@/lib/types";
 import { needsConfirmation } from "@/lib/loadStatus";
+import {
+  RelayChip, NonRevChip, DiagonalStripes,
+  fmtTimeRangeShort,
+} from "@/lib/loadCard";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -48,17 +52,6 @@ function fmtHourLabel(hour: number): string {
   if (hour === 12) return "12 PM";
   if (hour < 12) return `${hour} AM`;
   return `${hour - 12} PM`;
-}
-
-function fmtTime(iso: string): string {
-  if (!iso) return "";
-  const t = iso.slice(11, 16);
-  const [hStr, mStr] = t.split(":");
-  const h = parseInt(hStr, 10);
-  const m = parseInt(mStr, 10);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hh = h % 12 || 12;
-  return m === 0 ? `${hh} ${ampm}` : `${hh}:${pad(m)} ${ampm}`;
 }
 
 interface PositionedEvent {
@@ -127,9 +120,11 @@ function NowLine({ dateKey }: { dateKey: string }) {
 function EventBlock({ ev }: { ev: PositionedEvent }) {
   const router = useRouter();
   const { load, top, height, spansBefore, spansAfter } = ev;
-  const startLabel = spansBefore ? "Continues" : fmtTime(load.start);
-  const endLabel   = spansAfter  ? "Continues" : fmtTime(load.end);
   const needsAction = needsConfirmation(load);
+  const isNonRev   = load.eventKind === "non_revenue";
+  const spans      = spansBefore || spansAfter;
+  const stripeColor = needsAction ? "#dc2626" : "#1a73e8";
+
   return (
     <TouchableOpacity
       onPress={() => router.push({ pathname: "/load/[id]", params: { id: load.id } })}
@@ -138,19 +133,33 @@ function EventBlock({ ev }: { ev: PositionedEvent }) {
         position: "absolute", top, height,
         left: HOUR_LABEL_WIDTH + 6, right: 8,
         backgroundColor: needsAction ? "#fee2e2" : "#e8f0fe",
-        borderLeftWidth: 4, borderLeftColor: needsAction ? "#dc2626" : "#1a73e8",
+        borderLeftWidth: 4, borderLeftColor: stripeColor,
         borderRadius: 8, padding: 6, overflow: "hidden",
       }}
     >
-      <Text style={[txt(800), { fontSize: 11, color: needsAction ? "#dc2626" : "#1a73e8", letterSpacing: 0.2 }]} numberOfLines={1}>
-        {startLabel}{startLabel !== endLabel ? ` – ${endLabel}` : ""}
-      </Text>
-      <Text style={[txt(800), { fontSize: 13, color: "#1a3060", marginTop: 1 }]} numberOfLines={2}>
+      {isNonRev ? <DiagonalStripes /> : null}
+      {spans ? (
+        <Text style={[txt(800), { fontSize: 10, color: stripeColor, letterSpacing: 0.4, marginBottom: 1 }]} numberOfLines={1}>
+          CONTINUES
+        </Text>
+      ) : null}
+      <Text style={[txt(800), { fontSize: 13, color: "#1a3060" }]} numberOfLines={2}>
         {load.title}
       </Text>
-      {height >= 64 ? (
+      {(isNonRev || load.relayRole) ? (
+        <View style={{ flexDirection: "row", gap: 4, marginTop: 3, flexWrap: "wrap" }}>
+          {isNonRev ? <NonRevChip size="small" /> : null}
+          {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
+        </View>
+      ) : null}
+      {height >= 48 && load.assetName ? (
         <Text style={[txt(600), { fontSize: 11, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
-          {load.assetName ?? ""}
+          {load.assetName}
+        </Text>
+      ) : null}
+      {height >= 64 ? (
+        <Text style={[txt(600), { fontSize: 10, color: "#3c4043", marginTop: 2 }]} numberOfLines={1}>
+          {fmtTimeRangeShort(load)}
         </Text>
       ) : null}
     </TouchableOpacity>
