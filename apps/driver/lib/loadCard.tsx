@@ -110,6 +110,57 @@ export function fmtShortDate(iso?: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/**
+ * "APPT" / "WINDOW" / "FCFS" — short schedule-type label drivers can
+ * scan at a glance. Returns null when the field isn't set so callers
+ * can fall back to the default formatting.
+ */
+export function fmtScheduleType(scheduleType?: Stop["scheduleType"]): string | null {
+  if (!scheduleType) return null;
+  if (scheduleType === "appointment") return "APPT";
+  if (scheduleType === "window")      return "WINDOW";
+  if (scheduleType === "fcfs")        return "FCFS";
+  return null;
+}
+
+/**
+ * Tiny pill that flags how a stop's time should be interpreted —
+ * appointment (be there exactly), window (be there within), or
+ * first-come-first-served (no fixed time). Drivers care a lot about
+ * this distinction.
+ */
+export function ScheduleTypeChip({
+  scheduleType, size = "default",
+}: {
+  scheduleType: Stop["scheduleType"];
+  size?: "default" | "small";
+}) {
+  const label = fmtScheduleType(scheduleType);
+  if (!label) return null;
+  const fontSize = size === "small" ? 9 : 10;
+  const padH     = size === "small" ? 5 : 6;
+  const padV     = size === "small" ? 0 : 1;
+  // appointment = strict (red-ish), window = flexible (blue),
+  // fcfs = no appt (neutral gray)
+  const tint =
+    scheduleType === "appointment"
+      ? { bg: "#fee2e2", fg: "#b91c1c" }
+      : scheduleType === "window"
+      ? { bg: "#e8f0fe", fg: "#1558d6" }
+      : { bg: "#f1f3f4", fg: "#5f6368" };
+  return (
+    <View style={{
+      paddingHorizontal: padH, paddingVertical: padV,
+      borderRadius: 999,
+      backgroundColor: tint.bg,
+    }}>
+      <Text style={[txt(800), { fontSize, color: tint.fg, letterSpacing: 0.4 }]}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 /** Standard load-number label, "#45280". Falls back to internal id. */
 export function loadNumLabel(load: Pick<Load, "loadNum" | "internalLoadId">): string {
   return `#${load.loadNum ?? load.internalLoadId ?? "—"}`;

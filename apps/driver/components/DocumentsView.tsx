@@ -6,7 +6,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Plus, Trash2, X } from "lucide-react-native";
+import { FileText, Plus, Trash2, X, Share2 } from "lucide-react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { fetchDocuments, getSignedUrl, deleteDocument, type LoadDocument } from "@/lib/api/documents";
 import { UploadSheet } from "@/components/UploadSheet";
 
@@ -43,6 +45,29 @@ function fmtBytes(n?: number): string {
 function isImage(doc: LoadDocument): boolean {
   return (doc.mimeType ?? "").startsWith("image/")
     || /\.(jpg|jpeg|png|webp|heic)$/i.test(doc.fileName);
+}
+
+/**
+ * Download the document to the cache directory and hand it to the OS
+ * share sheet. Sharing on iOS / Android needs a `file://` URI, not a
+ * remote URL — we can't pass the signed URL straight through.
+ */
+async function shareDocument(url: string, doc: LoadDocument): Promise<void> {
+  try {
+    if (!(await Sharing.isAvailableAsync())) {
+      Alert.alert("Sharing not available", "This device can't share files.");
+      return;
+    }
+    const safeName = (doc.fileName || "document").replace(/[^A-Za-z0-9._-]/g, "_");
+    const dest = (FileSystem.cacheDirectory ?? "") + safeName;
+    const { uri } = await FileSystem.downloadAsync(url, dest);
+    await Sharing.shareAsync(uri, {
+      mimeType: doc.mimeType,
+      UTI:      doc.mimeType === "application/pdf" ? "com.adobe.pdf" : undefined,
+    });
+  } catch (err) {
+    Alert.alert("Couldn't share", err instanceof Error ? err.message : "Unknown error");
+  }
 }
 
 function DocumentRow({ doc, onPress, onDelete }: { doc: LoadDocument; onPress: () => void; onDelete: () => void }) {
@@ -101,6 +126,7 @@ function DocumentRow({ doc, onPress, onDelete }: { doc: LoadDocument; onPress: (
 
 function ViewerModal({ doc, visible, onClose }: { doc: LoadDocument | null; visible: boolean; onClose: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
   const insets = useSafeAreaInsets();
 
   React.useEffect(() => {
@@ -130,6 +156,26 @@ function ViewerModal({ doc, visible, onClose }: { doc: LoadDocument | null; visi
                 {fmtUploaded(doc.uploadedAt)}
               </Text>
             </View>
+            <TouchableOpacity
+              onPress={async () => {
+                if (!url || sharing) return;
+                setSharing(true);
+                try { await shareDocument(url, doc); }
+                finally { setSharing(false); }
+              }}
+              hitSlop={14}
+              disabled={!url || sharing}
+              style={{
+                width: 40, height: 40, borderRadius: 20,
+                backgroundColor: "rgba(255,255,255,0.18)",
+                alignItems: "center", justifyContent: "center",
+                opacity: url && !sharing ? 1 : 0.5,
+              }}
+            >
+              {sharing
+                ? <ActivityIndicator color="#ffffff" />
+                : <Share2 size={18} color="#ffffff" strokeWidth={2.4} />}
+            </TouchableOpacity>
           </View>
 
           <View style={{ flex: 1, padding: 0 }}>

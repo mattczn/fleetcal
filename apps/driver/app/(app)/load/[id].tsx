@@ -44,6 +44,7 @@ import { RouteMap } from "@/components/RouteMap";
 import { Toast } from "@/components/Toast";
 import { DocumentsView } from "@/components/DocumentsView";
 import { useDriverSession } from "@/lib/useDriverSession";
+import { ScheduleTypeChip } from "@/lib/loadCard";
 import type { LoadStatus, Stop } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -567,13 +568,14 @@ function StopCard({
             </Text>
           ) : null}
 
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 14, marginTop: 10 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
               <Clock size={12} color="#5f6368" strokeWidth={2.2} />
               <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]}>
                 {fmtDate(stop.apptStart)} · {window}
               </Text>
             </View>
+            {stop.scheduleType ? <ScheduleTypeChip scheduleType={stop.scheduleType} size="small" /> : null}
           </View>
         </View>
       </View>

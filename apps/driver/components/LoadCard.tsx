@@ -9,7 +9,7 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { useDriverSession } from "@/lib/useDriverSession";
 import {
   RelayChip, NonRevChip, StatusPill, DiagonalStripes,
-  fmtTimeRangeShort, fmtStopAppt, fmtShortDate, loadNumLabel,
+  fmtTimeRangeShort, fmtStopAppt, fmtShortDate, loadNumLabel, fmtScheduleType,
 } from "@/lib/loadCard";
 
 type Props = { load: Load };
@@ -162,6 +162,7 @@ export function LoadCard({ load }: Props) {
                 }]}>
                   {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}
                   {fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}
+                  {fmtScheduleType(pickup?.scheduleType) ? ` · ${fmtScheduleType(pickup?.scheduleType)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(pickup)}
@@ -176,6 +177,7 @@ export function LoadCard({ load }: Props) {
                 }]}>
                   {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}
                   {fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}
+                  {fmtScheduleType(delivery?.scheduleType) ? ` · ${fmtScheduleType(delivery?.scheduleType)}` : ""}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(delivery)}
