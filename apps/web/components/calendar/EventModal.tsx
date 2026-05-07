@@ -2333,7 +2333,6 @@ export default function EventModal() {
       <NewBrokerReviewModal
         initialName={pendingNewBroker}
         profile={parsedBrokerProfile}
-        accentColor={headerColor}
         onCancel={() => setPendingNewBroker(null)}
         onConfirm={confirmCreateBroker}
       />

@@ -23,7 +23,7 @@ export interface NewBrokerReviewModalProps {
 }
 
 export function NewBrokerReviewModal({
-  initialName, profile, accentColor = '#1a73e8', onCancel, onConfirm,
+  initialName, profile, accentColor = '#0369a1', onCancel, onConfirm,
 }: NewBrokerReviewModalProps) {
   // Only auto-fill from the profile when its broker name matches what we
   // were given (cleaned-suffix variations match too). Otherwise the user
@@ -79,7 +79,7 @@ export function NewBrokerReviewModal({
       <div className="rounded-2xl flex flex-col"
         style={{
           background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)',
-          width: 480, maxHeight: '90vh', border: '1px solid var(--gc-border-light)',
+          width: 600, maxHeight: '90vh', border: '1px solid var(--gc-border-light)',
         }}>
         {/* Header */}
         <div className="flex items-start justify-between px-6 pt-5 pb-4"
