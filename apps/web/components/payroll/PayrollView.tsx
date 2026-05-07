@@ -148,6 +148,7 @@ const ACC_CAT_LABELS: Record<string, string> = {
   lumper:       'Lumper',
   layover:      'Layover',
   scale_ticket: 'Scale Ticket',
+  extra_stop:   'Extra Stop',
   other:        'Other',
 };
 

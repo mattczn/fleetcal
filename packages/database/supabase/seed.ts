@@ -79,7 +79,9 @@ async function fetchAll<T>(table: string, client = oldDb): Promise<T[]> {
 
 const CATEGORY_MAP: Record<string, string> = {
   detention: 'detention', lumper: 'lumper', layover: 'layover',
-  scale_ticket: 'scale_ticket', 'scale ticket': 'scale_ticket', other: 'other',
+  scale_ticket: 'scale_ticket', 'scale ticket': 'scale_ticket',
+  extra_stop:  'extra_stop',  'extra stop':   'extra_stop',
+  other: 'other',
 };
 
 function transformAccessorials(old: OldAccessorial[] | null) {

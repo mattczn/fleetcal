@@ -12,6 +12,7 @@ const CATEGORIES: { id: AccessorialCategory; label: string }[] = [
   { id: "lumper",       label: "Lumper" },
   { id: "layover",      label: "Layover" },
   { id: "scale_ticket", label: "Scale Ticket" },
+  { id: "extra_stop",   label: "Extra Stop" },
   { id: "other",        label: "Other" },
 ];
 

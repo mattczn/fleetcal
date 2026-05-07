@@ -330,7 +330,7 @@ Tools available:
   - get_load_details: full info for a single load (audit log, all stops, accessorials)
   - get_payroll_summary: a driver's adjustments + finalized pay records
   Write:
-  - add_accessorial: append a detention/lumper/layover/scale_ticket/other charge to a load.
+  - add_accessorial: append a detention/lumper/layover/scale_ticket/extra_stop/other charge to a load.
 
 For WRITE tools: always restate exactly what you're about to do (which load, which amount, which category) and ask the user to confirm before calling. If their request is ambiguous (no specific load number or amount), ask first — never invent values.
 
@@ -412,7 +412,7 @@ const TOOLS: Tool[] = [
   {
     name: "add_accessorial",
     description:
-      "Add an accessorial charge to a load (detention, lumper, layover, scale_ticket, or other). " +
+      "Add an accessorial charge to a load (detention, lumper, layover, scale_ticket, extra_stop, or other). " +
       "Existing accessorials are preserved; the new one is appended. " +
       "BEFORE CALLING: confirm the load identifier and the dollar amount with the user — do not invent values. " +
       "Writes an audit log entry crediting 'AI Assistant'. Returns a summary of what was added.",
@@ -420,7 +420,7 @@ const TOOLS: Tool[] = [
       type: "object" as const,
       properties: {
         loadId:      { type: "string", description: "Load UUID or internal_load_id (numeric, e.g. '10042')" },
-        category:    { type: "string", enum: ["detention", "lumper", "layover", "scale_ticket", "other"] },
+        category:    { type: "string", enum: ["detention", "lumper", "layover", "scale_ticket", "extra_stop", "other"] },
         amount:      { type: "number", description: "Dollar amount, positive number" },
         description: { type: "string", description: "Optional free-text description (e.g. '2 hr at receiver')" },
         billable:    { type: "boolean", description: "Billable to the broker. Default true." },
@@ -644,8 +644,8 @@ async function runAddAccessorial(orgId: string, input: Record<string, unknown>):
   const category = typeof input.category === "string" ? input.category : "";
   const amount = Number(input.amount);
   if (!rawId)                                 return "loadId required.";
-  if (!["detention", "lumper", "layover", "scale_ticket", "other"].includes(category)) {
-    return `Invalid category '${category}'. Must be one of: detention, lumper, layover, scale_ticket, other.`;
+  if (!["detention", "lumper", "layover", "scale_ticket", "extra_stop", "other"].includes(category)) {
+    return `Invalid category '${category}'. Must be one of: detention, lumper, layover, scale_ticket, extra_stop, other.`;
   }
   if (!Number.isFinite(amount) || amount <= 0) return "amount must be a positive number.";
 

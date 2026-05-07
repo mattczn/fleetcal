@@ -3230,6 +3230,7 @@ export default function EventModal() {
                             <option value="lumper">Lumper</option>
                             <option value="layover">Layover</option>
                             <option value="scale_ticket">Scale Ticket</option>
+                            <option value="extra_stop">Extra Stop</option>
                             <option value="other">Other</option>
                           </select>
                           <input type="text" value={acc.description ?? ''}

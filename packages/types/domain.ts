@@ -31,6 +31,7 @@ export type AccessorialCategory =
   | "lumper"
   | "layover"
   | "scale_ticket"
+  | "extra_stop"
   | "other";
 
 export interface Accessorial {
