@@ -6,6 +6,7 @@ import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import DatePicker from './DatePicker';
 import { parseTimeInput } from '@/lib/time-utils';
+import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 
 interface Props {
   stops: Stop[];
@@ -104,7 +105,7 @@ function ApptInput({ value, onChange, placeholder, headerColor }: { value: strin
 
   return (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-      <DatePicker value={datePart} onChange={d => onChange(`${d}T${timePart || '08:00'}`)} headerColor={headerColor} />
+      <DatePicker value={datePart} onChange={d => onChange(`${d}T${timePart || '08:00'}`)} headerColor={LOAD_ACCENT} />
       <StopTimeInput value={timePart} onChange={t => onChange(`${datePart}T${t}`)} headerColor={headerColor} />
       <button
         type="button" onClick={() => onChange('')} title="Clear"
@@ -420,13 +421,13 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
           )}
           {loadedMiles != null && (
             <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
-              style={{ color: headerColor, border: `1px solid ${headerColor}40`, background: `${headerColor}10` }}>
+              style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG }}>
               <MapPin size={11} /> {loadedMiles.toLocaleString()} loaded mi
             </span>
           )}
           {ratePerMile != null && (
             <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
-              style={{ color: headerColor, border: `1px solid ${headerColor}40`, background: `${headerColor}10` }}>
+              style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG }}>
               ${ratePerMile.toFixed(2)}/mi
             </span>
           )}
@@ -435,9 +436,9 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
               type="button"
               onClick={onMapRoute}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all"
-              style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: `${headerColor}10` }}
-              onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}20`)}
-              onMouseLeave={e => (e.currentTarget.style.background = `${headerColor}10`)}
+              style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG }}
+              onMouseEnter={e => (e.currentTarget.style.background = LOAD_ACCENT_BG_HOVER)}
+              onMouseLeave={e => (e.currentTarget.style.background = LOAD_ACCENT_BG)}
             >
               <MapPin size={11} /> Map Route
             </button>
@@ -845,8 +846,8 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                             style={{
                               flex: 1, fontSize: 10, fontWeight: 700, padding: '3px 6px',
                               borderRadius: 5, cursor: 'pointer',
-                              border: `1px solid ${active ? headerColor : 'var(--gc-border)'}`,
-                              background: active ? headerColor : 'transparent',
+                              border: `1px solid ${active ? LOAD_ACCENT : 'var(--gc-border)'}`,
+                              background: active ? LOAD_ACCENT : 'transparent',
                               color: active ? '#fff' : 'var(--gc-text-3)',
                               transition: 'all 100ms',
                             }}
@@ -922,7 +923,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
         type="button"
         onClick={addStop}
         className="mt-2 flex items-center gap-1.5 text-xs font-semibold transition-opacity"
-        style={{ color: headerColor }}
+        style={{ color: LOAD_ACCENT }}
         onMouseEnter={e => (e.currentTarget.style.opacity = '0.7')}
         onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
       >

@@ -8,6 +8,12 @@
   --gc-blue-hover:    #1765cc;
   --gc-blue-light:    #e8f0fe;
   --gc-blue-text:     #1967d2;
+  /* Deeper blue used as the standard accent inside the load modal
+   * (miles/RPM/map badges, schedule-type chips, action buttons, etc).
+   * Picked to match the existing "Add customer" affordance. */
+  --gc-blue-deep:     #0369a1;
+  --gc-blue-deep-bg:  #f0f9ff;
+  --gc-blue-deep-bg2: #e0f2fe;
   --gc-red:           #ea4335;
   --gc-surface:       #ffffff;
   --gc-bg:            #f8f9fa;

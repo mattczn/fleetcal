@@ -11,6 +11,7 @@ import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
 import { cleanBrokerName } from '@/lib/brokerName';
 import { NewBrokerReviewModal } from './NewBrokerReviewModal';
+import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER, LOAD_ACCENT_HOVER } from '@/lib/loadAccent';
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
@@ -185,7 +186,7 @@ function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onCha
                 </button>
               </div>
             ) : (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px 3px 6px', borderRadius: 20, background: `${headerColor}14`, border: `1px solid ${headerColor}35`, fontSize: 12 }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px 3px 6px', borderRadius: 20, background: LOAD_ACCENT_BG, border: `1px solid ${LOAD_ACCENT_BORDER}`, fontSize: 12 }}>
                 <button type="button" onClick={() => setConfirmIdx(i)} title="Remove"
                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: 'var(--gc-text-3)', transition: 'color 120ms' }}
                   onMouseEnter={e => (e.currentTarget.style.color = '#d93025')}
@@ -341,8 +342,8 @@ function UploadedDocsPanel({
       <div className="shrink-0 flex items-center gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
         <button type="button" onClick={() => onSelect(null)}
           className="text-xs font-medium px-2 py-1 rounded transition-colors"
-          style={{ color: headerColor, border: `1px solid ${headerColor}40` }}
-          onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}12`)}
+          style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}` }}
+          onMouseEnter={e => (e.currentTarget.style.background = LOAD_ACCENT_BG)}
           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
           ← Back
         </button>
@@ -2157,7 +2158,7 @@ export default function EventModal() {
                 type="button"
                 onClick={() => setShowBrokerProfile(true)}
                 className="flex items-center gap-1.5 text-xs font-medium"
-                style={{ color: headerColor, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                style={{ color: LOAD_ACCENT, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                 <ExternalLink size={12} /> View customer profile
               </button>
             </>
@@ -2417,14 +2418,14 @@ export default function EventModal() {
                 <button type="button" onClick={() => { setDocsTab('rateCon'); setSelectedDocId(null); }}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap"
                   style={docsTab === 'rateCon'
-                    ? { background: `${headerColor}18`, color: headerColor, border: `1px solid ${headerColor}40` }
+                    ? { background: LOAD_ACCENT_BG, color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}` }
                     : { color: 'var(--gc-text-3)', border: '1px solid transparent' }}>
                   <FileText size={13} /> Rate Con{rateConPdf ? '' : ' (none)'}
                 </button>
                 <button type="button" onClick={() => setDocsTab('uploaded')}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap"
                   style={docsTab === 'uploaded'
-                    ? { background: `${headerColor}18`, color: headerColor, border: `1px solid ${headerColor}40` }
+                    ? { background: LOAD_ACCENT_BG, color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}` }
                     : { color: 'var(--gc-text-3)', border: '1px solid transparent' }}>
                   Uploaded ({loadDocuments.length})
                 </button>
@@ -2871,13 +2872,13 @@ export default function EventModal() {
                       }
                       setStartDate(v);
                     }}
-                    headerColor={headerColor} required />
+                    headerColor={LOAD_ACCENT} required />
                   <SmartTimeInput value={startTime} onChange={v => { markDirty(); setStartTime(v); }} headerColor={headerColor} />
                 </div>
               </Field>
               <Field label={endLabel}>
                 <div className="flex gap-2">
-                  <DatePicker value={endDate} onChange={v => { markDirty(); setEndDate(v); }} headerColor={headerColor} min={startDate} required />
+                  <DatePicker value={endDate} onChange={v => { markDirty(); setEndDate(v); }} headerColor={LOAD_ACCENT} min={startDate} required />
                   <SmartTimeInput value={endTime} onChange={v => { markDirty(); setEndTime(v); }} headerColor={headerColor} />
                 </div>
               </Field>
@@ -3339,7 +3340,7 @@ export default function EventModal() {
               <CheckCallsSection
                 loadId={ev.loadId}
                 currentUserName={currentUserName}
-                accentColor={headerColor}
+                accentColor={LOAD_ACCENT}
               />
             );
           })()}
