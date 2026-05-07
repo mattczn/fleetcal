@@ -821,7 +821,7 @@ function BrokerMatchBanner({ match, onConfirmMatch, onRejectMatch, onCreateNew, 
         <div className="flex items-center gap-2">
           <Plus size={13} style={{ color: '#0369a1', flexShrink: 0 }} />
           <span style={{ fontSize: 12, color: '#0c4a6e' }}>
-            New broker: <strong>{match.extracted}</strong>
+            New customer: <strong>{match.extracted}</strong>
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -2289,7 +2289,7 @@ export default function EventModal() {
               <Plus size={18} style={{ color: '#0369a1' }} />
             </div>
             <div>
-              <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>New broker detected</div>
+              <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>New customer detected</div>
               <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
                 <strong style={{ color: 'var(--gc-text-1)' }}>{brokerMatch.extracted}</strong>{' '}isn&apos;t in your customer list yet.
                 Save them before saving this load.
@@ -2324,7 +2324,7 @@ export default function EventModal() {
               }}
               className="w-full py-2.5 rounded-xl text-sm font-medium"
               style={{ background: 'transparent', color: 'var(--gc-text-3)', border: 'none', cursor: 'pointer' }}>
-              Save without linking broker
+              Save without linking customer
             </button>
           </div>
         </div>
@@ -2971,7 +2971,7 @@ export default function EventModal() {
                       <textarea
                         value={noteComposer}
                         onChange={e => { setNoteComposer(e.target.value); markDirty(); }}
-                        placeholder="Add a note. Pinned to this load. Never sent to driver or broker."
+                        placeholder="Add a note. Pinned to this load. Never sent to driver or customer."
                         rows={2}
                         autoFocus
                         style={{

@@ -569,7 +569,7 @@ const VARIABLE_DEFS: { key: keyof import('@/lib/prompt').PromptVariables; label:
   {
     key: 'specialInstructionsFormat',
     label: 'Special instructions format',
-    description: 'How the AI should fill the Special Instructions field. Stop-level info (addresses, appointment times, gate codes for a specific stop) is already extracted into the stops array — this should focus on load-level broker requirements.',
+    description: 'How the AI should fill the Special Instructions field. Stop-level info (addresses, appointment times, gate codes for a specific stop) is already extracted into the stops array — this should focus on load-level customer requirements.',
     rows: 7,
   },
 ];
@@ -659,7 +659,7 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
       <div>
         <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Rate Con AI</h2>
         <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
-          When you upload a rate con PDF, Claude reads it and fills in your enabled load fields automatically. Edit the formatting variables below to control how specific fields are written, then add any broker-specific instructions in the custom instructions box.
+          When you upload a rate con PDF, Claude reads it and fills in your enabled load fields automatically. Edit the formatting variables below to control how specific fields are written, then add any customer-specific instructions in the custom instructions box.
         </p>
       </div>
 
@@ -741,7 +741,7 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
         <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>Custom instructions</div>
           <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-            Broker-specific or company-specific guidance appended to every parse request.
+            Customer-specific or company-specific guidance appended to every parse request.
           </div>
         </div>
         <div className="p-5 space-y-3">
@@ -1989,7 +1989,7 @@ function CustomersPanel() {
 
   const FormFields = () => (
     <div className="space-y-2">
-      <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Customer / Broker name *" style={inp} autoFocus />
+      <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Customer name *" style={inp} autoFocus />
       <div className="grid grid-cols-2 gap-2">
         <input value={form.mcNum} onChange={e => setForm(f => ({ ...f, mcNum: e.target.value }))} placeholder="MC #" style={inp} />
         <input value={form.contactName} onChange={e => setForm(f => ({ ...f, contactName: e.target.value }))} placeholder="Contact name" style={inp} />
@@ -2006,9 +2006,9 @@ function CustomersPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Customers / Brokers</div>
+        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Customers</div>
         <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
-          When a rate con is parsed, the broker name is matched against this list automatically.
+          When a rate con is parsed, the customer name is matched against this list automatically.
         </div>
       </div>
 

@@ -28,7 +28,7 @@ const CHANNEL_ICON: Record<CheckCallChannel, typeof Phone> = {
 
 const PARTY_LABEL: Record<CheckCallParty, string> = {
   driver:   'Driver',
-  broker:   'Broker',
+  broker:   'Customer',
   shipper:  'Shipper',
   receiver: 'Receiver',
 };

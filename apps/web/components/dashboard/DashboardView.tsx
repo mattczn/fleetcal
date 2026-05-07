@@ -395,7 +395,7 @@ export default function DashboardView() {
       picked_up: 'Picked Up', delivered: 'Delivered', cancelled: 'Cancelled',
       tonu: 'TONU', problem: 'Problem',
     };
-    const headers = ['Pickup Date', 'Load #', 'Broker', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Driver Pay', 'Accessorials'];
+    const headers = ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Driver Pay', 'Accessorials'];
 
     const rows = weekLoads.map(load => {
       const partner = load.relayGroupId && load.relayRole
@@ -677,9 +677,9 @@ export default function DashboardView() {
             </Card>
 
             <Card className="flex flex-col">
-              <CardTitle>Revenue by Broker</CardTitle>
+              <CardTitle>Revenue by Customer</CardTitle>
               {revenueByBroker.length === 0 ? (
-                <Empty label="No broker data for this period" />
+                <Empty label="No customer data for this period" />
               ) : (
                 <div className="flex-1 flex gap-6 items-center justify-center">
                   {/* Donut chart */}
@@ -692,7 +692,7 @@ export default function DashboardView() {
                   {/* Ranked list — name and price as a tight pair */}
                   <div className="space-y-2.5">
                     <div className="text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--gc-text-3)' }}>
-                      Top 10 Brokers by Revenue
+                      Top 10 Customers by Revenue
                     </div>
                     {revenueByBroker.map(({ name, revenue, color }, i) => {
                       const customer = customers.find(c =>

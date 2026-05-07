@@ -90,12 +90,12 @@ export function NewBrokerReviewModal({
             </div>
             <div>
               <div className="text-base font-semibold mb-0.5" style={{ color: 'var(--gc-text-1)' }}>
-                Review new broker
+                Review new customer
               </div>
               <div className="text-xs" style={{ color: 'var(--gc-text-2)' }}>
                 {sameBroker
                   ? 'Auto-filled from this rate-con. Edit anything below, then create.'
-                  : 'Add this broker to your customers.'}
+                  : 'Add this customer to your directory.'}
               </div>
             </div>
           </div>
@@ -111,7 +111,7 @@ export function NewBrokerReviewModal({
         {/* Form */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           <Field label="Name">
-            <Input value={name} onChange={setName} placeholder="Broker name" autoFocus accent={accentColor} />
+            <Input value={name} onChange={setName} placeholder="Customer name" autoFocus accent={accentColor} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Short name">
@@ -156,7 +156,7 @@ export function NewBrokerReviewModal({
             </div>
             {invoiceMethod === 'email' ? (
               <Field label="Billing email" icon={<Mail size={11} />}>
-                <Input value={invoiceEmail} onChange={setInvoiceEmail} placeholder="ap@broker.com" accent={accentColor} type="email" />
+                <Input value={invoiceEmail} onChange={setInvoiceEmail} placeholder="ap@customer.com" accent={accentColor} type="email" />
               </Field>
             ) : invoiceMethod === 'portal' ? (
               <Field label="Portal">
@@ -195,7 +195,7 @@ export function NewBrokerReviewModal({
             disabled={!canCreate}
             className="px-5 py-2 rounded-full text-sm font-semibold text-white transition-colors"
             style={{ background: canCreate ? accentColor : 'var(--gc-border)', cursor: canCreate ? 'pointer' : 'default' }}>
-            {busy ? 'Creating…' : 'Create broker'}
+            {busy ? 'Creating…' : 'Create customer'}
           </button>
         </div>
       </div>

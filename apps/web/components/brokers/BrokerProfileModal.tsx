@@ -235,7 +235,7 @@ export default function BrokerProfileModal({
           <div className="flex items-center gap-2.5">
             <Building2 size={17} style={{ color: ACCENT }} />
             <span className="text-base font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-              Broker Directory
+              Customer Directory
             </span>
           </div>
           <button onClick={() => tryClose(onClose)} className="p-1.5 rounded-full transition-colors"
@@ -254,12 +254,12 @@ export default function BrokerProfileModal({
             style={{ width: 220, borderRight: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
             <div className="shrink-0 px-4 pt-5 pb-1">
               <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--gc-text-3)' }}>
-                Brokers
+                Customers
               </span>
             </div>
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {sorted.length === 0 ? (
-                <p className="text-xs px-2 py-2" style={{ color: 'var(--gc-text-3)' }}>No brokers yet.</p>
+                <p className="text-xs px-2 py-2" style={{ color: 'var(--gc-text-3)' }}>No customers yet.</p>
               ) : sorted.map(c => (
                 <BrokerNavRow key={c.id} broker={c} selected={selectedId === c.id} onSelect={() => handleSelectBroker(c.id)} />
               ))}
@@ -462,9 +462,15 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     else { setSortField(field); setSortDir('asc'); }
   };
 
-  const totalRevenue   = loads.reduce((s, e) => s + (e.loadPrice ?? 0), 0);
-  const deliveredCount = loads.filter(e => e.status === 'delivered').length;
-  const avgRevenue     = loads.length > 0 ? totalRevenue / loads.length : 0;
+  const totalRevenue = loads.reduce((s, e) => s + (e.loadPrice ?? 0), 0);
+  const avgRevenue   = loads.length > 0 ? totalRevenue / loads.length : 0;
+  const lastLoadStart = loads.reduce<string | null>((latest, e) => {
+    if (!e.start) return latest;
+    return latest && latest >= e.start ? latest : e.start;
+  }, null);
+  const lastLoadLabel = lastLoadStart
+    ? new Date(lastLoadStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : '—';
 
   const query = search.trim().toLowerCase();
 
@@ -508,16 +514,6 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         </div>
       </div>
 
-      {/* Stats */}
-      {!loading && (
-        <div className="grid grid-cols-2 gap-3 mb-6">
-          <StatCard icon={<Package size={13} />}      label="Total Loads"   value={String(loads.length)} />
-          <StatCard icon={<CheckCircle2 size={13} />} label="Delivered"     value={String(deliveredCount)} />
-          <StatCard icon={<TrendingUp size={13} />}   label="Total Revenue" value={moneyFmt.format(totalRevenue)} />
-          <StatCard icon={<TrendingUp size={13} />}   label="Avg per Load"  value={loads.length > 0 ? moneyFmt.format(avgRevenue) : '—'} />
-        </div>
-      )}
-
       {/* Details form */}
       <div className="mb-6">
         <SectionLabel>Details</SectionLabel>
@@ -542,7 +538,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </PField>
           <PField label="Email" icon={<Mail size={11} />}>
             <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)}
-              placeholder="email@broker.com" style={P_INPUT}
+              placeholder="email@customer.com" style={P_INPUT}
               onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
               onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
           </PField>
@@ -565,7 +561,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         <div className="mt-3">
           <PField label="Rate-con parse hints" icon={<FileText size={11} />}>
             <textarea value={parseHints} onChange={e => setParseHints(e.target.value)}
-              placeholder={'Broker-specific guidance for the AI parser. e.g.\n• Load # always follows "Order:"\n• Pickup # is in the BOL field on page 2'}
+              placeholder={'Customer-specific guidance for the AI parser. e.g.\n• Load # always follows "Order:"\n• Pickup # is in the BOL field on page 2'}
               rows={3}
               style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
               onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
@@ -599,7 +595,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           {invoiceMethod === 'email' ? (
             <PField label="Billing email" icon={<Mail size={11} />}>
               <input type="email" value={invoiceEmail} onChange={e => setInvoiceEmail(e.target.value)}
-                placeholder="ap@broker.com" style={P_INPUT}
+                placeholder="ap@customer.com" style={P_INPUT}
                 onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
                 onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
             </PField>
@@ -622,6 +618,16 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </div>
         </div>
       </div>
+
+      {/* Stats — between billing notes and load history */}
+      {!loading && (
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          <StatCard icon={<Package size={13} />}      label="Total Loads"   value={String(loads.length)} />
+          <StatCard icon={<Clock size={13} />}        label="Last Load"     value={lastLoadLabel} />
+          <StatCard icon={<TrendingUp size={13} />}   label="Total Revenue" value={moneyFmt.format(totalRevenue)} />
+          <StatCard icon={<TrendingUp size={13} />}   label="Avg per Load"  value={loads.length > 0 ? moneyFmt.format(avgRevenue) : '—'} />
+        </div>
+      )}
 
       {/* Loads */}
       <div>
