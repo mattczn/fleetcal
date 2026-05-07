@@ -36,7 +36,7 @@ export function NewBrokerReviewModal({
   const seed = sameBroker ? profile : undefined;
 
   const [name,                setName]                = useState(initialName);
-  const [mcNum,               setMcNum]               = useState(seed?.mcNum               ?? '');
+  const [shortName,           setShortName]           = useState('');
   const [contactName,         setContactName]         = useState(seed?.contactName         ?? '');
   const [contactEmail,        setContactEmail]        = useState(seed?.contactEmail        ?? '');
   const [contactPhone,        setContactPhone]        = useState(seed?.contactPhone        ?? '');
@@ -58,7 +58,7 @@ export function NewBrokerReviewModal({
       await onConfirm({
         name:                trimmedName,
         aliases:             [],
-        mcNum:               mcNum.trim()                || undefined,
+        shortName:           shortName.trim()            || undefined,
         contactName:         contactName.trim()          || undefined,
         contactEmail:        contactEmail.trim()         || undefined,
         contactPhone:        contactPhone.trim()         || undefined,
@@ -114,8 +114,8 @@ export function NewBrokerReviewModal({
             <Input value={name} onChange={setName} placeholder="Broker name" autoFocus accent={accentColor} />
           </Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="MC #">
-              <Input value={mcNum} onChange={setMcNum} placeholder="123456" accent={accentColor} />
+            <Field label="Short name">
+              <Input value={shortName} onChange={setShortName} placeholder="Echo" accent={accentColor} />
             </Field>
             <Field label="Contact name">
               <Input value={contactName} onChange={setContactName} placeholder="—" accent={accentColor} />
