@@ -116,7 +116,10 @@ export type Database = {
           id: string
           mc_num: string | null
           name: string
+          invoice_email: string | null
           invoice_instructions: string | null
+          invoice_method: string | null
+          invoice_portal: string | null
           notes: string | null
           org_id: string
           parse_hints: string | null
@@ -131,7 +134,10 @@ export type Database = {
           id?: string
           mc_num?: string | null
           name: string
+          invoice_email?: string | null
           invoice_instructions?: string | null
+          invoice_method?: string | null
+          invoice_portal?: string | null
           notes?: string | null
           org_id: string
           parse_hints?: string | null
@@ -146,7 +152,10 @@ export type Database = {
           id?: string
           mc_num?: string | null
           name?: string
+          invoice_email?: string | null
           invoice_instructions?: string | null
+          invoice_method?: string | null
+          invoice_portal?: string | null
           notes?: string | null
           org_id?: string
           parse_hints?: string | null

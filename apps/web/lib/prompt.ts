@@ -32,6 +32,13 @@ export interface BrokerProfile {
   contactName?:         string;
   contactEmail?:        string;
   contactPhone?:        string;
+  /** "email" | "portal" — how this broker accepts invoices. */
+  invoiceMethod?:       string;
+  /** AP / billing email when invoiceMethod is "email". */
+  invoiceEmail?:        string;
+  /** Portal name + URL when invoiceMethod is "portal". */
+  invoicePortal?:       string;
+  /** Catch-all for additional billing notes (terms, required docs, factor). */
   invoiceInstructions?: string;
   /** "rate_con" | "amendment" | "revised" | "other" — quick sanity check;
    *  if "other" the caller may bail out before pass 2. */
@@ -53,9 +60,12 @@ Return a single JSON object with this exact shape — no markdown, no explanatio
     "name":                "<canonical broker / customer / shipper company name as it appears>",
     "mcNum":               "<broker MC number if listed, digits only>",
     "contactName":         "<dispatcher or rep name on the rate con>",
-    "contactEmail":        "<dispatcher / billing email>",
+    "contactEmail":        "<dispatcher / billing contact email>",
     "contactPhone":        "<dispatcher phone, digits + format as on the doc>",
-    "invoiceInstructions": "<short summary of how to bill this broker — portal name + URL, AP email, required documents (BOL/POD/scale ticket), payment terms (net 30, quickpay), factor preferences, anything else billing-relevant. Combine into 2-5 short bulleted lines.>"
+    "invoiceMethod":       "<'email' | 'portal' | '' — how this broker wants invoices submitted. 'portal' if any online billing system is named (TriumphPay, RMIS, McLeod, MyCarrierPortal, broker's own portal, etc.). 'email' if invoices go to a specific AP/billing email. Empty string if unclear.>",
+    "invoiceEmail":        "<AP / billing email when invoiceMethod is 'email', otherwise empty string>",
+    "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal', e.g. 'TriumphPay (https://app.triumphpay.com)'. Otherwise empty string.>",
+    "invoiceInstructions": "<everything else billing-relevant that doesn't fit above: payment terms (net 30, quickpay rates), required documents (BOL/POD/scale tickets/lumper receipts), factor preferences, special PO numbers needed on the invoice. 1-3 short bulleted lines. Empty if nothing else to add.>"
   },
   "docType": "<rate_con | amendment | revised | other>"
 }

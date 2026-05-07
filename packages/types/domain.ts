@@ -185,9 +185,18 @@ export interface Customer {
    */
   parseHints?: string;
   /**
-   * Free-form invoicing/billing instructions for this broker (portal name,
-   * billing email, required docs, payment terms). Auto-populated by the
-   * rate-con parser on first capture; editable from the broker profile.
+   * How invoices are submitted to this broker. Drives downstream
+   * automation; pair with `invoiceEmail` or `invoicePortal`.
+   */
+  invoiceMethod?: 'email' | 'portal';
+  /** AP/billing email address. Populated when invoiceMethod === 'email'. */
+  invoiceEmail?:  string;
+  /** Portal name + URL. Populated when invoiceMethod === 'portal'. */
+  invoicePortal?: string;
+  /**
+   * Free-form additional billing guidance — payment terms, required docs,
+   * factor preferences, anything not covered by the structured fields
+   * above. Auto-populated by the rate-con parser on first capture.
    */
   invoiceInstructions?: string;
 }

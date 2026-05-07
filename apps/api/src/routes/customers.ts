@@ -30,10 +30,16 @@ interface DbCustomerRow {
   contact_phone: string | null;
   notes: string | null;
   parse_hints: string | null;
+  invoice_method: string | null;
+  invoice_email: string | null;
+  invoice_portal: string | null;
   invoice_instructions: string | null;
 }
 
 function rowToCustomer(r: DbCustomerRow): Customer {
+  const method = r.invoice_method === "email" || r.invoice_method === "portal"
+    ? r.invoice_method
+    : undefined;
   return {
     id:                  r.id,
     name:                r.name,
@@ -45,11 +51,14 @@ function rowToCustomer(r: DbCustomerRow): Customer {
     contactPhone:        r.contact_phone        ?? undefined,
     notes:               r.notes                ?? undefined,
     parseHints:          r.parse_hints          ?? undefined,
+    invoiceMethod:       method,
+    invoiceEmail:        r.invoice_email        ?? undefined,
+    invoicePortal:       r.invoice_portal       ?? undefined,
     invoiceInstructions: r.invoice_instructions ?? undefined,
   };
 }
 
-const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes,parse_hints,invoice_instructions";
+const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions";
 
 customers.get("/", async (c) => {
   const orgId = c.get("orgId");
@@ -83,6 +92,9 @@ customers.post("/", async (c) => {
     contact_phone: body.contactPhone ?? null,
     notes:                body.notes               ?? null,
     parse_hints:          body.parseHints          ?? null,
+    invoice_method:       body.invoiceMethod       ?? null,
+    invoice_email:        body.invoiceEmail        ?? null,
+    invoice_portal:       body.invoicePortal       ?? null,
     invoice_instructions: body.invoiceInstructions ?? null,
   };
   const { data, error } = await supabase
@@ -113,6 +125,9 @@ customers.patch("/:id", async (c) => {
   if ("contactPhone" in body) update.contact_phone = body.contactPhone ?? null;
   if ("notes"               in body) update.notes                = body.notes               ?? null;
   if ("parseHints"          in body) update.parse_hints          = body.parseHints          ?? null;
+  if ("invoiceMethod"       in body) update.invoice_method       = body.invoiceMethod       ?? null;
+  if ("invoiceEmail"        in body) update.invoice_email        = body.invoiceEmail        ?? null;
+  if ("invoicePortal"       in body) update.invoice_portal       = body.invoicePortal       ?? null;
   if ("invoiceInstructions" in body) update.invoice_instructions = body.invoiceInstructions ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);

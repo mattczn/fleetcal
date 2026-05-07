@@ -369,6 +369,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [contactPhone,        setContactPhone]        = useState(broker.contactPhone        ?? '');
   const [notes,               setNotes]               = useState(broker.notes               ?? '');
   const [parseHints,          setParseHints]          = useState(broker.parseHints          ?? '');
+  const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>(broker.invoiceMethod ?? '');
+  const [invoiceEmail,        setInvoiceEmail]        = useState(broker.invoiceEmail        ?? '');
+  const [invoicePortal,       setInvoicePortal]       = useState(broker.invoicePortal       ?? '');
   const [invoiceInstructions, setInvoiceInstructions] = useState(broker.invoiceInstructions ?? '');
 
   const [search,           setSearch]           = useState('');
@@ -385,6 +388,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setContactPhone(broker.contactPhone ?? '');
     setNotes(broker.notes ?? '');
     setParseHints(broker.parseHints ?? '');
+    setInvoiceMethod(broker.invoiceMethod ?? '');
+    setInvoiceEmail(broker.invoiceEmail ?? '');
+    setInvoicePortal(broker.invoicePortal ?? '');
     setInvoiceInstructions(broker.invoiceInstructions ?? '');
     setSearch('');
     setShowAllCompleted(false);
@@ -400,6 +406,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       contactPhone.trim()        !== (broker.contactPhone        ?? '') ||
       notes.trim()               !== (broker.notes               ?? '') ||
       parseHints.trim()          !== (broker.parseHints          ?? '') ||
+      invoiceMethod              !== (broker.invoiceMethod       ?? '') ||
+      invoiceEmail.trim()        !== (broker.invoiceEmail        ?? '') ||
+      invoicePortal.trim()       !== (broker.invoicePortal       ?? '') ||
       invoiceInstructions.trim() !== (broker.invoiceInstructions ?? ''),
     save: () => updateCustomer(broker.id, {
       shortName:           shortName.trim()           || undefined,
@@ -409,6 +418,11 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       contactPhone:        contactPhone.trim()        || undefined,
       notes:               notes.trim()               || undefined,
       parseHints:          parseHints.trim()          || undefined,
+      invoiceMethod:       invoiceMethod || undefined,
+      // Only persist the field that matches the chosen method; clears stale
+      // values left over from a previous selection.
+      invoiceEmail:        invoiceMethod === 'email'  ? (invoiceEmail.trim()  || undefined) : undefined,
+      invoicePortal:       invoiceMethod === 'portal' ? (invoicePortal.trim() || undefined) : undefined,
       invoiceInstructions: invoiceInstructions.trim() || undefined,
     }),
     discard: () => {
@@ -419,9 +433,12 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setContactPhone(broker.contactPhone ?? '');
       setNotes(broker.notes ?? '');
       setParseHints(broker.parseHints ?? '');
+      setInvoiceMethod(broker.invoiceMethod ?? '');
+      setInvoiceEmail(broker.invoiceEmail ?? '');
+      setInvoicePortal(broker.invoicePortal ?? '');
       setInvoiceInstructions(broker.invoiceInstructions ?? '');
     },
-  }), [shortName, mcNum, contactName, contactEmail, contactPhone, notes, parseHints, invoiceInstructions, broker]);
+  }), [shortName, mcNum, contactName, contactEmail, contactPhone, notes, parseHints, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -539,14 +556,54 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </PField>
         </div>
         <div className="mt-3">
-          <PField label="Invoice instructions" icon={<FileText size={11} />}>
-            <textarea value={invoiceInstructions} onChange={e => setInvoiceInstructions(e.target.value)}
-              placeholder={'How to bill this broker. e.g.\n• Submit via TriumphPay portal\n• Email invoices to ap@broker.com\n• Net 30; quickpay 2% available\n• Required: signed BOL + POD'}
-              rows={4}
-              style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit' }}
-              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
-              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
-          </PField>
+          <div className="text-[11px] font-semibold mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+            <FileText size={11} /> Invoice routing
+          </div>
+          {/* Method picker */}
+          <div className="flex gap-1.5 mb-2">
+            {(['email', 'portal'] as const).map(m => {
+              const active = invoiceMethod === m;
+              return (
+                <button key={m} type="button"
+                  onClick={() => setInvoiceMethod(active ? '' : m)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                  style={{
+                    border: `1px solid ${active ? ACCENT : 'var(--gc-border)'}`,
+                    background: active ? `${ACCENT}10` : 'transparent',
+                    color: active ? ACCENT : 'var(--gc-text-2)',
+                    cursor: 'pointer',
+                  }}>
+                  {m === 'email' ? 'Email' : 'Online portal'}
+                </button>
+              );
+            })}
+          </div>
+          {/* Conditional field */}
+          {invoiceMethod === 'email' ? (
+            <PField label="Billing email" icon={<Mail size={11} />}>
+              <input type="email" value={invoiceEmail} onChange={e => setInvoiceEmail(e.target.value)}
+                placeholder="ap@broker.com" style={P_INPUT}
+                onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+            </PField>
+          ) : invoiceMethod === 'portal' ? (
+            <PField label="Portal" icon={<FileText size={11} />}>
+              <input type="text" value={invoicePortal} onChange={e => setInvoicePortal(e.target.value)}
+                placeholder="TriumphPay (https://app.triumphpay.com)" style={P_INPUT}
+                onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+            </PField>
+          ) : null}
+          <div className="mt-2">
+            <PField label="Other billing notes" icon={<FileText size={11} />}>
+              <textarea value={invoiceInstructions} onChange={e => setInvoiceInstructions(e.target.value)}
+                placeholder={'Payment terms, required documents, factor preferences. e.g.\n• Net 30; quickpay 2% at 10 days\n• Required: signed BOL + POD\n• Factor with TBS Capital'}
+                rows={3}
+                style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit' }}
+                onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+            </PField>
+          </div>
         </div>
       </div>
 

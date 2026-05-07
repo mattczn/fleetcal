@@ -429,6 +429,9 @@ export interface CreateCustomerRequest {
   contactPhone?:        string | null;
   notes?:               string | null;
   parseHints?:          string | null;
+  invoiceMethod?:       'email' | 'portal' | null;
+  invoiceEmail?:        string | null;
+  invoicePortal?:       string | null;
   invoiceInstructions?: string | null;
 }
 export interface CreateCustomerResponse { customer: Customer; }
@@ -442,6 +445,9 @@ export interface UpdateCustomerRequest {
   contactPhone?:        string | null;
   notes?:               string | null;
   parseHints?:          string | null;
+  invoiceMethod?:       'email' | 'portal' | null;
+  invoiceEmail?:        string | null;
+  invoicePortal?:       string | null;
   invoiceInstructions?: string | null;
 }
 export interface UpdateCustomerResponse { customer: Customer; }

@@ -1027,12 +1027,18 @@ export default function EventModal() {
       cleanedParsed.toLowerCase() === name.toLowerCase()
     );
     if (!same) return base;
+    const method: 'email' | 'portal' | undefined =
+      profile.invoiceMethod === 'email'  ? 'email'  :
+      profile.invoiceMethod === 'portal' ? 'portal' : undefined;
     return {
       ...base,
       mcNum:               profile.mcNum?.trim()               || undefined,
       contactName:         profile.contactName?.trim()         || undefined,
       contactEmail:        profile.contactEmail?.trim()        || undefined,
       contactPhone:        profile.contactPhone?.trim()        || undefined,
+      invoiceMethod:       method,
+      invoiceEmail:        method === 'email'  ? (profile.invoiceEmail?.trim()  || undefined) : undefined,
+      invoicePortal:       method === 'portal' ? (profile.invoicePortal?.trim() || undefined) : undefined,
       invoiceInstructions: profile.invoiceInstructions?.trim() || undefined,
     };
   };
