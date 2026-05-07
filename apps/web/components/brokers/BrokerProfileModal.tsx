@@ -144,6 +144,7 @@ export default function BrokerProfileModal({
   // ── Unsaved changes guard ─────────────────────────────────────────────────
   const detailRef                           = useRef<BrokerDetailHandle>(null);
   const [showUnsaved, setShowUnsaved]       = useState(false);
+  const [panelDirty, setPanelDirty]         = useState(false);
   const pendingCloseFn                      = useRef<(() => void) | null>(null);
 
   const tryClose = (closeFn: () => void) => {
@@ -282,6 +283,7 @@ export default function BrokerProfileModal({
                 loading={loadingLoads}
                 selectedLoadId={selectedLoadId}
                 onSelectLoad={setSelectedLoadId}
+                onDirtyChange={setPanelDirty}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--gc-text-3)' }}>
@@ -303,17 +305,27 @@ export default function BrokerProfileModal({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="shrink-0 flex justify-end px-7 py-4"
-          style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-          <button onClick={() => tryClose(onClose)}
-            className="px-6 py-2.5 rounded-full text-sm font-medium text-white transition-colors"
-            style={{ background: ACCENT }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
-            onMouseLeave={e => (e.currentTarget.style.background = ACCENT)}>
-            Done
-          </button>
-        </div>
+        {/* Footer — only renders when there are unsaved edits */}
+        {panelDirty && (
+          <div className="shrink-0 flex items-center justify-end gap-2 px-7 py-3"
+            style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+            <span className="text-xs mr-2" style={{ color: 'var(--gc-text-3)' }}>Unsaved changes</span>
+            <button onClick={() => detailRef.current?.discard()}
+              className="px-4 py-2 rounded-full text-sm font-medium transition-colors"
+              style={{ color: '#d93025', background: 'transparent' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.07)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              Discard
+            </button>
+            <button onClick={() => detailRef.current?.save()}
+              className="px-5 py-2 rounded-full text-sm font-semibold text-white transition-colors"
+              style={{ background: ACCENT }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = ACCENT)}>
+              Save changes
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -359,7 +371,8 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   loading: boolean;
   selectedLoadId: string | null;
   onSelectLoad: (id: string) => void;
-}>(function BrokerDetailPanel({ broker, loads, loading, selectedLoadId, onSelectLoad }, ref) {
+  onDirtyChange?: (dirty: boolean) => void;
+}>(function BrokerDetailPanel({ broker, loads, loading, selectedLoadId, onSelectLoad, onDirtyChange }, ref) {
   const { updateCustomer } = useCalendarStore();
 
   const [shortName,           setShortName]           = useState(broker.shortName           ?? '');
@@ -397,19 +410,23 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setShowAllUpcoming(false);
   }, [broker.id]);
 
+  const dirty =
+    shortName.trim()           !== (broker.shortName           ?? '') ||
+    mcNum.trim()               !== (broker.mcNum               ?? '') ||
+    contactName.trim()         !== (broker.contactName         ?? '') ||
+    contactEmail.trim()        !== (broker.contactEmail        ?? '') ||
+    contactPhone.trim()        !== (broker.contactPhone        ?? '') ||
+    notes.trim()               !== (broker.notes               ?? '') ||
+    parseHints.trim()          !== (broker.parseHints          ?? '') ||
+    invoiceMethod              !== (broker.invoiceMethod       ?? '') ||
+    invoiceEmail.trim()        !== (broker.invoiceEmail        ?? '') ||
+    invoicePortal.trim()       !== (broker.invoicePortal       ?? '') ||
+    invoiceInstructions.trim() !== (broker.invoiceInstructions ?? '');
+
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+
   useImperativeHandle(ref, () => ({
-    isDirty: () =>
-      shortName.trim()           !== (broker.shortName           ?? '') ||
-      mcNum.trim()               !== (broker.mcNum               ?? '') ||
-      contactName.trim()         !== (broker.contactName         ?? '') ||
-      contactEmail.trim()        !== (broker.contactEmail        ?? '') ||
-      contactPhone.trim()        !== (broker.contactPhone        ?? '') ||
-      notes.trim()               !== (broker.notes               ?? '') ||
-      parseHints.trim()          !== (broker.parseHints          ?? '') ||
-      invoiceMethod              !== (broker.invoiceMethod       ?? '') ||
-      invoiceEmail.trim()        !== (broker.invoiceEmail        ?? '') ||
-      invoicePortal.trim()       !== (broker.invoicePortal       ?? '') ||
-      invoiceInstructions.trim() !== (broker.invoiceInstructions ?? ''),
+    isDirty: () => dirty,
     save: () => updateCustomer(broker.id, {
       shortName:           shortName.trim()           || undefined,
       mcNum:               mcNum.trim()               || undefined,
@@ -556,7 +573,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </PField>
         </div>
         <div className="mt-3">
-          <div className="text-[11px] font-semibold mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1" style={{ color: 'var(--gc-text-1)' }}>
             <FileText size={11} /> Invoice routing
           </div>
           {/* Method picker */}
@@ -597,7 +614,6 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           <div className="mt-2">
             <PField label="Other billing notes" icon={<FileText size={11} />}>
               <textarea value={invoiceInstructions} onChange={e => setInvoiceInstructions(e.target.value)}
-                placeholder={'Payment terms, required documents, factor preferences. e.g.\n• Net 30; quickpay 2% at 10 days\n• Required: signed BOL + POD\n• Factor with TBS Capital'}
                 rows={3}
                 style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit' }}
                 onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
@@ -1047,7 +1063,7 @@ function PField({ label, icon, children }: { label: string; icon?: React.ReactNo
   return (
     <div>
       <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-1.5"
-        style={{ color: 'var(--gc-text-3)' }}>
+        style={{ color: 'var(--gc-text-1)' }}>
         {icon}{label}
       </label>
       {children}

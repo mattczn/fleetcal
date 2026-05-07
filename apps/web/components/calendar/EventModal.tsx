@@ -10,6 +10,7 @@ import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, Loa
 import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
 import { cleanBrokerName } from '@/lib/brokerName';
+import { NewBrokerReviewModal } from './NewBrokerReviewModal';
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
@@ -666,7 +667,7 @@ function CustomerCombobox({ value, onChange, customers, inputRef, accentColor, o
   customers: import('@/lib/types').Customer[];
   inputRef?: React.RefObject<HTMLInputElement | null>;
   accentColor?: string;
-  onCreateNew?: (name: string) => Promise<void>;
+  onCreateNew?: (name: string) => Promise<void> | void;
 }) {
   const [query, setQuery] = useState(value);
   const [open, setOpen] = useState(false);
@@ -782,7 +783,7 @@ function BrokerMatchBanner({ match, onConfirmMatch, onRejectMatch, onCreateNew, 
   match: CustomerMatchResult;
   onConfirmMatch: (c: import('@/lib/types').Customer) => void;
   onRejectMatch: () => void;
-  onCreateNew: (name: string) => Promise<void>;
+  onCreateNew: (name: string) => Promise<void> | void;
   onFocusSearch: () => void;
 }) {
   const [creating, setCreating] = useState(false);
@@ -1013,34 +1014,20 @@ export default function EventModal() {
   // contact info, and invoice instructions when the broker isn't yet a
   // customer and the user clicks "Save as customer."
   const [parsedBrokerProfile, setParsedBrokerProfile] = useState<import('@/lib/prompt').BrokerProfile | undefined>(undefined);
+  // The pending new-broker creation flow. Set when the user clicks one of
+  // the "Save as customer" CTAs; the review modal renders when truthy.
+  const [pendingNewBroker, setPendingNewBroker] = useState<string | null>(null);
 
-  // Build a Customer payload pre-filled from the rate-con's pass-1 harvest.
-  // Only applies when the user is creating the same broker that was just
-  // parsed; for unrelated names we just create a name-only stub.
-  const buildPrefilledCustomer = (name: string): Parameters<typeof addCustomer>[0] => {
-    const base = { name, aliases: [] as string[] };
-    const profile = parsedBrokerProfile;
-    if (!profile) return base;
-    const cleanedParsed = profile.name ? cleanBrokerName(profile.name) : '';
-    const same = !!profile.name && (
-      profile.name.toLowerCase() === name.toLowerCase() ||
-      cleanedParsed.toLowerCase() === name.toLowerCase()
-    );
-    if (!same) return base;
-    const method: 'email' | 'portal' | undefined =
-      profile.invoiceMethod === 'email'  ? 'email'  :
-      profile.invoiceMethod === 'portal' ? 'portal' : undefined;
-    return {
-      ...base,
-      mcNum:               profile.mcNum?.trim()               || undefined,
-      contactName:         profile.contactName?.trim()         || undefined,
-      contactEmail:        profile.contactEmail?.trim()        || undefined,
-      contactPhone:        profile.contactPhone?.trim()        || undefined,
-      invoiceMethod:       method,
-      invoiceEmail:        method === 'email'  ? (profile.invoiceEmail?.trim()  || undefined) : undefined,
-      invoicePortal:       method === 'portal' ? (profile.invoicePortal?.trim() || undefined) : undefined,
-      invoiceInstructions: profile.invoiceInstructions?.trim() || undefined,
-    };
+  // Post-create handler shared by every "save new broker" CTA. The
+  // NewBrokerReviewModal calls this with the (possibly-edited) payload
+  // assembled by the user; we persist it and wire the new customer up
+  // to the load.
+  const confirmCreateBroker = async (payload: Parameters<typeof addCustomer>[0]) => {
+    const created = await addCustomer(payload);
+    if (created) setField('broker', created.name);
+    setBrokerMatch({ status: 'none' });
+    setBrokerSaveBlocked(false);
+    setPendingNewBroker(null);
   };
   const [showBrokerProfile, setShowBrokerProfile] = useState(false);
   const brokerComboRef = useRef<HTMLInputElement | null>(null);
@@ -1258,7 +1245,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -2129,10 +2116,7 @@ export default function EventModal() {
           customers={customers}
           inputRef={brokerComboRef}
           accentColor={headerColor}
-          onCreateNew={async (name) => {
-            const created = await addCustomer(buildPrefilledCustomer(name));
-            if (created) { setField('broker', created.name); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); }
-          }}
+          onCreateNew={(name) => { setPendingNewBroker(name); }}
         />
         {(brokerMatch.status === 'confirm' || brokerMatch.status === 'new') && (
           <BrokerMatchBanner
@@ -2151,12 +2135,7 @@ export default function EventModal() {
                 setBrokerMatch({ status: 'none' });
               }
             }}
-            onCreateNew={async (name) => {
-              const created = await addCustomer(buildPrefilledCustomer(name));
-              if (created) setField('broker', created.name);
-              setBrokerMatch({ status: 'none' });
-              setBrokerSaveBlocked(false);
-            }}
+            onCreateNew={(name) => { setPendingNewBroker(name); }}
             onFocusSearch={() => {
               setTimeout(() => brokerComboRef.current?.focus(), 50);
             }}
@@ -2319,15 +2298,10 @@ export default function EventModal() {
           <div className="flex flex-col gap-2">
             <button
               type="button"
-              onClick={async () => {
-                const created = await addCustomer(buildPrefilledCustomer(brokerMatch.extracted));
-                if (created) setField('broker', created.name);
-                setBrokerMatch({ status: 'none' });
-                setBrokerSaveBlocked(false);
-              }}
+              onClick={() => { setPendingNewBroker(brokerMatch.extracted); }}
               className="flex items-center justify-center gap-1.5 w-full py-2.5 rounded-xl text-sm font-semibold"
               style={{ background: '#0369a1', color: '#fff', border: 'none', cursor: 'pointer' }}>
-              <Plus size={14} /> Save as customer
+              <Plus size={14} /> Review and save
             </button>
             <button
               type="button"
@@ -2354,6 +2328,15 @@ export default function EventModal() {
           </div>
         </div>
       </div>
+    )}
+    {pendingNewBroker !== null && (
+      <NewBrokerReviewModal
+        initialName={pendingNewBroker}
+        profile={parsedBrokerProfile}
+        accentColor={headerColor}
+        onCancel={() => setPendingNewBroker(null)}
+        onConfirm={confirmCreateBroker}
+      />
     )}
     {showSavePrompt && (
       <div className="fixed inset-0 z-[150] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}>
