@@ -289,7 +289,7 @@ export default function WeekView() {
                           }} />
                         )}
                         <div className="flex items-center justify-center h-full px-1.5 overflow-hidden gap-1 min-w-0" style={{ position: 'relative' }}>
-                          <span className="text-[11px] font-bold text-white truncate leading-tight" style={{ paddingRight: event.relayGroupId ? 22 : 0 }}>
+                          <span className="text-[11px] font-extrabold text-white truncate leading-tight" style={{ paddingRight: event.relayGroupId ? 22 : 0 }}>
                             {event.title}
                           </span>
                           {event.relayGroupId && (

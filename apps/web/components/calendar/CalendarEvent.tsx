@@ -161,7 +161,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       {compact ? (
         /* Compact / triage mode: just title + time in one tight row */
         <div className="px-1.5 flex items-center h-full gap-1 overflow-hidden">
-          <div className="text-[10px] font-bold leading-none truncate flex-1 min-w-0" style={{ color: 'white' }}>
+          <div className="text-[10px] font-extrabold leading-none truncate flex-1 min-w-0" style={{ color: 'white' }}>
             {event.title}
           </div>
           <div className="text-[9px] font-semibold tabular-nums shrink-0" style={{ color: 'rgba(255,255,255,0.8)' }}>
@@ -204,7 +204,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           )}
           {/* Title — always shown */}
           <div className="flex items-start gap-1">
-            <div className="text-[11px] font-bold leading-tight break-words min-w-0" style={{ color: 'white', paddingRight: isRelay ? 22 : 0 }}>
+            <div className="text-[11px] font-extrabold leading-tight break-words min-w-0" style={{ color: 'white', paddingRight: isRelay ? 22 : 0 }}>
               {event.title}
             </div>
           </div>
