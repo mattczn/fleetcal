@@ -25,14 +25,40 @@ export interface NewBrokerReviewModalProps {
 export function NewBrokerReviewModal({
   initialName, profile, accentColor = '#0369a1', onCancel, onConfirm,
 }: NewBrokerReviewModalProps) {
-  // Only auto-fill from the profile when its broker name matches what we
-  // were given (cleaned-suffix variations match too). Otherwise the user
-  // typed a name unrelated to the parse and we don't want to mix data.
-  const cleanedParsed = profile?.name ? cleanBrokerName(profile.name) : '';
+  // Auto-fill from the profile whenever the names are even loosely
+  // related — matches against the raw name, the legal-suffix-stripped
+  // version on each side, and a fully-normalized token comparison
+  // (strips Logistics/Trucking/etc) so "King of Freight Inc" and
+  // "King of Freight" reliably resolve to the same broker. Falls back
+  // to "no seed" only when the user typed something genuinely unrelated.
+  const norm = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(t =>
+      t && !['llc','inc','corp','co','company','ltd','limited','group','international',
+             'freight','logistics','transport','transportation','trucking','carriers',
+             'carrier','solutions','services','service','systems','global','national',
+             'express','direct','lines','line','usa','us'].includes(t),
+    ).join(' ');
+  const cleanedParsed  = profile?.name ? cleanBrokerName(profile.name) : '';
+  const cleanedInitial = cleanBrokerName(initialName);
   const sameBroker = !!profile?.name && (
-    profile.name.toLowerCase() === initialName.toLowerCase() ||
-    cleanedParsed.toLowerCase() === initialName.toLowerCase()
+    profile.name.toLowerCase()        === initialName.toLowerCase()    ||
+    cleanedParsed.toLowerCase()       === initialName.toLowerCase()    ||
+    cleanedParsed.toLowerCase()       === cleanedInitial.toLowerCase() ||
+    (norm(profile.name).length > 0 && norm(profile.name) === norm(initialName))
   );
+  // Diagnostic — surfaces in DevTools when a user expects auto-fill and
+  // doesn't see it. Cheap and only logs on modal open.
+  if (typeof window !== 'undefined') {
+    // eslint-disable-next-line no-console
+    console.log('[NewBrokerReviewModal] match:', {
+      sameBroker,
+      initialName,
+      profileName: profile?.name,
+      cleanedParsed,
+      cleanedInitial,
+      hasProfile: !!profile,
+    });
+  }
   const seed = sameBroker ? profile : undefined;
 
   const [name,                setName]                = useState(initialName);
