@@ -1329,6 +1329,11 @@ export default function EventModal() {
       const batchItem = batchItems[batchIndex];
       if (batchItem) {
         const p = batchItem.parsed;
+        // Stash the pass-1 broker harvest so the new-customer review modal
+        // pre-fills MC#/contacts/invoice routing — same as the single-parse
+        // path. Without this, batch-parsed loads always opened a blank
+        // review form even when the AI extracted broker info.
+        if (p.brokerProfile) setParsedBrokerProfile(p.brokerProfile as import('@/lib/prompt').BrokerProfile);
         const today = localDateStr(currentDate);
         // Title generated after broker+stops are resolved below
         const initialAssetId = assets[0]?.id ?? 1;
