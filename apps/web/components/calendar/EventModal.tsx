@@ -9,6 +9,7 @@ import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
+import { cleanBrokerName } from '@/lib/brokerName';
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
@@ -1008,6 +1009,33 @@ export default function EventModal() {
   const [parseError, setParseError] = useState('');
   const [brokerMatch, setBrokerMatch] = useState<CustomerMatchResult>({ status: 'none' });
   const [brokerSaveBlocked, setBrokerSaveBlocked] = useState(false);
+  // Pass-1 broker profile from the rate-con parser. Used to pre-fill MC#,
+  // contact info, and invoice instructions when the broker isn't yet a
+  // customer and the user clicks "Save as customer."
+  const [parsedBrokerProfile, setParsedBrokerProfile] = useState<import('@/lib/prompt').BrokerProfile | undefined>(undefined);
+
+  // Build a Customer payload pre-filled from the rate-con's pass-1 harvest.
+  // Only applies when the user is creating the same broker that was just
+  // parsed; for unrelated names we just create a name-only stub.
+  const buildPrefilledCustomer = (name: string): Parameters<typeof addCustomer>[0] => {
+    const base = { name, aliases: [] as string[] };
+    const profile = parsedBrokerProfile;
+    if (!profile) return base;
+    const cleanedParsed = profile.name ? cleanBrokerName(profile.name) : '';
+    const same = !!profile.name && (
+      profile.name.toLowerCase() === name.toLowerCase() ||
+      cleanedParsed.toLowerCase() === name.toLowerCase()
+    );
+    if (!same) return base;
+    return {
+      ...base,
+      mcNum:               profile.mcNum?.trim()               || undefined,
+      contactName:         profile.contactName?.trim()         || undefined,
+      contactEmail:        profile.contactEmail?.trim()        || undefined,
+      contactPhone:        profile.contactPhone?.trim()        || undefined,
+      invoiceInstructions: profile.invoiceInstructions?.trim() || undefined,
+    };
+  };
   const [showBrokerProfile, setShowBrokerProfile] = useState(false);
   const brokerComboRef = useRef<HTMLInputElement | null>(null);
   const [linkedTrailerId, setLinkedTrailerId] = useState<number | undefined>(undefined);
@@ -1224,7 +1252,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -1786,11 +1814,19 @@ export default function EventModal() {
             enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
             customInstructions: promptInstructions,
             promptVariables,
-            brokerRules: buildBrokerRules(customers),
+            // Send the full roster so pass 1 can pick the matching rule.
+            // Server filters down to the one match before pass 2.
+            customers: customers.map(c => ({
+              name: c.name, aliases: c.aliases ?? [], parseHints: c.parseHints,
+            })),
           }),
         });
         const parsed = await res.json();
         if (parsed.error) throw new Error(parsed.error);
+
+        // Stash the broker profile from pass 1 so the new-customer CTAs
+        // can pre-fill MC#, contact info, and invoice instructions.
+        if (parsed.brokerProfile) setParsedBrokerProfile(parsed.brokerProfile);
 
         let resolvedBroker: string | undefined;
         if (parsed.loadNum) setField('loadNum', parsed.loadNum);
@@ -2088,7 +2124,7 @@ export default function EventModal() {
           inputRef={brokerComboRef}
           accentColor={headerColor}
           onCreateNew={async (name) => {
-            const created = await addCustomer({ name, aliases: [] });
+            const created = await addCustomer(buildPrefilledCustomer(name));
             if (created) { setField('broker', created.name); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); }
           }}
         />
@@ -2110,7 +2146,7 @@ export default function EventModal() {
               }
             }}
             onCreateNew={async (name) => {
-              const created = await addCustomer({ name, aliases: [] });
+              const created = await addCustomer(buildPrefilledCustomer(name));
               if (created) setField('broker', created.name);
               setBrokerMatch({ status: 'none' });
               setBrokerSaveBlocked(false);
@@ -2278,7 +2314,7 @@ export default function EventModal() {
             <button
               type="button"
               onClick={async () => {
-                const created = await addCustomer({ name: brokerMatch.extracted, aliases: [] });
+                const created = await addCustomer(buildPrefilledCustomer(brokerMatch.extracted));
                 if (created) setField('broker', created.name);
                 setBrokerMatch({ status: 'none' });
                 setBrokerSaveBlocked(false);

@@ -116,6 +116,7 @@ export type Database = {
           id: string
           mc_num: string | null
           name: string
+          invoice_instructions: string | null
           notes: string | null
           org_id: string
           parse_hints: string | null
@@ -130,6 +131,7 @@ export type Database = {
           id?: string
           mc_num?: string | null
           name: string
+          invoice_instructions?: string | null
           notes?: string | null
           org_id: string
           parse_hints?: string | null
@@ -144,6 +146,7 @@ export type Database = {
           id?: string
           mc_num?: string | null
           name?: string
+          invoice_instructions?: string | null
           notes?: string | null
           org_id?: string
           parse_hints?: string | null

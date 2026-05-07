@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam, DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { NextRequest, NextResponse } from 'next/server';
-import { buildRateConPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables, BrokerRule } from '@/lib/prompt';
+import { buildRateConPrompt, buildBrokerHarvestPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables, BrokerRule, BrokerProfile } from '@/lib/prompt';
 import { geocodeAll } from '@/lib/geocode';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
@@ -18,6 +18,32 @@ interface RawStop {
   instructions?: string;
 }
 
+interface IncomingCustomer {
+  name:        string;
+  aliases?:    string[];
+  parseHints?: string;
+}
+
+const MODEL = 'claude-haiku-4-5-20251001';
+
+function extractJson(text: string): Record<string, unknown> {
+  const match = text.match(/\{[\s\S]*\}/);
+  return JSON.parse(match ? match[0] : text);
+}
+
+/** Match a broker name (post-cleanBrokerName) against the org's customer
+ *  list. Exact name + alias match only — the more sophisticated fuzzy
+ *  matcher lives client-side; we just need to pick which broker's hints
+ *  go into pass 2, and the AI's pass-1 broker name is usually pristine. */
+function matchBroker(brokerName: string, customers: IncomingCustomer[]): IncomingCustomer | undefined {
+  if (!brokerName) return undefined;
+  const lower = brokerName.toLowerCase().trim();
+  return customers.find(c =>
+    c.name.toLowerCase() === lower ||
+    (c.aliases ?? []).some(a => a.toLowerCase() === lower),
+  );
+}
+
 export async function POST(req: NextRequest) {
   console.log('[parse-ratecon] ANTHROPIC_API_KEY present:', !!process.env.ANTHROPIC_API_KEY, 'keys:', Object.keys(process.env).filter(k => k.startsWith('ANTHROPIC')));
   const key = process.env.ANTHROPIC_API_KEY;
@@ -30,6 +56,7 @@ export async function POST(req: NextRequest) {
   let customInstructions = '';
   let promptVariables: PromptVariables = DEFAULT_PROMPT_VARIABLES;
   let brokerRules: BrokerRule[] = [];
+  let customers: IncomingCustomer[] = [];
 
   try {
     ({
@@ -37,35 +64,84 @@ export async function POST(req: NextRequest) {
       enabledFields = [],
       customInstructions = '',
       promptVariables = DEFAULT_PROMPT_VARIABLES,
+      // Two ways to pass broker context:
+      //   • brokerRules — legacy: caller pre-filtered to rules-bearing customers
+      //   • customers   — preferred: full roster, server picks the matched rule
+      // Sending `customers` enables the broker-harvest pass + new-customer
+      // prefill in the response.
       brokerRules = [],
+      customers = [],
     } = await req.json());
     if (!data) throw new Error('missing data');
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, brokerRules);
   const client = new Anthropic({ apiKey: key });
 
-  let parsed: Record<string, unknown>;
+  // The PDF block is identical across both calls; cache_control marks it
+  // as a cacheable prefix so pass 2 reads the PDF from cache instead of
+  // re-uploading. Cuts pass-2 input cost by ~90%.
+  const docBlock: DocumentBlockParam = {
+    type: 'document',
+    source: { type: 'base64', media_type: 'application/pdf', data },
+    cache_control: { type: 'ephemeral' },
+  };
 
+  // ── Pass 1: harvest broker profile (only when caller sent customers) ─────
+  let brokerProfile: BrokerProfile | undefined;
+  let matchedCustomer: IncomingCustomer | undefined;
+
+  if (customers.length > 0) {
+    try {
+      const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
+      const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
+      const pass1Response = await client.messages.create({
+        model: MODEL,
+        max_tokens: 512,
+        messages: [{ role: 'user', content: pass1Content }],
+      });
+      const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
+      const pass1Json = extractJson(pass1Text2) as { broker?: BrokerProfile; docType?: string };
+      brokerProfile = pass1Json.broker
+        ? { ...pass1Json.broker, docType: pass1Json.docType }
+        : undefined;
+      if (brokerProfile?.name) {
+        const cleaned = cleanBrokerName(brokerProfile.name);
+        matchedCustomer = matchBroker(cleaned, customers) ?? matchBroker(brokerProfile.name, customers);
+      }
+    } catch (err) {
+      // Non-fatal — fall through to pass 2 with whatever rules the caller
+      // pre-filtered. Logged so we can see if it's failing systemically.
+      console.error('[parse-ratecon] pass-1 broker harvest failed:', err);
+    }
+  }
+
+  // Build the broker rules to inject into pass 2:
+  //   • If pass 1 matched a customer with parseHints → use just that rule
+  //   • Else fall back to whatever the caller sent (legacy behavior)
+  const effectiveRules: BrokerRule[] = matchedCustomer && matchedCustomer.parseHints?.trim()
+    ? [{
+        name:    matchedCustomer.name,
+        aliases: matchedCustomer.aliases ?? [],
+        hints:   matchedCustomer.parseHints.trim(),
+      }]
+    : brokerRules;
+
+  // ── Pass 2: full extraction with the matched broker's hints ──────────────
+  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, effectiveRules);
+
+  let parsed: Record<string, unknown>;
   try {
-    const docBlock: DocumentBlockParam = {
-      type: 'document',
-      source: { type: 'base64', media_type: 'application/pdf', data },
-    };
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
     const content: ContentBlockParam[] = [docBlock, textBlock];
-
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODEL,
       max_tokens: 2048,
       messages: [{ role: 'user', content }],
     });
-
     const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    const match = text.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(match ? match[0] : text);
+    parsed = extractJson(text);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -121,5 +197,9 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ...parsed,
     stops: enrichedStops,
+    // Pass-1 broker profile harvest. Client uses this to pre-fill a new
+    // customer record when the broker isn't matched. `undefined` if pass 1
+    // didn't run (no customers sent) or failed.
+    brokerProfile,
   });
 }

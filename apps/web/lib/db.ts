@@ -170,14 +170,16 @@ export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
 export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): Promise<Customer | null> {
   try {
     const { customer } = await railway.createCustomer({
-      name:         c.name,
-      aliases:      c.aliases ?? [],
-      shortName:    c.shortName    ?? null,
-      mcNum:        c.mcNum        ?? null,
-      contactName:  c.contactName  ?? null,
-      contactEmail: c.contactEmail ?? null,
-      contactPhone: c.contactPhone ?? null,
-      notes:        c.notes        ?? null,
+      name:                c.name,
+      aliases:             c.aliases ?? [],
+      shortName:           c.shortName           ?? null,
+      mcNum:               c.mcNum               ?? null,
+      contactName:         c.contactName         ?? null,
+      contactEmail:        c.contactEmail        ?? null,
+      contactPhone:        c.contactPhone        ?? null,
+      notes:               c.notes               ?? null,
+      parseHints:          c.parseHints          ?? null,
+      invoiceInstructions: c.invoiceInstructions ?? null,
     });
     return customer;
   } catch (err) { console.error('createCustomer:', err); return null; }
@@ -192,8 +194,9 @@ export async function updateCustomer(id: string, updates: Partial<Omit<Customer,
     ...(updates.contactName !== undefined  ? { contactName: updates.contactName ?? null } : {}),
     ...(updates.contactEmail !== undefined ? { contactEmail: updates.contactEmail ?? null } : {}),
     ...(updates.contactPhone !== undefined ? { contactPhone: updates.contactPhone ?? null } : {}),
-    ...(updates.notes !== undefined        ? { notes: updates.notes ?? null } : {}),
-    ...(updates.parseHints !== undefined   ? { parseHints: updates.parseHints ?? null } : {}),
+    ...(updates.notes !== undefined               ? { notes: updates.notes ?? null } : {}),
+    ...(updates.parseHints !== undefined          ? { parseHints: updates.parseHints ?? null } : {}),
+    ...(updates.invoiceInstructions !== undefined ? { invoiceInstructions: updates.invoiceInstructions ?? null } : {}),
   };
   if (Object.keys(body).length === 0) return;
   try { await railway.updateCustomer(id, body); }

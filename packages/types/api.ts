@@ -420,27 +420,29 @@ export interface UpdateDriverResponse { driver: Driver; }
 
 export interface ListCustomersResponse { customers: Customer[]; }
 export interface CreateCustomerRequest {
-  name:           string;
-  shortName?:     string | null;
-  aliases?:       string[];
-  mcNum?:         string | null;
-  contactName?:   string | null;
-  contactEmail?:  string | null;
-  contactPhone?:  string | null;
-  notes?:         string | null;
-  parseHints?:    string | null;
+  name:                 string;
+  shortName?:           string | null;
+  aliases?:             string[];
+  mcNum?:               string | null;
+  contactName?:         string | null;
+  contactEmail?:        string | null;
+  contactPhone?:        string | null;
+  notes?:               string | null;
+  parseHints?:          string | null;
+  invoiceInstructions?: string | null;
 }
 export interface CreateCustomerResponse { customer: Customer; }
 export interface UpdateCustomerRequest {
-  name?:          string;
-  shortName?:     string | null;
-  aliases?:       string[];
-  mcNum?:         string | null;
-  contactName?:   string | null;
-  contactEmail?:  string | null;
-  contactPhone?:  string | null;
-  notes?:         string | null;
-  parseHints?:    string | null;
+  name?:                string;
+  shortName?:           string | null;
+  aliases?:             string[];
+  mcNum?:               string | null;
+  contactName?:         string | null;
+  contactEmail?:        string | null;
+  contactPhone?:        string | null;
+  notes?:               string | null;
+  parseHints?:          string | null;
+  invoiceInstructions?: string | null;
 }
 export interface UpdateCustomerResponse { customer: Customer; }
 

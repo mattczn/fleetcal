@@ -30,24 +30,26 @@ interface DbCustomerRow {
   contact_phone: string | null;
   notes: string | null;
   parse_hints: string | null;
+  invoice_instructions: string | null;
 }
 
 function rowToCustomer(r: DbCustomerRow): Customer {
   return {
-    id:           r.id,
-    name:         r.name,
-    shortName:    r.short_name    ?? undefined,
-    aliases:      r.aliases       ?? [],
-    mcNum:        r.mc_num        ?? undefined,
-    contactName:  r.contact_name  ?? undefined,
-    contactEmail: r.contact_email ?? undefined,
-    contactPhone: r.contact_phone ?? undefined,
-    notes:        r.notes         ?? undefined,
-    parseHints:   r.parse_hints   ?? undefined,
+    id:                  r.id,
+    name:                r.name,
+    shortName:           r.short_name           ?? undefined,
+    aliases:             r.aliases              ?? [],
+    mcNum:               r.mc_num               ?? undefined,
+    contactName:         r.contact_name         ?? undefined,
+    contactEmail:        r.contact_email        ?? undefined,
+    contactPhone:        r.contact_phone        ?? undefined,
+    notes:               r.notes                ?? undefined,
+    parseHints:          r.parse_hints          ?? undefined,
+    invoiceInstructions: r.invoice_instructions ?? undefined,
   };
 }
 
-const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes,parse_hints";
+const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes,parse_hints,invoice_instructions";
 
 customers.get("/", async (c) => {
   const orgId = c.get("orgId");
@@ -79,8 +81,9 @@ customers.post("/", async (c) => {
     contact_name:  body.contactName  ?? null,
     contact_email: body.contactEmail ?? null,
     contact_phone: body.contactPhone ?? null,
-    notes:         body.notes        ?? null,
-    parse_hints:   body.parseHints   ?? null,
+    notes:                body.notes               ?? null,
+    parse_hints:          body.parseHints          ?? null,
+    invoice_instructions: body.invoiceInstructions ?? null,
   };
   const { data, error } = await supabase
     .from("customers")
@@ -108,8 +111,9 @@ customers.patch("/:id", async (c) => {
   if ("contactName"  in body) update.contact_name  = body.contactName  ?? null;
   if ("contactEmail" in body) update.contact_email = body.contactEmail ?? null;
   if ("contactPhone" in body) update.contact_phone = body.contactPhone ?? null;
-  if ("notes"        in body) update.notes         = body.notes        ?? null;
-  if ("parseHints"   in body) update.parse_hints   = body.parseHints   ?? null;
+  if ("notes"               in body) update.notes                = body.notes               ?? null;
+  if ("parseHints"          in body) update.parse_hints          = body.parseHints          ?? null;
+  if ("invoiceInstructions" in body) update.invoice_instructions = body.invoiceInstructions ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }

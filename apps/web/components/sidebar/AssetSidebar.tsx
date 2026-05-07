@@ -69,7 +69,9 @@ export default function AssetSidebar() {
             enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
             customInstructions: promptInstructions,
             promptVariables,
-            brokerRules: buildBrokerRules(useCalendarStore.getState().customers),
+            customers: useCalendarStore.getState().customers.map(c => ({
+              name: c.name, aliases: c.aliases ?? [], parseHints: c.parseHints,
+            })),
           }),
         });
         const json = await res.json();

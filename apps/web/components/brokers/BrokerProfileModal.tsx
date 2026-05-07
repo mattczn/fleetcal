@@ -362,13 +362,14 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
 }>(function BrokerDetailPanel({ broker, loads, loading, selectedLoadId, onSelectLoad }, ref) {
   const { updateCustomer } = useCalendarStore();
 
-  const [shortName,    setShortName]    = useState(broker.shortName    ?? '');
-  const [mcNum,        setMcNum]        = useState(broker.mcNum        ?? '');
-  const [contactName,  setContactName]  = useState(broker.contactName  ?? '');
-  const [contactEmail, setContactEmail] = useState(broker.contactEmail ?? '');
-  const [contactPhone, setContactPhone] = useState(broker.contactPhone ?? '');
-  const [notes,        setNotes]        = useState(broker.notes        ?? '');
-  const [parseHints,   setParseHints]   = useState(broker.parseHints   ?? '');
+  const [shortName,           setShortName]           = useState(broker.shortName           ?? '');
+  const [mcNum,               setMcNum]               = useState(broker.mcNum               ?? '');
+  const [contactName,         setContactName]         = useState(broker.contactName         ?? '');
+  const [contactEmail,        setContactEmail]        = useState(broker.contactEmail        ?? '');
+  const [contactPhone,        setContactPhone]        = useState(broker.contactPhone        ?? '');
+  const [notes,               setNotes]               = useState(broker.notes               ?? '');
+  const [parseHints,          setParseHints]          = useState(broker.parseHints          ?? '');
+  const [invoiceInstructions, setInvoiceInstructions] = useState(broker.invoiceInstructions ?? '');
 
   const [search,           setSearch]           = useState('');
   const [sortField,        setSortField]        = useState<SortField>('date');
@@ -384,6 +385,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setContactPhone(broker.contactPhone ?? '');
     setNotes(broker.notes ?? '');
     setParseHints(broker.parseHints ?? '');
+    setInvoiceInstructions(broker.invoiceInstructions ?? '');
     setSearch('');
     setShowAllCompleted(false);
     setShowAllUpcoming(false);
@@ -391,21 +393,23 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
 
   useImperativeHandle(ref, () => ({
     isDirty: () =>
-      shortName.trim()    !== (broker.shortName    ?? '') ||
-      mcNum.trim()        !== (broker.mcNum        ?? '') ||
-      contactName.trim()  !== (broker.contactName  ?? '') ||
-      contactEmail.trim() !== (broker.contactEmail ?? '') ||
-      contactPhone.trim() !== (broker.contactPhone ?? '') ||
-      notes.trim()        !== (broker.notes        ?? '') ||
-      parseHints.trim()   !== (broker.parseHints   ?? ''),
+      shortName.trim()           !== (broker.shortName           ?? '') ||
+      mcNum.trim()               !== (broker.mcNum               ?? '') ||
+      contactName.trim()         !== (broker.contactName         ?? '') ||
+      contactEmail.trim()        !== (broker.contactEmail        ?? '') ||
+      contactPhone.trim()        !== (broker.contactPhone        ?? '') ||
+      notes.trim()               !== (broker.notes               ?? '') ||
+      parseHints.trim()          !== (broker.parseHints          ?? '') ||
+      invoiceInstructions.trim() !== (broker.invoiceInstructions ?? ''),
     save: () => updateCustomer(broker.id, {
-      shortName:    shortName.trim()    || undefined,
-      mcNum:        mcNum.trim()        || undefined,
-      contactName:  contactName.trim()  || undefined,
-      contactEmail: contactEmail.trim() || undefined,
-      contactPhone: contactPhone.trim() || undefined,
-      notes:        notes.trim()        || undefined,
-      parseHints:   parseHints.trim()   || undefined,
+      shortName:           shortName.trim()           || undefined,
+      mcNum:               mcNum.trim()               || undefined,
+      contactName:         contactName.trim()         || undefined,
+      contactEmail:        contactEmail.trim()        || undefined,
+      contactPhone:        contactPhone.trim()        || undefined,
+      notes:               notes.trim()               || undefined,
+      parseHints:          parseHints.trim()          || undefined,
+      invoiceInstructions: invoiceInstructions.trim() || undefined,
     }),
     discard: () => {
       setShortName(broker.shortName ?? '');
@@ -415,8 +419,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setContactPhone(broker.contactPhone ?? '');
       setNotes(broker.notes ?? '');
       setParseHints(broker.parseHints ?? '');
+      setInvoiceInstructions(broker.invoiceInstructions ?? '');
     },
-  }), [shortName, mcNum, contactName, contactEmail, contactPhone, notes, parseHints, broker]);
+  }), [shortName, mcNum, contactName, contactEmail, contactPhone, notes, parseHints, invoiceInstructions, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -529,6 +534,16 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
               placeholder={'Broker-specific guidance for the AI parser. e.g.\n• Load # always follows "Order:"\n• Pickup # is in the BOL field on page 2'}
               rows={3}
               style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+          </PField>
+        </div>
+        <div className="mt-3">
+          <PField label="Invoice instructions" icon={<FileText size={11} />}>
+            <textarea value={invoiceInstructions} onChange={e => setInvoiceInstructions(e.target.value)}
+              placeholder={'How to bill this broker. e.g.\n• Submit via TriumphPay portal\n• Email invoices to ap@broker.com\n• Net 30; quickpay 2% available\n• Required: signed BOL + POD'}
+              rows={4}
+              style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit' }}
               onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
               onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
           </PField>

@@ -23,6 +23,46 @@ export interface BrokerRule {
   hints:   string;     // free-form guidance from the org's customer record
 }
 
+/** Pass-1 harvest result. Used to look up matching customer record and
+ *  to pre-fill a new one if no match. All fields optional — Claude
+ *  returns "" when something isn't on the document. */
+export interface BrokerProfile {
+  name?:                string;
+  mcNum?:               string;
+  contactName?:         string;
+  contactEmail?:        string;
+  contactPhone?:        string;
+  invoiceInstructions?: string;
+  /** "rate_con" | "amendment" | "revised" | "other" — quick sanity check;
+   *  if "other" the caller may bail out before pass 2. */
+  docType?:             string;
+}
+
+/**
+ * Pass-1 prompt: identify the broker and harvest a few fields that
+ * belong on the customer record. Output is small (~150 tokens) so the
+ * subsequent full-schema pass can run cheaply against the cached PDF.
+ */
+export function buildBrokerHarvestPrompt(timezone: string): string {
+  return `You are the first of a two-pass rate-confirmation parser. This pass extracts ONLY the broker/customer profile so the second pass can apply broker-specific rules.
+
+Return a single JSON object with this exact shape — no markdown, no explanation. Use empty strings for fields not on the document; do not omit keys.
+
+{
+  "broker": {
+    "name":                "<canonical broker / customer / shipper company name as it appears>",
+    "mcNum":               "<broker MC number if listed, digits only>",
+    "contactName":         "<dispatcher or rep name on the rate con>",
+    "contactEmail":        "<dispatcher / billing email>",
+    "contactPhone":        "<dispatcher phone, digits + format as on the doc>",
+    "invoiceInstructions": "<short summary of how to bill this broker — portal name + URL, AP email, required documents (BOL/POD/scale ticket), payment terms (net 30, quickpay), factor preferences, anything else billing-relevant. Combine into 2-5 short bulleted lines.>"
+  },
+  "docType": "<rate_con | amendment | revised | other>"
+}
+
+The current timezone is ${timezone}.`;
+}
+
 export function buildRateConPrompt(
   enabledFieldIds: string[],
   customInstructions: string,

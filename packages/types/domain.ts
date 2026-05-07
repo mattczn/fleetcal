@@ -184,6 +184,12 @@ export interface Customer {
    * customer is detected. Free-form text, e.g. "Load # always follows 'Order:'."
    */
   parseHints?: string;
+  /**
+   * Free-form invoicing/billing instructions for this broker (portal name,
+   * billing email, required docs, payment terms). Auto-populated by the
+   * rate-con parser on first capture; editable from the broker profile.
+   */
+  invoiceInstructions?: string;
 }
 
 // ── Dispatcher ──────────────────────────────────────────────────────────
