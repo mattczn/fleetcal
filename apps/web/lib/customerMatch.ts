@@ -16,6 +16,28 @@ export function buildBrokerRules(customers: Customer[]): BrokerRule[] {
     }));
 }
 
+/**
+ * Resolve a load's broker string to the org's preferred display name.
+ * Returns `customer.shortName` when the broker matches a customer record
+ * (by canonical name or alias) AND the customer has a shortName set;
+ * otherwise returns the raw broker string. Use this everywhere a load's
+ * broker is rendered so abbreviations show consistently.
+ *
+ * The underlying `Load.broker` column always stores the canonical name,
+ * so search / fuzzy-match / recovery still work if a shortName is later
+ * cleared.
+ */
+export function displayBrokerName(
+  broker: string | null | undefined,
+  customers: Customer[],
+): string {
+  if (!broker) return '';
+  const customer = customers.find(c =>
+    c.name === broker || c.aliases.includes(broker),
+  );
+  return customer?.shortName?.trim() || broker;
+}
+
 // Words that add no signal when comparing broker names
 const STOP_WORDS = new Set([
   'llc', 'inc', 'corp', 'co', 'company', 'ltd', 'limited', 'group', 'international',

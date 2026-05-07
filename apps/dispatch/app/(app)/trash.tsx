@@ -7,7 +7,7 @@ import { useRouter } from "expo-router";
 import { useOrganization } from "@clerk/clerk-expo";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Trash2, RotateCcw, Truck, User, Building2, Hash, Clock } from "lucide-react-native";
-import { fetchDeletedLoads, restoreLoad, type DeletedLoadRow } from "@/lib/api";
+import { fetchDeletedLoads, restoreLoad, fetchCustomers, displayBrokerName, type DeletedLoadRow } from "@/lib/api";
 import { txt } from "@/lib/font";
 
 function fmtDate(iso: string): string {
@@ -34,6 +34,13 @@ export default function TrashScreen() {
   const queryClient = useQueryClient();
   const { organization } = useOrganization();
   const orgId = organization?.id;
+
+  const { data: customers = [] } = useQuery({
+    queryKey: ["customers", orgId],
+    queryFn:  () => fetchCustomers(orgId!),
+    enabled:  !!orgId,
+    staleTime: 60_000,
+  });
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["deleted-loads", orgId],
@@ -107,7 +114,7 @@ export default function TrashScreen() {
                   <RowLine Icon={Hash} text={`Load #${r.loadNum}`} />
                 ) : null}
                 {r.broker ? (
-                  <RowLine Icon={Building2} text={r.broker} />
+                  <RowLine Icon={Building2} text={displayBrokerName(r.broker, customers)} />
                 ) : null}
                 {r.assetName ? (
                   <RowLine Icon={Truck} text={r.assetName} />

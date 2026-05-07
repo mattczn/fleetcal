@@ -1,20 +1,26 @@
-import type { CalendarEvent } from './types';
+import type { CalendarEvent, Customer } from './types';
+import { displayBrokerName } from './customerMatch';
 
 export type CardFieldKey =
   | 'time' | 'driver' | 'loadNum' | 'broker' | 'loadPrice' | 'driverPay'
   | 'refNums' | 'notes';
 
+export interface CardFieldRenderCtx {
+  driverLabel?: string | null;
+  customers?:   Customer[];
+}
+
 export interface CardFieldDef {
   key: CardFieldKey;
   label: string;
-  render: (event: CalendarEvent, driverLabel?: string | null) => string | null;
+  render: (event: CalendarEvent, ctx?: CardFieldRenderCtx) => string | null;
 }
 
 export const CARD_FIELD_DEFS: CardFieldDef[] = [
   { key: 'time',      label: 'Time',       render: (e) => { const s = e.start.split('T')[1]?.slice(0,5); const en = e.end.split('T')[1]?.slice(0,5); return s && en ? `${fmt(s)}–${fmt(en)}` : null; } },
-  { key: 'driver',    label: 'Driver',     render: (e, d) => d ?? e.driverName ?? null },
+  { key: 'driver',    label: 'Driver',     render: (e, ctx) => ctx?.driverLabel ?? e.driverName ?? null },
   { key: 'loadNum',   label: 'Load #',     render: (e) => e.loadNum ? `#${e.loadNum}` : null },
-  { key: 'broker',    label: 'Broker',     render: (e) => e.broker ?? null },
+  { key: 'broker',    label: 'Broker',     render: (e, ctx) => displayBrokerName(e.broker, ctx?.customers ?? []) || null },
   { key: 'loadPrice', label: 'Rate',       render: (e) => e.loadPrice != null ? `$${e.loadPrice.toLocaleString()}` : null },
   { key: 'driverPay', label: 'Driver Pay', render: (e) => e.driverPay != null ? `$${e.driverPay.toLocaleString()}` : null },
   { key: 'refNums',   label: 'Ref #',      render: (e) => e.refNums?.length ? e.refNums.map(r => r.label ? `${r.label} ${r.value}` : r.value).filter(Boolean).join('  ·  ') : null },

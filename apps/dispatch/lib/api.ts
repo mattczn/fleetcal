@@ -59,6 +59,23 @@ export async function fetchCustomers(_orgId: string): Promise<Customer[]> {
 }
 
 /**
+ * Resolve a load's broker to the org's preferred display name. Returns
+ * `customer.shortName` when the broker matches a customer (by canonical
+ * name or alias) AND a shortName is set; otherwise returns the broker
+ * string unchanged. Use everywhere a load's broker is shown.
+ */
+export function displayBrokerName(
+  broker: string | null | undefined,
+  customers: Customer[],
+): string {
+  if (!broker) return "";
+  const customer = customers.find(
+    (c) => c.name === broker || (c.aliases ?? []).includes(broker),
+  );
+  return customer?.shortName?.trim() || broker;
+}
+
+/**
  * Replace all stops for an event. Server-side handles the delete+insert
  * transactionally and rewrites sequence numbers from array order.
  */

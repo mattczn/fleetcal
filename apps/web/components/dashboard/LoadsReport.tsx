@@ -25,7 +25,7 @@ interface ColumnDef {
 }
 
 interface ColumnCtx {
-  customers: { id: string; name: string }[];
+  customers: { id: string; name: string; shortName?: string; aliases: string[] }[];
   drivers:   { name: string }[];
   assets:    { id: number; name: string; unit?: string }[];
 }
@@ -63,7 +63,11 @@ const COLUMNS: ColumnDef[] = [
   { id: 'pickupDate',   label: 'Pickup Date', get: (l) => fmtDate(l.start) },
   { id: 'loadNum',      label: 'Load #',      get: (l) => l.loadNum ?? '' },
   { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '', noFormat: true },
-  { id: 'customer',     label: 'Customer',    get: (l, ctx) => ctx.customers.find(c => c.id === l.customerId)?.name ?? l.broker ?? '' },
+  { id: 'customer',     label: 'Customer',    get: (l, ctx) => {
+    const c = ctx.customers.find(c => c.id === l.customerId)
+           ?? (l.broker ? ctx.customers.find(c => c.name === l.broker || c.aliases.includes(l.broker!)) : undefined);
+    return (c?.shortName?.trim() || c?.name) ?? l.broker ?? '';
+  } },
   { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
   { id: 'driver',       label: 'Driver',      get: (l) => l.driverName ?? '' },
   { id: 'asset',        label: 'Asset',       get: (l, ctx) => {
@@ -929,10 +933,10 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                 </thead>
                 <tbody>
                   {pagedRows.map(load => {
-                    // Match by FK first, then fall back to name match against broker text
+                    // Match by FK first, then fall back to canonical name + alias match
                     const customer =
                       customers.find(c => c.id === load.customerId) ??
-                      (load.broker ? customers.find(c => c.name === load.broker) : undefined);
+                      (load.broker ? customers.find(c => c.name === load.broker || c.aliases.includes(load.broker!)) : undefined);
                     return (
                       <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
                         <td style={{ padding: '10px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>
@@ -968,7 +972,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                                 onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
                                 onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
                               >
-                                {customer.name}
+                                {customer.shortName?.trim() || customer.name}
                               </button>
                             );
                           } else if (col.id === 'driver' && load.driverName) {

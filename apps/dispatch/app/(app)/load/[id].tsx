@@ -10,7 +10,7 @@ import {
   Briefcase, Info, ChevronDown, ChevronUp, ChevronRight, CircleDot, Copy, Check,
   Repeat2, HandCoins, CheckCircle2, Route, Pencil, Lock, Trash2, Plus, Split,
 } from "lucide-react-native";
-import { fetchLoad, updateLoadStatus, updateLoadTrailer, updateLoadFields, fetchAssets, fetchDrivers, fetchDriverAssetPrefs, saveStops, splitIntoRelay, removeRelay, softDeleteLoad } from "@/lib/api";
+import { fetchLoad, updateLoadStatus, updateLoadTrailer, updateLoadFields, fetchAssets, fetchDrivers, fetchDriverAssetPrefs, fetchCustomers, displayBrokerName, saveStops, splitIntoRelay, removeRelay, softDeleteLoad } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { fetchMotiveLocations, distanceMiles, type MotiveLocation } from "@/lib/motive";
 import { calcRoadMiles } from "@/lib/directions";
@@ -976,6 +976,7 @@ function DetailsTab({
   onDeleteLoad, isDeleting,
   accessorials,
   onAddAccessorial, onEditAccessorial,
+  customers,
 }: {
   load: Load;
   width: number;
@@ -998,6 +999,7 @@ function DetailsTab({
   accessorials:        Accessorial[];
   onAddAccessorial:    () => void;
   onEditAccessorial:   (acc: Accessorial) => void;
+  customers:           import("@/lib/api").Customer[];
 }) {
   const refs   = load.refNums?.filter((r) => r.value) ?? [];
   const hasRef = !!load.loadNum || refs.length > 0;
@@ -1127,7 +1129,8 @@ function DetailsTab({
           )
         ) : null}
         <EditableRow
-          Icon={Building2} label="Broker" value={load.broker}
+          Icon={Building2} label="Broker"
+          value={editMode ? load.broker : displayBrokerName(load.broker, customers)}
           editing={editMode} modified={dirty.has("broker")}
           onEdit={onEditBroker}
         />
@@ -1482,6 +1485,13 @@ export default function LoadDetail() {
   const { data: drivers = [] } = useQuery({
     queryKey: ["drivers", orgId],
     queryFn:  () => fetchDrivers(orgId!),
+    enabled:  !!orgId,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const { data: customers = [] } = useQuery({
+    queryKey: ["customers", orgId],
+    queryFn:  () => fetchCustomers(orgId!),
     enabled:  !!orgId,
     staleTime: 10 * 60 * 1000,
   });
@@ -2139,6 +2149,7 @@ export default function LoadDetail() {
           accessorials={accessorialsCurrent}
           onAddAccessorial={() => setAccSheetState({ initial: null })}
           onEditAccessorial={(acc) => setAccSheetState({ initial: acc })}
+          customers={customers}
         />
         {orgId ? (
           <DocumentsView

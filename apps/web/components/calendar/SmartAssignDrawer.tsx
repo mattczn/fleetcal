@@ -6,6 +6,7 @@ import { X, Zap, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { scoreAssetsForLoad, AssetMatch } from '@/lib/scoring';
 import { localDateStr } from '@/lib/time-utils';
+import { displayBrokerName } from '@/lib/customerMatch';
 
 function fmtTime(iso: string) {
   const t = iso.split('T')[1]?.slice(0, 5);
@@ -251,7 +252,7 @@ function Chip({ label, value, color, tooltip }: { label: string; value: string; 
 }
 
 export default function SmartAssignDrawer() {
-  const { smartAssignEventId, setSmartAssignEventId, events, assets, unassignedAssetId, updateEvent, openEditModal } = useCalendarStore();
+  const { smartAssignEventId, setSmartAssignEventId, events, assets, unassignedAssetId, updateEvent, openEditModal, customers } = useCalendarStore();
 
   const load = useMemo(() => events.find(e => e.id === smartAssignEventId) ?? null, [events, smartAssignEventId]);
 
@@ -306,7 +307,7 @@ export default function SmartAssignDrawer() {
             {route && <div style={{ fontSize: 12, color: 'var(--gc-text-3)', marginTop: 2 }}>{route}</div>}
             <div style={{ display: 'flex', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>{fmtTime(load.start)} – {fmtTime(load.end)}</span>
-              {load.broker && <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>{load.broker}</span>}
+              {load.broker && <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>{displayBrokerName(load.broker, customers)}</span>}
               {load.loadNum && <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>#{load.loadNum}</span>}
               {load.loadPrice != null && <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>${load.loadPrice.toLocaleString()}</span>}
             </div>

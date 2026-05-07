@@ -37,7 +37,7 @@ function driverDisplayName(d: Driver): string {
 }
 
 export default function CalendarEvent({ event, asset, colIdx, totalCols, compact = false, overrideTop, overrideHeight, onSmartAssign }: Props) {
-  const { events, currentDate, dragState, setDragState, rowHeight, showStatusOverlay, drivers, openEditModal, cardFields } = useCalendarStore();
+  const { events, currentDate, dragState, setDragState, rowHeight, showStatusOverlay, drivers, openEditModal, cardFields, customers } = useCalendarStore();
   const matchedDriver = event.driverName ? drivers.find(d => d.name === event.driverName) ?? null : null;
   const driverLabel = matchedDriver ? driverDisplayName(matchedDriver) : (event.driverName ?? null);
   const driverPhone = matchedDriver?.phone ?? null;
@@ -212,7 +212,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           {cardFields.map((key, i) => {
             const def = CARD_FIELD_DEFS.find(d => d.key === key);
             if (!def) return null;
-            const value = def.render(event, driverLabel);
+            const value = def.render(event, { driverLabel, customers });
             if (!value) return null;
             const minHeight = 20 + i * 14;
             if (height <= minHeight) return null;
