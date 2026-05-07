@@ -88,33 +88,35 @@ export async function POST(req: NextRequest) {
     cache_control: { type: 'ephemeral' },
   };
 
-  // ── Pass 1: harvest broker profile (only when caller sent customers) ─────
+  // ── Pass 1: harvest broker profile ───────────────────────────────────────
+  // Runs every time so the client always has fields to pre-fill the
+  // "Save as customer" review modal with, even when the broker isn't
+  // yet in the customer list. The customer-rule injection that piggy-
+  // backs on this is just an extra benefit when customers DO exist.
   let brokerProfile: BrokerProfile | undefined;
   let matchedCustomer: IncomingCustomer | undefined;
 
-  if (customers.length > 0) {
-    try {
-      const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
-      const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
-      const pass1Response = await client.messages.create({
-        model: MODEL,
-        max_tokens: 512,
-        messages: [{ role: 'user', content: pass1Content }],
-      });
-      const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
-      const pass1Json = extractJson(pass1Text2) as { broker?: BrokerProfile; docType?: string };
-      brokerProfile = pass1Json.broker
-        ? { ...pass1Json.broker, docType: pass1Json.docType }
-        : undefined;
-      if (brokerProfile?.name) {
-        const cleaned = cleanBrokerName(brokerProfile.name);
-        matchedCustomer = matchBroker(cleaned, customers) ?? matchBroker(brokerProfile.name, customers);
-      }
-    } catch (err) {
-      // Non-fatal — fall through to pass 2 with whatever rules the caller
-      // pre-filtered. Logged so we can see if it's failing systemically.
-      console.error('[parse-ratecon] pass-1 broker harvest failed:', err);
+  try {
+    const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
+    const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
+    const pass1Response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 512,
+      messages: [{ role: 'user', content: pass1Content }],
+    });
+    const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
+    const pass1Json = extractJson(pass1Text2) as { broker?: BrokerProfile; docType?: string };
+    brokerProfile = pass1Json.broker
+      ? { ...pass1Json.broker, docType: pass1Json.docType }
+      : undefined;
+    if (brokerProfile?.name && customers.length > 0) {
+      const cleaned = cleanBrokerName(brokerProfile.name);
+      matchedCustomer = matchBroker(cleaned, customers) ?? matchBroker(brokerProfile.name, customers);
     }
+  } catch (err) {
+    // Non-fatal — fall through to pass 2 with whatever rules the caller
+    // pre-filtered. Logged so we can see if it's failing systemically.
+    console.error('[parse-ratecon] pass-1 broker harvest failed:', err);
   }
 
   // Build the broker rules to inject into pass 2:

@@ -46,19 +46,6 @@ export function NewBrokerReviewModal({
     cleanedParsed.toLowerCase()       === cleanedInitial.toLowerCase() ||
     (norm(profile.name).length > 0 && norm(profile.name) === norm(initialName))
   );
-  // Diagnostic — surfaces in DevTools when a user expects auto-fill and
-  // doesn't see it. Cheap and only logs on modal open.
-  if (typeof window !== 'undefined') {
-    // eslint-disable-next-line no-console
-    console.log('[NewBrokerReviewModal] match:', {
-      sameBroker,
-      initialName,
-      profileName: profile?.name,
-      cleanedParsed,
-      cleanedInitial,
-      hasProfile: !!profile,
-    });
-  }
   const seed = sameBroker ? profile : undefined;
 
   const [name,                setName]                = useState(initialName);
