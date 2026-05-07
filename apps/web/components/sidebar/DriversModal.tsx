@@ -473,7 +473,7 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
                   <div className="w-2.5 h-2.5 rounded-full shrink-0"
                     style={{ background: asset?.color ?? '#9aa0a6' }} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>
+                    <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
                       {ev.title}
                     </div>
                     <div className="text-xs mt-0.5 flex items-center gap-2"
@@ -593,7 +593,7 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
 function PField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5"
+      <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5"
         style={{ color: 'var(--gc-text-3)' }}>
         {label}
       </label>

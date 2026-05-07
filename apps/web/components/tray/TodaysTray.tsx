@@ -169,7 +169,7 @@ function LoadRow({
       <button
         type="button"
         onClick={() => onOpenLoad(ev.id)}
-        className="text-xs font-medium truncate text-left"
+        className="text-xs font-bold truncate text-left"
         style={{ color: 'var(--gc-text-1)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, flex: 1, minWidth: 0, textDecoration: 'underline', textDecorationColor: 'var(--gc-border)', textUnderlineOffset: 3 }}
         onMouseEnter={e => { e.currentTarget.style.color = '#1a73e8'; }}
         onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-1)'; }}

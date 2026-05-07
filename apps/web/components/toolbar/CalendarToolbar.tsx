@@ -402,7 +402,7 @@ export default function CalendarToolbar() {
                     onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
                     <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6' }} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
+                      <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
                       <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
                         {eventDateLabel(ev.start)}
                         {ev.loadNum && <> · <span style={{ color: 'var(--gc-text-2)', fontWeight: 600 }}>#{ev.loadNum}</span></>}
@@ -470,7 +470,7 @@ export default function CalendarToolbar() {
                       style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
                       <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6' }} />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
+                        <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
                         <div className="text-[11px] flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
                           <span>{eventDateLabel(ev.start)}{ev.loadNum ? ` · #${ev.loadNum}` : ''}</span>
                           <span style={{ color: days <= 5 ? '#d93025' : 'var(--gc-text-3)' }}>· {days}d left</span>
@@ -582,7 +582,7 @@ export default function CalendarToolbar() {
                         style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
                         <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6' }} />
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
+                          <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
                           <div className="text-[11px] flex items-center gap-2 flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
                             <span>{eventDateLabel(ev.start)}</span>
                             {ev.loadNum && <span>#{ev.loadNum}</span>}

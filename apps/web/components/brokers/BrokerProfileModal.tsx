@@ -573,7 +573,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </PField>
         </div>
         <div className="mt-3">
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1" style={{ color: 'var(--gc-text-1)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
             <FileText size={11} /> Invoice routing
           </div>
           {/* Method picker */}
@@ -779,7 +779,7 @@ function LoadTable({ rows, sortField, sortDir, onSort, selectedLoadId, onSelectL
                   {fmtDate(ev.start)}
                 </td>
                 <td style={{ padding: '9px 10px', color: 'var(--gc-text-1)', maxWidth: 160 }}>
-                  <span className="truncate block" title={ev.title}>{ev.title}</span>
+                  <span className="truncate block font-bold" title={ev.title}>{ev.title}</span>
                 </td>
                 <td style={{ padding: '9px 10px' }}>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
@@ -863,7 +863,7 @@ function LoadDetailPanel({ load, assets, onClose, onOpenEditor }: {
         {/* Route */}
         <div>
           <DetailSectionLabel>Route</DetailSectionLabel>
-          <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{load.title}</div>
+          <div className="text-sm font-bold" style={{ color: 'var(--gc-text-1)' }}>{load.title}</div>
           {(pickup || delivery) && (
             <div className="mt-3 space-y-2">
               {pickup && (
@@ -1062,8 +1062,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function PField({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
-      <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-1.5"
-        style={{ color: 'var(--gc-text-1)' }}>
+      <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-1.5"
+        style={{ color: 'var(--gc-text-3)' }}>
         {icon}{label}
       </label>
       {children}
