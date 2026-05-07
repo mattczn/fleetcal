@@ -28,7 +28,6 @@ export interface BrokerRule {
  *  returns "" when something isn't on the document. */
 export interface BrokerProfile {
   name?:                string;
-  mcNum?:               string;
   contactName?:         string;
   contactEmail?:        string;
   contactPhone?:        string;
@@ -58,7 +57,6 @@ Return a single JSON object with this exact shape — no markdown, no explanatio
 {
   "broker": {
     "name":                "<canonical broker / customer / shipper company name as it appears>",
-    "mcNum":               "<broker MC number if listed, digits only>",
     "contactName":         "<dispatcher or rep name on the rate con>",
     "contactEmail":        "<dispatcher / billing contact email>",
     "contactPhone":        "<dispatcher phone, digits + format as on the doc>",
