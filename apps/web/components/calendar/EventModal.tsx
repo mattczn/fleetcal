@@ -1391,6 +1391,9 @@ export default function EventModal() {
           driverPayAutoSet.current = true;
           setDriverPayIsAuto(true);
         }
+        // Default dispatcher fallback (rate cons rarely name a dispatcher).
+        const defaultDispatcher = dispatchers.find(d => d.isDefault);
+        if (defaultDispatcher && !vals['dispatcher']) vals['dispatcher'] = defaultDispatcher.name;
         setFieldValues(vals);
         // Generate title from resolved broker + stops (use raw values, not state which hasn't updated yet)
         const batchBroker = typeof vals['broker'] === 'string' ? vals['broker'] : (p.broker ? String(p.broker) : undefined);
