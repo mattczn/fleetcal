@@ -31,6 +31,42 @@ function extractJson(text: string): Record<string, unknown> {
   return JSON.parse(match ? match[0] : text);
 }
 
+/** Run pass 2 with progressively larger token budgets if the response
+ *  comes back truncated. Multi-stop rate cons can easily exceed 2k
+ *  output tokens; retrying with 8k handles even the longest docs. */
+async function pass2WithRetry(
+  client: Anthropic,
+  content: ContentBlockParam[],
+  budgets: number[],
+): Promise<Record<string, unknown>> {
+  let lastErr: unknown;
+  let lastText = '';
+  let lastStopReason: string | null | undefined;
+  for (const max_tokens of budgets) {
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens,
+      messages: [{ role: 'user', content }],
+    });
+    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    lastText = text;
+    lastStopReason = response.stop_reason;
+    try { return extractJson(text); }
+    catch (err) {
+      lastErr = err;
+      // Only retry when the model actually ran out of space; other parse
+      // errors (malformed but complete JSON) won't be fixed by more tokens.
+      if (response.stop_reason !== 'max_tokens') break;
+    }
+  }
+  console.error('[parse-ratecon] pass-2 JSON parse failed:', {
+    stopReason: lastStopReason,
+    textLength: lastText.length,
+    tail: lastText.slice(-200),
+  });
+  throw lastErr ?? new Error('pass-2 returned no usable JSON');
+}
+
 /** Match a broker name (post-cleanBrokerName) against the org's customer
  *  list. Exact name + alias match only — the more sophisticated fuzzy
  *  matcher lives client-side; we just need to pick which broker's hints
@@ -137,13 +173,9 @@ export async function POST(req: NextRequest) {
   try {
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
     const content: ContentBlockParam[] = [docBlock, textBlock];
-    const response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 2048,
-      messages: [{ role: 'user', content }],
-    });
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    parsed = extractJson(text);
+    // 4k handles ~99% of rate cons; 8k retry covers the long multi-stop
+    // outliers. The PDF is cached so the retry's input cost is minimal.
+    parsed = await pass2WithRetry(client, content, [4096, 8192]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
