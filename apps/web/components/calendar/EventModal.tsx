@@ -2575,20 +2575,22 @@ export default function EventModal() {
               </div>
               <div className="flex items-center gap-1 flex-nowrap shrink-0">
                 {docsTab === 'rateCon' && (<>
-                <button type="button" onClick={() => void handleQuickReparse()} disabled={reparsing}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
-                  style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)', opacity: reparsing ? 0.6 : 1 }}
-                  onMouseEnter={e => { if (!reparsing) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  {reparsing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-                  {reparsing ? 'Parsing…' : 'Get Load #'}
-                </button>
+                <Tooltip content="Pull just the Load # and reference numbers off this rate-con (existing fields stay intact)">
+                  <button type="button" onClick={() => void handleQuickReparse()} disabled={reparsing}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                    style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)', opacity: reparsing ? 0.6 : 1 }}
+                    onMouseEnter={e => { if (!reparsing) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                    {reparsing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                    {reparsing ? 'Parsing…' : 'Get Load #'}
+                  </button>
+                </Tooltip>
                 <Tooltip content="Re-extract every field from this rate-con (overwrites current values)">
                   <button type="button" onClick={() => void handleFullReparse()} disabled={reparsing}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
-                    style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG, opacity: reparsing ? 0.6 : 1 }}
-                    onMouseEnter={e => { if (!reparsing) e.currentTarget.style.background = LOAD_ACCENT_BG_HOVER; }}
-                    onMouseLeave={e => (e.currentTarget.style.background = LOAD_ACCENT_BG)}>
+                    style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)', opacity: reparsing ? 0.6 : 1 }}
+                    onMouseEnter={e => { if (!reparsing) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                     <RefreshCw size={11} /> Reparse
                   </button>
                 </Tooltip>
