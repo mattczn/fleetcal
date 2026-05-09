@@ -63,6 +63,8 @@ export async function POST(req: NextRequest) {
   let promptVariables: PromptVariables = DEFAULT_PROMPT_VARIABLES;
   let brokerRules: BrokerRule[] = [];
   let customers: IncomingCustomer[] = [];
+  let knownBrokerName: string | undefined;
+  let skipBrokerHarvest = false;
 
   try {
     ({
@@ -77,6 +79,11 @@ export async function POST(req: NextRequest) {
       // prefill in the response.
       brokerRules = [],
       customers = [],
+      // Reparse-from-doc-view path: caller already has the broker resolved
+      // on the load. Skip the harvest pass and look up the matched rule
+      // directly. ~half the latency, zero pass-1 token cost.
+      knownBrokerName,
+      skipBrokerHarvest = false,
     } = await req.json());
     if (!data) throw new Error('missing data');
   } catch {
@@ -99,30 +106,38 @@ export async function POST(req: NextRequest) {
   // "Save as customer" review modal with, even when the broker isn't
   // yet in the customer list. The customer-rule injection that piggy-
   // backs on this is just an extra benefit when customers DO exist.
+  //
+  // Reparse path skips this — caller has already resolved the customer
+  // and just wants pass-2 to refresh the load fields.
   let brokerProfile: BrokerProfile | undefined;
   let matchedCustomer: IncomingCustomer | undefined;
 
-  try {
-    const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
-    const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
-    const pass1Response = await client.messages.create({
-      model: MODEL,
-      max_tokens: 512,
-      messages: [{ role: 'user', content: pass1Content }],
-    });
-    const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
-    const pass1Json = extractJson(pass1Text2) as { broker?: BrokerProfile; docType?: string };
-    brokerProfile = pass1Json.broker
-      ? { ...pass1Json.broker, docType: pass1Json.docType }
-      : undefined;
-    if (brokerProfile?.name && customers.length > 0) {
-      const cleaned = cleanBrokerName(brokerProfile.name);
-      matchedCustomer = matchBroker(cleaned, customers) ?? matchBroker(brokerProfile.name, customers);
+  if (skipBrokerHarvest && knownBrokerName && customers.length > 0) {
+    matchedCustomer = matchBroker(cleanBrokerName(knownBrokerName), customers)
+                   ?? matchBroker(knownBrokerName, customers);
+  } else if (!skipBrokerHarvest) {
+    try {
+      const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
+      const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
+      const pass1Response = await client.messages.create({
+        model: MODEL,
+        max_tokens: 512,
+        messages: [{ role: 'user', content: pass1Content }],
+      });
+      const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
+      const pass1Json = extractJson(pass1Text2) as { broker?: BrokerProfile; docType?: string };
+      brokerProfile = pass1Json.broker
+        ? { ...pass1Json.broker, docType: pass1Json.docType }
+        : undefined;
+      if (brokerProfile?.name && customers.length > 0) {
+        const cleaned = cleanBrokerName(brokerProfile.name);
+        matchedCustomer = matchBroker(cleaned, customers) ?? matchBroker(brokerProfile.name, customers);
+      }
+    } catch (err) {
+      // Non-fatal — fall through to pass 2 with whatever rules the caller
+      // pre-filtered. Logged so we can see if it's failing systemically.
+      console.error('[parse-ratecon] pass-1 broker harvest failed:', err);
     }
-  } catch (err) {
-    // Non-fatal — fall through to pass 2 with whatever rules the caller
-    // pre-filtered. Logged so we can see if it's failing systemically.
-    console.error('[parse-ratecon] pass-1 broker harvest failed:', err);
   }
 
   // Build the broker rules to inject into pass 2:

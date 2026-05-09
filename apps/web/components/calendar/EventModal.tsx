@@ -1974,6 +1974,92 @@ export default function EventModal() {
     }
   };
 
+  /**
+   * Full reparse from the doc viewer — re-runs the AI against the existing
+   * rate-con PDF and overwrites the load's fields with the fresh extraction.
+   * Used when a broker sends an updated rate-con (rate change, added stop,
+   * etc.) and you want the form re-synced without re-uploading the PDF.
+   *
+   * Skips pass 1 (broker harvest) since the customer is already resolved
+   * on the load — server still injects that customer's parseHints into
+   * pass 2 via the knownBrokerName lookup. ~half the latency of a fresh
+   * parse and zero pass-1 token cost.
+   */
+  const handleFullReparse = async () => {
+    if (!rateConPdf || reparsing) return;
+    if (!confirm('Re-extract every field from this rate-con? Current values will be overwritten.')) return;
+    setReparsing(true);
+    try {
+      let base64: string;
+      if (rateConPdf.startsWith('data:')) {
+        base64 = rateConPdf.split(',')[1];
+      } else {
+        const resp = await fetch(pdfObjectUrl || rateConPdf);
+        const buf  = await resp.arrayBuffer();
+        base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      }
+      const knownBrokerName = typeof fieldValues['broker'] === 'string' ? (fieldValues['broker'] as string) : undefined;
+      const res = await fetch('/api/parse-ratecon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: base64,
+          enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
+          customInstructions: promptInstructions,
+          promptVariables,
+          customers: customers.map(c => ({
+            name: c.name, aliases: c.aliases ?? [], parseHints: c.parseHints,
+          })),
+          knownBrokerName,
+          skipBrokerHarvest: true,
+        }),
+      });
+      const parsed = await res.json();
+      if (parsed.error) throw new Error(parsed.error);
+
+      // Push every extracted field through the modal's field setter,
+      // mirroring the initial-parse handler so reparse and first-parse
+      // behave identically.
+      const lpNum = parsed.loadPrice != null ? parseFloat(String(parsed.loadPrice)) : NaN;
+      const dpNum = parsed.driverPay != null ? parseFloat(String(parsed.driverPay)) : NaN;
+      if (parsed.loadNum)     setField('loadNum', parsed.loadNum);
+      if (parsed.refNums)     setFieldValues(prev => ({ ...prev, refNums: parseAiRefNums(parsed.refNums) }));
+      if (parsed.dispatcher)  setField('dispatcher', parsed.dispatcher);
+      if (parsed.commodity)   setField('commodity', parsed.commodity);
+      if (parsed.weight != null) setField('weight', parsed.weight);
+      if (parsed.trailerType) setField('trailerType', parsed.trailerType);
+      if (parsed.specialInstructions) setField('specialInstructions', parsed.specialInstructions);
+      if (Number.isFinite(lpNum) && lpNum > 0) {
+        setField('loadPrice', lpNum);
+        if (driverPayPct != null) {
+          const auto = Math.round(lpNum * (driverPayPct / 100) * 100) / 100;
+          setFieldValues(prev => ({ ...prev, driverPay: auto }));
+          driverPayAutoSet.current = true;
+          setDriverPayIsAuto(true);
+        } else if (Number.isFinite(dpNum) && dpNum > 0) {
+          setField('driverPay', dpNum);
+        }
+      }
+      if (parsed.start) {
+        const [sd, st = '08:00'] = parsed.start.split('T');
+        setStartDate(sd); setStartTime(st.slice(0, 5));
+      }
+      if (parsed.end) {
+        const [ed, et = '17:00'] = parsed.end.split('T');
+        setEndDate(ed); setEndTime(et.slice(0, 5));
+      }
+      if (Array.isArray(parsed.stops) && parsed.stops.length > 0) {
+        setStops((parsed.stops as Stop[]).map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 })));
+      }
+      markDirty();
+    } catch (err) {
+      console.error('Full reparse failed:', err);
+      alert(`Reparse failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setReparsing(false);
+    }
+  };
+
   const handleDroppedFile = (file: File) => {
     if (!file || file.type !== 'application/pdf') return;
     if (!isEdit) {
@@ -2497,6 +2583,15 @@ export default function EventModal() {
                   {reparsing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
                   {reparsing ? 'Parsing…' : 'Get Load #'}
                 </button>
+                <Tooltip content="Re-extract every field from this rate-con (overwrites current values)">
+                  <button type="button" onClick={() => void handleFullReparse()} disabled={reparsing}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                    style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG, opacity: reparsing ? 0.6 : 1 }}
+                    onMouseEnter={e => { if (!reparsing) e.currentTarget.style.background = LOAD_ACCENT_BG_HOVER; }}
+                    onMouseLeave={e => (e.currentTarget.style.background = LOAD_ACCENT_BG)}>
+                    <RefreshCw size={11} /> Reparse
+                  </button>
+                </Tooltip>
                 {pdfObjectUrl && (
                   <Tooltip content="Download Rate Con">
                     <a href={pdfObjectUrl} download="rate-con.pdf"
