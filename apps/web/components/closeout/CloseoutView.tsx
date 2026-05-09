@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { useUser } from '@clerk/nextjs';
+import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
 import type { Load, CalendarEvent } from '@/lib/types';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -66,6 +66,12 @@ export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const { user } = useUser();
+  // Clerk readiness gate — without this, a hard refresh on /closeout
+  // fires the queue request before RailwayClientProvider has a chance
+  // to wire the token (its useEffect runs after children's effects),
+  // so the API rejects with 401. Navigating from /calendar works
+  // because the provider is already wired from the previous page.
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
 
   const [tab, setTab] = useState<Tab>('pending');
   const [loading, setLoading] = useState(false);
@@ -97,7 +103,10 @@ export default function CloseoutView() {
     }
   }, [tab, mergeEvents]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!authLoaded || !isSignedIn) return;
+    void refresh();
+  }, [refresh, authLoaded, isSignedIn]);
 
   // Dedup relays — one row per load (the pickup leg wins).
   const dedup = useMemo(() => {
