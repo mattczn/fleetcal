@@ -18,14 +18,14 @@ import type { CalendarEvent } from '@/lib/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Period = 'week' | 'month' | '30d' | '90d' | 'ytd';
+type Period = 'week' | 'month' | '30d' | '90d' | 'ytd' | 'custom';
 type WeekSortField = 'pickupDate' | 'loadNum' | 'broker' | 'title' | 'driver' | 'loadPrice' | 'driverPay' | 'accessorials';
 
 interface PeriodRange { start: Date; end: Date }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getPeriodRange(period: Period): PeriodRange {
+function getPeriodRange(period: Period, custom?: { startISO: string; endISO: string }): PeriodRange {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -54,6 +54,19 @@ function getPeriodRange(period: Period): PeriodRange {
     }
     case 'ytd':
       return { start: new Date(today.getFullYear(), 0, 1), end: today };
+    case 'custom': {
+      // Local-date parsing avoids the UTC-shift trap on YYYY-MM-DD strings.
+      const parse = (iso: string): Date => {
+        const [y, m, d] = iso.split('-').map(Number);
+        return new Date(y, (m ?? 1) - 1, d ?? 1);
+      };
+      const fallback = { start: today, end: today };
+      if (!custom?.startISO || !custom?.endISO) return fallback;
+      const start = parse(custom.startISO);
+      const end   = parse(custom.endISO);
+      // Guard against an end < start window from typos.
+      return start <= end ? { start, end } : { start: end, end: start };
+    }
   }
 }
 
@@ -102,11 +115,12 @@ const BROKER_COLORS = [
 ];
 
 const PERIODS: { value: Period; label: string }[] = [
-  { value: 'week',  label: 'This Week' },
-  { value: 'month', label: 'This Month' },
-  { value: '30d',   label: '30 Days' },
-  { value: '90d',   label: '90 Days' },
-  { value: 'ytd',   label: 'YTD' },
+  { value: 'week',   label: 'This Week' },
+  { value: 'month',  label: 'This Month' },
+  { value: '30d',    label: '30 Days' },
+  { value: '90d',    label: '90 Days' },
+  { value: 'ytd',    label: 'YTD' },
+  { value: 'custom', label: 'Custom' },
 ];
 
 // ─── SVG Pie / Donut chart ────────────────────────────────────────────────────
@@ -271,7 +285,23 @@ export default function DashboardView() {
   const [weekSort, setWeekSort] = useState<{ field: WeekSortField; dir: 'asc' | 'desc' }>({ field: 'pickupDate', dir: 'asc' });
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
 
-  const { start: pStart, end: pEnd } = useMemo(() => getPeriodRange(period), [period]);
+  // Custom range — stored as YYYY-MM-DD strings to play nice with native
+  // date inputs and avoid the UTC parsing trap. Default to "this month".
+  const initialMonthRange = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end   = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const fmtIso = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { start: fmtIso(start), end: fmtIso(end) };
+  }, []);
+  const [customStart, setCustomStart] = useState<string>(initialMonthRange.start);
+  const [customEnd,   setCustomEnd]   = useState<string>(initialMonthRange.end);
+
+  const { start: pStart, end: pEnd } = useMemo(
+    () => getPeriodRange(period, { startISO: customStart, endISO: customEnd }),
+    [period, customStart, customEnd],
+  );
 
   // Extend the loaded window whenever the selected period reaches beyond what's cached
   useEffect(() => {
@@ -624,6 +654,22 @@ export default function DashboardView() {
                   </button>
                 ))}
               </div>
+              {/* Custom range pickers — render right under the pill row when active */}
+              {period === 'custom' && (
+                <div className="flex items-center gap-1.5">
+                  <input type="date" value={customStart}
+                    onChange={e => setCustomStart(e.target.value)}
+                    max={customEnd || undefined}
+                    className="text-xs rounded-full outline-none"
+                    style={{ border: '1px solid var(--gc-border)', padding: '4px 10px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }} />
+                  <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>–</span>
+                  <input type="date" value={customEnd}
+                    onChange={e => setCustomEnd(e.target.value)}
+                    min={customStart || undefined}
+                    className="text-xs rounded-full outline-none"
+                    style={{ border: '1px solid var(--gc-border)', padding: '4px 10px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }} />
+                </div>
+              )}
               {/* Date range label */}
               <span className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>
                 {pStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
