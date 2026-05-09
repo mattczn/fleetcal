@@ -80,7 +80,30 @@ closeout.get("/queue", async (c) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const loads: Load[] = (data ?? []).map((row: any) => joinEventLoadToApp(row, row.load));
-  return c.json({ loads });
+
+  // Roll up doc-kind counts per load so the queue table can render
+  // RC/POD/BOL/Lumper/Scale chips in one render pass without N
+  // per-load fetches.
+  const loadIds = Array.from(new Set(loads.map(l => l.loadId).filter((id): id is string => !!id)));
+  const docCounts: Record<string, Record<string, number>> = {};
+  if (loadIds.length > 0) {
+    const { data: docs } = await supabase
+      .from("load_documents")
+      .select("load_id, kind, file_name")
+      .eq("org_id", orgId)
+      .in("load_id", loadIds);
+    for (const d of (docs ?? []) as Array<{ load_id: string | null; kind: string; file_name: string }>) {
+      if (!d.load_id) continue;
+      const lc = (docCounts[d.load_id] ??= {});
+      // Heuristic kinds — `kind` column is bol|pod|scale|other; we also
+      // sniff the filename for "lumper" since that's commonly tagged
+      // "other" by drivers.
+      const k = /lumper/i.test(d.file_name) ? "lumper" : d.kind;
+      lc[k] = (lc[k] ?? 0) + 1;
+    }
+  }
+
+  return c.json({ loads, docCounts });
 });
 
 interface UpdateBillingBody {

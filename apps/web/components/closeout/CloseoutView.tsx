@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, FileText, Clock, Play } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, ExternalLink, FileText } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -27,6 +27,7 @@ import ManagementHeader from '@/components/nav/ManagementHeader';
 import { displayBrokerName } from '@/lib/customerMatch';
 import ReviewQueue from './ReviewQueue';
 import { FlagModal, type FlagReason } from './FlagModal';
+import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 
 type Tab = 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid';
 
@@ -69,18 +70,22 @@ export default function CloseoutView() {
   const [tab, setTab] = useState<Tab>('pending');
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<QueueRow[]>([]);
+  const [docCounts, setDocCounts] = useState<Record<string, Record<string, number>>>({});
   const [error, setError] = useState<string | null>(null);
 
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewStartIndex, setReviewStartIndex] = useState(0);
   const [flagTarget, setFlagTarget] = useState<Load | null>(null);
+  const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
+  const openEditModal = useCalendarStore(s => s.openEditModal);
 
   const refresh = useMemo(() => async () => {
     setLoading(true);
     setError(null);
     try {
-      const { loads } = await railway.listCloseoutQueue(tab);
+      const { loads, docCounts } = await railway.listCloseoutQueue(tab);
       setRows(loads as QueueRow[]);
+      setDocCounts(docCounts ?? {});
       // Push into the calendar store so EventModal can resolve them by
       // id (closeout queue often pulls loads outside the calendar's
       // loaded date window).
@@ -111,7 +116,11 @@ export default function CloseoutView() {
 
   async function handleVerify(load: Load) {
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
-    await railway.updateLoadCloseout(load.id, { action: 'verify', actorName });
+    // PATCH /v1/closeout/loads/:id keys off the loads-table uuid, not
+    // the event uuid. Each row in the queue is an event, so we have to
+    // resolve the parent load id before sending the action.
+    const targetId = load.loadId ?? load.id;
+    await railway.updateLoadCloseout(targetId, { action: 'verify', actorName });
     await refresh();
   }
 
@@ -122,7 +131,8 @@ export default function CloseoutView() {
   async function confirmFlag(reason: FlagReason, note: string) {
     if (!flagTarget) return;
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
-    await railway.updateLoadCloseout(flagTarget.id, { action: 'flag', flagReason: reason, flagNote: note, actorName });
+    const targetId = flagTarget.loadId ?? flagTarget.id;
+    await railway.updateLoadCloseout(targetId, { action: 'flag', flagReason: reason, flagNote: note, actorName });
     setFlagTarget(null);
     await refresh();
   }
@@ -193,12 +203,12 @@ export default function CloseoutView() {
                     <Th>Age</Th>
                     <Th>Delivered</Th>
                     <Th>Load #</Th>
+                    <Th>Title</Th>
                     <Th>Customer</Th>
-                    <Th>Route</Th>
-                    <Th>Driver / Asset</Th>
+                    <Th>Driver(s)</Th>
                     <Th align="right">Rate</Th>
+                    <Th align="right">Accessorials</Th>
                     <Th>Docs</Th>
-                    <Th>Flag</Th>
                     <Th align="right">Actions</Th>
                   </tr>
                 </thead>
@@ -207,45 +217,132 @@ export default function CloseoutView() {
                     const days = ageDays(load.end);
                     const ac   = ageColor(days);
                     const cust = displayBrokerName(load.broker, customers);
-                    const stops = load.stops ?? [];
-                    const origin = stops[0]?.city ?? stops[0]?.facilityName ?? '—';
-                    const dest = stops[stops.length - 1]?.city ?? stops[stops.length - 1]?.facilityName ?? '—';
+                    // Customer profile lookup — need the canonical id, not the raw name
+                    const matchedCustomer = customers.find(c =>
+                      c.name === load.broker || (c.aliases ?? []).includes(load.broker ?? ''),
+                    );
+                    // For relays, surface BOTH drivers
+                    const relayPartner = load.relayGroupId
+                      ? rows.find(r => r.id !== load.id && r.relayGroupId === load.relayGroupId)
+                      : null;
+                    const drivers: string[] = [];
+                    if (load.driverName) drivers.push(load.driverName);
+                    if (relayPartner?.driverName && relayPartner.driverName !== load.driverName) drivers.push(relayPartner.driverName);
+                    const accessorialsSum = (load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+                    const accessorialsCount = (load.accessorials ?? []).length;
+                    const targetLoadId = load.loadId ?? load.id;
+                    const counts = docCounts[targetLoadId] ?? {};
+                    const hasRC = !!load.rateConPdf;
                     return (
                       <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}
-                        className="hover:bg-[var(--gc-hover)] cursor-pointer"
-                        onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}>
+                        className="hover:bg-[var(--gc-hover)]">
                         <Td>
                           <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
                             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
                           </span>
                         </Td>
                         <Td>{fmtDate(load.end)}</Td>
-                        <Td className="font-semibold">{load.loadNum ? `#${load.loadNum}` : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}</Td>
-                        <Td>{cust || <span style={{ color: 'var(--gc-text-3)' }}>—</span>}</Td>
+                        {/* Load # — copyable */}
                         <Td>
-                          <span style={{ color: 'var(--gc-text-2)' }}>
-                            {origin} → {dest}
-                          </span>
+                          {load.loadNum
+                            ? (
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); void copyToClipboard(load.loadNum!); }}
+                                className="font-semibold inline-flex items-center gap-1 text-[13px] hover:underline"
+                                style={{ color: 'var(--gc-text-1)' }}
+                                title="Copy load #">
+                                #{load.loadNum} <Copy size={11} style={{ color: 'var(--gc-text-3)' }} />
+                              </button>
+                            )
+                            : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
                         </Td>
+                        {/* Title — opens event modal with full load data */}
                         <Td>
-                          <div className="text-[13px]">{load.driverName ?? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>}</div>
-                          <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{load.assetName ?? ''}</div>
+                          <button type="button"
+                            onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
+                            className="text-left font-bold inline-flex items-center gap-1 hover:underline truncate max-w-[320px]"
+                            style={{ color: 'var(--gc-blue)' }}
+                            title="Open load details">
+                            <span className="truncate">{load.title}</span>
+                            <ExternalLink size={11} className="shrink-0" style={{ color: 'var(--gc-text-3)' }} />
+                          </button>
                         </Td>
-                        <Td align="right" className="font-semibold">
+                        {/* Customer — opens broker profile */}
+                        <Td>
+                          {matchedCustomer ? (
+                            <button type="button"
+                              onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
+                              className="hover:underline"
+                              style={{ color: 'var(--gc-blue)' }}
+                              title="Open customer profile">
+                              {cust}
+                            </button>
+                          ) : (
+                            <span style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>{cust || '—'}</span>
+                          )}
+                        </Td>
+                        {/* Driver(s) */}
+                        <Td>
+                          {drivers.length === 0
+                            ? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>
+                            : drivers.length === 1
+                              ? <span>{drivers[0]}</span>
+                              : (
+                                <div>
+                                  <div className="text-[13px]">{drivers[0]}</div>
+                                  <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+                                </div>
+                              )}
+                        </Td>
+                        {/* Total rate */}
+                        <Td align="right" className="font-semibold tabular-nums">
                           {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
                         </Td>
-                        <Td><DocChip load={load} /></Td>
-                        <Td>{load.flaggedReason ? <FlagChip reason={load.flaggedReason} /> : null}</Td>
+                        {/* Total accessorials */}
+                        <Td align="right" className="tabular-nums">
+                          {accessorialsCount === 0
+                            ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                            : (
+                              <div>
+                                <div className="font-semibold">{moneyFmt.format(accessorialsSum)}</div>
+                                <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accessorialsCount} item{accessorialsCount !== 1 ? 's' : ''}</div>
+                              </div>
+                            )}
+                        </Td>
+                        {/* Docs — chips per kind */}
+                        <Td>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <DocBadge label="RC"     present={hasRC} />
+                            <DocBadge label="POD"    present={(counts.pod ?? 0)    > 0} count={counts.pod} />
+                            <DocBadge label="BOL"    present={(counts.bol ?? 0)    > 0} count={counts.bol} />
+                            <DocBadge label="Lumper" present={(counts.lumper ?? 0) > 0} count={counts.lumper} />
+                            <DocBadge label="Scale"  present={(counts.scale ?? 0)  > 0} count={counts.scale} />
+                            {(counts.other ?? 0) > 0 && <DocBadge label="Other" present count={counts.other} />}
+                          </div>
+                          {load.flaggedReason && (
+                            <div className="mt-1">
+                              <FlagChip reason={load.flaggedReason} />
+                            </div>
+                          )}
+                        </Td>
+                        {/* Actions */}
                         <Td align="right" onClick={e => e.stopPropagation()}>
                           {tab === 'pending' || tab === 'flagged' ? (
                             <div className="flex items-center justify-end gap-1.5">
+                              <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
+                                className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+                                style={{ background: '#15803d', color: '#fff' }}
+                                title="Open in review queue">
+                                <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
+                              </button>
                               <button onClick={() => void handleVerify(load)}
                                 className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
-                                style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
+                                style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
+                                title="Release without opening review queue">
                                 <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
                               </button>
                               {tab === 'pending' && (
-                                <button onClick={() => void handleFlag(load)}
+                                <button onClick={() => handleFlag(load)}
                                   className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
                                   style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
                                   <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
@@ -263,6 +360,11 @@ export default function CloseoutView() {
           )}
         </div>
       </div>
+
+      {/* Customer profile modal */}
+      {brokerProfileId && (
+        <BrokerProfileModal initialBrokerId={brokerProfileId} onClose={() => setBrokerProfileId(null)} />
+      )}
 
       {/* Focused review queue overlay */}
       {reviewOpen && (
@@ -303,18 +405,24 @@ function Td({ children, align = 'left', className, onClick }: { children: React.
   );
 }
 
-function DocChip({ load }: { load: Load }) {
-  // Best-effort: count uploads of each kind without fetching documents.
-  // For now, fall back to a generic "View" hint — the modal shows the full list.
-  const hasRateCon = !!load.rateConPdf;
+function DocBadge({ label, present, count }: { label: string; present: boolean; count?: number }) {
   return (
-    <div className="flex items-center gap-1">
-      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
-        style={{ background: hasRateCon ? '#dcfce7' : '#f1f3f4', color: hasRateCon ? '#15803d' : 'var(--gc-text-3)' }}>
-        <FileText size={9} /> {hasRateCon ? 'RC' : 'No RC'}
-      </span>
-    </div>
+    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold tabular-nums"
+      title={present ? `${count ?? ''} ${label} uploaded`.trim() : `${label} missing`}
+      style={{
+        background: present ? '#dcfce7' : '#f1f3f4',
+        color:      present ? '#15803d' : 'var(--gc-text-3)',
+        border:     `1px solid ${present ? '#86efac' : 'var(--gc-border-light)'}`,
+        opacity:    present ? 1 : 0.7,
+      }}>
+      {label}{count && count > 1 ? ` ×${count}` : ''}
+    </span>
   );
+}
+
+async function copyToClipboard(text: string) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { /* clipboard API blocked — silent */ }
 }
 
 function FlagChip({ reason }: { reason: string }) {
