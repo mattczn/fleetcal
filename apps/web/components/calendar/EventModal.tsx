@@ -2288,12 +2288,44 @@ export default function EventModal() {
     </span>
   ) : null;
 
+  // ── Relay totals — used to swap the regular Driver Pay slot for a
+  // read-only "Total Driver Pay" tile when the modal is in relay context.
+  const relayLp = typeof fieldValues['loadPrice'] === 'number'
+    ? fieldValues['loadPrice']
+    : parseFloat(String(fieldValues['loadPrice'] ?? '')) || 0;
+  const relayPickupNum   = pickupDriverPay   === '' ? 0 : pickupDriverPay;
+  const relayDeliveryNum = deliveryDriverPay === '' ? 0 : deliveryDriverPay;
+  const relayTotalPay    = relayPickupNum + relayDeliveryNum;
+  const relayTotalPct    = relayLp > 0 && relayTotalPay > 0
+    ? Math.round((relayTotalPay / relayLp) * 1000) / 10
+    : null;
+  const relayTotalSuffix = relayTotalPct !== null ? (
+    <span className="px-1.5 py-0.5 rounded-full normal-case tracking-normal font-semibold"
+      style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+      {relayTotalPct % 1 === 0 ? relayTotalPct.toFixed(0) : relayTotalPct.toFixed(1)}%
+    </span>
+  ) : null;
+  // Self-contained slot replacement: uses noLabelFields so this Field
+  // (with its own "Total Driver Pay" label + % chip) takes over the
+  // driverPay grid position, sitting next to Load Price.
+  const relayTotalDisplay = (
+    <Field label="Total Driver Pay" labelSuffix={relayTotalSuffix}>
+      <div className="flex items-center w-full rounded-lg text-sm"
+        style={{ border: '1px solid var(--gc-border)', padding: '8px 10px', background: 'var(--gc-bg)', color: 'var(--gc-text-1)', minHeight: 38 }}>
+        {relayTotalPay > 0
+          ? `$${relayTotalPay.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+      </div>
+    </Field>
+  );
+
   const dispatcherLabelSuffixes: Record<string, React.ReactNode> = {
-    driverPay: driverPayLabelSuffix,
+    driverPay: isRelayContext ? relayTotalSuffix : driverPayLabelSuffix,
     loadNum: fieldValues['loadNum'] ? <CopyLabelBtn value={String(fieldValues['loadNum'])} /> : null,
   };
 
   const dispatcherFieldOverride: Record<string, React.ReactNode> = {
+    ...(isRelayContext ? { driverPay: relayTotalDisplay } : {}),
     refNums: (
       <RefNumsField
         value={Array.isArray(fieldValues['refNums']) ? fieldValues['refNums'] as RefNum[] : []}
@@ -3412,12 +3444,10 @@ export default function EventModal() {
               if (section === 'financial' && eventKind === 'non_revenue') {
                 fields = fields.filter(f => f.id === 'driverPay');
               }
-              // Hide single driverPay field in relay context — replaced by
-              // the dual Pickup/Delivery pay inputs below.
-              if (section === 'financial' && isRelayContext) {
-                fields = fields.filter(f => f.id !== 'driverPay');
-              }
-              if (fields.length === 0 && !(section === 'financial' && isRelayContext)) return null;
+              // In relay context the driverPay slot becomes a read-only
+              // "Total Driver Pay" tile (rendered via override + noLabel).
+              // The editable per-leg inputs live in a separate block below.
+              if (fields.length === 0) return null;
               return (
                 <div key={section} style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
                   <div className="flex items-center justify-between mb-4">
@@ -3441,31 +3471,32 @@ export default function EventModal() {
                     headerColor={headerColor}
                     overrides={dispatcherFieldOverride}
                     labelSuffixes={dispatcherLabelSuffixes}
-                    noLabelFields={new Set()}
+                    noLabelFields={isRelayContext && section === 'financial' ? new Set(['driverPay']) : new Set()}
                   />
-                  {/* Dual driver-pay inputs for relay loads */}
-                  {section === 'financial' && isRelayContext && (
-                    <div className={fields.length > 0 ? 'mt-3' : ''}>
-                      <div className="grid grid-cols-2 gap-3">
-                        <Field label="Pickup Driver Pay">
+                  {/* Dual driver-pay inputs for relay loads — Total + chip
+                      lives next to Load Price via the override above. */}
+                  {section === 'financial' && isRelayContext && (() => {
+                    const pctOf = (n: number) => (relayLp > 0 && n > 0 ? Math.round((n / relayLp) * 1000) / 10 : null);
+                    const pickupPct   = pctOf(relayPickupNum);
+                    const deliveryPct = pctOf(relayDeliveryNum);
+                    const fmtPct = (p: number) => `${p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
+                    const pctChip = (p: number | null) => p === null ? null : (
+                      <span className="px-1.5 py-0.5 rounded-full normal-case tracking-normal font-semibold"
+                        style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+                        {fmtPct(p)}
+                      </span>
+                    );
+                    return (
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <Field label="Pickup Driver Pay" labelSuffix={pctChip(pickupPct)}>
                           <NumberInputWithDollar value={pickupDriverPay} onChange={v => { setPickupDriverPay(v); markDirty(); }} headerColor={headerColor} />
                         </Field>
-                        <Field label="Delivery Driver Pay">
+                        <Field label="Delivery Driver Pay" labelSuffix={pctChip(deliveryPct)}>
                           <NumberInputWithDollar value={deliveryDriverPay} onChange={v => { setDeliveryDriverPay(v); markDirty(); }} headerColor={headerColor} />
                         </Field>
                       </div>
-                      {(pickupDriverPay !== '' || deliveryDriverPay !== '') && (
-                        <div className="mt-2 flex justify-end">
-                          <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
-                            Total driver pay:&nbsp;
-                            <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                              ${(((pickupDriverPay === '' ? 0 : pickupDriverPay) + (deliveryDriverPay === '' ? 0 : deliveryDriverPay)) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    );
+                  })()}
                   {section === 'financial' && eventKind === 'revenue' && accessorials.length > 0 && (
                     <div className="mt-3 space-y-2">
                       {accessorials.map(acc => (
