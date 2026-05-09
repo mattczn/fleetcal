@@ -376,7 +376,8 @@ export interface Load {
   specialInstructions?: string; // legacy: events.special_instructions, merged into loads.notes by migration
   accessorials?: Accessorial[];
   /** Storage path in `rate-cons` bucket (legacy: base64 data URL). */
-  rateConPdf?: string;
+  /** Storage path. `null` is sent on the wire to explicitly clear the column. */
+  rateConPdf?: string | null;
 
   // Stops — always an array; converters return [] when not yet loaded.
   stops: Stop[];

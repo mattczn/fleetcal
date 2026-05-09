@@ -2157,7 +2157,7 @@ export default function LoadDetail() {
             eventId={load.id}
             orgId={orgId}
             loadId={load.loadId}
-            rateConPath={load.rateConPdf}
+            rateConPath={load.rateConPdf ?? undefined}
             width={SCREEN_W}
           />
         ) : (

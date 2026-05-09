@@ -37,7 +37,7 @@ export interface CreateLoadRequestLoad {
   loadPrice?: number;
   commodity?: string;
   weight?: number;              // lbs
-  rateConPdf?: string;          // Storage path in `rate-cons` bucket
+  rateConPdf?: string | null;   // Storage path in `rate-cons` bucket; null is harmless on create
   accessorials?: Accessorial[];
   refNums?: RefNum[];
   notes?: string;               // load-level notes
