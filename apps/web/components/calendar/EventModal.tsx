@@ -154,8 +154,9 @@ function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onCha
   };
 
   const copy = (ref: RefNum, i: number) => {
-    const text = ref.label ? `${ref.label} ${ref.value}` : ref.value;
-    navigator.clipboard.writeText(text).then(() => {
+    // Copy the value only — the label is just a UI hint and pasting it
+    // into another system (broker portal, BOL, etc.) is rarely useful.
+    navigator.clipboard.writeText(ref.value).then(() => {
       setCopiedIdx(i);
       setTimeout(() => setCopiedIdx(null), 1500);
     });
