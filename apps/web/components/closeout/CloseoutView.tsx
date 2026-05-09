@@ -4,9 +4,11 @@
  * /closeout — POD verification + release queue.
  *
  * Tabs:
- *  Pending     — loads delivered/due that haven't been verified yet
+ *  Pending     — loads delivered/due that haven't been released yet
  *  Flagged     — held back pending follow-up (missing POD, rate dispute, …)
- *  Verified    — released for invoicing, awaiting accounting batch
+ *  Released    — released for invoicing, awaiting accounting batch
+ *                (DB billing_status is still "verified" — the Release
+ *                action sets it.)
  *  Invoiced    — sent to broker, awaiting payment
  *  Paid        — closed out
  *
@@ -60,7 +62,7 @@ type FilterState = Partial<Record<ColKey, string>>;
 const TABS: { value: Tab; label: string }[] = [
   { value: 'pending',  label: 'Pending'   },
   { value: 'flagged',  label: 'Flagged'   },
-  { value: 'verified', label: 'Verified'  },
+  { value: 'verified', label: 'Released'  },
   { value: 'invoiced', label: 'Invoiced'  },
   { value: 'paid',     label: 'Paid'      },
 ];
@@ -771,9 +773,9 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
     );
   }
   const messages: Record<Tab, { icon: React.ReactNode; title: string; sub: string }> = {
-    pending:  { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been verified or flagged.' },
+    pending:  { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been released or flagged.' },
     flagged:  { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads', sub: 'Anything that needs follow-up will show here.' },
-    verified: { icon: <Clock        size={28} style={{ color: '#1a73e8' }} />, title: 'Nothing waiting on accounting', sub: 'Verified loads ready to invoice will land here.' },
+    verified: { icon: <Clock        size={28} style={{ color: '#1a73e8' }} />, title: 'Nothing waiting on accounting', sub: 'Released loads ready to invoice will land here.' },
     invoiced: { icon: <FileText     size={28} style={{ color: 'var(--gc-text-3)' }} />, title: 'No invoiced loads', sub: 'Loads sent to brokers but unpaid will show here.' },
     paid:     { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'No paid loads in view', sub: 'Closed-out loads will show here.' },
   };
