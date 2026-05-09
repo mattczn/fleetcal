@@ -1254,6 +1254,13 @@ export default function EventModal() {
     setRelayGroupId(undefined); setRelayRole(undefined);
     setRelayActive(false); setRelayPartner(null);
     setAccessorials([]);
+    // Internal notes are scoped to a single load — never carry across
+    // duplicate / +1 Week / drag-create transitions. The edit branch
+    // re-seeds them from the loaded event below.
+    setInternalNotes([]);
+    setOriginalInternalNotes([]);
+    setNoteComposer('');
+    setNoteComposerOpen(false);
     setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null);
     setLinkedTrailerId(undefined);
     driverPayAutoSet.current = false;
