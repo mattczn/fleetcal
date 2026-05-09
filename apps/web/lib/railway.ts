@@ -110,12 +110,22 @@ class RailwayClient {
   }
   getLoad(id: string)                 { return this.req<GetLoadResponse>('GET',      `/v1/loads/${id}`); }
   // ── Closeout / POD verification queue ─────────────────────────────────
-  listCloseoutQueue(tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' = 'pending') {
+  listCloseoutQueue(
+    tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' = 'pending',
+    opts?: { limit?: number; offset?: number },
+  ) {
+    const params = new URLSearchParams({ tab });
+    if (opts?.limit  != null) params.set('limit',  String(opts.limit));
+    if (opts?.offset != null) params.set('offset', String(opts.offset));
     return this.req<{
       loads: import('@fleetcal/types').Load[];
       /** Per-loadId map of doc-kind counts: { [loadId]: { pod: 2, bol: 1, lumper: 1 } } */
       docCounts: Record<string, Record<string, number>>;
-    }>('GET', `/v1/closeout/queue?tab=${tab}`);
+      /** Total matching rows across all pages (for pagination footer). */
+      total: number;
+      limit: number;
+      offset: number;
+    }>('GET', `/v1/closeout/queue?${params.toString()}`);
   }
   updateLoadCloseout(id: string, body: {
     action: 'verify' | 'flag' | 'clear_flag' | 'set_invoice_docs' | 'mark_invoiced' | 'mark_paid' | 'reopen';

@@ -42,6 +42,8 @@ type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all";
 closeout.get("/queue", async (c) => {
   const orgId = c.get("orgId");
   const tab = ((c.req.query("tab") ?? "pending") as Tab);
+  const limit  = Math.min(Math.max(Number(c.req.query("limit") ?? "50"), 1), 200);
+  const offset = Math.max(Number(c.req.query("offset") ?? "0"), 0);
 
   // Fetch revenue events whose load matches the requested billing-status
   // filter. We pull events (not loads) so each leg is a row — the client
@@ -50,7 +52,7 @@ closeout.get("/queue", async (c) => {
 
   let query = supabase
     .from("events")
-    .select(`${EVENT_COLS}, load:loads!inner(${LOAD_COLS})`)
+    .select(`${EVENT_COLS}, load:loads!inner(${LOAD_COLS})`, { count: "exact" })
     .eq("org_id", orgId)
     .eq("event_kind", "revenue")
     .is("deleted_at", null)
@@ -73,7 +75,9 @@ closeout.get("/queue", async (c) => {
   }
   // "all" — no extra filter.
 
-  const { data, error } = await query.order("end", { ascending: true });
+  const { data, error, count } = await query
+    .order("end", { ascending: true })
+    .range(offset, offset + limit - 1);
   if (error) {
     console.error("[GET /v1/closeout/queue] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
@@ -113,7 +117,13 @@ closeout.get("/queue", async (c) => {
     }
   }
 
-  return c.json({ loads, docCounts });
+  return c.json({
+    loads,
+    docCounts,
+    total: count ?? loads.length,
+    limit,
+    offset,
+  });
 });
 
 interface UpdateBillingBody {

@@ -17,8 +17,8 @@
  * window.
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -30,6 +30,15 @@ import { FlagModal, type FlagReason } from './FlagModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 
 type Tab = 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid';
+
+const PAGE_SIZE = 50;
+
+interface CacheEntry {
+  loads: CalendarEvent[];
+  docCounts: Record<string, Record<string, number>>;
+  total: number;
+  fetchedAt: number;
+}
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'pending',  label: 'Pending'   },
@@ -74,9 +83,17 @@ export default function CloseoutView() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
 
   const [tab, setTab] = useState<Tab>('pending');
+  // Per-tab page state — switching tabs preserves where you were.
+  const [pageByTab, setPageByTab] = useState<Record<Tab, number>>({
+    pending: 0, flagged: 0, verified: 0, invoiced: 0, paid: 0,
+  });
+  const page = pageByTab[tab];
+  const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
+
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [docCounts, setDocCounts] = useState<Record<string, Record<string, number>>>({});
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -85,28 +102,67 @@ export default function CloseoutView() {
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const openEditModal = useCalendarStore(s => s.openEditModal);
 
-  const refresh = useMemo(() => async () => {
-    setLoading(true);
+  // In-memory cache keyed by `${tab}:${page}`. Tab switches and page
+  // changes show cached data instantly while a background refetch
+  // updates it. Cleared per-tab when an action mutates that tab's
+  // contents (verify / flag / etc).
+  const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
+
+  const cacheKey = `${tab}:${page}`;
+
+  const renderFromCache = (key: string): boolean => {
+    const cached = cacheRef.current.get(key);
+    if (!cached) return false;
+    setRows(cached.loads as QueueRow[]);
+    setDocCounts(cached.docCounts);
+    setTotal(cached.total);
+    return true;
+  };
+
+  const fetchAndCache = useMemo(() => async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     setError(null);
     try {
-      const { loads, docCounts } = await railway.listCloseoutQueue(tab);
-      setRows(loads as QueueRow[]);
-      setDocCounts(docCounts ?? {});
-      // Push into the calendar store so EventModal can resolve them by
-      // id (closeout queue often pulls loads outside the calendar's
-      // loaded date window).
+      const offset = page * PAGE_SIZE;
+      const { loads, docCounts, total } = await railway.listCloseoutQueue(tab, { limit: PAGE_SIZE, offset });
+      const entry: CacheEntry = { loads, docCounts, total, fetchedAt: Date.now() };
+      cacheRef.current.set(`${tab}:${page}`, entry);
+      // Only update view state if user is still on this tab/page —
+      // background refetches for previous pages shouldn't clobber the
+      // current view.
+      if (tab === tab && page === page) {
+        setRows(loads as QueueRow[]);
+        setDocCounts(docCounts ?? {});
+        setTotal(total ?? loads.length);
+      }
       mergeEvents(loads as QueueRow[]);
     } catch (err) {
       setError((err as Error).message ?? 'Failed to load queue');
     } finally {
       setLoading(false);
     }
-  }, [tab, mergeEvents]);
+  }, [tab, page, mergeEvents]);
 
+  // Invalidate every cached page for the active tab — call after any
+  // action that mutates membership (verify, flag, reopen).
+  const invalidateTab = (t: Tab) => {
+    for (const k of Array.from(cacheRef.current.keys())) {
+      if (k.startsWith(`${t}:`)) cacheRef.current.delete(k);
+    }
+  };
+
+  // Render cached data on tab/page change, then refresh in the background.
   useEffect(() => {
     if (!authLoaded || !isSignedIn) return;
-    void refresh();
-  }, [refresh, authLoaded, isSignedIn]);
+    const had = renderFromCache(cacheKey);
+    void fetchAndCache(!had);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey, authLoaded, isSignedIn]);
+
+  const refresh = async () => {
+    invalidateTab(tab);
+    await fetchAndCache(false);
+  };
 
   // Dedup relays — one row per load (the pickup leg wins).
   const dedup = useMemo(() => {
@@ -359,6 +415,16 @@ export default function CloseoutView() {
                   })}
                 </tbody>
               </table>
+              {/* Pagination footer — only shown when total exceeds one page */}
+              {total > PAGE_SIZE && (
+                <PaginationFooter
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={total}
+                  onPrev={() => setPage(Math.max(0, page - 1))}
+                  onNext={() => setPage(page + 1)}
+                />
+              )}
             </div>
           )}
         </div>
@@ -448,6 +514,60 @@ function CopyableLoadNum({ value }: { value: string }) {
         ? <Check size={11} style={{ color: '#15803d' }} />
         : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
     </button>
+  );
+}
+
+function PaginationFooter({
+  page, pageSize, total, onPrev, onNext,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const start = total === 0 ? 0 : page * pageSize + 1;
+  const end   = Math.min((page + 1) * pageSize, total);
+  const atStart = page === 0;
+  const atEnd   = end >= total;
+  return (
+    <div className="flex items-center justify-between px-4 py-3"
+      style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+      <div className="text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+        Showing <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{start.toLocaleString()}–{end.toLocaleString()}</span>
+        {' '}of <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{total.toLocaleString()}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onPrev}
+          disabled={atStart}
+          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-full transition-colors"
+          style={{
+            border:     '1px solid var(--gc-border)',
+            background: 'var(--gc-surface)',
+            color:      atStart ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+            opacity:    atStart ? 0.5 : 1,
+            cursor:     atStart ? 'not-allowed' : 'pointer',
+          }}>
+          <ChevronLeft size={13} /> Prev
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={atEnd}
+          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-full transition-colors"
+          style={{
+            border:     '1px solid var(--gc-border)',
+            background: 'var(--gc-surface)',
+            color:      atEnd ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+            opacity:    atEnd ? 0.5 : 1,
+            cursor:     atEnd ? 'not-allowed' : 'pointer',
+          }}>
+          Next <ChevronRight size={13} />
+        </button>
+      </div>
+    </div>
   );
 }
 
