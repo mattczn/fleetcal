@@ -450,6 +450,7 @@ function PdfCanvas({ dataUrl, onRetry }: { dataUrl: string; onRetry?: () => void
       while (box.firstChild) box.removeChild(box.firstChild);
 
       const scale = fitScaleRef.current * zoomMult;
+      const pdfjsLib = await loadPdfJsFromCDN();
 
       for (let n = 1; n <= pdf.numPages; n++) {
         if (cancelled) return;
@@ -457,19 +458,55 @@ function PdfCanvas({ dataUrl, onRetry }: { dataUrl: string; onRetry?: () => void
         const viewport = page.getViewport({ scale });
         const dpr      = window.devicePixelRatio || 1;
 
+        // Wrapper so the text layer can absolute-position over the canvas.
+        const wrap = document.createElement('div');
+        wrap.style.position      = 'relative';
+        wrap.style.width         = Math.round(viewport.width)  + 'px';
+        wrap.style.height        = Math.round(viewport.height) + 'px';
+        wrap.style.marginBottom  = n < pdf.numPages ? '8px' : '0';
+        wrap.style.boxShadow     = '0 2px 8px rgba(0,0,0,.4)';
+        box.appendChild(wrap);
+
         const canvas        = document.createElement('canvas');
         canvas.width        = Math.round(viewport.width  * dpr);
         canvas.height       = Math.round(viewport.height * dpr);
         canvas.style.width  = Math.round(viewport.width)  + 'px';
         canvas.style.height = Math.round(viewport.height) + 'px';
-        canvas.style.display      = 'block';
-        canvas.style.marginBottom = n < pdf.numPages ? '8px' : '0';
-        canvas.style.boxShadow    = '0 2px 8px rgba(0,0,0,.4)';
-        box.appendChild(canvas);
+        canvas.style.display = 'block';
+        wrap.appendChild(canvas);
 
         const ctx = canvas.getContext('2d')!;
         ctx.scale(dpr, dpr);
         await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+
+        // Transparent selectable text overlay (uses PDF.js TextLayer API,
+        // available in pdfjs-dist 4+). Each glyph is positioned over its
+        // rasterized counterpart so the browser's native selection works
+        // and copy-paste produces real text from the rate con.
+        if (cancelled) return;
+        const textLayerDiv = document.createElement('div');
+        textLayerDiv.className     = 'pdfTextLayer';
+        textLayerDiv.style.position = 'absolute';
+        textLayerDiv.style.inset    = '0';
+        textLayerDiv.style.overflow = 'hidden';
+        textLayerDiv.style.opacity  = '1';
+        textLayerDiv.style.lineHeight = '1';
+        wrap.appendChild(textLayerDiv);
+        try {
+          const TextLayerCtor = (pdfjsLib as { TextLayer?: new (args: object) => { render: () => Promise<void> } }).TextLayer;
+          if (TextLayerCtor) {
+            const tl = new TextLayerCtor({
+              textContentSource: page.streamTextContent(),
+              container: textLayerDiv,
+              viewport,
+            });
+            await tl.render();
+          }
+        } catch (err) {
+          // Selection is a nice-to-have — the canvas still renders
+          // correctly even if the text layer fails to mount.
+          console.warn('[PdfCanvas] text layer failed:', err);
+        }
       }
     })().catch(err => console.error('[PdfCanvas] render:', err));
 

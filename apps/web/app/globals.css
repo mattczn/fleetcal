@@ -79,6 +79,38 @@ input[type="number"] {
 /* ── Range accent ── */
 input[type="range"] { accent-color: var(--gc-blue); }
 
+/* ── PDF.js text layer (rate-con viewer) ───────────────────────────────
+ * Renders transparent glyphs on top of the PDF canvas so users can
+ * select + copy text. Each <span> is absolutely positioned to match the
+ * rasterized glyph; CSS keeps them invisible until the user selects. */
+.pdfTextLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  user-select: text;
+  forced-color-adjust: none;
+}
+.pdfTextLayer span,
+.pdfTextLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.pdfTextLayer ::selection {
+  background: rgba(3, 105, 161, 0.28); /* matches LOAD_ACCENT */
+}
+.pdfTextLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0 0;
+  z-index: -1;
+  cursor: default;
+  user-select: none;
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 
