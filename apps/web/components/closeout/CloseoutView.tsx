@@ -19,7 +19,7 @@
  * window.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
 import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
@@ -271,9 +271,13 @@ export default function CloseoutView() {
     }
   };
 
-  // Per-column option lists for the filter selects. Built from the
+  // Per-column option lists for the filter dropdowns. Built from the
   // current page's data so the user only ever picks values that exist.
-  const filterableCols: ColKey[] = ['age', 'delivered', 'loadNum', 'title', 'customer', 'driver'];
+  // Age and Title intentionally skipped — Age is better expressed by
+  // the Delivered date filter, and Title values are essentially unique
+  // per load so a dropdown doesn't help.
+  const filterableCols: ColKey[] = ['delivered', 'loadNum', 'customer', 'driver'];
+  const isFilterable = (c: ColKey) => filterableCols.includes(c);
   const filterOptions = useMemo(() => {
     const opts: Partial<Record<ColKey, string[]>> = {};
     for (const col of filterableCols) {
@@ -357,6 +361,49 @@ export default function CloseoutView() {
     await refresh();
   }
 
+  // For relay loads, the closeout queue can return either leg depending
+  // on what's matched the date filter. Without this, opening a relay
+  // sometimes lands on the delivery leg whose pickup-time asset isn't
+  // shown — confusing because the modal looks "empty". Always resolve
+  // to the pickup leg before opening; if the pickup leg isn't already
+  // in the calendar store, fetch the load and merge it in first so the
+  // modal renders with full data.
+  async function openLoadInModal(load: QueueRow) {
+    // Non-relay → just open the row's event directly.
+    if (!load.relayGroupId) {
+      openEditModal(load.id);
+      return;
+    }
+    const loadId = load.loadId;
+    if (!loadId) {
+      openEditModal(load.id);
+      return;
+    }
+    // Pickup leg already in the row set we rendered? Use it.
+    const pickupRow = rows.find(r => r.loadId === loadId && r.relayRole === 'pickup');
+    if (pickupRow) {
+      openEditModal(pickupRow.id);
+      return;
+    }
+    // Pickup leg in the broader calendar store?
+    const storeEvents = useCalendarStore.getState().events;
+    const pickupFromStore = storeEvents.find(e => e.loadId === loadId && e.relayRole === 'pickup');
+    if (pickupFromStore) {
+      openEditModal(pickupFromStore.id);
+      return;
+    }
+    // Last resort — fetch all legs of the load, merge, then open pickup.
+    try {
+      const { loads: legs } = await railway.getLoad(loadId);
+      mergeEvents(legs as CalendarEvent[]);
+      const pickup = legs.find(l => l.relayRole === 'pickup');
+      openEditModal(pickup?.id ?? load.id);
+    } catch (err) {
+      console.error('[closeout] failed to resolve pickup leg:', err);
+      openEditModal(load.id);
+    }
+  }
+
   // Internal notes panel
   const [notesTarget, setNotesTarget] = useState<Load | null>(null);
 
@@ -398,6 +445,25 @@ export default function CloseoutView() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [colsMenuOpen]);
+
+  // Per-column header menu — combined sort + filter popover anchored to
+  // the clicked column header. Replaces the prior always-visible filter
+  // row, which felt cramped.
+  const [openHeaderCol, setOpenHeaderCol] = useState<ColKey | null>(null);
+  const headerRefs = useRef<Partial<Record<ColKey, HTMLTableCellElement | null>>>({});
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!openHeaderCol) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (headerMenuRef.current?.contains(target)) return;
+      const inAnyHeader = Object.values(headerRefs.current).some(el => el?.contains(target));
+      if (inAnyHeader) return; // header click toggles via its own onClick
+      setOpenHeaderCol(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [openHeaderCol]);
 
   return (
     <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
@@ -486,42 +552,29 @@ export default function CloseoutView() {
               <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {visibleCols.age          && <SortableTh label="Age"          sortKey="age"          sort={sort} onSort={onSortClick} />}
-                    {visibleCols.delivered    && <SortableTh label="Delivered"    sortKey="delivered"    sort={sort} onSort={onSortClick} />}
-                    {visibleCols.loadNum      && <SortableTh label="Load #"       sortKey="loadNum"      sort={sort} onSort={onSortClick} />}
-                    {visibleCols.title        && <SortableTh label="Title"        sortKey="title"        sort={sort} onSort={onSortClick} />}
-                    {visibleCols.customer     && <SortableTh label="Customer"     sortKey="customer"     sort={sort} onSort={onSortClick} />}
-                    {visibleCols.driver       && <SortableTh label="Driver(s)"    sortKey="driver"       sort={sort} onSort={onSortClick} />}
-                    {visibleCols.rate         && <SortableTh label="Rate"         sortKey="rate"         align="right" sort={sort} onSort={onSortClick} />}
-                    {visibleCols.accessorials && <SortableTh label="Accessorials" sortKey="accessorials" align="right" sort={sort} onSort={onSortClick} />}
-                    {visibleCols.docs         && <Th>Docs</Th>}
+                    {visibleCols.age          && <MenuTh col="age"          label="Age"          align="left"  sort={sort} filterValue={filters.age          ?? ''} setHeaderRef={el => { headerRefs.current.age = el; }}          onClick={() => setOpenHeaderCol(p => p === 'age'          ? null : 'age')} />}
+                    {visibleCols.delivered    && <MenuTh col="delivered"    label="Delivered"    align="left"  sort={sort} filterValue={filters.delivered    ?? ''} setHeaderRef={el => { headerRefs.current.delivered = el; }}    onClick={() => setOpenHeaderCol(p => p === 'delivered'    ? null : 'delivered')} />}
+                    {visibleCols.loadNum      && <MenuTh col="loadNum"      label="Load #"       align="left"  sort={sort} filterValue={filters.loadNum      ?? ''} setHeaderRef={el => { headerRefs.current.loadNum = el; }}      onClick={() => setOpenHeaderCol(p => p === 'loadNum'      ? null : 'loadNum')} />}
+                    {visibleCols.title        && <MenuTh col="title"        label="Title"        align="left"  sort={sort} filterValue={filters.title        ?? ''} setHeaderRef={el => { headerRefs.current.title = el; }}        onClick={() => setOpenHeaderCol(p => p === 'title'        ? null : 'title')} />}
+                    {visibleCols.customer     && <MenuTh col="customer"     label="Customer"     align="left"  sort={sort} filterValue={filters.customer     ?? ''} setHeaderRef={el => { headerRefs.current.customer = el; }}     onClick={() => setOpenHeaderCol(p => p === 'customer'     ? null : 'customer')} />}
+                    {visibleCols.driver       && <MenuTh col="driver"       label="Driver(s)"    align="left"  sort={sort} filterValue={filters.driver       ?? ''} setHeaderRef={el => { headerRefs.current.driver = el; }}       onClick={() => setOpenHeaderCol(p => p === 'driver'       ? null : 'driver')} />}
+                    {visibleCols.rate         && <MenuTh col="rate"         label="Rate"         align="right" sort={sort} filterValue={filters.rate         ?? ''} setHeaderRef={el => { headerRefs.current.rate = el; }}         onClick={() => setOpenHeaderCol(p => p === 'rate'         ? null : 'rate')} />}
+                    {visibleCols.accessorials && <MenuTh col="accessorials" label="Accessorials" align="right" sort={sort} filterValue={filters.accessorials ?? ''} setHeaderRef={el => { headerRefs.current.accessorials = el; }} onClick={() => setOpenHeaderCol(p => p === 'accessorials' ? null : 'accessorials')} />}
+                    {visibleCols.docs && (
+                      <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider"
+                        style={{ color: 'var(--gc-text-3)', textAlign: 'left' }}>
+                        Docs
+                        {activeFilterCount > 0 && (
+                          <button onClick={clearAllFilters}
+                            className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                            style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
+                            title="Clear all filters">
+                            <X size={9} /> clear ({activeFilterCount})
+                          </button>
+                        )}
+                      </th>
+                    )}
                     <Th align="right">Actions</Th>
-                  </tr>
-                  <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {visibleCols.age       && <SelectFilterTh col="age"       value={filters.age       ?? ''} onChange={setFilter} options={filterOptions.age       ?? []} label="Age" />}
-                    {visibleCols.delivered && <SelectFilterTh col="delivered" value={filters.delivered ?? ''} onChange={setFilter} options={filterOptions.delivered ?? []} label="Date" />}
-                    {visibleCols.loadNum   && <SelectFilterTh col="loadNum"   value={filters.loadNum   ?? ''} onChange={setFilter} options={filterOptions.loadNum   ?? []} label="#" />}
-                    {visibleCols.title     && <SelectFilterTh col="title"     value={filters.title     ?? ''} onChange={setFilter} options={filterOptions.title     ?? []} label="Title" />}
-                    {visibleCols.customer  && <SelectFilterTh col="customer"  value={filters.customer  ?? ''} onChange={setFilter} options={filterOptions.customer  ?? []} label="Customer" />}
-                    {visibleCols.driver    && <SelectFilterTh col="driver"    value={filters.driver    ?? ''} onChange={setFilter} options={filterOptions.driver    ?? []} label="Driver" />}
-                    {visibleCols.rate         && <Th align="right" />}
-                    {visibleCols.accessorials && <Th align="right" />}
-                    {visibleCols.docs && <Th>{activeFilterCount > 0 && (
-                      <button onClick={clearAllFilters}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                        style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
-                        title="Clear all filters">
-                        <X size={9} /> clear ({activeFilterCount})
-                      </button>
-                    )}</Th>}
-                    <Th align="right">{!visibleCols.docs && activeFilterCount > 0 && (
-                      <button onClick={clearAllFilters}
-                        className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                        style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
-                        title="Clear all filters">
-                        <X size={9} /> clear ({activeFilterCount})
-                      </button>
-                    )}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -575,7 +628,7 @@ export default function CloseoutView() {
                         {visibleCols.title && (
                           <Td>
                             <button type="button"
-                              onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
+                              onClick={e => { e.stopPropagation(); void openLoadInModal(load); }}
                               className="text-left font-bold hover:underline truncate max-w-[320px]"
                               style={{ color: 'var(--gc-blue)' }}
                               title="Open load details">
@@ -721,6 +774,25 @@ export default function CloseoutView() {
           )}
         </div>
       </div>
+
+      {/* Combined sort + filter popover for the active column header */}
+      {openHeaderCol && (
+        <HeaderMenu
+          ref={headerMenuRef}
+          col={openHeaderCol}
+          anchorEl={headerRefs.current[openHeaderCol] ?? null}
+          sort={sort}
+          filterable={isFilterable(openHeaderCol)}
+          filterValue={filters[openHeaderCol] ?? ''}
+          options={filterOptions[openHeaderCol] ?? []}
+          onSort={(dir) => {
+            if (dir === null) setSort({ key: null, dir: 'asc' });
+            else setSort({ key: openHeaderCol, dir });
+          }}
+          onFilter={(v) => setFilter(openHeaderCol, v)}
+          onClose={() => setOpenHeaderCol(null)}
+        />
+      )}
 
       {/* Customer profile modal */}
       {brokerProfileId && (
@@ -1092,66 +1164,209 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
   );
 }
 
-function SortableTh({
-  label, sortKey, sort, onSort, align = 'left',
+/** Column header that opens a sort + filter popover when clicked. */
+function MenuTh({
+  col, label, align, sort, filterValue, setHeaderRef, onClick,
 }: {
+  col: ColKey;
   label: string;
-  sortKey: ColKey;
+  align: 'left' | 'right';
   sort: SortState;
-  onSort: (key: ColKey) => void;
-  align?: 'left' | 'right';
+  filterValue: string;
+  setHeaderRef: (el: HTMLTableCellElement | null) => void;
+  onClick: () => void;
 }) {
-  const active = sort.key === sortKey;
+  const sortActive   = sort.key === col;
+  const filterActive = filterValue !== '';
+  const anyActive    = sortActive || filterActive;
   return (
-    <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider select-none cursor-pointer"
-      style={{ color: active ? 'var(--gc-text-1)' : 'var(--gc-text-3)', textAlign: align }}
-      onClick={() => onSort(sortKey)}
-      title="Click to sort">
+    <th
+      ref={setHeaderRef}
+      onClick={onClick}
+      className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors"
+      style={{
+        color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+        textAlign:  align,
+        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
+      }}
+      title="Click for sort + filter">
       <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
         {label}
-        {active ? (
+        {sortActive ? (
           sort.dir === 'asc'
             ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)' }} />
             : <ArrowDown size={11} style={{ color: 'var(--gc-blue)' }} />
-        ) : (
-          <span style={{ width: 11, height: 11, opacity: 0.2 }}>
-            <ArrowUp size={11} />
-          </span>
+        ) : null}
+        {filterActive && (
+          <span title={`Filtered: ${filterValue}`}
+            style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--gc-blue)' }} />
         )}
       </span>
     </th>
   );
 }
 
-function SelectFilterTh({
-  col, value, onChange, options, label,
-}: {
+/** Combined sort + filter popover. Anchored to the clicked header via
+ *  getBoundingClientRect, repositioned on resize/scroll. Rendered with
+ *  fixed positioning so it escapes the table's overflow-hidden ancestor. */
+const HeaderMenu = forwardRef<HTMLDivElement, {
   col: ColKey;
-  value: string;
-  onChange: (col: ColKey, val: string) => void;
+  anchorEl: HTMLElement | null;
+  sort: SortState;
+  filterable: boolean;
+  filterValue: string;
   options: string[];
-  /** Shown as the "All …" placeholder option, e.g. "All Customers". */
-  label: string;
-}) {
-  const active = value !== '';
+  onSort: (dir: 'asc' | 'desc' | null) => void;
+  onFilter: (val: string) => void;
+  onClose: () => void;
+}>(function HeaderMenu({
+  col, anchorEl, sort, filterable, filterValue, options, onSort, onFilter, onClose,
+}, ref) {
+  const [pos, setPos]   = useState<{ left: number; top: number } | null>(null);
+  const [search, setSearch] = useState('');
+  // Re-position on mount + on resize/scroll. Closing on scroll would be
+  // jarring (the user might scroll the table to see options), so we
+  // just reposition.
+  useEffect(() => {
+    if (!anchorEl) { setPos(null); return; }
+    const update = () => {
+      const r = anchorEl.getBoundingClientRect();
+      // Anchor below the header, aligned to its left edge.
+      setPos({ left: r.left, top: r.bottom });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [anchorEl]);
+  if (!pos) return null;
+
+  const filteredOptions = search.trim() === ''
+    ? options
+    : options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+
   return (
-    <th className="px-2 pb-2" style={{ textAlign: 'left' }}>
-      <select
-        value={value}
-        onChange={e => onChange(col, e.target.value)}
-        className="w-full text-[11px] px-2 py-1 rounded-md outline-none cursor-pointer"
-        style={{
-          background: 'var(--gc-surface)',
-          border:     `1px solid ${active ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-          color:      active ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-          fontWeight: active ? 600 : 400,
-        }}
-        title={active ? `Filtered: ${value}` : `Filter by ${label}`}>
-        <option value="">All {label}</option>
-        {options.map(opt => (
-          <option key={opt} value={opt}>{opt}</option>
-        ))}
-      </select>
-    </th>
+    <div
+      ref={ref}
+      className="rounded-xl py-1.5"
+      style={{
+        position:   'fixed',
+        left:       pos.left,
+        top:        pos.top + 4,
+        zIndex:     50,
+        background: 'var(--gc-surface)',
+        border:     '1px solid var(--gc-border)',
+        boxShadow:  '0 12px 32px rgba(0,0,0,0.15)',
+        minWidth:   220,
+        maxWidth:   320,
+      }}>
+      {/* Sort group */}
+      <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold"
+        style={{ color: 'var(--gc-text-3)' }}>
+        Sort
+      </div>
+      <MenuRow
+        active={sort.key === col && sort.dir === 'asc'}
+        icon={<ArrowUp size={12} />}
+        label="Ascending"
+        onClick={() => { onSort('asc'); }}
+      />
+      <MenuRow
+        active={sort.key === col && sort.dir === 'desc'}
+        icon={<ArrowDown size={12} />}
+        label="Descending"
+        onClick={() => { onSort('desc'); }}
+      />
+      {sort.key === col && (
+        <MenuRow
+          icon={<X size={12} />}
+          label="Clear sort"
+          onClick={() => { onSort(null); }}
+          muted
+        />
+      )}
+
+      {/* Filter group */}
+      {filterable && (
+        <>
+          <div className="my-1" style={{ borderTop: '1px solid var(--gc-border-light)' }} />
+          <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
+            style={{ color: 'var(--gc-text-3)' }}>
+            <span>Filter</span>
+            {filterValue && (
+              <button onClick={() => { onFilter(''); }}
+                className="text-[10px] font-semibold normal-case tracking-normal"
+                style={{ color: 'var(--gc-blue)' }}>
+                Clear
+              </button>
+            )}
+          </div>
+          {options.length > 8 && (
+            <div className="px-2 pb-1.5">
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search…"
+                className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+                style={{
+                  background: 'var(--gc-bg)',
+                  border:     '1px solid var(--gc-border-light)',
+                  color:      'var(--gc-text-1)',
+                }}
+              />
+            </div>
+          )}
+          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] italic" style={{ color: 'var(--gc-text-3)' }}>
+                No options
+              </div>
+            ) : (
+              filteredOptions.map(opt => (
+                <MenuRow
+                  key={opt}
+                  active={filterValue === opt}
+                  label={opt}
+                  onClick={() => { onFilter(opt); onClose(); }}
+                  truncate
+                />
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+});
+
+function MenuRow({
+  icon, label, onClick, active, muted, truncate,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  muted?: boolean;
+  truncate?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left transition-colors hover:bg-[var(--gc-hover)]"
+      style={{
+        background: active ? 'rgba(26,115,232,0.10)' : 'transparent',
+        color:      muted
+                      ? 'var(--gc-text-3)'
+                      : active ? 'var(--gc-blue)' : 'var(--gc-text-1)',
+        fontWeight: active ? 600 : 400,
+      }}>
+      {icon && <span className="flex-none">{icon}</span>}
+      <span className={truncate ? 'truncate flex-1' : 'flex-1'}>{label}</span>
+      {active && <Check size={12} className="flex-none" />}
+    </button>
   );
 }
