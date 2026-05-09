@@ -1189,14 +1189,54 @@ function DetailsTab({
                 editing={editMode} modified={dirty.has("load_price")}
                 onEdit={editLoadPrice}
               />
-              <EditableRow
-                Icon={DollarSign} label="Driver Pay"
-                value={load.driverPay != null ? fmtMoney(load.driverPay) : null}
-                color="#15803d"
-                editing={editMode} modified={dirty.has("driver_pay")}
-                onEdit={editDriverPay}
-                last
-              />
+              {load.relayRole ? (() => {
+                // Relay context: show pickup + delivery pay separately. Only
+                // THIS leg's pay is editable here — the partner leg lives on
+                // a different load detail page.
+                const isPickup       = load.relayRole === "pickup";
+                const myPay          = load.driverPay         ?? null;
+                const partnerPay     = load.partnerDriverPay  ?? null;
+                const pickupPayVal   = isPickup ? myPay : partnerPay;
+                const deliveryPayVal = isPickup ? partnerPay : myPay;
+                const total = (myPay ?? 0) + (partnerPay ?? 0);
+                return (
+                  <>
+                    <EditableRow
+                      Icon={DollarSign} label="Pickup Driver Pay"
+                      value={pickupPayVal != null ? fmtMoney(pickupPayVal) : null}
+                      color="#15803d"
+                      editing={editMode && isPickup}
+                      modified={isPickup && dirty.has("driver_pay")}
+                      onEdit={isPickup ? editDriverPay : () => { /* read-only on this leg */ }}
+                    />
+                    <EditableRow
+                      Icon={DollarSign} label="Delivery Driver Pay"
+                      value={deliveryPayVal != null ? fmtMoney(deliveryPayVal) : null}
+                      color="#15803d"
+                      editing={editMode && !isPickup}
+                      modified={!isPickup && dirty.has("driver_pay")}
+                      onEdit={!isPickup ? editDriverPay : () => { /* read-only on this leg */ }}
+                    />
+                    <EditableRow
+                      Icon={DollarSign} label="Total Driver Pay"
+                      value={total > 0 ? fmtMoney(total) : null}
+                      color="#15803d"
+                      editing={false}
+                      onEdit={() => { /* read-only — derived */ }}
+                      last
+                    />
+                  </>
+                );
+              })() : (
+                <EditableRow
+                  Icon={DollarSign} label="Driver Pay"
+                  value={load.driverPay != null ? fmtMoney(load.driverPay) : null}
+                  color="#15803d"
+                  editing={editMode} modified={dirty.has("driver_pay")}
+                  onEdit={editDriverPay}
+                  last
+                />
+              )}
             </Card>
           ) : null}
 

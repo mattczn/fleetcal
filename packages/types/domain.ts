@@ -389,6 +389,9 @@ export interface Load {
   partnerStops?: Stop[];
   partnerDriverName?: string;
   partnerAssetName?: string;
+  /** Driver pay on the OTHER leg of the relay. Used by detail UIs that
+   *  show pickup + delivery driver pay side-by-side. */
+  partnerDriverPay?: number;
 
   // Audit
   auditLog?: LoadAuditEntry[];

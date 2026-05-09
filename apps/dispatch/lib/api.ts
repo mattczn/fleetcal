@@ -417,6 +417,7 @@ export async function fetchLoad(id: string, _orgId: string): Promise<Load | null
       partnerStops:      partner.stops,
       partnerDriverName: partner.driverName,
       partnerAssetName:  partner.assetName,
+      partnerDriverPay:  partner.driverPay,
     } as Load;
   } catch (err) {
     console.error("fetchLoad:", err);

@@ -272,6 +272,38 @@ function Field({ label, labelSuffix, children }: { label: string; labelSuffix?: 
   );
 }
 
+/** Number input prefixed with $. Empty string = unset (omitted on save). */
+function NumberInputWithDollar({ value, onChange, headerColor }: {
+  value: number | '';
+  onChange: (v: number | '') => void;
+  headerColor: string;
+}) {
+  return (
+    <div style={{ position: 'relative' }}>
+      <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--gc-text-3)', fontSize: 13, pointerEvents: 'none' }}>$</span>
+      <input
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        value={value}
+        onChange={e => {
+          const raw = e.target.value;
+          if (raw === '') onChange('');
+          else {
+            const n = parseFloat(raw);
+            onChange(Number.isFinite(n) ? n : '');
+          }
+        }}
+        placeholder="0.00"
+        className="w-full rounded-lg outline-none text-sm"
+        style={{ border: '1px solid var(--gc-border)', padding: '8px 10px 8px 22px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }}
+        onFocus={e => (e.currentTarget.style.borderColor = headerColor)}
+        onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+      />
+    </div>
+  );
+}
+
 const PDF_ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // Renders a PDF data URL to canvas elements via PDF.js with zoom controls.
@@ -1184,9 +1216,14 @@ export default function EventModal() {
 
   const [relayDelivAssetId,       setRelayDelivAssetId]       = useState(assets[0]?.id ?? 1);
   const [relayDelivDriverName,    setRelayDelivDriverName]    = useState('');
+  // Per-leg driver pay for relay loads. The single fieldValues['driverPay']
+  // is hidden when in relay context; these two drive both UI and save.
+  const [pickupDriverPay,   setPickupDriverPay]   = useState<number | ''>('');
+  const [deliveryDriverPay, setDeliveryDriverPay] = useState<number | ''>('');
 
   const isPickupLeg   = isEdit && relayRole === 'pickup';
   const isDeliveryLeg = isEdit && relayRole === 'delivery';
+  const isRelayContext = relayActive || isPickupLeg || isDeliveryLeg;
 
   // Compute loaded mileage from geocoded stops via Mapbox Directions.
   // For relay legs, only count stops up to (pickup) or from (delivery) the relay handoff.
@@ -1284,7 +1321,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -1355,6 +1392,14 @@ export default function EventModal() {
           setRelayDelivAssetId(localPartner.assetId);
           setRelayDelivDriverName(localPartner.driverName ?? '');
         }
+        // Seed both per-leg pays from whichever leg is which.
+        if (ev.relayRole === 'pickup') {
+          setPickupDriverPay(ev.driverPay ?? '');
+          setDeliveryDriverPay(localPartner?.driverPay ?? '');
+        } else if (ev.relayRole === 'delivery') {
+          setDeliveryDriverPay(ev.driverPay ?? '');
+          setPickupDriverPay(localPartner?.driverPay ?? '');
+        }
         // Fallback: partner not in the loaded events window → fetch the load.
         if (!localPartner && ev.loadId) {
           import('@/lib/railway').then(({ railway }) => railway.getLoad(ev.loadId!))
@@ -1365,6 +1410,9 @@ export default function EventModal() {
               if (ev.relayRole === 'pickup') {
                 setRelayDelivAssetId(partner.assetId);
                 setRelayDelivDriverName(partner.driverName ?? '');
+                setDeliveryDriverPay(partner.driverPay ?? '');
+              } else if (ev.relayRole === 'delivery') {
+                setPickupDriverPay(partner.driverPay ?? '');
               }
             })
             .catch(err => console.error('relay-partner fetch:', err));
@@ -1651,10 +1699,16 @@ export default function EventModal() {
     const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
     const deliveryLegStart  = relayStop?.apptEnd   ?? pickupLegEnd;
 
+    // Per-leg driver pay derived from the dual inputs. Empty input ⇒
+    // undefined so the API treats it as "no value" instead of zero.
+    const pickupPay   = pickupDriverPay   === '' ? undefined : pickupDriverPay;
+    const deliveryPay = deliveryDriverPay === '' ? undefined : deliveryDriverPay;
+
     if (isPickupLeg && relayPartner && relayGroupId) {
       const pickupUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
         ...shared, assetId, driverName: driverName || undefined,
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
+        driverPay: pickupPay,
         status, relayGroupId, relayRole: 'pickup',
       };
       const deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
@@ -1662,7 +1716,7 @@ export default function EventModal() {
         assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined,
         start: deliveryLegStart,
         end: relayPartner.end,
-        driverPay: relayPartner.driverPay,
+        driverPay: deliveryPay,
         status: relayPartner.status ?? 'scheduled',
         relayGroupId, relayRole: 'delivery',
       };
@@ -1672,13 +1726,14 @@ export default function EventModal() {
       const deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
         ...shared, assetId, driverName: driverName || undefined,
         start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
+        driverPay: deliveryPay,
         status, relayGroupId, relayRole: 'delivery',
       };
       const pickupUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
         ...shared,
         assetId: relayPartner.assetId, driverName: relayPartner.driverName,
         start: relayPartner.start, end: pickupLegEnd,
-        driverPay: relayPartner.driverPay,
+        driverPay: pickupPay,
         status: relayPartner.status ?? 'scheduled',
         relayGroupId, relayRole: 'pickup',
       };
@@ -1693,6 +1748,7 @@ export default function EventModal() {
       const pickupData: Omit<CalendarEvent, 'id'> = {
         ...shared, assetId, driverName: driverName || undefined,
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
+        driverPay: pickupPay,
         status, relayGroupId: rgId, relayRole: 'pickup',
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
         ...(isEdit ? { auditLog: relayAuditLog } : {}),
@@ -1701,6 +1757,7 @@ export default function EventModal() {
         ...shared,
         assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined,
         start: deliveryLegStart, end: `${delivEndDate}T${endTime}`,
+        driverPay: deliveryPay,
         status: 'scheduled', relayGroupId: rgId, relayRole: 'delivery',
         createdByName: currentUserName,
       };
@@ -3355,7 +3412,12 @@ export default function EventModal() {
               if (section === 'financial' && eventKind === 'non_revenue') {
                 fields = fields.filter(f => f.id === 'driverPay');
               }
-              if (fields.length === 0) return null;
+              // Hide single driverPay field in relay context — replaced by
+              // the dual Pickup/Delivery pay inputs below.
+              if (section === 'financial' && isRelayContext) {
+                fields = fields.filter(f => f.id !== 'driverPay');
+              }
+              if (fields.length === 0 && !(section === 'financial' && isRelayContext)) return null;
               return (
                 <div key={section} style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
                   <div className="flex items-center justify-between mb-4">
@@ -3381,6 +3443,29 @@ export default function EventModal() {
                     labelSuffixes={dispatcherLabelSuffixes}
                     noLabelFields={new Set()}
                   />
+                  {/* Dual driver-pay inputs for relay loads */}
+                  {section === 'financial' && isRelayContext && (
+                    <div className={fields.length > 0 ? 'mt-3' : ''}>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="Pickup Driver Pay">
+                          <NumberInputWithDollar value={pickupDriverPay} onChange={v => { setPickupDriverPay(v); markDirty(); }} headerColor={headerColor} />
+                        </Field>
+                        <Field label="Delivery Driver Pay">
+                          <NumberInputWithDollar value={deliveryDriverPay} onChange={v => { setDeliveryDriverPay(v); markDirty(); }} headerColor={headerColor} />
+                        </Field>
+                      </div>
+                      {(pickupDriverPay !== '' || deliveryDriverPay !== '') && (
+                        <div className="mt-2 flex justify-end">
+                          <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                            Total driver pay:&nbsp;
+                            <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                              ${(((pickupDriverPay === '' ? 0 : pickupDriverPay) + (deliveryDriverPay === '' ? 0 : deliveryDriverPay)) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {section === 'financial' && eventKind === 'revenue' && accessorials.length > 0 && (
                     <div className="mt-3 space-y-2">
                       {accessorials.map(acc => (
