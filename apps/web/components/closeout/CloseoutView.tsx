@@ -477,18 +477,23 @@ export default function CloseoutView() {
                             {load.title}
                           </button>
                         </Td>
-                        {/* Customer — opens broker profile */}
+                        {/* Customer — opens broker profile. Truncate so long
+                            names like "TCI Global Logistics" don't wrap. */}
                         <Td>
                           {matchedCustomer ? (
                             <button type="button"
                               onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
-                              className="hover:underline"
+                              className="text-left hover:underline truncate block max-w-[160px]"
                               style={{ color: 'var(--gc-blue)' }}
-                              title="Open customer profile">
+                              title={`Open customer profile — ${cust}`}>
                               {cust}
                             </button>
                           ) : (
-                            <span style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>{cust || '—'}</span>
+                            <span className="truncate block max-w-[160px]"
+                              title={cust || undefined}
+                              style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                              {cust || '—'}
+                            </span>
                           )}
                         </Td>
                         {/* Driver(s) */}
