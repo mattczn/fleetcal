@@ -13,6 +13,8 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import CopyChip from '@/components/ui/CopyChip';
 import { relayLegShare } from '@/lib/legMiles';
+import DatePicker from '@/components/calendar/DatePicker';
+import { LOAD_ACCENT } from '@/lib/loadAccent';
 import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
 
@@ -657,17 +659,9 @@ export default function DashboardView() {
               {/* Custom range pickers — render right under the pill row when active */}
               {period === 'custom' && (
                 <div className="flex items-center gap-1.5">
-                  <input type="date" value={customStart}
-                    onChange={e => setCustomStart(e.target.value)}
-                    max={customEnd || undefined}
-                    className="text-xs rounded-full outline-none"
-                    style={{ border: '1px solid var(--gc-border)', padding: '4px 10px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }} />
+                  <DatePicker value={customStart} onChange={setCustomStart} headerColor={LOAD_ACCENT} />
                   <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>–</span>
-                  <input type="date" value={customEnd}
-                    onChange={e => setCustomEnd(e.target.value)}
-                    min={customStart || undefined}
-                    className="text-xs rounded-full outline-none"
-                    style={{ border: '1px solid var(--gc-border)', padding: '4px 10px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }} />
+                  <DatePicker value={customEnd} onChange={setCustomEnd} headerColor={LOAD_ACCENT} min={customStart || undefined} />
                 </div>
               )}
               {/* Date range label */}
