@@ -502,6 +502,7 @@ export type Database = {
         Row: {
           accessorials: Json | null
           audit_log: Json | null
+          billing_status: string
           broker: string | null
           commodity: string | null
           created_at: string
@@ -509,9 +510,14 @@ export type Database = {
           customer_id: string | null
           deleted_at: string | null
           dispatcher: string | null
+          flagged_at: string | null
+          flagged_by: string | null
+          flagged_note: string | null
+          flagged_reason: string | null
           id: string
           internal_load_id: number
           internal_notes: Json
+          invoice_doc_ids: string[]
           load_num: string | null
           load_price: number | null
           notes: string | null
@@ -519,11 +525,14 @@ export type Database = {
           rate_con_pdf: string | null
           ref_nums: string | null
           updated_at: string
+          verified_at: string | null
+          verified_by: string | null
           weight: number | null
         }
         Insert: {
           accessorials?: Json | null
           audit_log?: Json | null
+          billing_status?: string
           broker?: string | null
           commodity?: string | null
           created_at?: string
@@ -531,9 +540,14 @@ export type Database = {
           customer_id?: string | null
           deleted_at?: string | null
           dispatcher?: string | null
+          flagged_at?: string | null
+          flagged_by?: string | null
+          flagged_note?: string | null
+          flagged_reason?: string | null
           id?: string
           internal_load_id: number
           internal_notes?: Json
+          invoice_doc_ids?: string[]
           load_num?: string | null
           load_price?: number | null
           notes?: string | null
@@ -541,11 +555,14 @@ export type Database = {
           rate_con_pdf?: string | null
           ref_nums?: string | null
           updated_at?: string
+          verified_at?: string | null
+          verified_by?: string | null
           weight?: number | null
         }
         Update: {
           accessorials?: Json | null
           audit_log?: Json | null
+          billing_status?: string
           broker?: string | null
           commodity?: string | null
           created_at?: string
@@ -553,9 +570,14 @@ export type Database = {
           customer_id?: string | null
           deleted_at?: string | null
           dispatcher?: string | null
+          flagged_at?: string | null
+          flagged_by?: string | null
+          flagged_note?: string | null
+          flagged_reason?: string | null
           id?: string
           internal_load_id?: number
           internal_notes?: Json
+          invoice_doc_ids?: string[]
           load_num?: string | null
           load_price?: number | null
           notes?: string | null
@@ -563,6 +585,8 @@ export type Database = {
           rate_con_pdf?: string | null
           ref_nums?: string | null
           updated_at?: string
+          verified_at?: string | null
+          verified_by?: string | null
           weight?: number | null
         }
         Relationships: [

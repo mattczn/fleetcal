@@ -109,6 +109,19 @@ class RailwayClient {
     return this.req<ListLoadsResponse>('GET', `/v1/loads${qs ? `?${qs}` : ''}`);
   }
   getLoad(id: string)                 { return this.req<GetLoadResponse>('GET',      `/v1/loads/${id}`); }
+  // ── Billing / POD verification queue ──────────────────────────────────
+  listBillingQueue(tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' = 'pending') {
+    return this.req<{ loads: import('@fleetcal/types').Load[] }>('GET', `/v1/billing/queue?tab=${tab}`);
+  }
+  updateLoadBilling(id: string, body: {
+    action: 'verify' | 'flag' | 'clear_flag' | 'set_invoice_docs' | 'mark_invoiced' | 'mark_paid' | 'reopen';
+    actorName?: string;
+    flagReason?: 'missing_pod' | 'awaiting_rate_con' | 'detention_pending' | 'lumper_pending' | 'rate_mismatch' | 'other';
+    flagNote?: string;
+    invoiceDocIds?: string[];
+  }) {
+    return this.req<{ ok: true }>('PATCH', `/v1/billing/loads/${id}`, body);
+  }
   searchLoads(q: string, limit?: number) {
     const qs = new URLSearchParams({ q, ...(limit ? { limit: String(limit) } : {}) }).toString();
     return this.req<SearchLoadsResponse>('GET', `/v1/loads/search?${qs}`);

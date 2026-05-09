@@ -19,6 +19,8 @@ const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
+  "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
+  "verified_at,verified_by,invoice_doc_ids," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 const STOP_COLS =

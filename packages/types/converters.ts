@@ -108,6 +108,17 @@ export function joinEventLoadToApp(
     internalNotes:  Array.isArray(l?.internal_notes)
                       ? (l!.internal_notes as InternalNote[])
                       : [],
+    // Billing workflow
+    billingStatus:  (l?.billing_status as Load['billingStatus'] | undefined) ?? undefined,
+    flaggedReason:  (l?.flagged_reason as string | null | undefined) ?? undefined,
+    flaggedNote:    (l?.flagged_note   as string | null | undefined) ?? undefined,
+    flaggedAt:      (l?.flagged_at     as string | null | undefined) ?? undefined,
+    flaggedBy:      (l?.flagged_by     as string | null | undefined) ?? undefined,
+    verifiedAt:     (l?.verified_at    as string | null | undefined) ?? undefined,
+    verifiedBy:     (l?.verified_by    as string | null | undefined) ?? undefined,
+    invoiceDocIds:  Array.isArray(l?.invoice_doc_ids)
+                      ? (l!.invoice_doc_ids as string[])
+                      : [],
     // relayGroupId aliases loadId for relay legs. Two events with the same
     // load_id and relay_role set ARE the relay; the alias keeps existing
     // relayGroupId-reading code working. Pre-2.5c, fall back to the

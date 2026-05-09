@@ -405,4 +405,28 @@ export interface Load {
   /** events.deleted_at — set on soft-deleted events; populated by reads
    *  that include deleted rows (trash UI). */
   deletedAt?: string;
+
+  // ── Billing / POD verification workflow ─────────────────────────────
+  /**
+   * Billing-state machine, independent of the operational status.
+   * Defaults to 'pending'; advances as the dispatcher verifies POD and
+   * accounting invoices + collects payment. 'on_hold' parks a load
+   * until a flag is cleared.
+   */
+  billingStatus?: 'pending' | 'verified' | 'invoiced' | 'paid' | 'on_hold';
+  /** Structured tag describing why a load is flagged for follow-up. */
+  flaggedReason?: string;
+  /** Free-form follow-up text (what we're waiting on, who to call). */
+  flaggedNote?: string;
+  flaggedAt?: string;
+  flaggedBy?: string;
+  /** Set when a dispatcher releases the load for invoicing. */
+  verifiedAt?: string;
+  verifiedBy?: string;
+  /**
+   * IDs of load_documents to bundle when accounting generates the
+   * invoice. Defaults to all uploaded PODs; the review screen lets the
+   * dispatcher trim/expand the set.
+   */
+  invoiceDocIds?: string[];
 }
