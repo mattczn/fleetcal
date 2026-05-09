@@ -763,9 +763,10 @@ export default function DashboardView() {
                   </div>
                   <div className="mt-3 pt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)', borderTop: '1px solid var(--gc-border-light)' }}>
                     Relay loads are split between the two assets in proportion
-                    to each leg&apos;s straight-line miles. Each leg counts as
-                    half a load. When one leg has no geocoded stops, the split
-                    falls back to 50/50.
+                    to each leg&apos;s loaded miles (routed when the load has
+                    been opened in the modal, otherwise straight-line as a
+                    fallback). Each leg counts as half a load. When one leg
+                    has no geocoded stops, the split falls back to 50/50.
                   </div>
                 </>
               )}

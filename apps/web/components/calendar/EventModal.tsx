@@ -1267,6 +1267,28 @@ export default function EventModal() {
     return () => { cancelled = true; };
   }, [relayPartner, relayRole]);
 
+  // ── Lazy cache: persist routed loadedMiles back to events.loaded_miles
+  // so reports / dashboards can pull from the column instead of re-running
+  // Google Directions. Fires once per modal-open when the computed value
+  // differs from what's stored (rounded to 0.1 mi to avoid noisy writes).
+  useEffect(() => {
+    if (!isEdit || !modalEventId || loadedMiles == null) return;
+    const ev = events.find(e => e.id === modalEventId);
+    if (!ev) return;
+    const stored = ev.loadedMiles ?? null;
+    const next   = Math.round(loadedMiles * 10) / 10;
+    if (stored != null && Math.abs(stored - next) < 0.1) return;
+    void updateEvent(modalEventId, { loadedMiles: next });
+  }, [loadedMiles, isEdit, modalEventId, events, updateEvent]);
+
+  useEffect(() => {
+    if (!relayPartner || partnerLoadedMiles == null) return;
+    const stored = relayPartner.loadedMiles ?? null;
+    const next   = Math.round(partnerLoadedMiles * 10) / 10;
+    if (stored != null && Math.abs(stored - next) < 0.1) return;
+    void updateEvent(relayPartner.id, { loadedMiles: next });
+  }, [partnerLoadedMiles, relayPartner, updateEvent]);
+
   // Auto-fill driver pay from percentage setting whenever load price changes.
   // Handles loadPrice as either number or numeric string (AI parses sometimes
   // return "1500.00"); only fills if driverPay is empty/zero or was previously

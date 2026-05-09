@@ -48,6 +48,7 @@ const EVENT_LEVEL_KEYS = [
   'trailerId',
   'trailerType',
   'driverPay',
+  'loadedMiles',
   'priority',
   'relayRole',
 ] as const;

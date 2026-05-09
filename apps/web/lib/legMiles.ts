@@ -35,15 +35,24 @@ export function legStraightMiles(event: Pick<CalendarEvent, 'stops'>): number {
   return total;
 }
 
+/** Best-available leg miles. Prefers the cached routed value (set when
+ *  the modal computed Google Directions), falls back to haversine when
+ *  no cache exists yet. */
+export function legMiles(event: Pick<CalendarEvent, 'stops' | 'loadedMiles'>): number {
+  if (typeof event.loadedMiles === 'number' && event.loadedMiles > 0) return event.loadedMiles;
+  return legStraightMiles(event);
+}
+
 /**
  * Compute the share (0..1) of a relay leg's revenue. Pass the legs in
  * either order. Falls back to 0.5 when one leg has no usable miles —
  * better than crediting the whole load to one asset and unfair to the
- * driver who hauled the other half.
+ * driver who hauled the other half. Uses cached routed miles when
+ * available and falls back to haversine on a per-leg basis.
  */
 export function relayLegShare(thisLeg: CalendarEvent, partnerLeg: CalendarEvent): number {
-  const a = legStraightMiles(thisLeg);
-  const b = legStraightMiles(partnerLeg);
+  const a = legMiles(thisLeg);
+  const b = legMiles(partnerLeg);
   if (a + b <= 0) return 0.5;
   return a / (a + b);
 }

@@ -83,6 +83,7 @@ export function joinEventLoadToApp(
     trailerId:      (e.trailer_id as number | null) ?? undefined,
     trailerType:    (e.trailer_type as string | null) ?? undefined,
     driverPay:      (e.driver_pay as number | null) ?? undefined,
+    loadedMiles:    (e.loaded_miles as number | null) ?? undefined,
     eventNotes:     (e.notes as string | null) ?? undefined,
     priority:       (e.priority as boolean | null) ?? false,
     createdAt:      (e.created_at as string | null) ?? undefined,
@@ -146,6 +147,7 @@ export function appLoadToEventInsert(
     trailer_id:       load.trailerId ?? null,
     trailer_type:     load.trailerType ?? null,
     driver_pay:       load.driverPay ?? null,
+    loaded_miles:     load.loadedMiles ?? null,
     notes:            load.eventNotes ?? null, // event-level notes
     priority:         load.priority ?? false,
     deleted_at:       null,

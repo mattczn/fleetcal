@@ -311,6 +311,7 @@ export type Database = {
           load_id: string | null
           load_num: string | null
           load_price: number | null
+          loaded_miles: number | null
           non_revenue_type: string | null
           notes: string | null
           org_id: string
@@ -346,6 +347,7 @@ export type Database = {
           load_id?: string | null
           load_num?: string | null
           load_price?: number | null
+          loaded_miles?: number | null
           non_revenue_type?: string | null
           notes?: string | null
           org_id: string
@@ -381,6 +383,7 @@ export type Database = {
           load_id?: string | null
           load_num?: string | null
           load_price?: number | null
+          loaded_miles?: number | null
           non_revenue_type?: string | null
           notes?: string | null
           org_id?: string

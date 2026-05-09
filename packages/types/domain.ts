@@ -351,6 +351,12 @@ export interface Load {
   // Financial
   loadPrice?: number;
   driverPay?: number;
+  /**
+   * Routed road miles on this leg, cached server-side so reports don't
+   * have to re-call Google Directions. Set by the load modal when
+   * calcRoadMiles resolves; cleared/recomputed whenever stops change.
+   */
+  loadedMiles?: number;
   detention?: number;
   lumperFees?: number;
   ratePerMile?: number; // legacy column

@@ -32,7 +32,7 @@ const STOP_COLS =
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
-  "notes,driver_pay,relay_role,event_kind,non_revenue_type,trailer_id," +
+  "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at";
 
 const LOAD_COLS =

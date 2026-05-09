@@ -62,6 +62,7 @@ export interface CreateLoadRequestEvent {
   trailerId?: number;
   trailerType?: string;
   driverPay?: number;
+  loadedMiles?: number;         // routed road miles for this leg (cached)
   eventNotes?: string;          // events.notes — leg-level operational notes
   priority?: boolean;
   stops?: Stop[];               // per-leg stops (no eventId; server fills it)
@@ -163,6 +164,7 @@ export interface UpdateEventRequest {
   trailerId?:    number | null;
   trailerType?:  string | null;
   driverPay?:    number | null;
+  loadedMiles?:  number | null;
   eventNotes?:   string | null;
   priority?:     boolean;
 }
@@ -278,6 +280,7 @@ export interface UpdateEventByIdRequest {
   trailerId?:    number | null;
   trailerType?:  string | null;
   driverPay?:    number | null;
+  loadedMiles?:  number | null;
   eventNotes?:   string | null;
   priority?:     boolean;
   nonRevenueType?: string | null;     // only meaningful when event_kind='non_revenue'
