@@ -1640,7 +1640,12 @@ export default function EventModal() {
     const internalNoteFields: { internalNotes?: import('@fleetcal/types').InternalNote[] } = notesChanged
       ? { internalNotes: finalNotes }
       : {};
-    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: storedPdf ?? undefined, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, ...internalNoteFields };
+    // Explicit null (not undefined) clears the column on the API. JSON
+    // serialization drops undefined keys entirely, so an undefined here
+    // would leave the column unchanged when the user just deleted the
+    // rate-con.
+    const rateConField = storedPdf ?? null;
+    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: rateConField, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, ...internalNoteFields };
 
     const relayStop = stops.find(s => s.type === 'relay');
     const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
