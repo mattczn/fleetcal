@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -58,6 +58,34 @@ type ColKey =
 interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
 
 type FilterState = Partial<Record<ColKey, string>>;
+
+// Toggleable columns. "actions" + "docs" are always rendered (they're
+// where the user mutates state). The notes button lives inside actions
+// so it follows the same rule.
+type ToggleableCol =
+  | 'age'
+  | 'delivered'
+  | 'loadNum'
+  | 'title'
+  | 'customer'
+  | 'driver'
+  | 'rate'
+  | 'accessorials'
+  | 'docs';
+
+const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
+  { key: 'age',          label: 'Age'          },
+  { key: 'delivered',    label: 'Delivered'    },
+  { key: 'loadNum',      label: 'Load #'       },
+  { key: 'title',        label: 'Title'        },
+  { key: 'customer',     label: 'Customer'     },
+  { key: 'driver',       label: 'Driver(s)'    },
+  { key: 'rate',         label: 'Rate'         },
+  { key: 'accessorials', label: 'Accessorials' },
+  { key: 'docs',         label: 'Docs'         },
+];
+
+const COLS_STORAGE_KEY = 'closeout-cols-v1';
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'pending',  label: 'Pending'   },
@@ -329,6 +357,48 @@ export default function CloseoutView() {
     await refresh();
   }
 
+  // Internal notes panel
+  const [notesTarget, setNotesTarget] = useState<Load | null>(null);
+
+  // Column show/hide menu — persisted to localStorage so the user's
+  // layout sticks across sessions.
+  const [visibleCols, setVisibleCols] = useState<Record<ToggleableCol, boolean>>(() => {
+    if (typeof window === 'undefined') {
+      return Object.fromEntries(TOGGLEABLE_COLS.map(c => [c.key, true])) as Record<ToggleableCol, boolean>;
+    }
+    try {
+      const stored = window.localStorage.getItem(COLS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as Record<string, boolean>;
+        // Re-build with defaults for any new column added since the
+        // user last saved their preferences.
+        const out: Record<ToggleableCol, boolean> = {} as Record<ToggleableCol, boolean>;
+        for (const c of TOGGLEABLE_COLS) out[c.key] = parsed[c.key] ?? true;
+        return out;
+      }
+    } catch { /* fall through to default */ }
+    return Object.fromEntries(TOGGLEABLE_COLS.map(c => [c.key, true])) as Record<ToggleableCol, boolean>;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols));
+  }, [visibleCols]);
+  const toggleCol = (key: ToggleableCol) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
+
+  // Click-outside dismissal for the columns menu.
+  const [colsMenuOpen, setColsMenuOpen] = useState(false);
+  const colsMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!colsMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (colsMenuRef.current && !colsMenuRef.current.contains(e.target as Node)) {
+        setColsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [colsMenuOpen]);
+
   return (
     <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
       <ManagementHeader title="Closeout" icon={FileCheck2} />
@@ -369,6 +439,30 @@ export default function CloseoutView() {
                 <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
             )}
+            {/* Columns visibility menu */}
+            <div className="relative" ref={colsMenuRef}>
+              <button onClick={() => setColsMenuOpen(o => !o)}
+                className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+                style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
+                <Columns3 size={12} /> Columns
+              </button>
+              {colsMenuOpen && (
+                <div className="absolute right-0 top-full mt-1 z-20 rounded-xl py-1.5"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', minWidth: 180 }}>
+                  {TOGGLEABLE_COLS.map(c => (
+                    <label key={c.key}
+                      className="flex items-center gap-2 px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--gc-hover)]"
+                      style={{ color: 'var(--gc-text-1)' }}>
+                      <input type="checkbox"
+                        checked={visibleCols[c.key]}
+                        onChange={() => toggleCol(c.key)}
+                        style={{ accentColor: '#1a73e8' }} />
+                      {c.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
             <button onClick={() => void refresh()}
               className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -392,28 +486,35 @@ export default function CloseoutView() {
               <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    <SortableTh label="Age"          sortKey="age"          sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Delivered"    sortKey="delivered"    sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Load #"       sortKey="loadNum"      sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Title"        sortKey="title"        sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Customer"     sortKey="customer"     sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Driver(s)"    sortKey="driver"       sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Rate"         sortKey="rate"         align="right" sort={sort} onSort={onSortClick} />
-                    <SortableTh label="Accessorials" sortKey="accessorials" align="right" sort={sort} onSort={onSortClick} />
-                    <Th>Docs</Th>
+                    {visibleCols.age          && <SortableTh label="Age"          sortKey="age"          sort={sort} onSort={onSortClick} />}
+                    {visibleCols.delivered    && <SortableTh label="Delivered"    sortKey="delivered"    sort={sort} onSort={onSortClick} />}
+                    {visibleCols.loadNum      && <SortableTh label="Load #"       sortKey="loadNum"      sort={sort} onSort={onSortClick} />}
+                    {visibleCols.title        && <SortableTh label="Title"        sortKey="title"        sort={sort} onSort={onSortClick} />}
+                    {visibleCols.customer     && <SortableTh label="Customer"     sortKey="customer"     sort={sort} onSort={onSortClick} />}
+                    {visibleCols.driver       && <SortableTh label="Driver(s)"    sortKey="driver"       sort={sort} onSort={onSortClick} />}
+                    {visibleCols.rate         && <SortableTh label="Rate"         sortKey="rate"         align="right" sort={sort} onSort={onSortClick} />}
+                    {visibleCols.accessorials && <SortableTh label="Accessorials" sortKey="accessorials" align="right" sort={sort} onSort={onSortClick} />}
+                    {visibleCols.docs         && <Th>Docs</Th>}
                     <Th align="right">Actions</Th>
                   </tr>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    <SelectFilterTh col="age"       value={filters.age       ?? ''} onChange={setFilter} options={filterOptions.age       ?? []} label="Age" />
-                    <SelectFilterTh col="delivered" value={filters.delivered ?? ''} onChange={setFilter} options={filterOptions.delivered ?? []} label="Date" />
-                    <SelectFilterTh col="loadNum"   value={filters.loadNum   ?? ''} onChange={setFilter} options={filterOptions.loadNum   ?? []} label="#" />
-                    <SelectFilterTh col="title"     value={filters.title     ?? ''} onChange={setFilter} options={filterOptions.title     ?? []} label="Title" />
-                    <SelectFilterTh col="customer"  value={filters.customer  ?? ''} onChange={setFilter} options={filterOptions.customer  ?? []} label="Customer" />
-                    <SelectFilterTh col="driver"    value={filters.driver    ?? ''} onChange={setFilter} options={filterOptions.driver    ?? []} label="Driver" />
-                    {/* Rate + Accessorials skipped — numeric ranges aren't dropdown-friendly. */}
-                    <Th align="right" />
-                    <Th align="right" />
-                    <Th>{activeFilterCount > 0 && (
+                    {visibleCols.age       && <SelectFilterTh col="age"       value={filters.age       ?? ''} onChange={setFilter} options={filterOptions.age       ?? []} label="Age" />}
+                    {visibleCols.delivered && <SelectFilterTh col="delivered" value={filters.delivered ?? ''} onChange={setFilter} options={filterOptions.delivered ?? []} label="Date" />}
+                    {visibleCols.loadNum   && <SelectFilterTh col="loadNum"   value={filters.loadNum   ?? ''} onChange={setFilter} options={filterOptions.loadNum   ?? []} label="#" />}
+                    {visibleCols.title     && <SelectFilterTh col="title"     value={filters.title     ?? ''} onChange={setFilter} options={filterOptions.title     ?? []} label="Title" />}
+                    {visibleCols.customer  && <SelectFilterTh col="customer"  value={filters.customer  ?? ''} onChange={setFilter} options={filterOptions.customer  ?? []} label="Customer" />}
+                    {visibleCols.driver    && <SelectFilterTh col="driver"    value={filters.driver    ?? ''} onChange={setFilter} options={filterOptions.driver    ?? []} label="Driver" />}
+                    {visibleCols.rate         && <Th align="right" />}
+                    {visibleCols.accessorials && <Th align="right" />}
+                    {visibleCols.docs && <Th>{activeFilterCount > 0 && (
+                      <button onClick={clearAllFilters}
+                        className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                        style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
+                        title="Clear all filters">
+                        <X size={9} /> clear ({activeFilterCount})
+                      </button>
+                    )}</Th>}
+                    <Th align="right">{!visibleCols.docs && activeFilterCount > 0 && (
                       <button onClick={clearAllFilters}
                         className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
                         style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
@@ -421,7 +522,6 @@ export default function CloseoutView() {
                         <X size={9} /> clear ({activeFilterCount})
                       </button>
                     )}</Th>
-                    <Th align="right">{/* spacer */}</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -455,94 +555,110 @@ export default function CloseoutView() {
                           borderLeft: load.priority ? '3px solid #eab308' : '3px solid transparent',
                         }}
                         className="hover:bg-[var(--gc-hover)]">
-                        <Td>
-                          <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                            {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
-                          </span>
-                        </Td>
-                        <Td>{fmtDate(load.end)}</Td>
+                        {visibleCols.age && (
+                          <Td>
+                            <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                              {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
+                            </span>
+                          </Td>
+                        )}
+                        {visibleCols.delivered && <Td>{fmtDate(load.end)}</Td>}
                         {/* Load # — copyable with visual confirmation */}
-                        <Td>
-                          {load.loadNum
-                            ? <CopyableLoadNum value={load.loadNum} />
-                            : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                        </Td>
+                        {visibleCols.loadNum && (
+                          <Td>
+                            {load.loadNum
+                              ? <CopyableLoadNum value={load.loadNum} />
+                              : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                          </Td>
+                        )}
                         {/* Title — opens event modal with full load data */}
-                        <Td>
-                          <button type="button"
-                            onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
-                            className="text-left font-bold hover:underline truncate max-w-[320px]"
-                            style={{ color: 'var(--gc-blue)' }}
-                            title="Open load details">
-                            {load.title}
-                          </button>
-                        </Td>
+                        {visibleCols.title && (
+                          <Td>
+                            <button type="button"
+                              onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
+                              className="text-left font-bold hover:underline truncate max-w-[320px]"
+                              style={{ color: 'var(--gc-blue)' }}
+                              title="Open load details">
+                              {load.title}
+                            </button>
+                          </Td>
+                        )}
                         {/* Customer — opens broker profile. Truncate so long
                             names like "TCI Global Logistics" don't wrap. */}
-                        <Td>
-                          {matchedCustomer ? (
-                            <button type="button"
-                              onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
-                              className="text-left hover:underline truncate block max-w-[160px]"
-                              style={{ color: 'var(--gc-blue)' }}
-                              title={`Open customer profile — ${cust}`}>
-                              {cust}
-                            </button>
-                          ) : (
-                            <span className="truncate block max-w-[160px]"
-                              title={cust || undefined}
-                              style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-                              {cust || '—'}
-                            </span>
-                          )}
-                        </Td>
+                        {visibleCols.customer && (
+                          <Td>
+                            {matchedCustomer ? (
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
+                                className="text-left hover:underline truncate block max-w-[160px]"
+                                style={{ color: 'var(--gc-blue)' }}
+                                title={`Open customer profile — ${cust}`}>
+                                {cust}
+                              </button>
+                            ) : (
+                              <span className="truncate block max-w-[160px]"
+                                title={cust || undefined}
+                                style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                                {cust || '—'}
+                              </span>
+                            )}
+                          </Td>
+                        )}
                         {/* Driver(s) */}
-                        <Td>
-                          {drivers.length === 0
-                            ? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>
-                            : drivers.length === 1
-                              ? <span>{drivers[0]}</span>
+                        {visibleCols.driver && (
+                          <Td>
+                            {drivers.length === 0
+                              ? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>
+                              : drivers.length === 1
+                                ? <span>{drivers[0]}</span>
+                                : (
+                                  <div>
+                                    <div className="text-[13px]">{drivers[0]}</div>
+                                    <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+                                  </div>
+                                )}
+                          </Td>
+                        )}
+                        {/* Total rate */}
+                        {visibleCols.rate && (
+                          <Td align="right" className="font-semibold tabular-nums">
+                            {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
+                          </Td>
+                        )}
+                        {/* Total accessorials */}
+                        {visibleCols.accessorials && (
+                          <Td align="right" className="tabular-nums">
+                            {accessorialsCount === 0
+                              ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
                               : (
                                 <div>
-                                  <div className="text-[13px]">{drivers[0]}</div>
-                                  <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+                                  <div className="font-semibold">{moneyFmt.format(accessorialsSum)}</div>
+                                  <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accessorialsCount} item{accessorialsCount !== 1 ? 's' : ''}</div>
                                 </div>
                               )}
-                        </Td>
-                        {/* Total rate */}
-                        <Td align="right" className="font-semibold tabular-nums">
-                          {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
-                        </Td>
-                        {/* Total accessorials */}
-                        <Td align="right" className="tabular-nums">
-                          {accessorialsCount === 0
-                            ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-                            : (
-                              <div>
-                                <div className="font-semibold">{moneyFmt.format(accessorialsSum)}</div>
-                                <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accessorialsCount} item{accessorialsCount !== 1 ? 's' : ''}</div>
+                          </Td>
+                        )}
+                        {/* Docs — only show kinds actually present. Empty when nothing uploaded. */}
+                        {visibleCols.docs && (
+                          <Td>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {hasRC                       && <DocBadge label="RC"     count={1} />}
+                              {(counts.pod    ?? 0) > 0    && <DocBadge label="POD"    count={counts.pod} />}
+                              {(counts.bol    ?? 0) > 0    && <DocBadge label="BOL"    count={counts.bol} />}
+                              {(counts.lumper ?? 0) > 0    && <DocBadge label="Lumper" count={counts.lumper} />}
+                              {(counts.scale  ?? 0) > 0    && <DocBadge label="Scale"  count={counts.scale} />}
+                              {(counts.other  ?? 0) > 0    && <DocBadge label="Other"  count={counts.other} />}
+                              {!hasRC && Object.keys(counts).length === 0 && (
+                                <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
+                              )}
+                            </div>
+                            {load.flaggedReason && (
+                              <div className="mt-1">
+                                <FlagChip reason={load.flaggedReason} />
                               </div>
                             )}
-                        </Td>
-                        {/* Docs — only show kinds actually present. Empty when nothing uploaded. */}
-                        <Td>
-                          <div className="flex flex-wrap items-center gap-1">
-                            {hasRC                       && <DocBadge label="RC"     count={1} />}
-                            {(counts.pod    ?? 0) > 0    && <DocBadge label="POD"    count={counts.pod} />}
-                            {(counts.bol    ?? 0) > 0    && <DocBadge label="BOL"    count={counts.bol} />}
-                            {(counts.lumper ?? 0) > 0    && <DocBadge label="Lumper" count={counts.lumper} />}
-                            {(counts.scale  ?? 0) > 0    && <DocBadge label="Scale"  count={counts.scale} />}
-                            {(counts.other  ?? 0) > 0    && <DocBadge label="Other"  count={counts.other} />}
-                            {!hasRC && Object.keys(counts).length === 0 && (
-                              <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
-                            )}
-                          </div>
-                          {load.flaggedReason && (
-                            <div className="mt-1">
-                              <FlagChip reason={load.flaggedReason} />
-                            </div>
-                          )}
-                        </Td>
+                          </Td>
+                        )}
                         {/* Actions */}
                         <Td align="right" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
@@ -558,6 +674,9 @@ export default function CloseoutView() {
                               }}>
                               <Star size={11} fill={load.priority ? '#eab308' : 'none'} />
                             </button>
+                            {/* Internal notes — opens a small thread modal.
+                                Filled icon when at least one note exists. */}
+                            <NotesButton load={load} onOpen={() => setNotesTarget(load)} />
                             {tab === 'pending' || tab === 'flagged' ? (
                               <>
                                 <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
@@ -626,6 +745,16 @@ export default function CloseoutView() {
           onConfirm={confirmFlag}
         />
       )}
+
+      {/* Internal notes thread */}
+      {notesTarget && (
+        <InternalNotesModal
+          load={notesTarget}
+          actorName={user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined}
+          onClose={() => setNotesTarget(null)}
+          onSaved={async () => { await refresh(); }}
+        />
+      )}
     </div>
   );
 }
@@ -688,6 +817,175 @@ function CopyableLoadNum({ value }: { value: string }) {
         : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
     </button>
   );
+}
+
+function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
+  const count = (load.internalNotes ?? []).length;
+  const has = count > 0;
+  return (
+    <button onClick={e => { e.stopPropagation(); onOpen(); }}
+      className="rounded-full p-1 transition-colors relative"
+      title={has ? `${count} internal note${count !== 1 ? 's' : ''}` : 'Add internal note'}
+      style={{
+        background: has ? '#dbeafe' : 'transparent',
+        border:     `1px solid ${has ? '#1a73e8' : 'var(--gc-border)'}`,
+        color:      has ? '#1a73e8' : 'var(--gc-text-3)',
+      }}>
+      <MessageSquare size={11} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
+      {has && count > 1 && (
+        <span className="absolute -top-1 -right-1 text-[8px] font-bold rounded-full px-1 leading-3 tabular-nums"
+          style={{ background: '#1a73e8', color: '#fff', minWidth: 12, textAlign: 'center' }}>
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function InternalNotesModal({
+  load, actorName, onClose, onSaved,
+}: {
+  load: Load;
+  actorName?: string;
+  onClose: () => void;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [notes, setNotes] = useState(load.internalNotes ?? []);
+
+  const handleSave = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      const targetId = load.loadId ?? load.id;
+      await railway.updateLoadCloseout(targetId, {
+        action:    'append_note',
+        noteText:  trimmed,
+        actorName,
+      });
+      // Optimistic local-thread update so the new note shows up
+      // immediately, then we trigger a parent refresh in the background
+      // to pull in the canonical timestamp/id.
+      setNotes(prev => [...prev, {
+        id:     'tmp-' + Date.now(),
+        text:   trimmed,
+        author: actorName ?? null,
+        at:     new Date().toISOString(),
+      }]);
+      setText('');
+      void onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Newest at the top.
+  const ordered = [...notes].sort((a, b) => (a.at < b.at ? 1 : -1));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      style={{ background: 'rgba(0,0,0,0.4)' }}
+      onClick={onClose}>
+      <div className="rounded-2xl max-w-xl w-full max-h-[80vh] flex flex-col"
+        style={{ background: 'var(--gc-surface)', boxShadow: '0 12px 48px rgba(0,0,0,0.18)' }}
+        onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3.5"
+          style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+          <div>
+            <div className="text-[15px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>Internal notes</div>
+            <div className="text-[12px] truncate max-w-[420px]" style={{ color: 'var(--gc-text-3)' }}>
+              {load.title}{load.loadNum ? ` · #${load.loadNum}` : ''}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-full hover:bg-[var(--gc-hover)]" title="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Thread */}
+        <div className="flex-1 overflow-y-auto px-5 py-3">
+          {ordered.length === 0 ? (
+            <div className="text-[13px] italic py-8 text-center" style={{ color: 'var(--gc-text-3)' }}>
+              No notes yet. Add one below.
+            </div>
+          ) : (
+            <ul className="space-y-2.5">
+              {ordered.map(n => (
+                <li key={n.id} className="rounded-xl px-3 py-2"
+                  style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+                  <div className="flex items-baseline justify-between gap-3 mb-0.5">
+                    <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                      {n.author ?? 'Unknown'}
+                    </span>
+                    <span className="text-[10px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                      {fmtNoteTimestamp(n.at)}
+                    </span>
+                  </div>
+                  <div className="text-[13px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>
+                    {n.text}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Composer */}
+        <div className="px-5 py-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => {
+              // Cmd/Ctrl + Enter to send — common pattern for chat composers.
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                void handleSave();
+              }
+            }}
+            rows={3}
+            placeholder="Add a note for the team…"
+            className="w-full rounded-lg px-3 py-2 text-[13px] outline-none resize-none"
+            style={{
+              background: 'var(--gc-bg)',
+              border:     '1px solid var(--gc-border-light)',
+              color:      'var(--gc-text-1)',
+            }}
+          />
+          <div className="flex items-center justify-between mt-2">
+            <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
+              ⌘/Ctrl+Enter to send
+            </div>
+            <button onClick={handleSave}
+              disabled={!text.trim() || saving}
+              className="text-[12px] font-semibold px-3.5 py-1.5 rounded-full transition-opacity"
+              style={{
+                background: '#1a73e8',
+                color:      '#fff',
+                opacity:    !text.trim() || saving ? 0.4 : 1,
+                cursor:     !text.trim() || saving ? 'not-allowed' : 'pointer',
+              }}>
+              {saving ? 'Saving…' : 'Add note'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function fmtNoteTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+         d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
 function PaginationFooter({

@@ -141,8 +141,9 @@ interface UpdateBillingBody {
     | "mark_paid"
     | "reopen"
     | "set_priority"
-    | "clear_priority";
-  /** Display name to record on verified_by / flagged_by. */
+    | "clear_priority"
+    | "append_note";
+  /** Display name to record on verified_by / flagged_by / note author. */
   actorName?: string;
   /** Required for action='flag'. */
   flagReason?:
@@ -155,12 +156,63 @@ interface UpdateBillingBody {
   flagNote?: string;
   /** Required for action='set_invoice_docs'. */
   invoiceDocIds?: string[];
+  /** Required for action='append_note'. The text body of the new note. */
+  noteText?: string;
+}
+
+interface InternalNoteRow {
+  id:     string;
+  text:   string;
+  author: string | null;
+  at:     string;
 }
 
 closeout.patch("/loads/:id", async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const body = await c.req.json<UpdateBillingBody>();
+
+  // append_note — fetch current notes, append a new structured entry,
+  // write the updated array back. Done server-side so multi-tab usage
+  // can't accidentally clobber prior notes the way a client-side
+  // read-modify-write would.
+  if (body.action === "append_note") {
+    if (!body.noteText || !body.noteText.trim()) {
+      return c.json({ error: "validation_failed", errors: ["noteText required"] } satisfies ApiErrorResponse, 400);
+    }
+    const { data: existing, error: fetchErr } = await supabase
+      .from("loads")
+      .select("internal_notes")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .single();
+    if (fetchErr) {
+      console.error("[PATCH /v1/closeout/loads/:id append_note] fetch failed:", fetchErr);
+      return c.json({ error: "update_failed", detail: fetchErr.message } satisfies ApiErrorResponse, 500);
+    }
+    const prior: InternalNoteRow[] = Array.isArray(existing?.internal_notes)
+      ? (existing!.internal_notes as unknown as InternalNoteRow[])
+      : [];
+    const newNote: InternalNoteRow = {
+      // crypto.randomUUID is available in modern node/edge runtimes Hono ships on
+      id:     globalThis.crypto.randomUUID(),
+      text:   body.noteText.trim(),
+      author: body.actorName ?? null,
+      at:     new Date().toISOString(),
+    };
+    const next = [...prior, newNote];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await supabase
+      .from("loads")
+      .update({ internal_notes: next } as any)
+      .eq("id", loadId)
+      .eq("org_id", orgId);
+    if (error) {
+      console.error("[PATCH /v1/closeout/loads/:id append_note] write failed:", error);
+      return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+    return c.json({ ok: true, note: newNote });
+  }
 
   // Priority lives on the events table, not loads — handle separately
   // so it covers relay legs (both pickup and delivery events get the

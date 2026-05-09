@@ -137,11 +137,13 @@ class RailwayClient {
       | 'mark_paid'
       | 'reopen'
       | 'set_priority'
-      | 'clear_priority';
+      | 'clear_priority'
+      | 'append_note';
     actorName?: string;
     flagReason?: 'missing_pod' | 'awaiting_rate_con' | 'detention_pending' | 'lumper_pending' | 'rate_mismatch' | 'other';
     flagNote?: string;
     invoiceDocIds?: string[];
+    noteText?: string;
   }) {
     return this.req<{ ok: true }>('PATCH', `/v1/closeout/loads/${id}`, body);
   }
