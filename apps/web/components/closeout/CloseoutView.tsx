@@ -18,13 +18,15 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { FileCheck2, Loader2, Flag, AlertCircle, CheckCircle2, FileText, Clock } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, FileText, Clock, Play } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
 import type { Load, CalendarEvent } from '@/lib/types';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import { displayBrokerName } from '@/lib/customerMatch';
+import ReviewQueue from './ReviewQueue';
+import { FlagModal, type FlagReason } from './FlagModal';
 
 type Tab = 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid';
 
@@ -61,7 +63,6 @@ interface QueueRow extends CalendarEvent { /* alias for clarity */ }
 
 export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
-  const openEditModal = useCalendarStore(s => s.openEditModal);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const { user } = useUser();
 
@@ -69,6 +70,10 @@ export default function CloseoutView() {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewStartIndex, setReviewStartIndex] = useState(0);
+  const [flagTarget, setFlagTarget] = useState<Load | null>(null);
 
   const refresh = useMemo(() => async () => {
     setLoading(true);
@@ -110,15 +115,15 @@ export default function CloseoutView() {
     await refresh();
   }
 
-  async function handleFlag(load: Load) {
-    const reason = window.prompt(
-      'Flag reason (missing_pod | awaiting_rate_con | detention_pending | lumper_pending | rate_mismatch | other):',
-      'missing_pod',
-    );
-    if (!reason) return;
-    const note = window.prompt('Follow-up note (what we\'re waiting on):') ?? '';
+  function handleFlag(load: Load) {
+    setFlagTarget(load);
+  }
+
+  async function confirmFlag(reason: FlagReason, note: string) {
+    if (!flagTarget) return;
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
-    await railway.updateLoadCloseout(load.id, { action: 'flag', flagReason: reason as 'missing_pod', flagNote: note, actorName });
+    await railway.updateLoadCloseout(flagTarget.id, { action: 'flag', flagReason: reason, flagNote: note, actorName });
+    setFlagTarget(null);
     await refresh();
   }
 
@@ -153,6 +158,15 @@ export default function CloseoutView() {
               );
             })}
             <div className="flex-1" />
+            {(tab === 'pending' || tab === 'flagged') && dedup.length > 0 && (
+              <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
+                className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-full text-white transition-colors"
+                style={{ background: '#15803d' }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
+                <Play size={13} fill="currentColor" /> Review queue ({dedup.length})
+              </button>
+            )}
             <button onClick={() => void refresh()}
               className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -189,7 +203,7 @@ export default function CloseoutView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {dedup.map(load => {
+                  {dedup.map((load, rowIdx) => {
                     const days = ageDays(load.end);
                     const ac   = ageColor(days);
                     const cust = displayBrokerName(load.broker, customers);
@@ -199,7 +213,7 @@ export default function CloseoutView() {
                     return (
                       <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}
                         className="hover:bg-[var(--gc-hover)] cursor-pointer"
-                        onClick={() => openEditModal(load.id)}>
+                        onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}>
                         <Td>
                           <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
                             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
@@ -249,6 +263,25 @@ export default function CloseoutView() {
           )}
         </div>
       </div>
+
+      {/* Focused review queue overlay */}
+      {reviewOpen && (
+        <ReviewQueue
+          loads={dedup}
+          startIndex={reviewStartIndex}
+          onClose={() => { setReviewOpen(false); void refresh(); }}
+          onLoadResolved={() => { /* refresh happens on close */ }}
+        />
+      )}
+
+      {/* Inline flag modal (used from row buttons; review queue has its own) */}
+      {flagTarget && (
+        <FlagModal
+          loadLabel={`${flagTarget.title}${flagTarget.loadNum ? ` · #${flagTarget.loadNum}` : ''}`}
+          onCancel={() => setFlagTarget(null)}
+          onConfirm={confirmFlag}
+        />
+      )}
     </div>
   );
 }
