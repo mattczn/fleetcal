@@ -1777,11 +1777,15 @@ export default function EventModal() {
       apptStart: shiftIso(s.apptStart),
       apptEnd:   shiftIso(s.apptEnd),
     }));
+    // Strip per-load identifiers — same as Duplicate. The next-week copy
+    // is logically a brand-new load that just inherits the route + asset.
+    const { loadNum: _loadNum, refNums: _refNums, ...rest } = buildOptionalPayload();
+    void _loadNum; void _refNums;
     openCreateModal({
       title: title || undefined, assetId, driverName: driverName || undefined,
       start: `${shiftDateStr(startDate)}T${startTime}`,
       end:   `${shiftDateStr(endDate)}T${endTime}`,
-      ...buildOptionalPayload(),
+      ...rest,
       accessorials: accessorials.length > 0 ? accessorials : undefined,
       stops: shiftedStops.length > 0 ? shiftedStops : undefined,
     });
