@@ -203,8 +203,8 @@ export default function CloseoutView() {
   // different relevant signals.
   useEffect(() => { setSort({ key: null, dir: 'asc' }); setFilters({}); }, [tab]);
 
-  // Project a row to its visible string-or-number for a given column.
-  // Used by both the filter (substring match) and the sort comparator.
+  // Project a row to its sortable value for a given column. Numbers
+  // for numeric columns so the comparator orders them naturally.
   const projectRowForCol = (row: QueueRow, col: ColKey): string | number => {
     switch (col) {
       case 'age':       return ageDays(row.end);
@@ -219,6 +219,45 @@ export default function CloseoutView() {
     }
   };
 
+  // The filter dropdowns work on the same human-readable string the
+  // cell renders — that way the option list mirrors what the user is
+  // actually looking at. Match is exact since the user picks from a
+  // closed set of values.
+  const formatRowForCol = (row: QueueRow, col: ColKey): string => {
+    switch (col) {
+      case 'age': {
+        const d = ageDays(row.end);
+        return d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`;
+      }
+      case 'delivered': return fmtDate(row.end) || '—';
+      case 'loadNum':   return row.loadNum ?? '';
+      case 'title':     return row.title ?? '';
+      case 'customer':  return displayBrokerName(row.broker, customers) ?? '';
+      case 'driver':    return row.driverName ?? '';
+      // Rate + accessorials don't get filter dropdowns — these branches
+      // are unused but kept exhaustive for future-proofing.
+      case 'rate':         return row.loadPrice != null ? moneyFmt.format(row.loadPrice) : '';
+      case 'accessorials': return moneyFmt.format((row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0));
+    }
+  };
+
+  // Per-column option lists for the filter selects. Built from the
+  // current page's data so the user only ever picks values that exist.
+  const filterableCols: ColKey[] = ['age', 'delivered', 'loadNum', 'title', 'customer', 'driver'];
+  const filterOptions = useMemo(() => {
+    const opts: Partial<Record<ColKey, string[]>> = {};
+    for (const col of filterableCols) {
+      const set = new Set<string>();
+      for (const row of dedup) {
+        const v = formatRowForCol(row, col);
+        if (v) set.add(v);
+      }
+      opts[col] = Array.from(set).sort((a, b) => a.localeCompare(b));
+    }
+    return opts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dedup, customers]);
+
   // Apply filters → then sort, but always pin priority rows to the
   // top so dispatchers' high-priority work stays visible regardless
   // of the user's chosen sort.
@@ -227,10 +266,7 @@ export default function CloseoutView() {
     const activeFilters = (Object.entries(filters) as [ColKey, string][]).filter(([, v]) => v && v.trim() !== '');
     if (activeFilters.length > 0) {
       out = out.filter(row => {
-        return activeFilters.every(([col, q]) => {
-          const v = projectRowForCol(row, col);
-          return String(v).toLowerCase().includes(q.toLowerCase());
-        });
+        return activeFilters.every(([col, q]) => formatRowForCol(row, col) === q);
       });
     }
     if (sort.key) {
@@ -366,14 +402,15 @@ export default function CloseoutView() {
                     <Th align="right">Actions</Th>
                   </tr>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    <FilterTh col="age"          value={filters.age          ?? ''} onChange={setFilter} placeholder="e.g. 3" />
-                    <FilterTh col="delivered"    value={filters.delivered    ?? ''} onChange={setFilter} placeholder="Mar 5" />
-                    <FilterTh col="loadNum"      value={filters.loadNum      ?? ''} onChange={setFilter} placeholder="#" />
-                    <FilterTh col="title"        value={filters.title        ?? ''} onChange={setFilter} placeholder="title" />
-                    <FilterTh col="customer"     value={filters.customer     ?? ''} onChange={setFilter} placeholder="customer" />
-                    <FilterTh col="driver"       value={filters.driver       ?? ''} onChange={setFilter} placeholder="driver" />
-                    <FilterTh col="rate"         value={filters.rate         ?? ''} onChange={setFilter} placeholder="$" align="right" />
-                    <FilterTh col="accessorials" value={filters.accessorials ?? ''} onChange={setFilter} placeholder="$" align="right" />
+                    <SelectFilterTh col="age"       value={filters.age       ?? ''} onChange={setFilter} options={filterOptions.age       ?? []} label="Age" />
+                    <SelectFilterTh col="delivered" value={filters.delivered ?? ''} onChange={setFilter} options={filterOptions.delivered ?? []} label="Date" />
+                    <SelectFilterTh col="loadNum"   value={filters.loadNum   ?? ''} onChange={setFilter} options={filterOptions.loadNum   ?? []} label="#" />
+                    <SelectFilterTh col="title"     value={filters.title     ?? ''} onChange={setFilter} options={filterOptions.title     ?? []} label="Title" />
+                    <SelectFilterTh col="customer"  value={filters.customer  ?? ''} onChange={setFilter} options={filterOptions.customer  ?? []} label="Customer" />
+                    <SelectFilterTh col="driver"    value={filters.driver    ?? ''} onChange={setFilter} options={filterOptions.driver    ?? []} label="Driver" />
+                    {/* Rate + Accessorials skipped — numeric ranges aren't dropdown-friendly. */}
+                    <Th align="right" />
+                    <Th align="right" />
                     <Th>{activeFilterCount > 0 && (
                       <button onClick={clearAllFilters}
                         className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
@@ -781,30 +818,35 @@ function SortableTh({
   );
 }
 
-function FilterTh({
-  col, value, onChange, placeholder, align = 'left',
+function SelectFilterTh({
+  col, value, onChange, options, label,
 }: {
   col: ColKey;
   value: string;
   onChange: (col: ColKey, val: string) => void;
-  placeholder?: string;
-  align?: 'left' | 'right';
+  options: string[];
+  /** Shown as the "All …" placeholder option, e.g. "All Customers". */
+  label: string;
 }) {
+  const active = value !== '';
   return (
-    <th className="px-2 pb-2" style={{ textAlign: align }}>
-      <input
-        type="text"
+    <th className="px-2 pb-2" style={{ textAlign: 'left' }}>
+      <select
         value={value}
         onChange={e => onChange(col, e.target.value)}
-        placeholder={placeholder}
-        className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+        className="w-full text-[11px] px-2 py-1 rounded-md outline-none cursor-pointer"
         style={{
           background: 'var(--gc-surface)',
-          border:     '1px solid var(--gc-border-light)',
-          color:      'var(--gc-text-1)',
-          textAlign:  align,
+          border:     `1px solid ${active ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+          color:      active ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+          fontWeight: active ? 600 : 400,
         }}
-      />
+        title={active ? `Filtered: ${value}` : `Filter by ${label}`}>
+        <option value="">All {label}</option>
+        {options.map(opt => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+      </select>
     </th>
   );
 }
