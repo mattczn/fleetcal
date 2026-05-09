@@ -1944,6 +1944,20 @@ export default function EventModal() {
     reader.readAsDataURL(file);
   };
 
+  // Convert an ArrayBuffer to base64 in fixed-size chunks. Spreading a
+  // typed array directly into String.fromCharCode hits the JS argument
+  // limit (~125 KB on most engines) and throws "Maximum call stack size
+  // exceeded" on PDFs larger than ~100 KB.
+  const bufferToBase64 = (buf: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const CHUNK = 0x8000; // 32 KB — safely under any spread limit
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  };
+
   const handleQuickReparse = async () => {
     if (!rateConPdf || reparsing) return;
     setReparsing(true);
@@ -1956,7 +1970,7 @@ export default function EventModal() {
         // Fetch the PDF (signed URL or blob URL) and convert
         const resp = await fetch(pdfObjectUrl || rateConPdf);
         const buf  = await resp.arrayBuffer();
-        base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        base64 = bufferToBase64(buf);
       }
       const res = await fetch('/api/parse-ratecon', {
         method: 'POST',
@@ -1987,7 +2001,6 @@ export default function EventModal() {
    */
   const handleFullReparse = async () => {
     if (!rateConPdf || reparsing) return;
-    if (!confirm('Re-extract every field from this rate-con? Current values will be overwritten.')) return;
     setReparsing(true);
     try {
       let base64: string;
@@ -1996,7 +2009,7 @@ export default function EventModal() {
       } else {
         const resp = await fetch(pdfObjectUrl || rateConPdf);
         const buf  = await resp.arrayBuffer();
-        base64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        base64 = bufferToBase64(buf);
       }
       const knownBrokerName = typeof fieldValues['broker'] === 'string' ? (fieldValues['broker'] as string) : undefined;
       const res = await fetch('/api/parse-ratecon', {
