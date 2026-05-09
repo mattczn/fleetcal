@@ -91,6 +91,11 @@ interface CalendarStore extends ModalState {
   lastKnownAssetCount: number;
   hydrate: (payload: HydratePayload) => void;
   extendLoadedRange: (start: string, end: string) => Promise<void>;
+  /** Splice fetched events into the store. Used when a screen pulls
+   *  loads outside the calendar's loaded window (e.g. /closeout) and
+   *  needs the EventModal to find them by id. Existing ids are
+   *  overwritten with the new payload (server is source of truth). */
+  mergeEvents: (events: CalendarEvent[]) => void;
 
   assets: Asset[];
   events: CalendarEvent[];
@@ -286,6 +291,14 @@ export const useCalendarStore = create<CalendarStore>()(
         }));
       }).catch((err) => console.error('hydrate: create unassigned asset:', err));
     }
+  },
+
+  mergeEvents: (incoming) => {
+    set((state) => {
+      const incomingIds = new Set(incoming.map(e => e.id));
+      const kept = state.events.filter(e => !incomingIds.has(e.id));
+      return { events: [...kept, ...incoming] };
+    });
   },
 
   extendLoadedRange: async (start, end) => {

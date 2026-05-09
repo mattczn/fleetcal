@@ -1,12 +1,12 @@
 'use client';
 
-import BillingView from '@/components/billing/BillingView';
+import CloseoutView from '@/components/closeout/CloseoutView';
 import EventModal from '@/components/calendar/EventModal';
 
-export default function BillingPage() {
+export default function CloseoutPage() {
   return (
     <div className="flex h-full overflow-hidden">
-      <BillingView />
+      <CloseoutView />
       <EventModal />
     </div>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * /billing — POD verification + invoicing queue.
+ * /closeout — POD verification + release queue.
  *
  * Tabs:
  *  Pending     — loads delivered/due that haven't been verified yet
@@ -11,8 +11,10 @@
  *  Paid        — closed out
  *
  * Default is Pending, sorted oldest delivery first. Click a row → opens
- * the review queue (next iteration). For now, click → opens the
- * existing event modal.
+ * the existing event modal (the focused review-queue mode is the next
+ * iteration). Fetched events are merged into the calendar store so the
+ * modal can find them even when they're outside the calendar's loaded
+ * window.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -57,9 +59,10 @@ function fmtDate(iso: string): string {
 
 interface QueueRow extends CalendarEvent { /* alias for clarity */ }
 
-export default function BillingView() {
+export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
   const openEditModal = useCalendarStore(s => s.openEditModal);
+  const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const { user } = useUser();
 
   const [tab, setTab] = useState<Tab>('pending');
@@ -71,14 +74,18 @@ export default function BillingView() {
     setLoading(true);
     setError(null);
     try {
-      const { loads } = await railway.listBillingQueue(tab);
+      const { loads } = await railway.listCloseoutQueue(tab);
       setRows(loads as QueueRow[]);
+      // Push into the calendar store so EventModal can resolve them by
+      // id (closeout queue often pulls loads outside the calendar's
+      // loaded date window).
+      mergeEvents(loads as QueueRow[]);
     } catch (err) {
       setError((err as Error).message ?? 'Failed to load queue');
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, mergeEvents]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -99,7 +106,7 @@ export default function BillingView() {
 
   async function handleVerify(load: Load) {
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
-    await railway.updateLoadBilling(load.id, { action: 'verify', actorName });
+    await railway.updateLoadCloseout(load.id, { action: 'verify', actorName });
     await refresh();
   }
 
@@ -111,13 +118,13 @@ export default function BillingView() {
     if (!reason) return;
     const note = window.prompt('Follow-up note (what we\'re waiting on):') ?? '';
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
-    await railway.updateLoadBilling(load.id, { action: 'flag', flagReason: reason as 'missing_pod', flagNote: note, actorName });
+    await railway.updateLoadCloseout(load.id, { action: 'flag', flagReason: reason as 'missing_pod', flagNote: note, actorName });
     await refresh();
   }
 
   return (
     <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
-      <ManagementHeader title="Billing" icon={FileCheck2} />
+      <ManagementHeader title="Closeout" icon={FileCheck2} />
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-[1600px] mx-auto space-y-4">
 

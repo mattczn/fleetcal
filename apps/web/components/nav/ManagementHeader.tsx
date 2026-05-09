@@ -7,7 +7,7 @@ import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2 } from 'lucide-
 const NAV_LINKS = [
   { href: '/board',     label: 'Command Center', icon: LayoutDashboard },
   { href: '/dashboard', label: 'Dashboard',      icon: BarChart2       },
-  { href: '/billing',   label: 'Billing',        icon: FileCheck2      },
+  { href: '/closeout',  label: 'Closeout',       icon: FileCheck2      },
   { href: '/payroll',   label: 'Payroll',        icon: Users           },
 ];
 

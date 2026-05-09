@@ -18,7 +18,7 @@ import { env, isProd } from "./lib/env.js";
 import { clerkAuth, type AuthVariables } from "./middleware/clerk.js";
 import { botAuth } from "./middleware/botAuth.js";
 import loadsRoute from "./routes/loads.js";
-import billingRoute from "./routes/billing.js";
+import closeoutRoute from "./routes/closeout.js";
 import botLoadsRoute from "./routes/bot-loads.js";
 import eventsRoute from "./routes/events.js";
 import documentsRoute from "./routes/documents.js";
@@ -87,7 +87,7 @@ authed.get("/whoami", (c) =>
 );
 
 authed.route("/loads", loadsRoute);
-authed.route("/billing", billingRoute);
+authed.route("/closeout", closeoutRoute);
 authed.route("/events", eventsRoute);
 authed.route("/documents", documentsRoute);
 authed.route("/assets", assetsRoute);

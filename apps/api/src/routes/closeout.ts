@@ -1,14 +1,14 @@
 /**
- * /v1/billing — POD verification + invoicing workflow.
+ * /v1/closeout — POD verification + release workflow.
  *
- * The billing queue is the dispatcher's daily list of loads waiting for
- * paperwork verification before they can be invoiced. The queue is
- * date-driven, not status-driven — drivers don't always mark loads
- * delivered, but a load whose end date has arrived still needs to be
- * worked.
+ * The closeout queue is the dispatcher's daily list of loads waiting on
+ * paperwork verification before they can be invoiced. Date-driven, not
+ * status-driven — drivers don't always mark loads delivered, but a load
+ * whose end date has arrived still needs to be worked. (Accounting-side
+ * invoicing tools live separately under /payroll-style modules.)
  *
- *   GET    /v1/billing/queue?tab=pending|flagged|verified|invoiced
- *   PATCH  /v1/billing/loads/:id  — verify, flag, set invoice_doc_ids, …
+ *   GET    /v1/closeout/queue?tab=pending|flagged|verified|invoiced
+ *   PATCH  /v1/closeout/loads/:id  — verify, flag, set invoice_doc_ids, …
  */
 
 import { Hono } from "hono";
@@ -21,7 +21,7 @@ import { joinEventLoadToApp } from "@fleetcal/types";
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 
-const billing = new Hono<{ Variables: AuthVariables }>();
+const closeout = new Hono<{ Variables: AuthVariables }>();
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
@@ -38,7 +38,7 @@ const LOAD_COLS =
 
 type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all";
 
-billing.get("/queue", async (c) => {
+closeout.get("/queue", async (c) => {
   const orgId = c.get("orgId");
   const tab = ((c.req.query("tab") ?? "pending") as Tab);
 
@@ -74,7 +74,7 @@ billing.get("/queue", async (c) => {
 
   const { data, error } = await query.order("end", { ascending: true });
   if (error) {
-    console.error("[GET /v1/billing/queue] failed:", error);
+    console.error("[GET /v1/closeout/queue] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
 
@@ -101,7 +101,7 @@ interface UpdateBillingBody {
   invoiceDocIds?: string[];
 }
 
-billing.patch("/loads/:id", async (c) => {
+closeout.patch("/loads/:id", async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const body = await c.req.json<UpdateBillingBody>();
@@ -159,10 +159,10 @@ billing.patch("/loads/:id", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await supabase.from("loads").update(update as any).eq("id", loadId).eq("org_id", orgId);
   if (error) {
-    console.error("[PATCH /v1/billing/loads/:id] failed:", error);
+    console.error("[PATCH /v1/closeout/loads/:id] failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   return c.json({ ok: true });
 });
 
-export default billing;
+export default closeout;
