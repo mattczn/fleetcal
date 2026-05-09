@@ -75,8 +75,12 @@ closeout.get("/queue", async (c) => {
   }
   // "all" — no extra filter.
 
+  // Priority loads always pin to the top of every page so dispatchers
+  // see them first regardless of which page they're paginating through.
+  // Within priority and non-priority groups, oldest end-date first.
   const { data, error, count } = await query
-    .order("end", { ascending: true })
+    .order("priority", { ascending: false })
+    .order("end",      { ascending: true })
     .range(offset, offset + limit - 1);
   if (error) {
     console.error("[GET /v1/closeout/queue] failed:", error);
@@ -128,7 +132,16 @@ closeout.get("/queue", async (c) => {
 
 interface UpdateBillingBody {
   /** Which action to take. */
-  action: "verify" | "flag" | "clear_flag" | "set_invoice_docs" | "mark_invoiced" | "mark_paid" | "reopen";
+  action:
+    | "verify"
+    | "flag"
+    | "clear_flag"
+    | "set_invoice_docs"
+    | "mark_invoiced"
+    | "mark_paid"
+    | "reopen"
+    | "set_priority"
+    | "clear_priority";
   /** Display name to record on verified_by / flagged_by. */
   actorName?: string;
   /** Required for action='flag'. */
@@ -148,6 +161,24 @@ closeout.patch("/loads/:id", async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const body = await c.req.json<UpdateBillingBody>();
+
+  // Priority lives on the events table, not loads — handle separately
+  // so it covers relay legs (both pickup and delivery events get the
+  // same flag) and doesn't fight the loads-table whitelist below.
+  if (body.action === "set_priority" || body.action === "clear_priority") {
+    const next = body.action === "set_priority";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await supabase
+      .from("events")
+      .update({ priority: next } as any)
+      .eq("load_id", loadId)
+      .eq("org_id", orgId);
+    if (error) {
+      console.error("[PATCH /v1/closeout/loads/:id priority] failed:", error);
+      return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+    return c.json({ ok: true });
+  }
 
   const update: Record<string, unknown> = {};
   const now = new Date().toISOString();

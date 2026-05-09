@@ -128,7 +128,16 @@ class RailwayClient {
     }>('GET', `/v1/closeout/queue?${params.toString()}`);
   }
   updateLoadCloseout(id: string, body: {
-    action: 'verify' | 'flag' | 'clear_flag' | 'set_invoice_docs' | 'mark_invoiced' | 'mark_paid' | 'reopen';
+    action:
+      | 'verify'
+      | 'flag'
+      | 'clear_flag'
+      | 'set_invoice_docs'
+      | 'mark_invoiced'
+      | 'mark_paid'
+      | 'reopen'
+      | 'set_priority'
+      | 'clear_priority';
     actorName?: string;
     flagReason?: 'missing_pod' | 'awaiting_rate_con' | 'detention_pending' | 'lumper_pending' | 'rate_mismatch' | 'other';
     flagNote?: string;

@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -39,6 +39,23 @@ interface CacheEntry {
   total: number;
   fetchedAt: number;
 }
+
+// Column keys used by the sort + filter system. Must match the
+// Th `sortKey` values in the table head and the row-projection
+// function below (`projectRowForCol`).
+type ColKey =
+  | 'age'
+  | 'delivered'
+  | 'loadNum'
+  | 'title'
+  | 'customer'
+  | 'driver'
+  | 'rate'
+  | 'accessorials';
+
+interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
+
+type FilterState = Partial<Record<ColKey, string>>;
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'pending',  label: 'Pending'   },
@@ -177,6 +194,71 @@ export default function CloseoutView() {
     });
   }, [rows]);
 
+  // Per-column sort + filter state. Resets when changing tabs since
+  // tabs have different shapes/actions. Filters apply to the current
+  // page only — a known limitation now that the queue is paginated.
+  const [sort, setSort] = useState<SortState>({ key: null, dir: 'asc' });
+  const [filters, setFilters] = useState<FilterState>({});
+  // Reset sort/filter when tab changes — different tabs surface
+  // different relevant signals.
+  useEffect(() => { setSort({ key: null, dir: 'asc' }); setFilters({}); }, [tab]);
+
+  // Project a row to its visible string-or-number for a given column.
+  // Used by both the filter (substring match) and the sort comparator.
+  const projectRowForCol = (row: QueueRow, col: ColKey): string | number => {
+    switch (col) {
+      case 'age':       return ageDays(row.end);
+      case 'delivered': return row.end;
+      case 'loadNum':   return row.loadNum ?? '';
+      case 'title':     return row.title ?? '';
+      case 'customer':  return displayBrokerName(row.broker, customers) ?? '';
+      case 'driver':    return row.driverName ?? '';
+      case 'rate':      return row.loadPrice ?? 0;
+      case 'accessorials':
+        return (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+    }
+  };
+
+  // Apply filters → then sort, but always pin priority rows to the
+  // top so dispatchers' high-priority work stays visible regardless
+  // of the user's chosen sort.
+  const visible = useMemo(() => {
+    let out = dedup;
+    const activeFilters = (Object.entries(filters) as [ColKey, string][]).filter(([, v]) => v && v.trim() !== '');
+    if (activeFilters.length > 0) {
+      out = out.filter(row => {
+        return activeFilters.every(([col, q]) => {
+          const v = projectRowForCol(row, col);
+          return String(v).toLowerCase().includes(q.toLowerCase());
+        });
+      });
+    }
+    if (sort.key) {
+      const k = sort.key;
+      const mul = sort.dir === 'asc' ? 1 : -1;
+      out = [...out].sort((a, b) => {
+        const av = projectRowForCol(a, k);
+        const bv = projectRowForCol(b, k);
+        if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mul;
+        return String(av).localeCompare(String(bv)) * mul;
+      });
+    }
+    // Priority pin is non-negotiable — always first.
+    return [...out].sort((a, b) => Number(!!b.priority) - Number(!!a.priority));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dedup, sort, filters, customers]);
+
+  const onSortClick = (key: ColKey) => {
+    setSort(prev => {
+      if (prev.key !== key) return { key, dir: 'asc' };
+      if (prev.dir === 'asc') return { key, dir: 'desc' };
+      return { key: null, dir: 'asc' }; // third click clears
+    });
+  };
+  const setFilter = (key: ColKey, val: string) => setFilters(f => ({ ...f, [key]: val }));
+  const clearAllFilters = () => setFilters({});
+  const activeFilterCount = Object.values(filters).filter(v => v && v.trim() !== '').length;
+
   const tabCount = (t: Tab) => t === tab ? dedup.length : null;
 
   async function handleVerify(load: Load) {
@@ -199,6 +281,13 @@ export default function CloseoutView() {
     const targetId = flagTarget.loadId ?? flagTarget.id;
     await railway.updateLoadCloseout(targetId, { action: 'flag', flagReason: reason, flagNote: note, actorName });
     setFlagTarget(null);
+    await refresh();
+  }
+
+  async function handleTogglePriority(load: Load) {
+    const targetId = load.loadId ?? load.id;
+    const next = !load.priority;
+    await railway.updateLoadCloseout(targetId, { action: next ? 'set_priority' : 'clear_priority' });
     await refresh();
   }
 
@@ -233,13 +322,13 @@ export default function CloseoutView() {
               );
             })}
             <div className="flex-1" />
-            {(tab === 'pending' || tab === 'flagged') && dedup.length > 0 && (
+            {(tab === 'pending' || tab === 'flagged') && visible.length > 0 && (
               <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
                 className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-full text-white transition-colors"
                 style={{ background: '#15803d' }}
                 onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
                 onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
-                <Play size={13} fill="currentColor" /> Review queue ({dedup.length})
+                <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
             )}
             <button onClick={() => void refresh()}
@@ -258,27 +347,46 @@ export default function CloseoutView() {
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
               {error}
             </div>
-          ) : dedup.length === 0 ? (
-            <EmptyState tab={tab} />
+          ) : visible.length === 0 ? (
+            <EmptyState tab={tab} hasFilters={activeFilterCount > 0} onClearFilters={clearAllFilters} />
           ) : (
             <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
               <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    <Th>Age</Th>
-                    <Th>Delivered</Th>
-                    <Th>Load #</Th>
-                    <Th>Title</Th>
-                    <Th>Customer</Th>
-                    <Th>Driver(s)</Th>
-                    <Th align="right">Rate</Th>
-                    <Th align="right">Accessorials</Th>
+                    <SortableTh label="Age"          sortKey="age"          sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Delivered"    sortKey="delivered"    sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Load #"       sortKey="loadNum"      sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Title"        sortKey="title"        sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Customer"     sortKey="customer"     sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Driver(s)"    sortKey="driver"       sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Rate"         sortKey="rate"         align="right" sort={sort} onSort={onSortClick} />
+                    <SortableTh label="Accessorials" sortKey="accessorials" align="right" sort={sort} onSort={onSortClick} />
                     <Th>Docs</Th>
                     <Th align="right">Actions</Th>
                   </tr>
+                  <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                    <FilterTh col="age"          value={filters.age          ?? ''} onChange={setFilter} placeholder="e.g. 3" />
+                    <FilterTh col="delivered"    value={filters.delivered    ?? ''} onChange={setFilter} placeholder="Mar 5" />
+                    <FilterTh col="loadNum"      value={filters.loadNum      ?? ''} onChange={setFilter} placeholder="#" />
+                    <FilterTh col="title"        value={filters.title        ?? ''} onChange={setFilter} placeholder="title" />
+                    <FilterTh col="customer"     value={filters.customer     ?? ''} onChange={setFilter} placeholder="customer" />
+                    <FilterTh col="driver"       value={filters.driver       ?? ''} onChange={setFilter} placeholder="driver" />
+                    <FilterTh col="rate"         value={filters.rate         ?? ''} onChange={setFilter} placeholder="$" align="right" />
+                    <FilterTh col="accessorials" value={filters.accessorials ?? ''} onChange={setFilter} placeholder="$" align="right" />
+                    <Th>{activeFilterCount > 0 && (
+                      <button onClick={clearAllFilters}
+                        className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                        style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
+                        title="Clear all filters">
+                        <X size={9} /> clear ({activeFilterCount})
+                      </button>
+                    )}</Th>
+                    <Th align="right">{/* spacer */}</Th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {dedup.map((load, rowIdx) => {
+                  {visible.map((load, rowIdx) => {
                     const days = ageDays(load.end);
                     const ac   = ageColor(days);
                     const cust = displayBrokerName(load.broker, customers);
@@ -299,7 +407,14 @@ export default function CloseoutView() {
                     const counts = docCounts[targetLoadId] ?? {};
                     const hasRC = !!load.rateConPdf;
                     return (
-                      <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}
+                      <tr key={load.id}
+                        style={{
+                          borderBottom: '1px solid var(--gc-border-light)',
+                          // Priority loads stand out — soft yellow band so
+                          // the dispatcher can scan and find them instantly.
+                          background: load.priority ? '#fefce8' : undefined,
+                          borderLeft: load.priority ? '3px solid #eab308' : '3px solid transparent',
+                        }}
                         className="hover:bg-[var(--gc-hover)]">
                         <Td>
                           <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
@@ -386,29 +501,43 @@ export default function CloseoutView() {
                         </Td>
                         {/* Actions */}
                         <Td align="right" onClick={e => e.stopPropagation()}>
-                          {tab === 'pending' || tab === 'flagged' ? (
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
-                                className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
-                                style={{ background: '#15803d', color: '#fff' }}
-                                title="Open in review queue">
-                                <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
-                              </button>
-                              <button onClick={() => void handleVerify(load)}
-                                className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
-                                style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
-                                title="Release without opening review queue">
-                                <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
-                              </button>
-                              {tab === 'pending' && (
-                                <button onClick={() => handleFlag(load)}
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Priority toggle — visible on every tab so a
+                                load can be flagged/unflagged anywhere. */}
+                            <button onClick={() => void handleTogglePriority(load)}
+                              className="rounded-full p-1 transition-colors"
+                              title={load.priority ? 'Unmark priority' : 'Mark as priority'}
+                              style={{
+                                background: load.priority ? '#fef9c3' : 'transparent',
+                                border:     `1px solid ${load.priority ? '#eab308' : 'var(--gc-border)'}`,
+                                color:      load.priority ? '#854d0e' : 'var(--gc-text-3)',
+                              }}>
+                              <Star size={11} fill={load.priority ? '#eab308' : 'none'} />
+                            </button>
+                            {tab === 'pending' || tab === 'flagged' ? (
+                              <>
+                                <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
                                   className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
-                                  style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
-                                  <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+                                  style={{ background: '#15803d', color: '#fff' }}
+                                  title="Open in review queue">
+                                  <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
                                 </button>
-                              )}
-                            </div>
-                          ) : null}
+                                <button onClick={() => void handleVerify(load)}
+                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+                                  style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
+                                  title="Release without opening review queue">
+                                  <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
+                                </button>
+                                {tab === 'pending' && (
+                                  <button onClick={() => handleFlag(load)}
+                                    className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+                                    style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
+                                    <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+                                  </button>
+                                )}
+                              </>
+                            ) : null}
+                          </div>
                         </Td>
                       </tr>
                     );
@@ -438,7 +567,7 @@ export default function CloseoutView() {
       {/* Focused review queue overlay */}
       {reviewOpen && (
         <ReviewQueue
-          loads={dedup}
+          loads={visible}
           startIndex={reviewStartIndex}
           onClose={() => { setReviewOpen(false); void refresh(); }}
           onLoadResolved={() => { /* refresh happens on close */ }}
@@ -457,7 +586,7 @@ export default function CloseoutView() {
   );
 }
 
-function Th({ children, align = 'left' }: { children: React.ReactNode; align?: 'left' | 'right' }) {
+function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 'left' | 'right' }) {
   return (
     <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider"
       style={{ color: 'var(--gc-text-3)', textAlign: align }}>
@@ -588,7 +717,22 @@ function FlagChip({ reason }: { reason: string }) {
   );
 }
 
-function EmptyState({ tab }: { tab: Tab }) {
+function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?: boolean; onClearFilters?: () => void }) {
+  // Filter-cleared case takes precedence — the "all caught up" message
+  // is misleading when the user has just filtered everything out.
+  if (hasFilters) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center" style={{ color: 'var(--gc-text-3)' }}>
+        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>No matches</div>
+        <div className="text-sm mb-3">Filters hide every load on this page.</div>
+        <button onClick={onClearFilters}
+          className="text-xs font-semibold px-3 py-1.5 rounded-full"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
+          Clear filters
+        </button>
+      </div>
+    );
+  }
   const messages: Record<Tab, { icon: React.ReactNode; title: string; sub: string }> = {
     pending:  { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been verified or flagged.' },
     flagged:  { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads', sub: 'Anything that needs follow-up will show here.' },
@@ -603,5 +747,64 @@ function EmptyState({ tab }: { tab: Tab }) {
       <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>{m.title}</div>
       <div className="text-sm">{m.sub}</div>
     </div>
+  );
+}
+
+function SortableTh({
+  label, sortKey, sort, onSort, align = 'left',
+}: {
+  label: string;
+  sortKey: ColKey;
+  sort: SortState;
+  onSort: (key: ColKey) => void;
+  align?: 'left' | 'right';
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider select-none cursor-pointer"
+      style={{ color: active ? 'var(--gc-text-1)' : 'var(--gc-text-3)', textAlign: align }}
+      onClick={() => onSort(sortKey)}
+      title="Click to sort">
+      <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
+        {label}
+        {active ? (
+          sort.dir === 'asc'
+            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)' }} />
+            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)' }} />
+        ) : (
+          <span style={{ width: 11, height: 11, opacity: 0.2 }}>
+            <ArrowUp size={11} />
+          </span>
+        )}
+      </span>
+    </th>
+  );
+}
+
+function FilterTh({
+  col, value, onChange, placeholder, align = 'left',
+}: {
+  col: ColKey;
+  value: string;
+  onChange: (col: ColKey, val: string) => void;
+  placeholder?: string;
+  align?: 'left' | 'right';
+}) {
+  return (
+    <th className="px-2 pb-2" style={{ textAlign: align }}>
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(col, e.target.value)}
+        placeholder={placeholder}
+        className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+        style={{
+          background: 'var(--gc-surface)',
+          border:     '1px solid var(--gc-border-light)',
+          color:      'var(--gc-text-1)',
+          textAlign:  align,
+        }}
+      />
+    </th>
   );
 }
