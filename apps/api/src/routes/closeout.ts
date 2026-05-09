@@ -19,6 +19,7 @@ import {
 import { joinEventLoadToApp } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { fetchStopsByEvent } from "../lib/stops.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 
 const closeout = new Hono<{ Variables: AuthVariables }>();
@@ -80,6 +81,15 @@ closeout.get("/queue", async (c) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const loads: Load[] = (data ?? []).map((row: any) => joinEventLoadToApp(row, row.load));
+
+  // Attach stops so the EventModal renders fully when opened from the
+  // closeout table. Without this the loads in the calendar store have
+  // empty stops arrays and the modal looks blank.
+  const eventIds = loads.map(l => l.id);
+  const stopsByEvent = await fetchStopsByEvent(eventIds);
+  for (const l of loads) {
+    l.stops = stopsByEvent.get(l.id) ?? [];
+  }
 
   // Roll up doc-kind counts per load so the queue table can render
   // RC/POD/BOL/Lumper/Scale chips in one render pass without N
