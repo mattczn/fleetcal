@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, ExternalLink, FileText } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -242,29 +242,20 @@ export default function CloseoutView() {
                           </span>
                         </Td>
                         <Td>{fmtDate(load.end)}</Td>
-                        {/* Load # — copyable */}
+                        {/* Load # — copyable with visual confirmation */}
                         <Td>
                           {load.loadNum
-                            ? (
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); void copyToClipboard(load.loadNum!); }}
-                                className="font-semibold inline-flex items-center gap-1 text-[13px] hover:underline"
-                                style={{ color: 'var(--gc-text-1)' }}
-                                title="Copy load #">
-                                #{load.loadNum} <Copy size={11} style={{ color: 'var(--gc-text-3)' }} />
-                              </button>
-                            )
+                            ? <CopyableLoadNum value={load.loadNum} />
                             : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
                         </Td>
                         {/* Title — opens event modal with full load data */}
                         <Td>
                           <button type="button"
                             onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
-                            className="text-left font-bold inline-flex items-center gap-1 hover:underline truncate max-w-[320px]"
+                            className="text-left font-bold hover:underline truncate max-w-[320px]"
                             style={{ color: 'var(--gc-blue)' }}
                             title="Open load details">
-                            <span className="truncate">{load.title}</span>
-                            <ExternalLink size={11} className="shrink-0" style={{ color: 'var(--gc-text-3)' }} />
+                            {load.title}
                           </button>
                         </Td>
                         {/* Customer — opens broker profile */}
@@ -309,15 +300,18 @@ export default function CloseoutView() {
                               </div>
                             )}
                         </Td>
-                        {/* Docs — chips per kind */}
+                        {/* Docs — only show kinds actually present. Empty when nothing uploaded. */}
                         <Td>
                           <div className="flex flex-wrap items-center gap-1">
-                            <DocBadge label="RC"     present={hasRC} />
-                            <DocBadge label="POD"    present={(counts.pod ?? 0)    > 0} count={counts.pod} />
-                            <DocBadge label="BOL"    present={(counts.bol ?? 0)    > 0} count={counts.bol} />
-                            <DocBadge label="Lumper" present={(counts.lumper ?? 0) > 0} count={counts.lumper} />
-                            <DocBadge label="Scale"  present={(counts.scale ?? 0)  > 0} count={counts.scale} />
-                            {(counts.other ?? 0) > 0 && <DocBadge label="Other" present count={counts.other} />}
+                            {hasRC                       && <DocBadge label="RC"     count={1} />}
+                            {(counts.pod    ?? 0) > 0    && <DocBadge label="POD"    count={counts.pod} />}
+                            {(counts.bol    ?? 0) > 0    && <DocBadge label="BOL"    count={counts.bol} />}
+                            {(counts.lumper ?? 0) > 0    && <DocBadge label="Lumper" count={counts.lumper} />}
+                            {(counts.scale  ?? 0) > 0    && <DocBadge label="Scale"  count={counts.scale} />}
+                            {(counts.other  ?? 0) > 0    && <DocBadge label="Other"  count={counts.other} />}
+                            {!hasRC && Object.keys(counts).length === 0 && (
+                              <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
+                            )}
                           </div>
                           {load.flaggedReason && (
                             <div className="mt-1">
@@ -405,24 +399,47 @@ function Td({ children, align = 'left', className, onClick }: { children: React.
   );
 }
 
-function DocBadge({ label, present, count }: { label: string; present: boolean; count?: number }) {
+function DocBadge({ label, count }: { label: string; count?: number }) {
   return (
     <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold tabular-nums"
-      title={present ? `${count ?? ''} ${label} uploaded`.trim() : `${label} missing`}
+      title={`${count ?? ''} ${label}`.trim()}
       style={{
-        background: present ? '#dcfce7' : '#f1f3f4',
-        color:      present ? '#15803d' : 'var(--gc-text-3)',
-        border:     `1px solid ${present ? '#86efac' : 'var(--gc-border-light)'}`,
-        opacity:    present ? 1 : 0.7,
+        background: '#dcfce7',
+        color:      '#15803d',
+        border:     '1px solid #86efac',
       }}>
       {label}{count && count > 1 ? ` ×${count}` : ''}
     </span>
   );
 }
 
-async function copyToClipboard(text: string) {
-  try { await navigator.clipboard.writeText(text); }
-  catch { /* clipboard API blocked — silent */ }
+/** Load # button with a 1.5s "Copied" confirmation flip. */
+function CopyableLoadNum({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button"
+      onClick={async e => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch { /* clipboard API blocked — silent */ }
+      }}
+      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors"
+      style={{
+        color:      copied ? '#15803d' : 'var(--gc-text-1)',
+        background: copied ? '#dcfce7' : 'transparent',
+      }}
+      title={copied ? 'Copied!' : 'Copy load #'}
+      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
+      #{value}
+      {copied
+        ? <Check size={11} style={{ color: '#15803d' }} />
+        : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
+    </button>
+  );
 }
 
 function FlagChip({ reason }: { reason: string }) {
