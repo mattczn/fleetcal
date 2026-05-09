@@ -165,6 +165,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   async function handleRelease() {
     if (!current || busy) return;
+    // Required-doc gate runs inside the click handler — putting it in
+    // the button's `disabled` prop fires the confirm() on every render.
+    if (!requiredPass) {
+      const ok = window.confirm('Required docs are missing for this load. Release anyway?');
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       const targetId = (current as Load).loadId ?? current.id;
@@ -437,9 +443,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
             {/* Action buttons */}
             <div className="shrink-0 px-4 py-4 space-y-2" style={{ background: 'var(--gc-bg)' }}>
-              <button onClick={() => void handleRelease()} disabled={busy || (!requiredPass && !window.confirm('Required docs missing. Release anyway?'))}
+              <button onClick={() => void handleRelease()} disabled={busy}
                 className="w-full flex items-center justify-center gap-2 rounded-full text-sm font-bold transition-colors disabled:opacity-50"
-                style={{ background: '#15803d', color: '#fff', padding: '10px 14px' }}>
+                style={{ background: '#15803d', color: '#fff', padding: '10px 14px' }}
+                title={requiredPass ? 'Release for invoicing' : 'Required docs missing — confirm before releasing'}>
                 <CheckCircle2 size={15} /> Release for invoicing
                 <span className="text-[10px] font-mono opacity-70 ml-1">R</span>
               </button>
