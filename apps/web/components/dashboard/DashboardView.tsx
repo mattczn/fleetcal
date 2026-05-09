@@ -12,6 +12,7 @@ import DataLoader from '@/components/DataLoader';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import CopyChip from '@/components/ui/CopyChip';
+import { relayLegShare } from '@/lib/legMiles';
 import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
 
@@ -329,21 +330,55 @@ export default function DashboardView() {
     return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay };
   }, [deduped, filtered]);
 
-  // ── Revenue by asset (deduped — relay attributed to whichever leg is kept) ──
-  const revenueByAsset = useMemo(() => assets
-    .filter(asset => asset.id !== unassignedAssetId && asset.type !== 'Unassigned' && asset.name !== 'Unassigned')
-    .map(asset => {
-      const ae = deduped.filter(e => e.assetId === asset.id);
-      return {
-        asset,
-        revenue: ae.reduce((s, e) => s + (e.loadPrice ?? 0), 0),
-        loads:   ae.length,
-        miles:   0,
-      };
-    })
-    .sort((a, b) => b.revenue - a.revenue),
-    [assets, deduped, unassignedAssetId],
-  );
+  // ── Revenue by asset ──────────────────────────────────────────────────
+  // Relay (split) loads are prorated by haversine leg miles so each
+  // asset gets credit for the work it actually did. Non-relay loads
+  // attribute the full price to the single asset that ran them.
+  // Falls back to a 50/50 split when one of the legs has no usable
+  // geocoded stops.
+  const revenueByAsset = useMemo(() => {
+    // Index relay legs by group so we can find the partner cheaply.
+    const partnerByGroup = new Map<string, CalendarEvent>();
+    for (const e of filtered) {
+      if (e.relayGroupId && e.relayRole) {
+        partnerByGroup.set(`${e.relayGroupId}-${e.relayRole}`, e);
+      }
+    }
+
+    return assets
+      .filter(asset => asset.id !== unassignedAssetId && asset.type !== 'Unassigned' && asset.name !== 'Unassigned')
+      .map(asset => {
+        const ae = filtered.filter(e => e.assetId === asset.id);
+        let revenue = 0;
+        let loads   = 0;
+        for (const e of ae) {
+          if (!e.relayGroupId || !e.relayRole) {
+            revenue += e.loadPrice ?? 0;
+            loads += 1;
+            continue;
+          }
+          const partner = partnerByGroup.get(
+            `${e.relayGroupId}-${e.relayRole === 'pickup' ? 'delivery' : 'pickup'}`,
+          );
+          // Partner not in the filtered window — credit the leg's
+          // straight-line proportion but use 0.5 if its miles also failed.
+          const share = partner
+            ? relayLegShare(e, partner)
+            : 0.5;
+          revenue += (e.loadPrice ?? 0) * share;
+          // Count relay legs as 0.5 of a load each so totals stay sane;
+          // the dashboard "loads" KPI uses the dedup'd list separately.
+          loads += 0.5;
+        }
+        return {
+          asset,
+          revenue,
+          loads,
+          miles: 0,
+        };
+      })
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [assets, filtered, unassignedAssetId]);
 
 
   // ── Sortable weekly loads list ──
@@ -637,42 +672,56 @@ export default function DashboardView() {
               {revenueByAsset.length === 0 ? (
                 <Empty label="No load data for this period" />
               ) : (
-                <div className="space-y-3">
-                  {revenueByAsset.map(({ asset, revenue, loads }) => {
-                    const pct = (revenue / maxAssetRev) * 100;
-                    const assetLabel = asset.unit
-                      ? `#${asset.unit} · ${asset.name}`
-                      : asset.name;
-                    return (
-                      <div key={asset.id} className="flex items-center gap-3">
-                        <div
-                          className="w-[120px] shrink-0 text-[13px] truncate font-medium"
-                          style={{ color: 'var(--gc-text-1)' }}
-                          title={assetLabel}
-                        >
-                          {assetLabel}
-                        </div>
-                        <div className="flex-1 h-5 relative flex items-center">
+                <>
+                  <div className="space-y-3">
+                    {revenueByAsset.map(({ asset, revenue, loads }) => {
+                      const pct = (revenue / maxAssetRev) * 100;
+                      const assetLabel = asset.unit
+                        ? `#${asset.unit} · ${asset.name}`
+                        : asset.name;
+                      // loads can be a half-step (relay legs are 0.5 each).
+                      // Round to 1 decimal only when fractional so whole
+                      // counts still render as integers.
+                      const loadsLabel = loads % 1 === 0
+                        ? `${loads} load${loads !== 1 ? 's' : ''}`
+                        : `${loads.toFixed(1)} loads`;
+                      return (
+                        <div key={asset.id} className="flex items-center gap-3">
                           <div
-                            className="absolute rounded"
-                            style={{
-                              width: `${pct}%`, height: 7,
-                              background: asset.color,
-                              top: '50%', transform: 'translateY(-50%)',
-                              minWidth: revenue > 0 ? 4 : 0,
-                            }}
-                          />
+                            className="w-[120px] shrink-0 text-[13px] truncate font-medium"
+                            style={{ color: 'var(--gc-text-1)' }}
+                            title={assetLabel}
+                          >
+                            {assetLabel}
+                          </div>
+                          <div className="flex-1 h-5 relative flex items-center">
+                            <div
+                              className="absolute rounded"
+                              style={{
+                                width: `${pct}%`, height: 7,
+                                background: asset.color,
+                                top: '50%', transform: 'translateY(-50%)',
+                                minWidth: revenue > 0 ? 4 : 0,
+                              }}
+                            />
+                          </div>
+                          <div className="text-[13px] font-semibold shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 64 }}>
+                            {fmt(revenue)}
+                          </div>
+                          <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60 }}>
+                            {loadsLabel}
+                          </div>
                         </div>
-                        <div className="text-[13px] font-semibold shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 64 }}>
-                          {fmt(revenue)}
-                        </div>
-                        <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 52 }}>
-                          {loads} load{loads !== 1 ? 's' : ''}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 pt-3 text-[11px] leading-relaxed" style={{ color: 'var(--gc-text-3)', borderTop: '1px solid var(--gc-border-light)' }}>
+                    Relay loads are split between the two assets in proportion
+                    to each leg&apos;s straight-line miles. Each leg counts as
+                    half a load. When one leg has no geocoded stops, the split
+                    falls back to 50/50.
+                  </div>
+                </>
               )}
             </Card>
 
