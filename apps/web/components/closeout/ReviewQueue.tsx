@@ -74,6 +74,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // can show the actual delivery date, not the pickup-leg's end (which
   // is the relay handoff time).
   const allEvents = useCalendarStore(s => s.events);
+  // True when the load detail (EventModal) is open over us. We pause
+  // our keyboard shortcuts and the backdrop-click-to-close while it's
+  // up so EscClose / arrow keys / clicks belong to the modal on top,
+  // not the review queue underneath.
+  const eventModalOpen = useCalendarStore(s => s.modalOpen);
   const { user } = useUser();
   const [idx, setIdx] = useState(startIndex);
   const [showFlag, setShowFlag] = useState(false);
@@ -270,6 +275,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const releaseRef = useRef(handleRelease);
   releaseRef.current = handleRelease;
   useEffect(() => {
+    // Don't fight the EventModal for the keyboard when it's stacked
+    // on top — its own Esc handler should close it, not our queue.
+    if (eventModalOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (showFlag) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -282,12 +290,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showFlag, onClose]);
+  }, [showFlag, onClose, eventModalOpen]);
 
   // ── Render ────────────────────────────────────────────────────────
   if (!current) {
     return (
-      <Shell onClose={onClose}>
+      <Shell onClose={onClose} blocked={eventModalOpen}>
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center" style={{ color: 'var(--gc-text-3)' }}>
             <CheckCircle2 size={32} className="mx-auto mb-2" style={{ color: '#15803d' }} />
@@ -336,7 +344,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   return (
     <>
-      <Shell onClose={onClose}>
+      <Shell onClose={onClose} blocked={eventModalOpen}>
         {/* Top bar */}
         <div className="shrink-0 flex items-center gap-3 px-5 py-3"
           style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
@@ -674,15 +682,18 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   );
 }
 
-function Shell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function Shell({ children, onClose, blocked }: { children: React.ReactNode; onClose: () => void; blocked?: boolean }) {
   // Centered modal with a dim backdrop. The closeout page stays visible
   // behind so opening the review queue doesn't feel like leaving — just
   // a focused work surface on top of the existing context. Backdrop
-  // click closes; Esc is wired by the parent.
+  // click closes; Esc is wired by the parent. When `blocked` (load
+  // detail modal stacked on top), backdrop click is a no-op so the
+  // user doesn't accidentally lose their queue position when the click
+  // bubbles past EventModal's backdrop.
   return (
     <div className="fixed inset-0 z-[180] flex items-center justify-center p-4"
       style={{ background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(2px)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      onMouseDown={e => { if (!blocked && e.target === e.currentTarget) onClose(); }}>
       <div
         className="flex flex-col rounded-2xl overflow-hidden"
         style={{

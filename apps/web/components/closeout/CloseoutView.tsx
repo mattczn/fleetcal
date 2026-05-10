@@ -826,10 +826,10 @@ export default function CloseoutView() {
           onClose={() => { setReviewOpen(false); void refresh(); }}
           onLoadResolved={() => { /* refresh happens on close */ }}
           onOpenLoadModal={(load) => {
-            // EventModal sits at z-50, review queue at z-180. Close the
-            // review queue first so the load modal isn't obscured behind
-            // it, then defer to the smart pickup-leg resolver.
-            setReviewOpen(false);
+            // EventModal sits at z-[200], review queue at z-180, so the
+            // load detail stacks ON TOP of the review queue without
+            // dismissing it. Closing the load modal returns the user
+            // to their original review-queue position.
             void openLoadInModal(load as QueueRow);
           }}
         />

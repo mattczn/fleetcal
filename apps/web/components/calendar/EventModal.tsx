@@ -2447,7 +2447,7 @@ export default function EventModal() {
   return (
     <>
     {dupLoadNum && (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
+      <div className="fixed inset-0 z-[220] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
         <div className="rounded-2xl p-6 space-y-4" style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-start gap-3">
             <div style={{ background: '#fffbeb', borderRadius: 10, padding: 8, flexShrink: 0 }}>
@@ -2503,7 +2503,7 @@ export default function EventModal() {
       const ungeocoded = stops.filter(s => s.geocodeStatus === 'failed');
       const which = geocodeBlock;
       return (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
+        <div className="fixed inset-0 z-[220] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
           <div className="rounded-2xl p-6 space-y-4" style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 420, border: '1px solid var(--gc-border-light)' }}>
             <div className="flex items-start gap-3">
               <div style={{ background: '#fef2f2', borderRadius: 10, padding: 8, flexShrink: 0 }}>
@@ -2554,7 +2554,7 @@ export default function EventModal() {
       );
     })()}
     {brokerSaveBlocked && brokerMatch.status === 'new' && (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
+      <div className="fixed inset-0 z-[220] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
         <div className="rounded-2xl p-6 space-y-4" style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-start gap-3">
             <div style={{ background: '#f0f9ff', borderRadius: 10, padding: 8, flexShrink: 0 }}>
@@ -2611,7 +2611,7 @@ export default function EventModal() {
       />
     )}
     {showSavePrompt && (
-      <div className="fixed inset-0 z-[150] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}>
+      <div className="fixed inset-0 z-[210] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}>
         <div
           className="rounded-2xl p-6 space-y-4"
           style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}
@@ -2658,7 +2658,10 @@ export default function EventModal() {
         </div>
       </div>
     )}
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    {/* z-[200] keeps the load detail modal above the closeout review
+        queue (z-180) so the user can pop it open without losing their
+        review-queue position. Sub-dialogs below stack at +10/+20. */}
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.36)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) handleBackdropClick(); }}>
       <div className="flex"
