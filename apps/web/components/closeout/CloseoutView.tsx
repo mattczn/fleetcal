@@ -57,7 +57,10 @@ type ColKey =
 
 interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
 
-type FilterState = Partial<Record<ColKey, string>>;
+// Each filterable column carries a list of selected values. An empty
+// or absent array means "no filter on this column"; otherwise a row
+// passes only if its formatted value matches one of the selections.
+type FilterState = Partial<Record<ColKey, string[]>>;
 
 // Toggleable columns. "actions" + "docs" are always rendered (they're
 // where the user mutates state). The notes button lives inside actions
@@ -273,10 +276,10 @@ export default function CloseoutView() {
 
   // Per-column option lists for the filter dropdowns. Built from the
   // current page's data so the user only ever picks values that exist.
-  // Age and Title intentionally skipped — Age is better expressed by
-  // the Delivered date filter, and Title values are essentially unique
-  // per load so a dropdown doesn't help.
-  const filterableCols: ColKey[] = ['delivered', 'loadNum', 'customer', 'driver'];
+  // Age, Title, and Load# intentionally skipped — Age is better expressed
+  // by the Delivered date filter, and Title/Load# values are essentially
+  // unique per load so a dropdown doesn't help.
+  const filterableCols: ColKey[] = ['delivered', 'customer', 'driver'];
   const isFilterable = (c: ColKey) => filterableCols.includes(c);
   const filterOptions = useMemo(() => {
     const opts: Partial<Record<ColKey, string[]>> = {};
@@ -297,10 +300,11 @@ export default function CloseoutView() {
   // of the user's chosen sort.
   const visible = useMemo(() => {
     let out = dedup;
-    const activeFilters = (Object.entries(filters) as [ColKey, string][]).filter(([, v]) => v && v.trim() !== '');
+    const activeFilters = (Object.entries(filters) as [ColKey, string[] | undefined][])
+      .filter(([, vs]) => vs && vs.length > 0) as [ColKey, string[]][];
     if (activeFilters.length > 0) {
       out = out.filter(row => {
-        return activeFilters.every(([col, q]) => formatRowForCol(row, col) === q);
+        return activeFilters.every(([col, vals]) => vals.includes(formatRowForCol(row, col)));
       });
     }
     if (sort.key) {
@@ -325,9 +329,22 @@ export default function CloseoutView() {
       return { key: null, dir: 'asc' }; // third click clears
     });
   };
-  const setFilter = (key: ColKey, val: string) => setFilters(f => ({ ...f, [key]: val }));
+  // Toggle a single value in the column's selection list. Adds when
+  // missing, removes when present. Empty array → no filter on that col.
+  const toggleFilterValue = (key: ColKey, val: string) => {
+    setFilters(f => {
+      const current = f[key] ?? [];
+      const next = current.includes(val)
+        ? current.filter(v => v !== val)
+        : [...current, val];
+      return { ...f, [key]: next };
+    });
+  };
+  const clearColFilter = (key: ColKey) => setFilters(f => ({ ...f, [key]: [] }));
+  const setColFilterAll = (key: ColKey, options: string[]) =>
+    setFilters(f => ({ ...f, [key]: [...options] }));
   const clearAllFilters = () => setFilters({});
-  const activeFilterCount = Object.values(filters).filter(v => v && v.trim() !== '').length;
+  const activeFilterCount = Object.values(filters).filter(v => v && v.length > 0).length;
 
   const tabCount = (t: Tab) => t === tab ? dedup.length : null;
 
@@ -552,14 +569,14 @@ export default function CloseoutView() {
               <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {visibleCols.age          && <MenuTh col="age"          label="Age"          align="left"  sort={sort} filterValue={filters.age          ?? ''} setHeaderRef={el => { headerRefs.current.age = el; }}          onClick={() => setOpenHeaderCol(p => p === 'age'          ? null : 'age')} />}
-                    {visibleCols.delivered    && <MenuTh col="delivered"    label="Delivered"    align="left"  sort={sort} filterValue={filters.delivered    ?? ''} setHeaderRef={el => { headerRefs.current.delivered = el; }}    onClick={() => setOpenHeaderCol(p => p === 'delivered'    ? null : 'delivered')} />}
-                    {visibleCols.loadNum      && <MenuTh col="loadNum"      label="Load #"       align="left"  sort={sort} filterValue={filters.loadNum      ?? ''} setHeaderRef={el => { headerRefs.current.loadNum = el; }}      onClick={() => setOpenHeaderCol(p => p === 'loadNum'      ? null : 'loadNum')} />}
-                    {visibleCols.title        && <MenuTh col="title"        label="Title"        align="left"  sort={sort} filterValue={filters.title        ?? ''} setHeaderRef={el => { headerRefs.current.title = el; }}        onClick={() => setOpenHeaderCol(p => p === 'title'        ? null : 'title')} />}
-                    {visibleCols.customer     && <MenuTh col="customer"     label="Customer"     align="left"  sort={sort} filterValue={filters.customer     ?? ''} setHeaderRef={el => { headerRefs.current.customer = el; }}     onClick={() => setOpenHeaderCol(p => p === 'customer'     ? null : 'customer')} />}
-                    {visibleCols.driver       && <MenuTh col="driver"       label="Driver(s)"    align="left"  sort={sort} filterValue={filters.driver       ?? ''} setHeaderRef={el => { headerRefs.current.driver = el; }}       onClick={() => setOpenHeaderCol(p => p === 'driver'       ? null : 'driver')} />}
-                    {visibleCols.rate         && <MenuTh col="rate"         label="Rate"         align="right" sort={sort} filterValue={filters.rate         ?? ''} setHeaderRef={el => { headerRefs.current.rate = el; }}         onClick={() => setOpenHeaderCol(p => p === 'rate'         ? null : 'rate')} />}
-                    {visibleCols.accessorials && <MenuTh col="accessorials" label="Accessorials" align="right" sort={sort} filterValue={filters.accessorials ?? ''} setHeaderRef={el => { headerRefs.current.accessorials = el; }} onClick={() => setOpenHeaderCol(p => p === 'accessorials' ? null : 'accessorials')} />}
+                    {visibleCols.age          && <MenuTh col="age"          label="Age"          align="left"  sort={sort} selectedCount={(filters.age          ?? []).length} setHeaderRef={el => { headerRefs.current.age = el; }}          onClick={() => setOpenHeaderCol(p => p === 'age'          ? null : 'age')} />}
+                    {visibleCols.delivered    && <MenuTh col="delivered"    label="Delivered"    align="left"  sort={sort} selectedCount={(filters.delivered    ?? []).length} setHeaderRef={el => { headerRefs.current.delivered = el; }}    onClick={() => setOpenHeaderCol(p => p === 'delivered'    ? null : 'delivered')} />}
+                    {visibleCols.loadNum      && <MenuTh col="loadNum"      label="Load #"       align="left"  sort={sort} selectedCount={(filters.loadNum      ?? []).length} setHeaderRef={el => { headerRefs.current.loadNum = el; }}      onClick={() => setOpenHeaderCol(p => p === 'loadNum'      ? null : 'loadNum')} />}
+                    {visibleCols.title        && <MenuTh col="title"        label="Title"        align="left"  sort={sort} selectedCount={(filters.title        ?? []).length} setHeaderRef={el => { headerRefs.current.title = el; }}        onClick={() => setOpenHeaderCol(p => p === 'title'        ? null : 'title')} />}
+                    {visibleCols.customer     && <MenuTh col="customer"     label="Customer"     align="left"  sort={sort} selectedCount={(filters.customer     ?? []).length} setHeaderRef={el => { headerRefs.current.customer = el; }}     onClick={() => setOpenHeaderCol(p => p === 'customer'     ? null : 'customer')} />}
+                    {visibleCols.driver       && <MenuTh col="driver"       label="Driver(s)"    align="left"  sort={sort} selectedCount={(filters.driver       ?? []).length} setHeaderRef={el => { headerRefs.current.driver = el; }}       onClick={() => setOpenHeaderCol(p => p === 'driver'       ? null : 'driver')} />}
+                    {visibleCols.rate         && <MenuTh col="rate"         label="Rate"         align="right" sort={sort} selectedCount={(filters.rate         ?? []).length} setHeaderRef={el => { headerRefs.current.rate = el; }}         onClick={() => setOpenHeaderCol(p => p === 'rate'         ? null : 'rate')} />}
+                    {visibleCols.accessorials && <MenuTh col="accessorials" label="Accessorials" align="right" sort={sort} selectedCount={(filters.accessorials ?? []).length} setHeaderRef={el => { headerRefs.current.accessorials = el; }} onClick={() => setOpenHeaderCol(p => p === 'accessorials' ? null : 'accessorials')} />}
                     {visibleCols.docs && (
                       <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider"
                         style={{ color: 'var(--gc-text-3)', textAlign: 'left' }}>
@@ -783,13 +800,15 @@ export default function CloseoutView() {
           anchorEl={headerRefs.current[openHeaderCol] ?? null}
           sort={sort}
           filterable={isFilterable(openHeaderCol)}
-          filterValue={filters[openHeaderCol] ?? ''}
+          selected={filters[openHeaderCol] ?? []}
           options={filterOptions[openHeaderCol] ?? []}
           onSort={(dir) => {
             if (dir === null) setSort({ key: null, dir: 'asc' });
             else setSort({ key: openHeaderCol, dir });
           }}
-          onFilter={(v) => setFilter(openHeaderCol, v)}
+          onToggleValue={(val) => toggleFilterValue(openHeaderCol, val)}
+          onClearFilter={() => clearColFilter(openHeaderCol)}
+          onSelectAll={() => setColFilterAll(openHeaderCol, filterOptions[openHeaderCol] ?? [])}
           onClose={() => setOpenHeaderCol(null)}
         />
       )}
@@ -1166,18 +1185,19 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
 
 /** Column header that opens a sort + filter popover when clicked. */
 function MenuTh({
-  col, label, align, sort, filterValue, setHeaderRef, onClick,
+  col, label, align, sort, selectedCount, setHeaderRef, onClick,
 }: {
   col: ColKey;
   label: string;
   align: 'left' | 'right';
   sort: SortState;
-  filterValue: string;
+  /** How many filter values are currently selected for this column. */
+  selectedCount: number;
   setHeaderRef: (el: HTMLTableCellElement | null) => void;
   onClick: () => void;
 }) {
   const sortActive   = sort.key === col;
-  const filterActive = filterValue !== '';
+  const filterActive = selectedCount > 0;
   const anyActive    = sortActive || filterActive;
   return (
     <th
@@ -1198,8 +1218,11 @@ function MenuTh({
             : <ArrowDown size={11} style={{ color: 'var(--gc-blue)' }} />
         ) : null}
         {filterActive && (
-          <span title={`Filtered: ${filterValue}`}
-            style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--gc-blue)' }} />
+          <span title={`${selectedCount} selected`}
+            className="text-[9px] font-bold tabular-nums px-1 rounded-full"
+            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px' }}>
+            {selectedCount}
+          </span>
         )}
       </span>
     </th>
@@ -1208,19 +1231,25 @@ function MenuTh({
 
 /** Combined sort + filter popover. Anchored to the clicked header via
  *  getBoundingClientRect, repositioned on resize/scroll. Rendered with
- *  fixed positioning so it escapes the table's overflow-hidden ancestor. */
+ *  fixed positioning so it escapes the table's overflow-hidden ancestor.
+ *
+ *  Filter is multi-select: clicking an option toggles it in/out of the
+ *  selection. Empty selection = no filter active. Helpers for "Select
+ *  all" / "Clear" are provided in the filter header. */
 const HeaderMenu = forwardRef<HTMLDivElement, {
   col: ColKey;
   anchorEl: HTMLElement | null;
   sort: SortState;
   filterable: boolean;
-  filterValue: string;
+  selected: string[];
   options: string[];
   onSort: (dir: 'asc' | 'desc' | null) => void;
-  onFilter: (val: string) => void;
+  onToggleValue: (val: string) => void;
+  onClearFilter: () => void;
+  onSelectAll: () => void;
   onClose: () => void;
 }>(function HeaderMenu({
-  col, anchorEl, sort, filterable, filterValue, options, onSort, onFilter, onClose,
+  col, anchorEl, sort, filterable, selected, options, onSort, onToggleValue, onClearFilter, onSelectAll, onClose,
 }, ref) {
   const [pos, setPos]   = useState<{ left: number; top: number } | null>(null);
   const [search, setSearch] = useState('');
@@ -1231,7 +1260,6 @@ const HeaderMenu = forwardRef<HTMLDivElement, {
     if (!anchorEl) { setPos(null); return; }
     const update = () => {
       const r = anchorEl.getBoundingClientRect();
-      // Anchor below the header, aligned to its left edge.
       setPos({ left: r.left, top: r.bottom });
     };
     update();
@@ -1247,6 +1275,8 @@ const HeaderMenu = forwardRef<HTMLDivElement, {
   const filteredOptions = search.trim() === ''
     ? options
     : options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+  const selectedSet = new Set(selected);
+  const allSelected = options.length > 0 && options.every(o => selectedSet.has(o));
 
   return (
     <div
@@ -1260,8 +1290,8 @@ const HeaderMenu = forwardRef<HTMLDivElement, {
         background: 'var(--gc-surface)',
         border:     '1px solid var(--gc-border)',
         boxShadow:  '0 12px 32px rgba(0,0,0,0.15)',
-        minWidth:   220,
-        maxWidth:   320,
+        minWidth:   240,
+        maxWidth:   340,
       }}>
       {/* Sort group */}
       <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold"
@@ -1289,20 +1319,31 @@ const HeaderMenu = forwardRef<HTMLDivElement, {
         />
       )}
 
-      {/* Filter group */}
+      {/* Multi-select filter */}
       {filterable && (
         <>
           <div className="my-1" style={{ borderTop: '1px solid var(--gc-border-light)' }} />
           <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
             style={{ color: 'var(--gc-text-3)' }}>
-            <span>Filter</span>
-            {filterValue && (
-              <button onClick={() => { onFilter(''); }}
+            <span>Filter {selected.length > 0 && (
+              <span className="ml-1 text-[10px] font-semibold normal-case tracking-normal" style={{ color: 'var(--gc-text-2)' }}>
+                ({selected.length})
+              </span>
+            )}</span>
+            <span className="flex items-center gap-2">
+              <button onClick={() => { allSelected ? onClearFilter() : onSelectAll(); }}
                 className="text-[10px] font-semibold normal-case tracking-normal"
                 style={{ color: 'var(--gc-blue)' }}>
-                Clear
+                {allSelected ? 'Deselect all' : 'Select all'}
               </button>
-            )}
+              {selected.length > 0 && !allSelected && (
+                <button onClick={() => { onClearFilter(); }}
+                  className="text-[10px] font-semibold normal-case tracking-normal"
+                  style={{ color: 'var(--gc-text-2)' }}>
+                  Clear
+                </button>
+              )}
+            </span>
           </div>
           {options.length > 8 && (
             <div className="px-2 pb-1.5">
@@ -1320,22 +1361,31 @@ const HeaderMenu = forwardRef<HTMLDivElement, {
               />
             </div>
           )}
-          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
             {filteredOptions.length === 0 ? (
               <div className="px-3 py-2 text-[12px] italic" style={{ color: 'var(--gc-text-3)' }}>
                 No options
               </div>
             ) : (
               filteredOptions.map(opt => (
-                <MenuRow
+                <CheckboxMenuRow
                   key={opt}
-                  active={filterValue === opt}
+                  checked={selectedSet.has(opt)}
                   label={opt}
-                  onClick={() => { onFilter(opt); onClose(); }}
-                  truncate
+                  onToggle={() => onToggleValue(opt)}
                 />
               ))
             )}
+          </div>
+          {/* Done button — gives the user an explicit way out of the
+              multi-select panel since clicking a checkbox doesn't auto-
+              close (you'd lose the ability to pick multiple). */}
+          <div className="px-2 pt-1.5 pb-1" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+            <button onClick={onClose}
+              className="w-full text-[12px] font-semibold py-1.5 rounded-lg transition-colors"
+              style={{ background: '#1a73e8', color: '#fff' }}>
+              Done
+            </button>
           </div>
         </>
       )}
@@ -1368,5 +1418,28 @@ function MenuRow({
       <span className={truncate ? 'truncate flex-1' : 'flex-1'}>{label}</span>
       {active && <Check size={12} className="flex-none" />}
     </button>
+  );
+}
+
+function CheckboxMenuRow({
+  checked, label, onToggle,
+}: {
+  checked: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
+      style={{ color: 'var(--gc-text-1)' }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        className="flex-none"
+        style={{ accentColor: '#1a73e8' }}
+      />
+      <span className="truncate flex-1">{label}</span>
+    </label>
   );
 }
