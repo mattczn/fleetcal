@@ -42,27 +42,36 @@ interface Props {
 
 export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '#525659' }: Props) {
   const wrapRef    = useRef<HTMLDivElement>(null);
+  const scrollRef  = useRef<HTMLDivElement>(null);
   const boxRef     = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pdfRef     = useRef<any>(null);
-  const naturalRef = useRef(0);
+  // First-page natural dimensions — used by the fit-to-page calc so
+  // the whole first page is visible by default rather than just the
+  // page width (which would leave the bottom cut off on tall pages).
+  const naturalRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const [containerW, setContainerW] = useState(0);
+  const [containerH, setContainerH] = useState(0);
   const [ready,    setReady]    = useState(false);
   const [error,    setError]    = useState('');
   const [zoomMult, setZoomMult] = useState(1.0);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Track container width via ResizeObserver so the fit calc reacts to
-  // panel resizes (e.g. user toggles the map panel side-by-side).
+  // Track the scroll-area dimensions via ResizeObserver so the fit calc
+  // reacts to panel resizes (e.g. modal/popup, or the user toggling the
+  // map panel side-by-side). We measure the inner scroll area, not the
+  // outer wrap, so the toolbar height is excluded.
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
       setContainerW(el.clientWidth);
+      setContainerH(el.clientHeight);
     });
     ro.observe(el);
     setContainerW(el.clientWidth);
+    setContainerH(el.clientHeight);
     return () => ro.disconnect();
   }, []);
 
@@ -87,7 +96,7 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
 
       const page    = await pdf.getPage(1);
       const natural = page.getViewport({ scale: 1 });
-      naturalRef.current = natural.width;
+      naturalRef.current = { w: natural.width, h: natural.height };
       pdfRef.current = pdf;
       if (!cancelled) setReady(true);
     })().catch(err => { if (!cancelled) setError(String(err)); });
@@ -97,7 +106,7 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
 
   // Re-render canvases on ready, zoom change, or container resize
   useEffect(() => {
-    if (!ready || !pdfRef.current || !containerW || !naturalRef.current) return;
+    if (!ready || !pdfRef.current || !containerW || !naturalRef.current.w) return;
     let cancelled = false;
 
     (async () => {
@@ -107,8 +116,15 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
 
       while (box.firstChild) box.removeChild(box.firstChild);
 
-      // Fit-to-container; minus 32 for padding/scrollbar
-      const fitScale = Math.max(0.1, (containerW - 32) / naturalRef.current);
+      // Fit-to-PAGE: scale to whichever of width or height is the binding
+      // constraint so the whole first page lands on screen at 100% zoom.
+      // The 32 / 24 paddings account for the canvas-area inner padding
+      // (16px top+bottom, 16px left+right) plus a little for the scroll-
+      // bar gutter so the page never reflows under the user.
+      const { w: natW, h: natH } = naturalRef.current;
+      const fitW = (containerW - 32) / natW;
+      const fitH = containerH > 0 ? (containerH - 24) / natH : fitW;
+      const fitScale = Math.max(0.1, Math.min(fitW, fitH));
       const scale = fitScale * zoomMult;
       const pdfjsLib = await loadPdfJsFromCDN();
 
@@ -164,7 +180,7 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
     })().catch(err => console.error('[PdfCanvas] render:', err));
 
     return () => { cancelled = true; };
-  }, [ready, zoomMult, containerW]);
+  }, [ready, zoomMult, containerW, containerH]);
 
   const zoomIn  = () => { const n = ZOOM_STEPS.find(z => z > zoomMult + 0.01); if (n) setZoomMult(n); };
   const zoomOut = () => { const n = [...ZOOM_STEPS].reverse().find(z => z < zoomMult - 0.01); if (n) setZoomMult(n); };
@@ -201,7 +217,7 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
       </div>
 
       {/* Canvas scroll area */}
-      <div className="flex-1 overflow-auto" style={{ background: canvasBg, padding: 16 }}>
+      <div ref={scrollRef} className="flex-1 overflow-auto" style={{ background: canvasBg, padding: 16 }}>
         {!ready && !error && (
           <div className="flex items-center justify-center gap-2 py-16 text-sm" style={{ color: 'rgba(255,255,255,.5)' }}>
             <Loader2 size={16} className="animate-spin" /> {dataUrl ? 'Rendering…' : 'Loading…'}

@@ -483,10 +483,29 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   );
 }
 
-function Shell({ children, onClose: _onClose }: { children: React.ReactNode; onClose: () => void }) {
+function Shell({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  // Centered modal with a dim backdrop. The closeout page stays visible
+  // behind so opening the review queue doesn't feel like leaving — just
+  // a focused work surface on top of the existing context. Backdrop
+  // click closes; Esc is wired by the parent.
   return (
-    <div className="fixed inset-0 z-[180] flex flex-col" style={{ background: 'var(--gc-bg)' }}>
-      {children}
+    <div className="fixed inset-0 z-[180] flex items-center justify-center p-4"
+      style={{ background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(2px)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div
+        className="flex flex-col rounded-2xl overflow-hidden"
+        style={{
+          // Roughly the working area used to be — a full-screen takeover.
+          // Capping at sensible maxes keeps the modal from looking weird
+          // on ultrawide monitors but lets it use most of a laptop screen.
+          width:      'min(96vw, 1500px)',
+          height:     'min(92vh, 940px)',
+          background: 'var(--gc-bg)',
+          boxShadow:  '0 24px 64px rgba(0,0,0,0.45)',
+          border:     '1px solid var(--gc-border)',
+        }}>
+        {children}
+      </div>
     </div>
   );
 }
