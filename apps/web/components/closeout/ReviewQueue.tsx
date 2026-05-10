@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -65,6 +65,10 @@ function ageDays(iso: string): number {
 
 export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved }: Props) {
   const customers = useCalendarStore(s => s.customers);
+  // Used to look up the delivery partner of a relay so the meta line
+  // can show the actual delivery date, not the pickup-leg's end (which
+  // is the relay handoff time).
+  const allEvents = useCalendarStore(s => s.events);
   const { user } = useUser();
   const [idx, setIdx] = useState(startIndex);
   const [showFlag, setShowFlag] = useState(false);
@@ -250,9 +254,22 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   const cust = displayBrokerName(current.broker, customers);
   const stops = current.stops ?? [];
-  const route = stops.length > 0
-    ? `${stops[0]?.city ?? '—'} → ${stops[stops.length - 1]?.city ?? '—'}`
+
+  // Pickup date = pickup leg's start. For non-relays it's also delivery
+  // start; for relays we want the *actual* delivery date which lives on
+  // the delivery leg's end. If we can find the partner in the calendar
+  // store, use it; otherwise fall back to current.end (correct for
+  // non-relays and acceptable degraded info for orphan pickup legs).
+  const pickupDate = current.start;
+  const deliveryPartner = (current.relayGroupId && current.relayRole === 'pickup')
+    ? allEvents.find(e =>
+        e.id !== current.id &&
+        e.relayRole === 'delivery' &&
+        ((current.loadId && e.loadId === current.loadId) ||
+         (current.relayGroupId && e.relayGroupId === current.relayGroupId)),
+      )
     : null;
+  const deliveryDate = deliveryPartner?.end ?? current.end;
 
   return (
     <>
@@ -271,13 +288,30 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
               {current.title}
             </div>
-            <div className="text-xs flex items-center gap-3" style={{ color: 'var(--gc-text-3)' }}>
-              {cust && <span>{cust}</span>}
-              {route && <span>{route}</span>}
-              {current.loadNum && <span>#{current.loadNum}</span>}
-              {current.loadPrice != null && <span>{moneyFmt.format(current.loadPrice)}</span>}
-              {current.driverName && <span>{current.driverName}</span>}
-              {current.assetName && <span>{current.assetName}</span>}
+            <div className="text-xs flex items-center gap-3 flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
+              <span className="tabular-nums">
+                {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
+              </span>
+              {cust && (
+                <>
+                  <Sep />
+                  <span className="truncate max-w-[200px]" title={cust}>{cust}</span>
+                </>
+              )}
+              {current.loadNum && (
+                <>
+                  <Sep />
+                  <CopyLoadNum value={current.loadNum} />
+                </>
+              )}
+              {current.loadPrice != null && (
+                <>
+                  <Sep />
+                  <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                    {moneyFmt.format(current.loadPrice)}
+                  </span>
+                </>
+              )}
             </div>
           </div>
           <button onClick={prev} disabled={safeIdx === 0}
@@ -495,11 +529,11 @@ function Shell({ children, onClose }: { children: React.ReactNode; onClose: () =
       <div
         className="flex flex-col rounded-2xl overflow-hidden"
         style={{
-          // Roughly the working area used to be — a full-screen takeover.
-          // Capping at sensible maxes keeps the modal from looking weird
-          // on ultrawide monitors but lets it use most of a laptop screen.
-          width:      'min(96vw, 1500px)',
-          height:     'min(92vh, 940px)',
+          // ~15% larger than the original modal sizing — still capped so
+          // it doesn't span an ultrawide, but uses more of a laptop
+          // screen so the PDFs render at a comfortable size.
+          width:      'min(98vw, 1725px)',
+          height:     'min(94vh, 1080px)',
           background: 'var(--gc-bg)',
           boxShadow:  '0 24px 64px rgba(0,0,0,0.45)',
           border:     '1px solid var(--gc-border)',
@@ -507,6 +541,49 @@ function Shell({ children, onClose }: { children: React.ReactNode; onClose: () =
         {children}
       </div>
     </div>
+  );
+}
+
+function fmtMetaDate(iso: string | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function Sep() {
+  return <span aria-hidden="true" style={{ color: 'var(--gc-text-3)', opacity: 0.4 }}>·</span>;
+}
+
+/** Inline copy-to-clipboard for the load number; mirrors the table's
+ *  CopyableLoadNum but compacted for the review queue header. */
+function CopyLoadNum({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async e => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch { /* clipboard blocked — silent */ }
+      }}
+      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors"
+      style={{
+        background: copied ? '#dcfce7' : 'transparent',
+        color:      copied ? '#15803d' : 'var(--gc-text-2)',
+        fontWeight: 600,
+      }}
+      title={copied ? 'Copied!' : 'Copy load #'}
+      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
+      #{value}
+      {copied
+        ? <Check size={11} style={{ color: '#15803d' }} />
+        : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
+    </button>
   );
 }
 
