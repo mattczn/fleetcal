@@ -104,51 +104,137 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const loadId = current?.loadId ?? current?.id;
   const orgId  = useCalendarStore(s => s.orgId);
 
-  // Fetch docs whenever the active load changes
+  // Per-load assets cache — docs list + signed URL for every doc +
+  // rate-con URL. Populated up-front for current/next/prev so prev/next
+  // navigation renders instantly without a network round-trip per
+  // signed URL. Rate-con and doc URLs all expire in ~1h, well past a
+  // typical review session.
+  const [rateConUrl, setRateConUrl] = useState<string | null>(null);
+  interface LoadAssets {
+    docs:        LoadDocument[];
+    urlByDocId:  Map<string, string>;
+    rateConUrl:  string | null;
+    fetchedAt:   number;
+  }
+  const docsCacheRef = useRef<Map<string, LoadAssets>>(new Map());
+
+  // Prefetch (or no-op if already cached) all assets for one load:
+  // docs list + every doc's signed URL + rate-con URL, all in
+  // parallel.
+  const prefetchLoadAssets = async (
+    targetLoadId: string | undefined,
+    rateConPresent: boolean,
+  ) => {
+    if (!targetLoadId || !orgId) return;
+    if (docsCacheRef.current.has(targetLoadId)) return;
+    try {
+      const [docList, rcUrl] = await Promise.all([
+        fetchLoadDocuments(targetLoadId, orgId),
+        rateConPresent
+          ? railway.getRateConUrl(targetLoadId).then(r => r.url).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const urlByDocId = new Map<string, string>();
+      // Fan out signed-URL fetches in parallel — typically 0–4 docs.
+      await Promise.all(docList.map(async d => {
+        const u = await getLoadDocumentSignedUrl(d.id);
+        if (u) urlByDocId.set(d.id, u);
+      }));
+      docsCacheRef.current.set(targetLoadId, {
+        docs:       docList,
+        urlByDocId,
+        rateConUrl: rcUrl,
+        fetchedAt:  Date.now(),
+      });
+    } catch (err) {
+      console.error('[review queue] prefetch failed for load', targetLoadId, err);
+    }
+  };
+
+  // On idx change: render current load's assets from cache (instant if
+  // already prefetched, fall through to fetch+render otherwise), and
+  // kick off background prefetches for next + prev so they're ready
+  // when the user advances.
   useEffect(() => {
-    if (!loadId || !orgId) { setDocs([]); setIncludedDocIds(new Set()); return; }
+    if (!loadId || !orgId) {
+      setDocs([]);
+      setActiveDocUrl(null);
+      setRateConUrl(null);
+      setIncludedDocIds(new Set());
+      return;
+    }
+
     let cancelled = false;
-    setDocsLoading(true);
-    fetchLoadDocuments(loadId, orgId).then(d => {
-      if (cancelled) return;
-      setDocs(d);
+    const applyAssets = (assets: LoadAssets) => {
+      setDocs(assets.docs);
       setActiveDocIdx(0);
-      // Default included = any doc with kind=pod uploaded on/after delivery
+      setRateConUrl(assets.rateConUrl);
+      // Default invoice selection — same heuristic as before: prior
+      // saved selection wins, else PODs near delivery time.
       const deliveredAt = current?.end ? new Date(current.end).getTime() : 0;
       const presetFromDb = (current as Load).invoiceDocIds ?? [];
       const ids = new Set<string>(presetFromDb.length > 0
         ? presetFromDb
-        : d.filter(x => x.kind === 'pod' && new Date(x.uploadedAt).getTime() >= deliveredAt - 86_400_000).map(x => x.id),
+        : assets.docs
+            .filter(x => x.kind === 'pod' && new Date(x.uploadedAt).getTime() >= deliveredAt - 86_400_000)
+            .map(x => x.id),
       );
       setIncludedDocIds(ids);
-    }).finally(() => { if (!cancelled) setDocsLoading(false); });
-    return () => { cancelled = true; };
-  }, [loadId, orgId, current]);
+    };
 
-  // Resolve the currently selected doc to a fresh signed URL
+    const cached = docsCacheRef.current.get(loadId);
+    if (cached) {
+      // Cache hit → instant paint. No spinner.
+      applyAssets(cached);
+      setDocsLoading(false);
+    } else {
+      setDocsLoading(true);
+      void prefetchLoadAssets(loadId, !!current?.rateConPdf).then(() => {
+        if (cancelled) return;
+        const fresh = docsCacheRef.current.get(loadId);
+        if (fresh) applyAssets(fresh);
+        setDocsLoading(false);
+      });
+    }
+
+    // Always kick off neighbor prefetches in the background.
+    const nxt = loads[safeIdx + 1];
+    const prv = loads[safeIdx - 1];
+    if (nxt) void prefetchLoadAssets(nxt.loadId ?? nxt.id, !!nxt.rateConPdf);
+    if (prv) void prefetchLoadAssets(prv.loadId ?? prv.id, !!prv.rateConPdf);
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadId, orgId, safeIdx]);
+
+  // Resolve the currently selected doc to its signed URL — preferring
+  // the cached one. Falls back to a per-doc fetch only if the cache
+  // doesn't have it (e.g., a freshly uploaded doc whose URL hasn't
+  // been prefetched yet).
   useEffect(() => {
     if (docs.length === 0) { setActiveDocUrl(null); return; }
     const d = docs[Math.min(activeDocIdx, docs.length - 1)];
     if (!d) { setActiveDocUrl(null); return; }
+    const cached = loadId ? docsCacheRef.current.get(loadId) : undefined;
+    const cachedUrl = cached?.urlByDocId.get(d.id);
+    if (cachedUrl) {
+      setActiveDocUrl(cachedUrl);
+      return;
+    }
     let cancelled = false;
     setActiveDocUrl(null);
     void getLoadDocumentSignedUrl(d.id).then(url => {
-      if (!cancelled) setActiveDocUrl(url);
+      if (cancelled || !url) return;
+      setActiveDocUrl(url);
+      // Backfill the cache so subsequent tab clicks / revisits are
+      // instant too.
+      if (loadId) {
+        const entry = docsCacheRef.current.get(loadId);
+        if (entry) entry.urlByDocId.set(d.id, url);
+      }
     });
     return () => { cancelled = true; };
-  }, [docs, activeDocIdx]);
-
-  // Rate con signed URL
-  const [rateConUrl, setRateConUrl] = useState<string | null>(null);
-  useEffect(() => {
-    if (!loadId || !current?.rateConPdf) { setRateConUrl(null); return; }
-    let cancelled = false;
-    setRateConUrl(null);
-    railway.getRateConUrl(loadId).then(({ url }) => {
-      if (!cancelled) setRateConUrl(url);
-    }).catch(() => { if (!cancelled) setRateConUrl(null); });
-    return () => { cancelled = true; };
-  }, [loadId, current?.rateConPdf]);
+  }, [docs, activeDocIdx, loadId]);
 
   // ── Verification checklist ────────────────────────────────────────
   // Only POD is *required*. BOL is optional (still uploadable + can be
@@ -246,10 +332,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     setUploadError(null);
     try {
       const { document } = await railway.uploadLoadDocument(loadId, pendingFile, kind);
-      // Optimistic insert into the local docs list so the new doc shows
-      // up immediately in the tabs + checklist + invoice picker. The
-      // signedUrl will fall in via the existing per-doc effect.
-      setDocs(prev => [...prev, {
+      const newDoc: LoadDocument = {
         id:         document.id,
         loadId:     document.loadId ?? loadId,
         fileName:   document.fileName,
@@ -257,7 +340,17 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         sizeBytes:  document.sizeBytes,
         kind:       document.kind,
         uploadedAt: document.uploadedAt,
-      } as LoadDocument]);
+      } as LoadDocument;
+      // Optimistic insert into the local docs list so the new doc shows
+      // up immediately in the tabs + checklist + invoice picker.
+      setDocs(prev => [...prev, newDoc]);
+      // Keep the cache in sync so leaving and returning to this load
+      // still shows the upload — otherwise the next idx revisit would
+      // overwrite docs from the stale cache entry.
+      const entry = docsCacheRef.current.get(loadId);
+      if (entry) {
+        docsCacheRef.current.set(loadId, { ...entry, docs: [...entry.docs, newDoc] });
+      }
       // PODs auto-include in the invoice packet (matches the default
       // behavior elsewhere in this view).
       if (kind === 'pod') {
