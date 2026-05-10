@@ -37,6 +37,7 @@ import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import PdfCanvas from '@/components/pdf/PdfCanvas';
+import DocViewer from './DocViewer';
 import { FlagModal, type FlagReason } from './FlagModal';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
@@ -150,9 +151,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   }, [loadId, current?.rateConPdf]);
 
   // ── Verification checklist ────────────────────────────────────────
+  // Only POD is *required*. BOL is optional (still uploadable + can be
+  // included in the invoice, just doesn't block release if missing).
+  // Lumper / scale are conditionally required when the load carries the
+  // matching accessorial, since brokers only pay those when the
+  // supporting doc is present.
   const isTonu = current?.status === 'tonu';
   const hasPod = useMemo(() => docs.some(d => d.kind === 'pod'), [docs]);
-  const hasBol = useMemo(() => docs.some(d => d.kind === 'bol'), [docs]);
   const accCategories = (current?.accessorials ?? []).map(a => a.category);
   const needsLumper = accCategories.includes('lumper');
   const hasLumper   = useMemo(() => docs.some(d => /lumper/i.test(d.fileName)), [docs]);
@@ -161,7 +166,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   const checklist = [
     { id: 'pod',    label: 'POD uploaded',     pass: isTonu || hasPod,     skip: isTonu },
-    { id: 'bol',    label: 'BOL uploaded',     pass: hasBol,               skip: false },
     { id: 'lumper', label: 'Lumper receipt',   pass: !needsLumper || hasLumper, skip: !needsLumper },
     { id: 'scale',  label: 'Scale ticket',     pass: !needsScale || hasScale,    skip: !needsScale },
   ];
@@ -496,9 +500,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   );
                 })}
               </div>
-              {docs.length > 0
-                ? <PdfCanvas dataUrl={activeDocUrl ?? ''} />
-                : <NoDocPanel label="No documents uploaded yet for this load." />}
+              {docs.length > 0 ? (() => {
+                const active = docs[Math.min(activeDocIdx, docs.length - 1)];
+                return (
+                  <DocViewer
+                    url={activeDocUrl ?? ''}
+                    mimeType={active?.mimeType}
+                    fileName={active?.fileName}
+                  />
+                );
+              })() : <NoDocPanel label="No documents uploaded yet for this load." />}
             </div>
           </div>
 

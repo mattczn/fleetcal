@@ -17,6 +17,7 @@
     "@types/mapbox-gl": "^3.4.1",
     "dotenv": "^17.4.2",
     "geo-tz": "^8.1.6",
+    "heic2any": "^0.0.4",
     "lucide-react": "^1.8.0",
     "mapbox-gl": "^3.22.0",
     "next": "16.2.4",
