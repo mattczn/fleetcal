@@ -48,6 +48,11 @@ interface Props {
   /** Called after each successful release/flag with the affected load id
    *  so the parent (CloseoutView) can drop it from the queue locally. */
   onLoadResolved?: (loadId: string, action: 'verified' | 'flagged') => void;
+  /** Open the full event modal for this load. Implemented by the parent
+   *  so it can use its smart pickup-leg resolver. The parent should also
+   *  dismiss the review queue when this fires (the modals don't stack —
+   *  EventModal sits at a lower z-index). */
+  onOpenLoadModal?: (load: CalendarEvent) => void;
 }
 
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
@@ -63,7 +68,7 @@ function ageDays(iso: string): number {
   return Math.floor((Date.now() - t) / 86_400_000);
 }
 
-export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved }: Props) {
+export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved, onOpenLoadModal }: Props) {
   const customers = useCalendarStore(s => s.customers);
   // Used to look up the delivery partner of a relay so the meta line
   // can show the actual delivery date, not the pickup-leg's end (which
@@ -294,9 +299,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
           </span>
           <div className="flex flex-col flex-1 min-w-0">
-            <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
-              {current.title}
-            </div>
+            {onOpenLoadModal ? (
+              <button type="button"
+                onClick={() => onOpenLoadModal(current)}
+                className="text-base font-extrabold truncate text-left hover:underline transition-colors"
+                style={{ color: 'var(--gc-blue)' }}
+                title="Open full load details">
+                {current.title}
+              </button>
+            ) : (
+              <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                {current.title}
+              </div>
+            )}
             <div className="text-xs flex items-center gap-3 flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
               <span className="tabular-nums">
                 {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
