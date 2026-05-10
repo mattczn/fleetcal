@@ -190,6 +190,32 @@ class RailwayClient {
   getDocumentUrl(documentId: string) {
     return this.req<GetDocumentUrlResponse>('GET', `/v1/documents/${documentId}/url`);
   }
+  /** Multipart upload — bypasses the JSON `req` helper because file
+   *  bodies need FormData and a different Content-Type. */
+  async uploadLoadDocument(loadId: string, file: File, kind: 'bol' | 'pod' | 'scale' | 'other') {
+    const token = _getToken ? await _getToken() : null;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('kind', kind);
+    const res = await fetch(`${BASE_URL}/v1/loads/${loadId}/documents`, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: fd,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let detail: unknown = text;
+      try { detail = JSON.parse(text); } catch { /* keep raw text */ }
+      throw new RailwayError(res.status, detail, `POST /v1/loads/${loadId}/documents → ${res.status}`);
+    }
+    return res.json() as Promise<{
+      document: {
+        id: string; loadId: string | null; fileName: string;
+        mimeType?: string; sizeBytes?: number;
+        kind: 'bol' | 'pod' | 'scale' | 'other'; uploadedAt: string;
+      };
+    }>;
+  }
 
   // ── Reference data ──────────────────────────────────────────────────
   listAssets()                               { return this.req<ListAssetsResponse>('GET', '/v1/assets'); }

@@ -547,6 +547,114 @@ loads.get("/:id/documents", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// POST /v1/loads/:id/documents — dispatcher uploads a paperwork file
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Multipart body: file (binary) + kind ("bol" | "pod" | "scale" | "other").
+// Resolves the load's first event so the document is reachable through
+// event-scoped queries too (the driver app and audit log both key off
+// event_id; matching that schema keeps things consistent).
+
+const DOC_BUCKET = "load-documents";
+
+loads.post("/:id/documents", async (c) => {
+  const orgId  = c.get("orgId");
+  const loadId = c.req.param("id");
+
+  let body: { file?: File; kind?: string };
+  try { body = await c.req.parseBody() as { file?: File; kind?: string }; }
+  catch (err) {
+    console.error("[POST /v1/loads/:id/documents] parseBody:", err);
+    return c.json({ error: "validation_failed", errors: ["multipart parse failed"] } satisfies ApiErrorResponse, 400);
+  }
+  const file = body.file;
+  const kind = (body.kind ?? "other").toString();
+  if (!file || typeof file === "string") {
+    return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
+  }
+  if (!["bol", "pod", "scale", "other"].includes(kind)) {
+    return c.json({ error: "validation_failed", errors: ["kind must be bol|pod|scale|other"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Pick the pickup leg's event id for the doc's event_id when relay,
+  // else the single event for the load. Doc still links to the load
+  // via load_id so the closeout queue's per-load grouping still works.
+  const { data: legs, error: legsErr } = await supabase
+    .from("events")
+    .select("id, relay_role")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .is("deleted_at", null);
+  if (legsErr) {
+    console.error("[POST /v1/loads/:id/documents] load events fetch:", legsErr);
+    return c.json({ error: "fetch_failed", detail: legsErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const legRows = (legs ?? []) as Array<{ id: string; relay_role: string | null }>;
+  const eventId =
+       legRows.find(e => e.relay_role === "pickup")?.id
+    ?? legRows[0]?.id
+    ?? null;
+  if (!eventId) {
+    return c.json({ error: "not_found", detail: "no event for load" } satisfies ApiErrorResponse, 404);
+  }
+
+  const bytes  = new Uint8Array(await file.arrayBuffer());
+  const ext    = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const random = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${eventId}/${Date.now()}_${random}.${ext}`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from(DOC_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[POST /v1/loads/:id/documents] storage upload:", uploadErr);
+    return c.json({ error: "upload_failed", detail: uploadErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("load_documents")
+    .insert({
+      event_id:     eventId,
+      load_id:      loadId,
+      org_id:       orgId,
+      storage_path: storagePath,
+      file_name:    file.name,
+      mime_type:    file.type || null,
+      size_bytes:   bytes.length,
+      kind,
+    } as any)
+    .select("id, load_id, storage_path, file_name, mime_type, size_bytes, kind, uploaded_at")
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(DOC_BUCKET).remove([storagePath]);
+    console.error("[POST /v1/loads/:id/documents] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  type DocRow = {
+    id: string; load_id: string | null; storage_path: string;
+    file_name: string; mime_type: string | null; size_bytes: number | null;
+    kind: string; uploaded_at: string;
+  };
+  const d = data as DocRow;
+
+  return c.json({
+    document: {
+      id:         d.id,
+      loadId:     d.load_id,
+      fileName:   d.file_name,
+      mimeType:   d.mime_type   ?? undefined,
+      sizeBytes:  d.size_bytes  ?? undefined,
+      kind:       d.kind        as "bol" | "pod" | "scale" | "other",
+      uploadedAt: d.uploaded_at,
+    },
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /v1/loads/:id/rate-con-url — viewable URL for the load's rate-con PDF
 // ─────────────────────────────────────────────────────────────────────────
 

@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2 } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -214,6 +214,55 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       alert(`Flag failed: ${(err as Error).message ?? 'Unknown error'}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // ── Upload paperwork ──────────────────────────────────────────────
+  // Two-stage flow: file picker first, then a kind picker so the user
+  // can categorize before the upload commits. Pending file lives here
+  // so the user can change the kind without re-picking the file.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [uploading, setUploading]     = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  function pickFile() {
+    setUploadError(null);
+    fileInputRef.current?.click();
+  }
+
+  async function uploadAs(kind: 'pod' | 'bol' | 'scale' | 'other') {
+    if (!pendingFile || !loadId || uploading) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const { document } = await railway.uploadLoadDocument(loadId, pendingFile, kind);
+      // Optimistic insert into the local docs list so the new doc shows
+      // up immediately in the tabs + checklist + invoice picker. The
+      // signedUrl will fall in via the existing per-doc effect.
+      setDocs(prev => [...prev, {
+        id:         document.id,
+        loadId:     document.loadId ?? loadId,
+        fileName:   document.fileName,
+        mimeType:   document.mimeType,
+        sizeBytes:  document.sizeBytes,
+        kind:       document.kind,
+        uploadedAt: document.uploadedAt,
+      } as LoadDocument]);
+      // PODs auto-include in the invoice packet (matches the default
+      // behavior elsewhere in this view).
+      if (kind === 'pod') {
+        setIncludedDocIds(prev => new Set(prev).add(document.id));
+      }
+      // Switch the viewer to the freshly uploaded doc so the user can
+      // sanity-check the right page is up.
+      setActiveDocIdx(docs.length); // length pre-update == new index
+      setPendingFile(null);
+    } catch (err) {
+      console.error('[review queue] upload failed:', err);
+      setUploadError((err as Error).message ?? 'Upload failed');
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -471,6 +520,78 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* Upload paperwork */}
+            <div className="px-4 py-3.5" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                Add paperwork
+              </div>
+              {!pendingFile ? (
+                <button onClick={pickFile} disabled={uploading}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg text-[12px] font-semibold py-2 transition-colors"
+                  style={{
+                    background: 'var(--gc-bg)',
+                    color:      'var(--gc-text-1)',
+                    border:     '1px dashed var(--gc-border)',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
+                  <Upload size={13} /> Pick file
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  {/* Filename row + cancel */}
+                  <div className="flex items-center gap-1.5 text-[12px]">
+                    <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+                    <span className="truncate flex-1" title={pendingFile.name} style={{ color: 'var(--gc-text-1)' }}>
+                      {pendingFile.name}
+                    </span>
+                    <button onClick={() => { setPendingFile(null); setUploadError(null); }}
+                      className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Cancel">
+                      <X size={11} style={{ color: 'var(--gc-text-3)' }} />
+                    </button>
+                  </div>
+                  {/* Kind picker */}
+                  <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                    What is this?
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {([
+                      { kind: 'pod',   label: 'POD',   tint: { bg: '#dcfce7', fg: '#15803d' } },
+                      { kind: 'bol',   label: 'BOL',   tint: { bg: '#e8f0fe', fg: '#1558d6' } },
+                      { kind: 'scale', label: 'Scale', tint: { bg: '#fff7ed', fg: '#9a3412' } },
+                      { kind: 'other', label: 'Other', tint: { bg: '#f1f3f4', fg: '#3c4043' } },
+                    ] as const).map(opt => (
+                      <button key={opt.kind}
+                        onClick={() => void uploadAs(opt.kind)}
+                        disabled={uploading}
+                        className="flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-bold py-1.5 transition-opacity disabled:opacity-50"
+                        style={{ background: opt.tint.bg, color: opt.tint.fg, border: `1px solid ${opt.tint.fg}30` }}>
+                        {uploading ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {uploadError && (
+                <div className="mt-2 text-[11px] flex items-start gap-1" style={{ color: '#dc2626' }}>
+                  <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} /> {uploadError}
+                </div>
+              )}
+              {/* Hidden file input — wired by pickFile() */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,application/pdf,image/*"
+                style={{ display: 'none' }}
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) setPendingFile(f);
+                  e.target.value = '';
+                }}
+              />
             </div>
 
             {/* Invoice doc selection */}
