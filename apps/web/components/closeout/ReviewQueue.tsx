@@ -271,6 +271,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     : null;
   const deliveryDate = deliveryPartner?.end ?? current.end;
 
+  // Driver(s) — pickup leg's driver, plus the delivery leg's driver for
+  // relays when distinct. Falls back to "Unassigned" so a missing driver
+  // is visible rather than the line collapsing.
+  const drivers: string[] = [];
+  if (current.driverName) drivers.push(current.driverName);
+  if (deliveryPartner?.driverName && deliveryPartner.driverName !== current.driverName) {
+    drivers.push(deliveryPartner.driverName);
+  }
+
   return (
     <>
       <Shell onClose={onClose}>
@@ -311,6 +320,18 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     {moneyFmt.format(current.loadPrice)}
                   </span>
                 </>
+              )}
+              <Sep />
+              {drivers.length === 0 ? (
+                <span style={{ color: 'var(--gc-text-3)', fontStyle: 'italic' }}>Unassigned</span>
+              ) : drivers.length === 1 ? (
+                <span className="truncate max-w-[160px]" title={drivers[0]} style={{ color: 'var(--gc-text-2)' }}>
+                  {drivers[0]}
+                </span>
+              ) : (
+                <span className="truncate max-w-[260px]" title={drivers.join(' → ')} style={{ color: 'var(--gc-text-2)' }}>
+                  {drivers[0]} <span style={{ opacity: 0.5 }}>→</span> {drivers[1]}
+                </span>
               )}
             </div>
           </div>
