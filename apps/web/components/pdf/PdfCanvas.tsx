@@ -124,7 +124,14 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
       const { w: natW, h: natH } = naturalRef.current;
       const fitW = (containerW - 32) / natW;
       const fitH = containerH > 0 ? (containerH - 24) / natH : fitW;
-      const fitScale = Math.max(0.1, Math.min(fitW, fitH));
+      // Round to 2 decimals to damp sub-pixel oscillation. Without
+      // this + the `scrollbar-gutter: stable` below, fast window
+      // resizes could land the fit-scale just barely on the edge of
+      // needing a vertical scrollbar — the scrollbar flickering on/off
+      // would change clientWidth on each frame, which retriggers this
+      // useEffect and locks us in a render loop.
+      const rawScale = Math.max(0.1, Math.min(fitW, fitH));
+      const fitScale = Math.round(rawScale * 100) / 100;
       const scale = fitScale * zoomMult;
       const pdfjsLib = await loadPdfJsFromCDN();
 
@@ -217,7 +224,16 @@ export default function PdfCanvas({ dataUrl, onRetry, toolbarStyle, canvasBg = '
       </div>
 
       {/* Canvas scroll area */}
-      <div ref={scrollRef} className="flex-1 overflow-auto" style={{ background: canvasBg, padding: 16 }}>
+      <div ref={scrollRef} className="flex-1 overflow-auto"
+        style={{
+          background: canvasBg,
+          padding:    16,
+          // Reserve the scrollbar gutter so the page width stays stable
+          // when the vertical scrollbar shows/hides. Without this, the
+          // fit calc oscillates on window resizes — see the rounding
+          // comment in the render effect.
+          scrollbarGutter: 'stable',
+        }}>
         {!ready && !error && (
           <div className="flex items-center justify-center gap-2 py-16 text-sm" style={{ color: 'rgba(255,255,255,.5)' }}>
             <Loader2 size={16} className="animate-spin" /> {dataUrl ? 'Rendering…' : 'Loading…'}
