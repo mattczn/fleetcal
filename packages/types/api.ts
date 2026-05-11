@@ -340,7 +340,41 @@ export interface GetAuditLogResponse {
 
 // ── /v1/documents ────────────────────────────────────────────────────────
 
-export type DocumentKind = "bol" | "pod" | "scale" | "other";
+/**
+ * Standardized document categories for the closeout workflow. Anything
+ * that doesn't fit one of these slots goes under "other"; the UI keeps
+ * a free-text description field separate so users can disambiguate
+ * within a category without polluting the kind enum (which the
+ * verification checklist and invoice-packet logic depend on).
+ *
+ *   rate_con     — broker rate confirmation; primary one is mirrored
+ *                  onto loads.rate_con_pdf, history lives here
+ *   pod          — proof of delivery (required for release)
+ *   bol          — bill of lading
+ *   scale        — scale ticket (required when load has scale_ticket
+ *                  accessorial)
+ *   lumper       — lumper receipt (required when load has lumper
+ *                  accessorial)
+ *   receipt      — generic receipt (fuel, layover, etc.)
+ *   driver_sheet — driver pay sheet / trip sheet
+ *   invoice      — already-built invoice for this load
+ *   other        — anything else
+ */
+export type DocumentKind =
+  | "rate_con"
+  | "pod"
+  | "bol"
+  | "scale"
+  | "lumper"
+  | "receipt"
+  | "driver_sheet"
+  | "invoice"
+  | "other";
+
+/** Canonical ordered list — drives the UI chip order and validation. */
+export const DOCUMENT_KINDS: readonly DocumentKind[] = [
+  "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "other",
+];
 
 /**
  * Document summary shape returned by list/show endpoints. `signedUrl` is

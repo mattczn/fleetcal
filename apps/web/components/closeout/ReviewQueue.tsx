@@ -57,12 +57,59 @@ interface Props {
   onOpenLoadModal?: (load: CalendarEvent) => void;
 }
 
+// Color tokens per document kind. Used by the doc-tab strip + the
+// upload chips so the visual language stays consistent.
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-  bol:   { bg: '#e8f0fe', fg: '#1558d6' },
-  pod:   { bg: '#dcfce7', fg: '#15803d' },
-  scale: { bg: '#fff7ed', fg: '#9a3412' },
-  other: { bg: '#f1f3f4', fg: '#3c4043' },
+  rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },
+  pod:          { bg: '#dcfce7', fg: '#15803d' },
+  bol:          { bg: '#e8f0fe', fg: '#1558d6' },
+  scale:        { bg: '#fff7ed', fg: '#9a3412' },
+  lumper:       { bg: '#fef3c7', fg: '#92400e' },
+  receipt:      { bg: '#fce7f3', fg: '#9d174d' },
+  driver_sheet: { bg: '#e0f2fe', fg: '#0c4a6e' },
+  invoice:      { bg: '#fef9c3', fg: '#854d0e' },
+  other:        { bg: '#f1f3f4', fg: '#3c4043' },
 };
+
+// Display label per kind. snake_case → "Title Case" for the docs UI.
+const KIND_LABEL: Record<string, string> = {
+  rate_con:     'Rate Con',
+  pod:          'POD',
+  bol:          'BOL',
+  scale:        'Scale',
+  lumper:       'Lumper',
+  receipt:      'Receipt',
+  driver_sheet: 'Driver Sheet',
+  invoice:      'Invoice',
+  other:        'Other',
+};
+
+// Display labels for accessorial categories — used by the banner in
+// the review panel so dispatchers see the human-readable name instead
+// of the snake_case enum value.
+const ACCESSORIAL_LABEL: Record<string, string> = {
+  detention:    'Detention',
+  lumper:       'Lumper',
+  layover:      'Layover',
+  scale_ticket: 'Scale ticket',
+  extra_stop:   'Extra stop',
+  other:        'Other',
+};
+
+// Upload-chip order in the "Add paperwork" panel — most-frequent first
+// so dispatchers hit common buttons by muscle memory. Rate Con goes
+// first since it's required for release alongside POD.
+const KIND_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string; tint: { bg: string; fg: string } }> = [
+  { kind: 'pod',          label: 'POD',          tint: KIND_TINT.pod },
+  { kind: 'rate_con',     label: 'Rate Con',     tint: KIND_TINT.rate_con },
+  { kind: 'bol',          label: 'BOL',          tint: KIND_TINT.bol },
+  { kind: 'lumper',       label: 'Lumper',       tint: KIND_TINT.lumper },
+  { kind: 'scale',        label: 'Scale',        tint: KIND_TINT.scale },
+  { kind: 'receipt',      label: 'Receipt',      tint: KIND_TINT.receipt },
+  { kind: 'driver_sheet', label: 'Driver Sheet', tint: KIND_TINT.driver_sheet },
+  { kind: 'invoice',      label: 'Invoice',      tint: KIND_TINT.invoice },
+  { kind: 'other',        label: 'Other',        tint: KIND_TINT.other },
+];
 
 function ageDays(iso: string): number {
   const t = new Date(iso).getTime();
@@ -238,23 +285,33 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   }, [docs, activeDocIdx, loadId]);
 
   // ── Verification checklist ────────────────────────────────────────
-  // Only POD is *required*. BOL is optional (still uploadable + can be
-  // included in the invoice, just doesn't block release if missing).
-  // Lumper / scale are conditionally required when the load carries the
-  // matching accessorial, since brokers only pay those when the
-  // supporting doc is present.
+  // Required for release: Rate Con + POD. Lumper / Scale are
+  // conditionally required when the load carries the matching
+  // accessorial (brokers only pay those when the supporting doc is
+  // present). Everything else (BOL, Receipt, Driver Sheet, Invoice,
+  // Other) is freely uploadable but doesn't block closeout.
   const isTonu = current?.status === 'tonu';
-  const hasPod = useMemo(() => docs.some(d => d.kind === 'pod'), [docs]);
+  const hasPod     = useMemo(() => docs.some(d => d.kind === 'pod'), [docs]);
+  const hasRateCon = useMemo(
+    () => !!current?.rateConPdf || docs.some(d => d.kind === 'rate_con'),
+    [docs, current?.rateConPdf],
+  );
   const accCategories = (current?.accessorials ?? []).map(a => a.category);
   const needsLumper = accCategories.includes('lumper');
-  const hasLumper   = useMemo(() => docs.some(d => /lumper/i.test(d.fileName)), [docs]);
+  // Detect lumper from kind first (new uploads), filename second (old
+  // driver-uploaded docs tagged "other" with "lumper" in the name).
+  const hasLumper   = useMemo(
+    () => docs.some(d => d.kind === 'lumper' || /lumper/i.test(d.fileName)),
+    [docs],
+  );
   const needsScale  = accCategories.includes('scale_ticket');
   const hasScale    = useMemo(() => docs.some(d => d.kind === 'scale'), [docs]);
 
   const checklist = [
-    { id: 'pod',    label: 'POD uploaded',     pass: isTonu || hasPod,     skip: isTonu },
-    { id: 'lumper', label: 'Lumper receipt',   pass: !needsLumper || hasLumper, skip: !needsLumper },
-    { id: 'scale',  label: 'Scale ticket',     pass: !needsScale || hasScale,    skip: !needsScale },
+    { id: 'rate_con', label: 'Rate confirmation', pass: hasRateCon,                 skip: false },
+    { id: 'pod',      label: 'POD uploaded',       pass: isTonu || hasPod,           skip: isTonu },
+    { id: 'lumper',   label: 'Lumper receipt',     pass: !needsLumper || hasLumper,  skip: !needsLumper },
+    { id: 'scale',    label: 'Scale ticket',       pass: !needsScale || hasScale,    skip: !needsScale },
   ];
   const requiredPass = checklist.filter(c => !c.skip).every(c => c.pass);
 
@@ -333,7 +390,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     fileInputRef.current?.click();
   }
 
-  async function uploadAs(kind: 'pod' | 'bol' | 'scale' | 'other') {
+  async function uploadAs(kind: import('@fleetcal/types').DocumentKind) {
     if (!pendingFile || !loadId || uploading) return;
     setUploading(true);
     setUploadError(null);
@@ -631,7 +688,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         color: active ? tint.fg : 'var(--gc-text-3)',
                         border: `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
                       }}>
-                      <FileText size={10} /> {d.kind.toUpperCase()} · {d.fileName.replace(/\.[^.]+$/, '').slice(0, 18)}
+                      <FileText size={10} /> {KIND_LABEL[d.kind] ?? d.kind} · {d.fileName.replace(/\.[^.]+$/, '').slice(0, 18)}
                     </button>
                   );
                 })}
@@ -651,6 +708,30 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
           {/* Right: actions sidebar */}
           <div className="shrink-0 flex flex-col" style={{ width: 300, borderLeft: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+            {/* Accessorials banner — surfaces detention / lumper / scale
+                etc. with their amounts so the dispatcher knows what
+                support docs they're verifying against. */}
+            {(current.accessorials ?? []).length > 0 && (
+              <div className="px-4 py-3" style={{ background: '#fef9c3', borderBottom: '1px solid #fde68a' }}>
+                <div className="text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#854d0e' }}>
+                  Accessorials ({(current.accessorials ?? []).length})
+                </div>
+                <ul className="space-y-1">
+                  {(current.accessorials ?? []).map((a, i) => (
+                    <li key={i} className="flex items-center justify-between text-[12px]">
+                      <span style={{ color: '#78350f' }}>
+                        {ACCESSORIAL_LABEL[a.category] ?? a.category}
+                        {a.description && <span className="ml-1" style={{ color: '#a16207', fontSize: 11 }}>· {a.description}</span>}
+                      </span>
+                      <span className="font-semibold tabular-nums" style={{ color: '#78350f' }}>
+                        {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {/* Verification checklist */}
             <div className="px-4 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
               <div className="text-[11px] font-bold uppercase tracking-wider mb-2.5" style={{ color: 'var(--gc-text-3)' }}>
@@ -712,12 +793,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     What is this?
                   </div>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {([
-                      { kind: 'pod',   label: 'POD',   tint: { bg: '#dcfce7', fg: '#15803d' } },
-                      { kind: 'bol',   label: 'BOL',   tint: { bg: '#e8f0fe', fg: '#1558d6' } },
-                      { kind: 'scale', label: 'Scale', tint: { bg: '#fff7ed', fg: '#9a3412' } },
-                      { kind: 'other', label: 'Other', tint: { bg: '#f1f3f4', fg: '#3c4043' } },
-                    ] as const).map(opt => (
+                    {KIND_OPTIONS.map(opt => (
                       <button key={opt.kind}
                         onClick={() => void uploadAs(opt.kind)}
                         disabled={uploading}
@@ -774,7 +850,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                           }} />
                         <div className="flex-1 min-w-0">
                           <div className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                            {d.kind.toUpperCase()}
+                            {KIND_LABEL[d.kind] ?? d.kind}
                           </div>
                           <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
                             {d.fileName}

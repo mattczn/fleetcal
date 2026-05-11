@@ -713,12 +713,18 @@ export default function CloseoutView() {
                         {visibleCols.docs && (
                           <Td>
                             <div className="flex flex-wrap items-center gap-1">
-                              {hasRC                       && <DocBadge label="RC"     count={1} />}
-                              {(counts.pod    ?? 0) > 0    && <DocBadge label="POD"    count={counts.pod} />}
-                              {(counts.bol    ?? 0) > 0    && <DocBadge label="BOL"    count={counts.bol} />}
-                              {(counts.lumper ?? 0) > 0    && <DocBadge label="Lumper" count={counts.lumper} />}
-                              {(counts.scale  ?? 0) > 0    && <DocBadge label="Scale"  count={counts.scale} />}
-                              {(counts.other  ?? 0) > 0    && <DocBadge label="Other"  count={counts.other} />}
+                              {/* RC chip: shows count from load_documents
+                                  (rate_con kind) but always at least 1
+                                  if rate_con_pdf is set on the load. */}
+                              {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"     count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+                              {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
+                              {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
+                              {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
+                              {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
+                              {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
+                              {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
+                              {(counts.invoice      ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
+                              {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
                               {!hasRC && Object.keys(counts).length === 0 && (
                                 <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
                               )}

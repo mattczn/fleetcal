@@ -10,6 +10,8 @@ import {
   type Load,
   type Stop,
   type StopType,
+  type DocumentKind,
+  DOCUMENT_KINDS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -620,8 +622,11 @@ driver.post("/loads/:id/documents", async (c) => {
   if (!file || typeof file === "string") {
     return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
   }
-  if (!["bol", "pod", "scale", "other"].includes(kind)) {
-    return c.json({ error: "validation_failed", errors: ["kind must be bol|pod|scale|other"] }, 400);
+  // Drivers can upload any of the standardized kinds — the phone UI
+  // surfaces POD/BOL/Scale/Other today, but we accept the full set so
+  // adding more categories doesn't need an API change.
+  if (!DOCUMENT_KINDS.includes(kind as DocumentKind)) {
+    return c.json({ error: "validation_failed", errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`] }, 400);
   }
 
   // Resolve load_id from the event so the document is reachable from

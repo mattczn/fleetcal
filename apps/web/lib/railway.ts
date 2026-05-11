@@ -192,7 +192,7 @@ class RailwayClient {
   }
   /** Multipart upload — bypasses the JSON `req` helper because file
    *  bodies need FormData and a different Content-Type. */
-  async uploadLoadDocument(loadId: string, file: File, kind: 'bol' | 'pod' | 'scale' | 'other') {
+  async uploadLoadDocument(loadId: string, file: File, kind: import('@fleetcal/types').DocumentKind) {
     const token = _getToken ? await _getToken() : null;
     const fd = new FormData();
     fd.append('file', file);
@@ -212,7 +212,7 @@ class RailwayClient {
       document: {
         id: string; loadId: string | null; fileName: string;
         mimeType?: string; sizeBytes?: number;
-        kind: 'bol' | 'pod' | 'scale' | 'other'; uploadedAt: string;
+        kind: import('@fleetcal/types').DocumentKind; uploadedAt: string;
       };
     }>;
   }

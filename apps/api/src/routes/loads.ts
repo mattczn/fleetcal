@@ -40,6 +40,7 @@ import {
   type ListDocumentsResponse,
   type DocumentSummary,
   type DocumentKind,
+  DOCUMENT_KINDS,
   type ApiErrorResponse,
   type Load,
   type LoadStatus,
@@ -572,8 +573,8 @@ loads.post("/:id/documents", async (c) => {
   if (!file || typeof file === "string") {
     return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
   }
-  if (!["bol", "pod", "scale", "other"].includes(kind)) {
-    return c.json({ error: "validation_failed", errors: ["kind must be bol|pod|scale|other"] } satisfies ApiErrorResponse, 400);
+  if (!DOCUMENT_KINDS.includes(kind as DocumentKind)) {
+    return c.json({ error: "validation_failed", errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`] } satisfies ApiErrorResponse, 400);
   }
 
   // Pick the pickup leg's event id for the doc's event_id when relay,
@@ -640,6 +641,25 @@ loads.post("/:id/documents", async (c) => {
     kind: string; uploaded_at: string;
   };
   const d = data as DocRow;
+
+  // Rate-con mirror: a newly uploaded rate confirmation becomes the
+  // load's "current" rate-con. We keep the history in load_documents
+  // (kind=rate_con) so older versions stay accessible, but point
+  // loads.rate_con_pdf at the latest so the review queue's primary
+  // Rate Con panel + the AI rate-con parser flow keep working with
+  // a single canonical pointer.
+  if (kind === "rate_con") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: mirrorErr } = await supabase
+      .from("loads")
+      .update({ rate_con_pdf: storagePath } as any)
+      .eq("id", loadId)
+      .eq("org_id", orgId);
+    if (mirrorErr) {
+      // Non-fatal — the doc is uploaded and visible in the docs list.
+      console.warn("[POST /v1/loads/:id/documents] rate_con mirror failed:", mirrorErr);
+    }
+  }
 
   return c.json({
     document: {

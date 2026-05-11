@@ -113,10 +113,12 @@ closeout.get("/queue", async (c) => {
     for (const d of (docs ?? []) as Array<{ load_id: string | null; kind: string; file_name: string }>) {
       if (!d.load_id) continue;
       const lc = (docCounts[d.load_id] ??= {});
-      // Heuristic kinds — `kind` column is bol|pod|scale|other; we also
-      // sniff the filename for "lumper" since that's commonly tagged
-      // "other" by drivers.
-      const k = /lumper/i.test(d.file_name) ? "lumper" : d.kind;
+      // Kinds are now standardized (rate_con|pod|bol|scale|lumper|
+      // receipt|driver_sheet|invoice|other), but we still sniff
+      // filenames for "lumper" so legacy driver-uploaded docs tagged
+      // "other" with "lumper" in the name still count toward the
+      // Lumper chip in the table.
+      const k = d.kind === "other" && /lumper/i.test(d.file_name) ? "lumper" : d.kind;
       lc[k] = (lc[k] ?? 0) + 1;
     }
   }
