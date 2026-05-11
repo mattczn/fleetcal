@@ -298,12 +298,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   );
   const accCategories = (current?.accessorials ?? []).map(a => a.category);
   const needsLumper = accCategories.includes('lumper');
-  // Detect lumper from kind first (new uploads), filename second (old
-  // driver-uploaded docs tagged "other" with "lumper" in the name).
-  const hasLumper   = useMemo(
-    () => docs.some(d => d.kind === 'lumper' || /lumper/i.test(d.fileName)),
-    [docs],
-  );
+  const hasLumper   = useMemo(() => docs.some(d => d.kind === 'lumper'), [docs]);
   const needsScale  = accCategories.includes('scale_ticket');
   const hasScale    = useMemo(() => docs.some(d => d.kind === 'scale'), [docs]);
 
