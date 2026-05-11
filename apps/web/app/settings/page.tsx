@@ -1,7 +1,8 @@
 'use client';
 
 import { useRef, useState, useEffect } from 'react';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText } from 'lucide-react';
+import { useOrganization } from '@clerk/nextjs';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles } from 'lucide-react';
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -963,10 +964,18 @@ function vehicleLabel(v: MotiveVehicle) {
 // prefix. Settings live on org_settings.invoice_settings (JSONB) so we
 // can iterate on the shape without DDL.
 function InvoicingPanel() {
+  // Clerk org provides company name (and logo via imageUrl) — pre-fill
+  // those when invoice settings haven't been written yet, so the
+  // dispatcher doesn't have to retype info that already exists.
+  const { organization: clerkOrg } = useOrganization();
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
   const [err,     setErr]     = useState<string | null>(null);
+  // Track which fields were auto-filled from Clerk (vs explicitly
+  // saved) so we can show a subtle "auto-filled" hint and not save
+  // the prefilled value unless the user explicitly touches it.
+  const [autofilledFromClerk, setAutofilledFromClerk] = useState<Set<string>>(new Set());
 
   // Single state blob keyed to InvoiceSettings — keeps the form
   // straightforward. Empty strings for unset fields so the inputs
@@ -993,6 +1002,14 @@ function InvoicingPanel() {
   const updateField = (key: keyof typeof form, value: string) => {
     setForm(prev => ({ ...prev, [key]: value }));
     setSaved(false);
+    // User edited this field — drop the "auto-filled" badge.
+    if (autofilledFromClerk.has(key as string)) {
+      setAutofilledFromClerk(prev => {
+        const next = new Set(prev);
+        next.delete(key as string);
+        return next;
+      });
+    }
   };
 
   // Hydrate on mount.
@@ -1002,8 +1019,21 @@ function InvoicingPanel() {
       .then(({ settings }) => {
         if (cancelled) return;
         const inv = settings.invoiceSettings ?? {};
+        // Clerk fallbacks — only used when the saved field is empty.
+        // Currently just companyName (Clerk org.name); other fields
+        // (address, MC#, EIN) aren't standard Clerk org properties.
+        const clerkAutofills: Record<string, string | undefined> = {
+          companyName: clerkOrg?.name ?? undefined,
+        };
+        const filled = new Set<string>();
+        const pick = (saved: string | undefined, key: string): string => {
+          if (saved && saved.length > 0) return saved;
+          const fallback = clerkAutofills[key];
+          if (fallback && fallback.length > 0) { filled.add(key); return fallback; }
+          return '';
+        };
         setForm({
-          companyName:             inv.companyName             ?? '',
+          companyName:             pick(inv.companyName, 'companyName'),
           mcNumber:                inv.mcNumber                ?? '',
           dotNumber:               inv.dotNumber               ?? '',
           ein:                     inv.ein                     ?? '',
@@ -1021,6 +1051,7 @@ function InvoicingPanel() {
           factorCompanyName:       inv.factorCompanyName       ?? '',
           factorNoticeText:        inv.factorNoticeText        ?? '',
         });
+        setAutofilledFromClerk(filled);
         setLoading(false);
       })
       .catch(e => {
@@ -1030,7 +1061,7 @@ function InvoicingPanel() {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [clerkOrg?.name]);
 
   const save = async () => {
     setSaving(true);
@@ -1086,12 +1117,28 @@ function InvoicingPanel() {
           Letterhead, contact info, and payment instructions that appear on every invoice you generate.
           Per-broker invoice routing (email vs portal) lives on each customer&rsquo;s profile.
         </p>
+        {clerkOrg && (
+          <div className="text-xs mt-2 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+            <Sparkles size={12} />
+            Company name auto-fills from your Clerk org ({clerkOrg.name}).
+            {clerkOrg.imageUrl && <> Logo from your Clerk org image is used on the invoice.</>}
+          </div>
+        )}
       </div>
 
       {/* Company identity */}
       <Card title="Company identity" subtitle="Carrier info printed at the top of every invoice.">
-        <FieldRow label="Company name" subtitle="As it should appear on the invoice (legal entity or DBA).">
-          <Input value={form.companyName} onChange={v => updateField('companyName', v)} placeholder="Acme Trucking LLC" />
+        <FieldRow
+          label="Company name"
+          subtitle="As it should appear on the invoice (legal entity or DBA).">
+          <div className="flex-1 flex flex-col gap-1">
+            <Input value={form.companyName} onChange={v => updateField('companyName', v)} placeholder="Acme Trucking LLC" />
+            {autofilledFromClerk.has('companyName') && (
+              <div className="text-[11px] flex items-center gap-1" style={{ color: '#7b1fa2' }}>
+                <Sparkles size={11} /> Auto-filled from your Clerk organization. Edit + save to override.
+              </div>
+            )}
+          </div>
         </FieldRow>
         <FieldRow label="MC #">
           <Input value={form.mcNumber} onChange={v => updateField('mcNumber', v)} placeholder="MC-123456" />
