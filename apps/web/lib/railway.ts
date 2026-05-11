@@ -359,6 +359,23 @@ class RailwayClient {
     }
     return res.blob();
   }
+  /**
+   * Fetch the merged invoice-packet PDF (invoice + rate con + POD + ...)
+   * as a Blob. This is the canonical broker-facing artifact — what
+   * gets attached when an email is sent. Use this for any preview /
+   * download where you want the full bundle, not just the invoice.
+   */
+  async getInvoicePacketBlob(id: string, opts: { asDownload?: boolean } = {}): Promise<Blob> {
+    const qs = opts.asDownload ? '?download=1' : '';
+    const res = await this.rawFetch('GET', `/v1/invoices/${id}/packet.pdf${qs}`);
+    if (!res.ok) {
+      const text = await res.text();
+      let detail: unknown = text;
+      try { detail = JSON.parse(text); } catch { /* keep raw */ }
+      throw new RailwayError(res.status, detail, `GET /v1/invoices/${id}/packet.pdf → ${res.status}`);
+    }
+    return res.blob();
+  }
 
   // ── Stops ─────────────────────────────────────────────────────────────
   listRecentStops(query: { q: string; limit?: number }) {

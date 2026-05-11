@@ -15,7 +15,6 @@
 
 import { Resend } from "resend";
 import type { Invoice, DocumentKind } from "@fleetcal/types";
-import { renderInvoicePdf } from "./invoicePdf.js";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -48,13 +47,10 @@ export interface SendInvoiceEmailArgs {
   /** Optional message body override. If omitted we generate a sane
    *  default referencing the invoice number, load, and broker. */
   bodyText?:  string;
-  /** load_document storage paths to bundle as attachments (PODs,
-   *  BOLs). Empty array = no extras; PDF stays the only attachment. */
-  extraAttachmentPaths?: string[];
-  /** Issued/due date display strings, same format as the on-screen
-   *  renderer. Caller is responsible for formatting consistently. */
-  issuedDate?: string;
-  dueDate?:    string;
+  /** Pre-rendered PDF attachments. The caller is responsible for
+   *  packing the right set — typically the merged invoice-packet
+   *  built by invoicePacket.ts. */
+  attachments: Array<{ filename: string; content: Buffer }>;
 }
 
 export interface SendInvoiceEmailResult {
@@ -95,66 +91,44 @@ function defaultSubject(invoice: Invoice): string {
 }
 
 /**
- * Pull extra attachments from Supabase storage by path. Failures on
- * individual files are warnings, not fatal — we'd rather send the
- * invoice without the BOL than block on a missing file.
+ * Sanitize a display name for an RFC 5322 From header. Resend accepts
+ * "Name <addr@host>" syntax but chokes on bare double-quotes or angle
+ * brackets inside the name. Replace problem chars with spaces.
  */
-async function loadExtraAttachments(
-  paths: string[],
-): Promise<Array<{ filename: string; content: Buffer }>> {
-  if (!paths.length) return [];
-  const out: Array<{ filename: string; content: Buffer }> = [];
-  for (const path of paths) {
-    try {
-      const { data, error } = await supabase.storage.from("load-documents").download(path);
-      if (error || !data) {
-        console.warn("[invoiceEmail] attachment download failed:", path, error);
-        continue;
-      }
-      const buf = Buffer.from(await data.arrayBuffer());
-      // Use the last path segment as the filename — matches what the
-      // user sees in the uploaded-docs panel.
-      const filename = path.split("/").pop() ?? "document";
-      out.push({ filename, content: buf });
-    } catch (err) {
-      console.warn("[invoiceEmail] attachment fetch threw:", path, err);
-    }
-  }
-  return out;
+function safeDisplayName(name: string): string {
+  return name.replace(/[<>"\\]/g, " ").trim();
 }
 
 export async function sendInvoiceEmail(args: SendInvoiceEmailArgs): Promise<SendInvoiceEmailResult> {
   if (!env.resendApiKey) throw new EmailNotConfiguredError();
 
-  const pdf = await renderInvoicePdf({
-    snapshot:      args.invoice.snapshot,
-    invoiceNumber: args.invoice.invoiceNumber,
-    issuedDate:    args.issuedDate,
-    dueDate:       args.dueDate,
-    logoData:      args.invoice.snapshot.companyLogoUrl,
-  });
+  // From address pattern: the carrier's company name appears in the
+  // display slot, the actual envelope address stays on our verified
+  // domain. Replies route to the carrier's AR email via Reply-To.
+  // This is the shape brokers expect — they see who they're paying
+  // without us needing every org to verify a domain in Resend.
+  const displayName = safeDisplayName(
+    args.invoice.snapshot.companyName?.trim() || env.invoiceFromNameFallback,
+  );
+  const fromAddr = `${displayName} <${env.invoiceFromEmail}>`;
 
-  const extras = await loadExtraAttachments(args.extraAttachmentPaths ?? []);
+  // Reply-To: the carrier's AR/accounting email if they've configured
+  // one. Falls back to undefined (Resend omits the header) so replies
+  // just bounce back to From — not ideal but harmless.
+  const replyTo  = args.invoice.snapshot.email?.trim() || undefined;
 
-  const attachments: Array<{ filename: string; content: Buffer }> = [
-    { filename: `invoice-${args.invoice.invoiceNumber}.pdf`, content: pdf },
-    ...extras,
-  ];
+  const subject = defaultSubject(args.invoice);
+  const text    = args.bodyText?.trim() || defaultBody(args.invoice);
 
-  const fromAddr = `${env.invoiceFromName} <${env.invoiceFromEmail}>`;
-  const subject  = defaultSubject(args.invoice);
-  const text     = args.bodyText?.trim() || defaultBody(args.invoice);
-
-  // Resend's TS types are strict about attachment content shape;
-  // accept Buffer | string. We pass Buffer directly.
   const { data, error } = await client().emails.send({
     from:        fromAddr,
+    replyTo,
     to:          [args.to],
     cc:          args.cc?.length ? args.cc : undefined,
     bcc:         args.bccSender ? [args.bccSender] : undefined,
     subject,
     text,
-    attachments,
+    attachments: args.attachments,
   });
 
   if (error || !data) {

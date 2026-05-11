@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
 import { ArrowLeft, Download, ExternalLink, Send, Mail, Check, X, Loader2, AlertTriangle, Paperclip } from 'lucide-react';
 import type { Invoice, Customer } from '@fleetcal/types';
@@ -21,6 +21,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const search = useSearchParams();
   const { organization } = useOrganization();
   const id = params?.id as string;
 
@@ -28,7 +29,7 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | 'email' | null>(null);
-  const [pdfBusy, setPdfBusy] = useState<'download' | 'view' | null>(null);
+  const [pdfBusy, setPdfBusy] = useState<'download-packet' | 'view-packet' | 'download-invoice' | 'view-invoice' | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
 
   // Pull broker info from the calendar store so the email dialog can
@@ -50,6 +51,19 @@ export default function InvoiceDetailPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id]);
+
+  // Generate-and-send flow drops the user here with ?send=1. Once we
+  // have the invoice loaded and confirm it's still in draft (and not
+  // somehow void/sent already), pop the email dialog automatically.
+  // Strip the query param afterwards so a manual refresh doesn't
+  // re-trigger it.
+  useEffect(() => {
+    if (!invoice) return;
+    if (search?.get('send') !== '1') return;
+    if (invoice.status !== 'draft') return;
+    setEmailOpen(true);
+    router.replace(`/accounting/invoices/${invoice.id}`);
+  }, [invoice, search, router]);
 
   async function handleMarkSentManual() {
     if (!invoice) return;
@@ -110,49 +124,51 @@ export default function InvoiceDetailPage() {
     }
   }
 
-  async function handleDownloadPdf() {
+  /** Shared PDF action — fetches a blob and either downloads it or
+   *  opens it in a new tab. Used by both invoice-only and packet
+   *  views so the two paths stay in sync. */
+  async function fetchPdf(
+    label: 'download-packet' | 'view-packet' | 'download-invoice' | 'view-invoice',
+    fetcher: (opts: { asDownload?: boolean }) => Promise<Blob>,
+    filename: string,
+    asDownload: boolean,
+  ) {
     if (!invoice || pdfBusy) return;
-    setPdfBusy('download');
+    setPdfBusy(label);
     try {
-      const blob = await railway.getInvoicePdfBlob(invoice.id, { asDownload: true });
+      const blob = await fetcher({ asDownload });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `invoice-${invoice.invoiceNumber}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // Release the blob asynchronously so the click handler has time
-      // to start the download (some browsers race on immediate revoke).
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      if (asDownload) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      } else {
+        const win = window.open(url, '_blank', 'noopener');
+        if (!win) window.alert('Pop-up blocked. Enable pop-ups for this site to view the PDF.');
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
     } catch (err) {
-      console.error('[invoice] download pdf failed:', err);
-      window.alert('Failed to download PDF.');
-    } finally {
-      setPdfBusy(null);
-    }
-  }
-
-  async function handleViewPdf() {
-    if (!invoice || pdfBusy) return;
-    setPdfBusy('view');
-    try {
-      const blob = await railway.getInvoicePdfBlob(invoice.id);
-      const url = URL.createObjectURL(blob);
-      // window.open is more reliable than navigating the current tab —
-      // the user keeps the detail page open and can close the PDF tab
-      // when they're done.
-      const win = window.open(url, '_blank', 'noopener');
-      if (!win) window.alert('Pop-up blocked. Enable pop-ups for this site to view the PDF.');
-      // Don't revoke immediately — the new tab is still rendering.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    } catch (err) {
-      console.error('[invoice] view pdf failed:', err);
+      console.error('[invoice]', label, 'failed:', err);
       window.alert('Failed to open PDF.');
     } finally {
       setPdfBusy(null);
     }
   }
+
+  // Packet — the merged broker-facing PDF (invoice + rate con + POD + ...).
+  const handleDownloadPacket = () =>
+    invoice && fetchPdf('download-packet', (o) => railway.getInvoicePacketBlob(invoice.id, o), `invoice-packet-${invoice.invoiceNumber}.pdf`, true);
+  const handleViewPacket = () =>
+    invoice && fetchPdf('view-packet', (o) => railway.getInvoicePacketBlob(invoice.id, o), `invoice-packet-${invoice.invoiceNumber}.pdf`, false);
+  // Invoice only — the standalone PDF.
+  const handleDownloadInvoice = () =>
+    invoice && fetchPdf('download-invoice', (o) => railway.getInvoicePdfBlob(invoice.id, o), `invoice-${invoice.invoiceNumber}.pdf`, true);
+  const handleViewInvoice = () =>
+    invoice && fetchPdf('view-invoice', (o) => railway.getInvoicePdfBlob(invoice.id, o), `invoice-${invoice.invoiceNumber}.pdf`, false);
 
   async function handleVoid() {
     if (!invoice) return;
@@ -187,25 +203,39 @@ export default function InvoiceDetailPage() {
         </div>
         {invoice && <StatusPill status={invoice.status} />}
         <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => void handleViewPdf()}
+          {/* Invoice-only PDF — quiet secondary actions. The merged
+              packet is what brokers actually receive, so it gets the
+              primary CTA placement on the right. */}
+          <button onClick={handleViewInvoice}
+            className="text-[12px] font-semibold px-2.5 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)] disabled:opacity-60"
+            style={{ color: 'var(--gc-text-3)' }}
+            disabled={!invoice || pdfBusy !== null}
+            title="Open just the invoice PDF (no rate-con or POD)">
+            {pdfBusy === 'view-invoice'
+              ? <Loader2 size={12} className="animate-spin inline mr-1" />
+              : null}
+            Invoice only
+          </button>
+          <div style={{ width: 1, height: 18, background: 'var(--gc-border)' }} />
+          <button onClick={handleViewPacket}
             className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)] disabled:opacity-60"
             style={{ border: '1px solid var(--gc-border)' }}
             disabled={!invoice || pdfBusy !== null}
-            title="Open PDF in a new tab">
-            {pdfBusy === 'view'
+            title="Open the full broker packet (invoice + rate-con + POD) in a new tab">
+            {pdfBusy === 'view-packet'
               ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
               : <ExternalLink size={12} className="inline mr-1.5" />}
-            View PDF
+            View packet
           </button>
-          <button onClick={() => void handleDownloadPdf()}
+          <button onClick={handleDownloadPacket}
             className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
             style={{ background: '#1a73e8', color: '#fff' }}
             disabled={!invoice || pdfBusy !== null}
-            title="Download as PDF">
-            {pdfBusy === 'download'
+            title="Download the full broker packet">
+            {pdfBusy === 'download-packet'
               ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
               : <Download size={12} className="inline mr-1.5" />}
-            Download PDF
+            Download packet
           </button>
         </div>
       </div>

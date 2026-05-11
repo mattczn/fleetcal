@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, FilePlus, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, FilePlus, Send, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway, RailwayError } from '@/lib/railway';
@@ -432,13 +432,18 @@ export default function CloseoutView() {
     await refresh();
   }
 
-  async function handleGenerateInvoice(load: Load) {
+  async function handleGenerateInvoice(load: Load, opts: { thenSend?: boolean } = {}) {
     const loadId = load.loadId ?? load.id;
     if (generatingId) return;
     setGeneratingId(loadId);
     try {
       const { invoice } = await railway.createInvoice({ loadId });
-      router.push(`/accounting/invoices/${invoice.id}`);
+      // thenSend=true → drop the user into the detail page with the
+      // email dialog auto-opened. The detail page reads ?send=1 from
+      // the URL on mount. Generate-only keeps the existing behavior
+      // so the user can review before sending.
+      const suffix = opts.thenSend ? '?send=1' : '';
+      router.push(`/accounting/invoices/${invoice.id}${suffix}`);
     } catch (err) {
       // 409 = an active invoice already exists for this load. Take the
       // user to the existing one rather than dead-ending.
@@ -447,7 +452,8 @@ export default function CloseoutView() {
           const { invoices: existing } = await railway.listInvoices({ loadId });
           const open = existing.find(i => i.status !== 'void');
           if (open) {
-            router.push(`/accounting/invoices/${open.id}`);
+            const suffix = opts.thenSend && open.status === 'draft' ? '?send=1' : '';
+            router.push(`/accounting/invoices/${open.id}${suffix}`);
             return;
           }
         } catch { /* fall through to alert */ }
@@ -968,20 +974,34 @@ export default function CloseoutView() {
                                 )}
                               </>
                             ) : tab === 'verified' ? (
-                              // Verified → ready to bill. Generates the
-                              // invoice row + frozen snapshot, then opens
-                              // the accounting detail page so the user
-                              // can review / send.
-                              <button onClick={() => void handleGenerateInvoice(load)}
-                                disabled={generatingId === (load.loadId ?? load.id)}
-                                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
-                                style={{ background: '#1a73e8', color: '#fff' }}
-                                title="Generate invoice from this load">
-                                {generatingId === (load.loadId ?? load.id)
-                                  ? <Loader2 size={11} className="animate-spin" style={{ display: 'inline', marginRight: 3 }} />
-                                  : <FilePlus size={11} style={{ display: 'inline', marginRight: 3 }} />}
-                                Generate invoice
-                              </button>
+                              // Verified → ready to bill. Two paths:
+                              //   • Generate: creates a draft invoice
+                              //     and opens the detail page for review
+                              //     (then the user clicks Email).
+                              //   • Generate & send: creates the draft
+                              //     and lands on the detail page with
+                              //     the email dialog auto-opened so it's
+                              //     two clicks instead of three.
+                              <>
+                                <button onClick={() => void handleGenerateInvoice(load, { thenSend: true })}
+                                  disabled={generatingId === (load.loadId ?? load.id)}
+                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
+                                  style={{ background: '#1a73e8', color: '#fff' }}
+                                  title="Generate invoice and immediately email it to the broker">
+                                  {generatingId === (load.loadId ?? load.id)
+                                    ? <Loader2 size={11} className="animate-spin" style={{ display: 'inline', marginRight: 3 }} />
+                                    : <Send size={11} style={{ display: 'inline', marginRight: 3 }} />}
+                                  Generate &amp; send
+                                </button>
+                                <button onClick={() => void handleGenerateInvoice(load)}
+                                  disabled={generatingId === (load.loadId ?? load.id)}
+                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
+                                  style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+                                  title="Generate invoice as draft so you can review before sending">
+                                  <FilePlus size={11} style={{ display: 'inline', marginRight: 3 }} />
+                                  Generate
+                                </button>
+                              </>
                             ) : tab === 'invoiced' || tab === 'paid' ? (
                               // Already invoiced — jump to the saved
                               // invoice. Resolves the invoice id at click

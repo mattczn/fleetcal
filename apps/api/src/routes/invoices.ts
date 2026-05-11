@@ -583,6 +583,67 @@ invoices.get("/:id/pdf", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /v1/invoices/:id/packet.pdf — merged invoice + rate con + POD bundle
+// ─────────────────────────────────────────────────────────────────────────
+//
+// The "packet" is the canonical broker-facing artifact: a single PDF
+// the broker can save / forward in one file. Built on the fly each
+// call from the frozen invoice snapshot + the load's rate con and
+// selected supporting docs. ?download=1 forces attachment disposition;
+// otherwise inline for browser preview.
+
+invoices.get("/:id/packet.pdf", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const url   = new URL(c.req.url);
+  const asDownload = url.searchParams.get("download") === "1";
+
+  const { data, error } = await supabase
+    .from("invoices")
+    .select(INVOICE_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const invoice = rowToInvoice(data as unknown as InvoiceRow);
+
+  const fmt = (iso?: string) => iso
+    ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : undefined;
+
+  try {
+    const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad } =
+      await import("../lib/invoicePacket.js");
+    const [extraDocPaths, rateConPath] = await Promise.all([
+      resolvePacketDocsForLoad(invoice.loadId, orgId),
+      resolveRateConPathForLoad(invoice.loadId, orgId),
+    ]);
+    const packet = await buildInvoicePacket({
+      invoice,
+      rateConPath,
+      extraDocPaths,
+      issuedDate: fmt(invoice.issuedAt),
+      dueDate:    fmt(invoice.dueAt),
+    });
+    const filename = `invoice-packet-${invoice.invoiceNumber}.pdf`;
+    return new Response(new Uint8Array(packet.buffer), {
+      status: 200,
+      headers: {
+        "Content-Type":        "application/pdf",
+        "Content-Disposition": `${asDownload ? "attachment" : "inline"}; filename="${filename}"`,
+        "Cache-Control":       "private, max-age=0, no-store",
+      },
+    });
+  } catch (err) {
+    console.error("[GET /v1/invoices/:id/packet.pdf] render failed:", err);
+    return c.json({ error: "pdf_render_failed", detail: (err as Error)?.message } satisfies ApiErrorResponse, 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // PATCH /v1/invoices/:id — edit a draft
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -722,17 +783,38 @@ invoices.post("/:id/send", async (c) => {
   // send the user has no way to retry without voiding + regenerating.
   if (body.method === "email") {
     try {
-      const { sendInvoiceEmail, resolveDefaultInvoiceAttachments, EmailNotConfiguredError } =
+      const { sendInvoiceEmail } =
         await import("../lib/invoiceEmail.js");
-
-      const attachLoadDocs = body.attachLoadDocs ?? true;
-      const extraPaths = attachLoadDocs
-        ? await resolveDefaultInvoiceAttachments(invoice.loadId, orgId)
-        : [];
+      const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad } =
+        await import("../lib/invoicePacket.js");
 
       const fmt = (iso?: string) => iso
         ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
         : undefined;
+
+      // Build the merged invoice packet (invoice + rate con + POD/etc).
+      // attachLoadDocs=false skips the supporting docs entirely — the
+      // broker just gets the invoice + rate con. Used when there are
+      // privacy concerns about the supporting docs.
+      const attachLoadDocs = body.attachLoadDocs ?? true;
+      const extraDocPaths = attachLoadDocs
+        ? await resolvePacketDocsForLoad(invoice.loadId, orgId)
+        : [];
+      const rateConPath = await resolveRateConPathForLoad(invoice.loadId, orgId);
+
+      const packet = await buildInvoicePacket({
+        invoice,
+        rateConPath,
+        extraDocPaths,
+        issuedDate: fmt(invoice.issuedAt),
+        dueDate:    fmt(invoice.dueAt),
+      });
+      if (packet.skipped.length) {
+        console.warn(
+          "[POST /v1/invoices/:id/send] packet skipped some sources:",
+          packet.skipped,
+        );
+      }
 
       await sendInvoiceEmail({
         invoice,
@@ -740,9 +822,14 @@ invoices.post("/:id/send", async (c) => {
         cc:         body.cc,
         bccSender,
         bodyText:   body.bodyText,
-        extraAttachmentPaths: extraPaths,
-        issuedDate: fmt(invoice.issuedAt),
-        dueDate:    fmt(invoice.dueAt),
+        attachments: [
+          // Single merged attachment — broker AP teams strongly
+          // prefer one file over a stack of mismatched PDFs/images.
+          {
+            filename: `invoice-packet-${invoice.invoiceNumber}.pdf`,
+            content:  packet.buffer,
+          },
+        ],
       });
     } catch (err) {
       const isConfig = err instanceof Error && err.name === "EmailNotConfiguredError";

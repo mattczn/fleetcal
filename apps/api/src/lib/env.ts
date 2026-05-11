@@ -43,11 +43,18 @@ export const env = {
   // Optional — invoice email delivery. Without a Resend key the
   // send endpoint refuses email sends (still allows manual/portal).
   resendApiKey:           process.env.RESEND_API_KEY || undefined,
-  // From-address for outbound invoice emails. Must be on a domain
-  // verified in Resend. Defaults to a placeholder that will fail
-  // verification so misconfig is obvious in logs.
+  // The shared transactional From address. ALL outbound invoice
+  // emails fly from this single, verified-in-Resend domain. Each
+  // send applies a per-org display name (the carrier's company
+  // name) and a per-org Reply-To (the carrier's AR email), so the
+  // broker sees the carrier on the From line and replies go to
+  // the carrier — without us asking every org to verify a domain
+  // in our Resend account. This is the pattern Stripe / QuickBooks /
+  // Bill.com use.
   invoiceFromEmail:       process.env.INVOICE_FROM_EMAIL || "invoices@fleetcal.app",
-  invoiceFromName:        process.env.INVOICE_FROM_NAME  || "FleetCal Invoicing",
+  /** Fallback display name used only when the org hasn't set a
+   *  company name in its invoice settings. */
+  invoiceFromNameFallback: process.env.INVOICE_FROM_NAME  || "FleetCal Invoicing",
 } as const;
 
 export const isProd = env.nodeEnv === "production";
