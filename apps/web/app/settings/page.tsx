@@ -980,7 +980,16 @@ function InvoicingPanel() {
   // Single state blob keyed to InvoiceSettings — keeps the form
   // straightforward. Empty strings for unset fields so the inputs
   // always have a controlled value.
-  const [form, setForm] = useState({
+  type Form = {
+    companyName: string; mcNumber: string; dotNumber: string; ein: string;
+    addressLine1: string; addressLine2: string; city: string; state: string; zip: string;
+    phone: string; email: string;
+    defaultPaymentTermsDays: string;
+    remitToInstructions: string;
+    invoiceFooterNotes: string;
+    invoiceNumberPrefix: string;
+  };
+  const emptyForm: Form = {
     companyName:             '',
     mcNumber:                '',
     dotNumber:               '',
@@ -996,8 +1005,29 @@ function InvoicingPanel() {
     remitToInstructions:     '',
     invoiceFooterNotes:      '',
     invoiceNumberPrefix:     '',
-  });
-  const updateField = (key: keyof typeof form, value: string) => {
+  };
+  const [form, setForm] = useState<Form>(emptyForm);
+  // Snapshot of the last-saved (or freshly-loaded) state. Compared
+  // against `form` to detect unsaved edits — we use that to gate the
+  // beforeunload guard so the user gets a "leave with unsaved changes?"
+  // browser prompt if they try to navigate away mid-edit.
+  const [savedSnapshot, setSavedSnapshot] = useState<Form>(emptyForm);
+  const isDirty = JSON.stringify(form) !== JSON.stringify(savedSnapshot);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Modern browsers ignore the returnValue text but still need it
+      // set to trigger the native prompt. Cross-browser-safe shape.
+      e.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty]);
+
+  const updateField = (key: keyof Form, value: string) => {
     setForm(prev => ({ ...prev, [key]: value }));
     setSaved(false);
     // User edited this field — drop the "auto-filled" badge.
@@ -1030,7 +1060,7 @@ function InvoicingPanel() {
           if (fallback && fallback.length > 0) { filled.add(key); return fallback; }
           return '';
         };
-        setForm({
+        const next: Form = {
           companyName:             pick(inv.companyName, 'companyName'),
           mcNumber:                inv.mcNumber                ?? '',
           dotNumber:               inv.dotNumber               ?? '',
@@ -1046,7 +1076,14 @@ function InvoicingPanel() {
           remitToInstructions:     inv.remitToInstructions     ?? '',
           invoiceFooterNotes:      inv.invoiceFooterNotes      ?? '',
           invoiceNumberPrefix:     inv.invoiceNumberPrefix     ?? '',
-        });
+        };
+        setForm(next);
+        // Snapshot the loaded state as the new baseline — the form
+        // is "clean" relative to what's in the DB. Auto-filled-from-
+        // Clerk fields are intentionally part of the snapshot so we
+        // don't nag the user about leaving when nothing has actually
+        // changed since load.
+        setSavedSnapshot(next);
         setAutofilledFromClerk(filled);
         setLoading(false);
       })
@@ -1085,6 +1122,9 @@ function InvoicingPanel() {
         invoiceNumberPrefix:     form.invoiceNumberPrefix.trim()     || undefined,
       };
       await railway.updateOrgSettings({ invoiceSettings: cleaned });
+      // Snapshot moves forward to the just-saved values so the form
+      // is "clean" again and the beforeunload guard relaxes.
+      setSavedSnapshot(form);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
@@ -1104,7 +1144,7 @@ function InvoicingPanel() {
   }
 
   return (
-    <div className="flex items-start gap-8" style={{ minWidth: 1080 }}>
+    <div className="flex items-start gap-8" style={{ minWidth: 1440 }}>
       {/* Left: form */}
       <div className="space-y-6" style={{ width: 560, flexShrink: 0 }}>
         <div>
@@ -1224,6 +1264,11 @@ function InvoicingPanel() {
               <Check size={14} /> Saved
             </span>
           )}
+          {!saved && isDirty && !saving && (
+            <span className="text-sm font-semibold" style={{ color: '#92400e' }}>
+              Unsaved changes
+            </span>
+          )}
           {err && (
             <span className="text-sm" style={{ color: '#d93025' }}>{err}</span>
           )}
@@ -1235,7 +1280,7 @@ function InvoicingPanel() {
           fixed sample data for load/broker/line-items since real load
           rendering happens in Phase 2 — this is just for visualizing
           the letterhead + payment block layout. */}
-      <div className="flex-1 sticky top-0" style={{ minWidth: 480 }}>
+      <div className="flex-1 sticky top-0" style={{ minWidth: 840 }}>
         <div className="text-xs font-bold uppercase tracking-wider mb-2"
           style={{ color: 'var(--gc-text-3)' }}>
           Preview
@@ -1297,19 +1342,25 @@ function MockInvoice({ form, clerkOrg }: {
         boxShadow:  '0 8px 24px rgba(0,0,0,0.08)',
         // Aspect roughly matches an 8.5x11" page at this width.
         aspectRatio: '8.5 / 11',
-        maxWidth: 520,
+        // 1.75× the previous 520 — bigger preview so the user can
+        // really see the layout.
+        maxWidth: 910,
       }}>
-      <div className="h-full overflow-y-auto px-8 py-7 text-[#202124] text-[11px]" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' }}>
+      {/* All inner sizes scaled down so the page reads like a real
+          letter-size document rather than a poster. Body is 10px,
+          headers 14–17px, micro-labels 8px. */}
+      <div className="h-full overflow-y-auto px-12 py-10 text-[#202124] text-[10px] leading-normal"
+        style={{ fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' }}>
         {/* Header: company on left, logo + invoice meta on right */}
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex items-start justify-between mb-7">
           <div>
-            <div className="text-[20px] font-extrabold leading-tight">{companyName}</div>
-            <div className="mt-1 leading-snug" style={{ color: '#5f6368' }}>
+            <div className="text-[17px] font-extrabold leading-tight">{companyName}</div>
+            <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
               {form.addressLine1 || <span style={{ opacity: 0.4 }}>Street address</span>}<br/>
               {form.addressLine2 && <>{form.addressLine2}<br/></>}
               {csz || <span style={{ opacity: 0.4 }}>City, ST ZIP</span>}
             </div>
-            <div className="mt-2 leading-snug" style={{ color: '#5f6368' }}>
+            <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
               {form.phone && <>P: {form.phone}<br/></>}
               {form.email && <>{form.email}<br/></>}
               {form.mcNumber  && <>MC# {form.mcNumber}{form.dotNumber && <> · DOT# {form.dotNumber}</>}{form.ein && <> · EIN {form.ein}</>}</>}
@@ -1320,10 +1371,10 @@ function MockInvoice({ form, clerkOrg }: {
           <div className="text-right shrink-0 ml-4">
             {clerkOrg?.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={clerkOrg.imageUrl} alt="" style={{ maxWidth: 80, maxHeight: 80, marginLeft: 'auto', marginBottom: 8 }} />
+              <img src={clerkOrg.imageUrl} alt="" style={{ maxWidth: 64, maxHeight: 64, marginLeft: 'auto', marginBottom: 8 }} />
             )}
-            <div className="text-[18px] font-extrabold tracking-wide" style={{ color: '#1a73e8' }}>INVOICE</div>
-            <div className="mt-2 leading-snug" style={{ color: '#5f6368' }}>
+            <div className="text-[15px] font-extrabold tracking-wide" style={{ color: '#1a73e8' }}>INVOICE</div>
+            <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
               <div><span className="font-bold" style={{ color: '#202124' }}>#</span> {invoiceNum}</div>
               <div>Issued {fmtDate(issueDate)}</div>
               <div>Due {Number.isFinite(termsDays) ? fmtDate(dueDate) : '—'}</div>
@@ -1333,25 +1384,25 @@ function MockInvoice({ form, clerkOrg }: {
 
         {/* Bill-to */}
         <div className="mb-5">
-          <div className="text-[9px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Bill to</div>
+          <div className="text-[8px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Bill to</div>
           <div className="font-bold">{sample.broker}</div>
           <div className="leading-snug whitespace-pre-line" style={{ color: '#5f6368' }}>{sample.brokerAddr}</div>
         </div>
 
         {/* Load detail */}
         <div className="mb-5">
-          <div className="text-[9px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Load</div>
+          <div className="text-[8px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Load</div>
           <div><span className="font-bold">{sample.loadNum}</span> · {sample.miles.toLocaleString()} mi</div>
           <div style={{ color: '#5f6368' }}>Pickup: {sample.pickup}</div>
           <div style={{ color: '#5f6368' }}>Delivery: {sample.delivery}</div>
         </div>
 
         {/* Line items */}
-        <table className="w-full mb-5" style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+        <table className="w-full mb-5" style={{ borderCollapse: 'collapse', fontSize: 10 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid #dadce0' }}>
-              <th className="text-left py-1.5 font-extrabold uppercase tracking-wider text-[9px]" style={{ color: '#5f6368' }}>Description</th>
-              <th className="text-right py-1.5 font-extrabold uppercase tracking-wider text-[9px]" style={{ color: '#5f6368' }}>Amount</th>
+              <th className="text-left py-1.5 font-extrabold uppercase tracking-wider text-[8px]" style={{ color: '#5f6368' }}>Description</th>
+              <th className="text-right py-1.5 font-extrabold uppercase tracking-wider text-[8px]" style={{ color: '#5f6368' }}>Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -1368,8 +1419,8 @@ function MockInvoice({ form, clerkOrg }: {
               <td className="py-1.5 text-right tabular-nums">${sample.lumper.toLocaleString()}.00</td>
             </tr>
             <tr>
-              <td className="pt-2 font-extrabold text-[12px]">Total due</td>
-              <td className="pt-2 text-right font-extrabold text-[12px] tabular-nums">${total.toLocaleString()}.00</td>
+              <td className="pt-2 font-extrabold text-[11px]">Total due</td>
+              <td className="pt-2 text-right font-extrabold text-[11px] tabular-nums">${total.toLocaleString()}.00</td>
             </tr>
           </tbody>
         </table>
@@ -1377,18 +1428,18 @@ function MockInvoice({ form, clerkOrg }: {
         {/* Remit-to */}
         {form.remitToInstructions ? (
           <div className="mb-4 px-3 py-2.5 rounded" style={{ background: '#f1f3f4' }}>
-            <div className="text-[9px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Remit to</div>
+            <div className="text-[8px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Remit to</div>
             <div className="whitespace-pre-line leading-snug">{form.remitToInstructions}</div>
           </div>
         ) : (
-          <div className="mb-4 px-3 py-2.5 rounded text-[10px] italic" style={{ background: '#f1f3f4', color: '#5f6368' }}>
+          <div className="mb-4 px-3 py-2.5 rounded text-[9px] italic" style={{ background: '#f1f3f4', color: '#5f6368' }}>
             Remit-to instructions appear here.
           </div>
         )}
 
         {/* Footer notes */}
         {form.invoiceFooterNotes && (
-          <div className="text-[10px] leading-snug mt-3" style={{ color: '#5f6368' }}>
+          <div className="text-[9px] leading-snug mt-3" style={{ color: '#5f6368' }}>
             {form.invoiceFooterNotes}
           </div>
         )}
