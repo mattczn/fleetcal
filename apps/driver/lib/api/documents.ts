@@ -6,7 +6,20 @@
  */
 import { railway } from "@/lib/railway";
 
-export type DocumentKind = "bol" | "pod" | "scale" | "other";
+// Mirrors the canonical DocumentKind in packages/types/api.ts. The
+// driver UI surfaces a smaller subset today (see UploadSheet's
+// KIND_OPTIONS) — adding more chips there is a UX choice, not a
+// data-model gate.
+export type DocumentKind =
+  | "rate_con"
+  | "pod"
+  | "bol"
+  | "scale"
+  | "lumper"
+  | "receipt"
+  | "driver_sheet"
+  | "invoice"
+  | "other";
 
 export interface LoadDocument {
   id:           string;

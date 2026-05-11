@@ -427,7 +427,20 @@ export async function fetchLoad(id: string, _orgId: string): Promise<Load | null
 
 // ── Documents ─────────────────────────────────────────────────────────────────
 
-export type DocumentKind = "bol" | "pod" | "scale" | "other";
+// Mirrors the canonical DocumentKind in packages/types/api.ts. Kept
+// duplicated here because expo apps don't pull from @fleetcal/types
+// (workspace setup limitation); keep this list and the labels below
+// in sync with the shared package when adding new kinds.
+export type DocumentKind =
+  | "rate_con"
+  | "pod"
+  | "bol"
+  | "scale"
+  | "lumper"
+  | "receipt"
+  | "driver_sheet"
+  | "invoice"
+  | "other";
 
 export interface LoadDocument {
   id:          string;

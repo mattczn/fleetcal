@@ -316,11 +316,31 @@ function UploadedDocsPanel({
   signedUrl: string | null;
   headerColor: string;
 }) {
+  // Doc category styling. Mirror of the same map in the closeout
+  // ReviewQueue — keeping them in sync is a manual chore but extracting
+  // a shared module would mean cross-component coupling without much
+  // payoff. If a third surface needs these, extract then.
   const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-    bol:   { bg: '#e8f0fe', fg: '#1558d6' },
-    pod:   { bg: '#dcfce7', fg: '#15803d' },
-    scale: { bg: '#fff7ed', fg: '#9a3412' },
-    other: { bg: '#f1f3f4', fg: '#3c4043' },
+    rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },
+    pod:          { bg: '#dcfce7', fg: '#15803d' },
+    bol:          { bg: '#e8f0fe', fg: '#1558d6' },
+    scale:        { bg: '#fff7ed', fg: '#9a3412' },
+    lumper:       { bg: '#fef3c7', fg: '#92400e' },
+    receipt:      { bg: '#fce7f3', fg: '#9d174d' },
+    driver_sheet: { bg: '#e0f2fe', fg: '#0c4a6e' },
+    invoice:      { bg: '#fef9c3', fg: '#854d0e' },
+    other:        { bg: '#f1f3f4', fg: '#3c4043' },
+  };
+  const KIND_LABEL: Record<string, string> = {
+    rate_con:     'Rate Con',
+    pod:          'POD',
+    bol:          'BOL',
+    scale:        'Scale',
+    lumper:       'Lumper',
+    receipt:      'Receipt',
+    driver_sheet: 'Driver Sheet',
+    invoice:      'Invoice',
+    other:        'Other',
   };
   const fmt = (iso: string) => new Date(iso).toLocaleString('en-US', {
     month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
@@ -356,7 +376,7 @@ function UploadedDocsPanel({
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
                   <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: tint.fg, background: tint.bg, padding: '1px 6px', borderRadius: 999 }}>
-                    {d.kind}
+                    {KIND_LABEL[d.kind] ?? d.kind}
                   </span>
                 </div>
                 <div className="text-sm font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</div>

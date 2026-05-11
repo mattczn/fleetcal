@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -376,6 +376,53 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // Cmd+Enter all belong to the notes composer.
   const [notesOpen, setNotesOpen] = useState(false);
 
+  // ── Inline doc rename ──────────────────────────────────────────────
+  // When the user clicks the pencil on a doc tab we swap that tab into
+  // an inline text input. The keyboard handler pauses while a rename
+  // input has focus (covered by the existing INPUT/TEXTAREA tag check).
+  const [renamingDocId, setRenamingDocId]     = useState<string | null>(null);
+  const [renameDraft,   setRenameDraft]       = useState('');
+  const [renameSaving,  setRenameSaving]      = useState(false);
+
+  const startRename = (docId: string, currentName: string) => {
+    setRenamingDocId(docId);
+    // Drop the extension so the user types the name, not the format.
+    const base = currentName.replace(/\.[^.]+$/, '');
+    setRenameDraft(base);
+  };
+  const cancelRename = () => { setRenamingDocId(null); setRenameDraft(''); };
+  const commitRename = async () => {
+    if (!renamingDocId || renameSaving) return;
+    const target = docs.find(d => d.id === renamingDocId);
+    if (!target) { cancelRename(); return; }
+    const ext = (target.fileName.match(/\.[^.]+$/)?.[0] ?? '').toLowerCase();
+    const nextName = `${renameDraft.trim()}${ext}`;
+    if (!renameDraft.trim() || nextName === target.fileName) { cancelRename(); return; }
+    setRenameSaving(true);
+    try {
+      await railway.renameDocument(renamingDocId, nextName);
+      // Optimistic update in the local docs list + the prefetch cache
+      // so the new name shows up immediately and survives the next
+      // load-revisit.
+      setDocs(prev => prev.map(d => d.id === renamingDocId ? { ...d, fileName: nextName } : d));
+      if (loadId) {
+        const entry = docsCacheRef.current.get(loadId);
+        if (entry) {
+          docsCacheRef.current.set(loadId, {
+            ...entry,
+            docs: entry.docs.map(d => d.id === renamingDocId ? { ...d, fileName: nextName } : d),
+          });
+        }
+      }
+      cancelRename();
+    } catch (err) {
+      console.error('[review queue] rename failed:', err);
+      alert(`Rename failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
   // ── Upload paperwork ──────────────────────────────────────────────
   // Two-stage flow: file picker first, then a kind picker so the user
   // can categorize before the upload commits. Pending file lives here
@@ -680,16 +727,60 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 {docs.map((d, i) => {
                   const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
                   const active = i === activeDocIdx;
+                  const renaming = renamingDocId === d.id;
+                  if (renaming) {
+                    // Swap the tab for an inline input. Enter commits,
+                    // Esc cancels, blur commits to avoid losing input
+                    // if the user clicks away.
+                    return (
+                      <div key={d.id} className="flex items-center gap-1.5 px-2 py-1 rounded-full shrink-0"
+                        style={{ background: tint.bg, border: `1px solid ${tint.fg}50` }}>
+                        <FileText size={10} style={{ color: tint.fg }} />
+                        <span className="text-[11px] font-semibold" style={{ color: tint.fg }}>
+                          {KIND_LABEL[d.kind] ?? d.kind} ·
+                        </span>
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          disabled={renameSaving}
+                          onChange={e => setRenameDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={() => { if (!renameSaving) void commitRename(); }}
+                          className="text-[11px] font-semibold bg-transparent outline-none border-b"
+                          style={{ color: tint.fg, borderColor: tint.fg + '70', minWidth: 140, maxWidth: 240 }}
+                        />
+                      </div>
+                    );
+                  }
                   return (
-                    <button key={d.id} onClick={() => setActiveDocIdx(i)}
-                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors shrink-0"
-                      style={{
-                        background: active ? tint.bg : 'transparent',
-                        color: active ? tint.fg : 'var(--gc-text-3)',
-                        border: `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
-                      }}>
-                      <FileText size={10} /> {KIND_LABEL[d.kind] ?? d.kind} · {d.fileName.replace(/\.[^.]+$/, '').slice(0, 18)}
-                    </button>
+                    <div key={d.id} className="flex items-center shrink-0">
+                      <button onClick={() => setActiveDocIdx(i)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-l-full text-xs font-semibold whitespace-nowrap transition-colors"
+                        style={{
+                          background: active ? tint.bg : 'transparent',
+                          color: active ? tint.fg : 'var(--gc-text-3)',
+                          border: `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
+                          borderRight: active ? '0' : `1px solid ${'var(--gc-border-light)'}`,
+                        }}>
+                        <FileText size={10} /> {KIND_LABEL[d.kind] ?? d.kind} · {d.fileName.replace(/\.[^.]+$/, '').slice(0, 18)}
+                      </button>
+                      {active && (
+                        <button onClick={() => startRename(d.id, d.fileName)}
+                          className="px-1.5 py-1 rounded-r-full transition-colors"
+                          title={`Rename — ${d.fileName}`}
+                          style={{
+                            background: tint.bg,
+                            color: tint.fg,
+                            border: `1px solid ${tint.fg + '50'}`,
+                            borderLeft: '0',
+                          }}>
+                          <Pencil size={10} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>

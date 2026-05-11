@@ -86,11 +86,17 @@ function buildFileName(kind: DocumentKind, loadNum: string | undefined, suffix: 
 
 type Step = "idle" | "scanning" | "converting" | "uploading";
 
+// Driver-facing kind picker. Subset of the full DocumentKind enum —
+// the dispatcher categories (Rate Con / Driver Sheet / Invoice) don't
+// originate from the field and would only confuse the picker. Order
+// puts POD first because that's the most common driver upload.
 const KIND_OPTIONS: { key: DocumentKind; label: string; tint: string }[] = [
-  { key: "bol",   label: "BOL",         tint: "#1a73e8" },
-  { key: "pod",   label: "POD",         tint: "#15803d" },
-  { key: "scale", label: "Scale",       tint: "#9a3412" },
-  { key: "other", label: "Other",       tint: "#5f6368" },
+  { key: "pod",     label: "POD",     tint: "#15803d" },
+  { key: "bol",     label: "BOL",     tint: "#1a73e8" },
+  { key: "scale",   label: "Scale",   tint: "#9a3412" },
+  { key: "lumper",  label: "Lumper",  tint: "#92400e" },
+  { key: "receipt", label: "Receipt", tint: "#9d174d" },
+  { key: "other",   label: "Other",   tint: "#5f6368" },
 ];
 
 export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, visible, onClose, onUploaded }: Props) {

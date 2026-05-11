@@ -190,6 +190,9 @@ class RailwayClient {
   getDocumentUrl(documentId: string) {
     return this.req<GetDocumentUrlResponse>('GET', `/v1/documents/${documentId}/url`);
   }
+  renameDocument(documentId: string, fileName: string) {
+    return this.req<{ ok: true; fileName: string }>('PATCH', `/v1/documents/${documentId}`, { fileName });
+  }
   /** Multipart upload — bypasses the JSON `req` helper because file
    *  bodies need FormData and a different Content-Type. */
   async uploadLoadDocument(loadId: string, file: File, kind: import('@fleetcal/types').DocumentKind) {

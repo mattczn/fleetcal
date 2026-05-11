@@ -604,6 +604,34 @@ loads.post("/:id/documents", async (c) => {
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${eventId}/${Date.now()}_${random}.${ext}`;
 
+  // Build a display filename in the {LoadNum}_{KIND}{_N}.{ext} convention
+  // so dispatchers can read the file list at a glance without opening
+  // each one. Falls back to the original name if we can't resolve a
+  // load number for the load (rare — usually backfilled on create).
+  // Suffix _N is added when there's already a doc of the same kind on
+  // this load so users can tell them apart.
+  const { data: loadInfo } = await supabase
+    .from("loads")
+    .select("load_num")
+    .eq("id", loadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const loadNum = (loadInfo as { load_num: string | null } | null)?.load_num ?? null;
+  let displayName = file.name;
+  if (loadNum) {
+    const safeNum = loadNum.replace(/[^A-Za-z0-9_-]/g, "");
+    const kindLabel = kind.toUpperCase();
+    // Count existing docs of this kind for the load to pick a suffix.
+    const { count: priorCount } = await supabase
+      .from("load_documents")
+      .select("id", { head: true, count: "exact" })
+      .eq("load_id", loadId)
+      .eq("org_id", orgId)
+      .eq("kind", kind);
+    const suffix = (priorCount ?? 0) > 0 ? `_${(priorCount ?? 0) + 1}` : "";
+    displayName = `${safeNum}_${kindLabel}${suffix}.${ext}`;
+  }
+
   const { error: uploadErr } = await supabase.storage
     .from(DOC_BUCKET)
     .upload(storagePath, bytes, {
@@ -623,7 +651,7 @@ loads.post("/:id/documents", async (c) => {
       load_id:      loadId,
       org_id:       orgId,
       storage_path: storagePath,
-      file_name:    file.name,
+      file_name:    displayName,
       mime_type:    file.type || null,
       size_bytes:   bytes.length,
       kind,

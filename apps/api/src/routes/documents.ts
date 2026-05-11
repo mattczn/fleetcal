@@ -2,14 +2,12 @@
  * /v1/documents — driver-uploaded document URLs.
  *
  * Endpoints:
- *   GET /v1/documents/:id/url — fresh 1-hour signed URL
+ *   GET   /v1/documents/:id/url   — fresh 1-hour signed URL
+ *   PATCH /v1/documents/:id       — rename (file_name only for now)
  *
  * Listing happens via load scope: GET /v1/loads/:loadId/documents
- * (defined in routes/loads.ts).
- *
- * Upload + delete from this server are intentionally not provided yet —
- * the driver app uploads directly to Storage today, and web doesn't
- * upload load documents. Add when those flows route through Railway.
+ * Uploads happen via POST /v1/loads/:loadId/documents (loads.ts) or
+ * POST /v1/driver/loads/:id/documents (driver.ts).
  */
 
 import { Hono } from "hono";
@@ -49,6 +47,36 @@ documents.get("/:id/url", async (c) => {
   }
   const res: GetDocumentUrlResponse = { url: signed.signedUrl };
   return c.json(res);
+});
+
+// PATCH /v1/documents/:id — currently only file_name is mutable. Kind
+// rewrites would need cascading effects on the closeout checklist
+// (e.g. flipping a doc from BOL → POD changes what counts toward the
+// release gate); leaving that out until there's a user need.
+documents.patch("/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const docId = c.req.param("id");
+  const body = await c.req.json<{ fileName?: string }>();
+
+  if (!body.fileName || !body.fileName.trim()) {
+    return c.json({ error: "validation_failed", errors: ["fileName required"] } satisfies ApiErrorResponse, 400);
+  }
+  // Strip path separators so a rename can't escape the storage layer.
+  // We're not touching storage_path here — only the display name on
+  // the row — so this is belt-and-suspenders.
+  const cleanName = body.fileName.trim().replace(/[/\\]/g, "_").slice(0, 200);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await supabase
+    .from("load_documents")
+    .update({ file_name: cleanName } as any)
+    .eq("id", docId)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[PATCH /v1/documents/:id] update failed:", error);
+    return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ ok: true, fileName: cleanName });
 });
 
 export default documents;
