@@ -485,21 +485,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [uploadError, setUploadError]   = useState<string | null>(null);
   const [mergeStatus, setMergeStatus]   = useState<string | null>(null);
 
-  // Merge selected docs into a single PDF. The "include in invoice"
-  // checkboxes double as a multi-select for this — when ≥2 boxes are
-  // checked the dispatcher gets a Merge button that:
-  //   - downloads each selected file via its signed URL
-  //   - runs pdfMerge (PDFs copy page-for-page, images embed as pages)
-  //   - uploads the merged blob as a new doc with kind = first
-  //     selected doc's kind (load# + kind go into the auto-generated
-  //     filename via the API)
-  //   - deletes the originals so the invoice picker only carries the
-  //     merged result
-  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
-  const [merging,          setMerging]          = useState(false);
+  // Merge selected docs into a single PDF — kept separate from the
+  // "include in invoice" checkboxes so the two workflows don't fight
+  // each other. The merge button (in the invoice section) opens a
+  // dedicated dialog with its own selection list; the merge result is
+  // appended to the docs list as a new entry. Originals stay — the
+  // user can delete them after if they want to, but losing them
+  // implicitly would be too aggressive.
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeSelection,  setMergeSelection]  = useState<Set<string>>(new Set());
+  const [merging,         setMerging]         = useState(false);
   const handleMergeSelected = async () => {
     if (!loadId || merging) return;
-    const selected = docs.filter(d => includedDocIds.has(d.id));
+    const selected = docs.filter(d => mergeSelection.has(d.id));
     if (selected.length < 2) return;
     setMerging(true);
     try {
@@ -518,31 +516,33 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const mergedBlob = await mergeFilesToPdf(files);
       const mergedFile = new File([mergedBlob], `merged.pdf`, { type: 'application/pdf' });
       // Kind = the most common kind among selected (or first if tied).
-      // For dispatchers this is almost always all-PODs merging into one POD.
       const kindCounts = new Map<string, number>();
       for (const d of selected) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
       const mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selected[0].kind) as import('@fleetcal/types').DocumentKind;
       const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
-      // Delete originals in parallel.
-      await Promise.all(selected.map(d => railway.deleteDocument(d.id).catch(err => {
-        console.warn('[review queue] failed to delete original after merge:', d.fileName, err);
-      })));
+      // Originals are NOT deleted — the merged doc is appended.
       // Refresh: invalidate cache + re-prefetch.
       docsCacheRef.current.delete(loadId);
       await prefetchLoadAssets(loadId, !!current?.rateConPdf);
       const fresh = docsCacheRef.current.get(loadId);
       if (fresh) {
         setDocs(fresh.docs);
-        setActiveDocIdx(0);
-        // Carry the merged doc forward as the only selected doc.
-        setIncludedDocIds(new Set([newDoc.id]));
+        // Switch the viewer to the newly merged doc so the user can
+        // sanity-check the result.
+        const newIdx = fresh.docs.findIndex(d => d.id === newDoc.id);
+        if (newIdx !== -1) setActiveDocIdx(newIdx);
+        // Auto-include the merged result in the invoice packet —
+        // typically that's what the user wants. Originals stay in
+        // their existing included/excluded state.
+        setIncludedDocIds(prev => new Set([...prev, newDoc.id]));
       }
     } catch (err) {
       console.error('[review queue] merge failed:', err);
       alert(`Merge failed: ${(err as Error).message ?? 'Unknown error'}`);
     } finally {
       setMerging(false);
-      setMergeConfirmOpen(false);
+      setMergeDialogOpen(false);
+      setMergeSelection(new Set());
     }
   };
 
@@ -932,7 +932,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 {docs.map((d, i) => {
                   const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
                   const active = i === activeDocIdx;
-                  const renaming = renamingDocId === d.id;
                   // Sequence among same-kind docs on this load. Only
                   // shown when there are multiples — single POD stays
                   // just "POD" but two PODs become "POD 1" / "POD 2".
@@ -943,33 +942,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
                   const labelText     = KIND_LABEL[d.kind] ?? d.kind;
                   const tabLabel      = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
-                  if (renaming) {
-                    // Swap the tab for an inline input. Enter commits,
-                    // Esc cancels, blur commits to avoid losing input
-                    // if the user clicks away.
-                    return (
-                      <div key={d.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full shrink-0"
-                        style={{ background: tint.bg }}>
-                        <FileText size={11} style={{ color: tint.fg }} />
-                        <span className="text-[12px] font-extrabold" style={{ color: tint.fg }}>
-                          {KIND_LABEL[d.kind] ?? d.kind} ·
-                        </span>
-                        <input
-                          autoFocus
-                          value={renameDraft}
-                          disabled={renameSaving}
-                          onChange={e => setRenameDraft(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
-                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                          }}
-                          onBlur={() => { if (!renameSaving) void commitRename(); }}
-                          className="text-[12px] font-extrabold bg-transparent outline-none border-b"
-                          style={{ color: tint.fg, borderColor: 'rgba(255,255,255,0.5)', minWidth: 140, maxWidth: 240 }}
-                        />
-                      </div>
-                    );
-                  }
                   return (
                     <div key={d.id} className="flex items-center gap-1 shrink-0">
                       <button onClick={() => setActiveDocIdx(i)}
@@ -1177,12 +1149,18 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 </div>
               ) : (
                 <>
-                {/* Multi-select merge bar — only shown when 2+ docs are
-                    checked. Clicking opens a confirm dialog (irreversible
-                    since the originals are deleted after merging). */}
-                {includedDocIds.size >= 2 && (
+                {/* "Merge files" — opens a popup with a fresh selection
+                    list so the choice is decoupled from the invoice
+                    checkboxes above. Always visible when there are 2+
+                    docs on the load. */}
+                {docs.length >= 2 && (
                   <button type="button"
-                    onClick={() => setMergeConfirmOpen(true)}
+                    onClick={() => {
+                      // Default to nothing selected; the user picks
+                      // explicitly inside the merge dialog.
+                      setMergeSelection(new Set());
+                      setMergeDialogOpen(true);
+                    }}
                     disabled={merging}
                     className="w-full flex items-center justify-center gap-1.5 mb-2 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
                     style={{
@@ -1192,7 +1170,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
                     }}>
                     {merging ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
-                    Merge {includedDocIds.size} into one PDF
+                    Merge files
                   </button>
                 )}
                 <div className="space-y-1.5">
@@ -1216,33 +1194,58 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                             style={{ background: tint.bg, color: tint.fg }}>
                             {KIND_LABEL[d.kind] ?? d.kind}
                           </span>
-                          <div className="text-[12px] font-semibold truncate mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
-                            {d.fileName}
-                          </div>
+                          {renamingDocId === d.id ? (
+                            // Inline rename — Enter commits, Esc cancels,
+                            // blur auto-commits so a click elsewhere
+                            // doesn't lose what the user typed. Lives
+                            // here in the invoice card (not the top tab
+                            // strip) so the edit happens inside the
+                            // same card as the pencil that triggered it.
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              disabled={renameSaving}
+                              onClick={e => e.preventDefault()}
+                              onChange={e => setRenameDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                                if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                              }}
+                              onBlur={() => { if (!renameSaving) void commitRename(); }}
+                              className="text-[12px] font-semibold w-full bg-transparent outline-none border-b mt-0.5"
+                              style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                            />
+                          ) : (
+                            <div className="text-[12px] font-semibold truncate mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
+                              {d.fileName}
+                            </div>
+                          )}
                         </div>
                         {/* Hover-revealed row actions. Live here instead
                             of the top doc-tab strip so they're closer
                             to where the user is reviewing the list. */}
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button type="button"
-                            onClick={e => { e.preventDefault(); startRename(d.id, d.fileName); }}
-                            className="rounded-full p-1 transition-colors"
-                            title={`Rename — ${d.fileName}`}
-                            style={{ color: tint.bg, background: 'transparent' }}
-                            onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
-                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                            <Pencil size={11} />
-                          </button>
-                          <button type="button"
-                            onClick={e => { e.preventDefault(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                            className="rounded-full p-1 transition-colors"
-                            title={`Delete — ${d.fileName}`}
-                            style={{ color: '#d93025', background: 'transparent' }}
-                            onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                            <Trash2 size={11} />
-                          </button>
-                        </div>
+                        {renamingDocId !== d.id && (
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button type="button"
+                              onClick={e => { e.preventDefault(); startRename(d.id, d.fileName); }}
+                              className="rounded-full p-1 transition-colors"
+                              title={`Rename — ${d.fileName}`}
+                              style={{ color: tint.bg, background: 'transparent' }}
+                              onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                              onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                              <Pencil size={11} />
+                            </button>
+                            <button type="button"
+                              onClick={e => { e.preventDefault(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                              className="rounded-full p-1 transition-colors"
+                              title={`Delete — ${d.fileName}`}
+                              style={{ color: '#d93025', background: 'transparent' }}
+                              onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                              onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        )}
                       </label>
                     );
                   })}
@@ -1323,21 +1326,24 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         />
       )}
 
-      {mergeConfirmOpen && (() => {
-        const count = includedDocIds.size;
-        return (
-          <ConfirmDialog
-            title={`Merge ${count} documents?`}
-            message={`The ${count} selected docs will be combined into a single PDF. The originals will be deleted — this can't be undone.`}
-            confirmLabel={merging ? 'Merging…' : 'Merge'}
-            cancelLabel="Cancel"
-            destructive
-            zIndex={240}
-            onCancel={() => setMergeConfirmOpen(false)}
-            onConfirm={() => void handleMergeSelected()}
-          />
-        );
-      })()}
+      {mergeDialogOpen && (
+        <MergeDialog
+          docs={docs}
+          selected={mergeSelection}
+          onToggle={(id) => setMergeSelection(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          })}
+          onSelectAll={() => setMergeSelection(new Set(docs.map(d => d.id)))}
+          onSelectNone={() => setMergeSelection(new Set())}
+          onCancel={() => { setMergeDialogOpen(false); setMergeSelection(new Set()); }}
+          onConfirm={() => void handleMergeSelected()}
+          merging={merging}
+          kindLabel={KIND_LABEL}
+          kindTint={KIND_TINT}
+        />
+      )}
 
     </>
   );
@@ -1422,6 +1428,132 @@ function NoDocPanel({ label }: { label: string }) {
       <div className="text-center" style={{ color: 'rgba(255,255,255,0.6)' }}>
         <FileText size={28} className="mx-auto mb-2" />
         <div className="text-sm">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * MergeDialog — popup with a list of all docs on the load and
+ * checkboxes for selecting which ones to merge. The result becomes a
+ * NEW doc appended to the load; originals stay (delete manually if
+ * undesired).
+ */
+function MergeDialog({
+  docs, selected, onToggle, onSelectAll, onSelectNone, onCancel, onConfirm, merging,
+  kindLabel, kindTint,
+}: {
+  docs: LoadDocument[];
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+  merging: boolean;
+  kindLabel: Record<string, string>;
+  kindTint:  Record<string, { bg: string; fg: string }>;
+}) {
+  const count = selected.size;
+  const canMerge = count >= 2 && !merging;
+  return (
+    <div className="fixed inset-0 flex items-center justify-center px-4"
+      style={{ background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
+      onMouseDown={e => { if (e.target === e.currentTarget && !merging) onCancel(); }}>
+      <div className="rounded-2xl flex flex-col w-full"
+        style={{
+          maxWidth:   480,
+          maxHeight:  '80vh',
+          background: 'var(--gc-surface)',
+          boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
+          border:     '1px solid var(--gc-border)',
+        }}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 pt-5 pb-3">
+          <div>
+            <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
+              Merge files
+            </div>
+            <div className="text-[12px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
+              Pick the documents to combine into a single PDF. Originals stay in the list.
+            </div>
+          </div>
+          <button onClick={onCancel} disabled={merging}
+            className="p-1 rounded-full hover:bg-[var(--gc-hover)]" title="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Select-all + select-none bar */}
+        <div className="flex items-center gap-2 px-5 pb-2">
+          <button type="button" onClick={onSelectAll} disabled={merging}
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors"
+            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            Select all
+          </button>
+          <button type="button" onClick={onSelectNone} disabled={merging}
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors"
+            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            None
+          </button>
+          <div className="flex-1" />
+          <span className="text-[11px] font-bold" style={{ color: count >= 2 ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+            {count} selected
+          </span>
+        </div>
+
+        {/* Doc list */}
+        <div className="flex-1 overflow-y-auto px-5 pb-3" style={{ minHeight: 80 }}>
+          {docs.length === 0 ? (
+            <div className="text-[13px] italic py-8 text-center" style={{ color: 'var(--gc-text-3)' }}>
+              No documents on this load.
+            </div>
+          ) : (
+            <ul className="space-y-1">
+              {docs.map(d => {
+                const tint = kindTint[d.kind] ?? kindTint.other;
+                const isOn = selected.has(d.id);
+                return (
+                  <li key={d.id}>
+                    <label className="flex items-start gap-2 cursor-pointer rounded-lg px-2 py-2 transition-colors hover:bg-[var(--gc-hover)]"
+                      style={{ background: isOn ? 'rgba(26,115,232,0.06)' : 'transparent' }}>
+                      <input type="checkbox" checked={isOn} disabled={merging} className="mt-1"
+                        style={{ accentColor: 'var(--gc-blue)' }}
+                        onChange={() => onToggle(d.id)} />
+                      <div className="flex-1 min-w-0">
+                        <span className="inline-block text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                          style={{ background: tint.bg, color: tint.fg }}>
+                          {kindLabel[d.kind] ?? d.kind}
+                        </span>
+                        <div className="text-[12px] font-semibold truncate mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
+                          {d.fileName}
+                        </div>
+                      </div>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-5 py-4"
+          style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+          <button type="button" onClick={onCancel} disabled={merging}
+            className="text-[13px] font-bold px-4 py-2 rounded-full transition-colors disabled:opacity-50"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
+            Cancel
+          </button>
+          <button type="button"
+            onClick={() => { if (canMerge) onConfirm(); }}
+            disabled={!canMerge}
+            className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-full transition-opacity text-white disabled:opacity-40"
+            style={{ background: 'var(--gc-blue)' }}>
+            {merging ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+            {merging ? 'Merging…' : count >= 2 ? `Merge ${count} files` : 'Pick at least 2'}
+          </button>
+        </div>
       </div>
     </div>
   );
