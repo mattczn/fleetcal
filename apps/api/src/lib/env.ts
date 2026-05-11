@@ -40,6 +40,14 @@ export const env = {
   // Optional — only needed when the Telegram bot is connected.
   botApiKey:              process.env.BOT_API_KEY || undefined,
   botOrgId:               process.env.BOT_ORG_ID || undefined,
+  // Optional — invoice email delivery. Without a Resend key the
+  // send endpoint refuses email sends (still allows manual/portal).
+  resendApiKey:           process.env.RESEND_API_KEY || undefined,
+  // From-address for outbound invoice emails. Must be on a domain
+  // verified in Resend. Defaults to a placeholder that will fail
+  // verification so misconfig is obvious in logs.
+  invoiceFromEmail:       process.env.INVOICE_FROM_EMAIL || "invoices@fleetcal.app",
+  invoiceFromName:        process.env.INVOICE_FROM_NAME  || "FleetCal Invoicing",
 } as const;
 
 export const isProd = env.nodeEnv === "production";

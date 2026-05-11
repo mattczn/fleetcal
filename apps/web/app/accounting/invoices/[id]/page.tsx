@@ -5,20 +5,18 @@
  *
  * Two-column layout: the rendered InvoiceDocument fills the canvas on
  * the left, an action sidebar on the right. The sidebar's controls
- * adapt to status: draft → Send / Edit / Void, sent → Mark Paid / Void,
+ * adapt to status: draft → Email/Mark Sent/Void, sent → Mark Paid/Void,
  * paid / void → read-only.
- *
- * "Print" uses the browser print stylesheet — Phase-4 will swap in a
- * server-side PDF renderer for email delivery.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
-import { ArrowLeft, Download, ExternalLink, Send, Check, X, Loader2, AlertTriangle } from 'lucide-react';
-import type { Invoice } from '@fleetcal/types';
-import { railway } from '@/lib/railway';
+import { ArrowLeft, Download, ExternalLink, Send, Mail, Check, X, Loader2, AlertTriangle, Paperclip } from 'lucide-react';
+import type { Invoice, Customer } from '@fleetcal/types';
+import { railway, RailwayError } from '@/lib/railway';
 import { InvoiceDocument } from '@/components/invoicing/InvoiceDocument';
+import { useCalendarStore } from '@/store/useCalendarStore';
 
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -29,8 +27,17 @@ export default function InvoiceDetailPage() {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
-  const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | null>(null);
+  const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | 'email' | null>(null);
   const [pdfBusy, setPdfBusy] = useState<'download' | 'view' | null>(null);
+  const [emailOpen, setEmailOpen] = useState(false);
+
+  // Pull broker info from the calendar store so the email dialog can
+  // pre-fill the recipient with the saved AP email (customers.invoice_email).
+  const customers = useCalendarStore(s => s.customers);
+  const broker: Customer | undefined = useMemo(() => {
+    if (!invoice?.customerId) return undefined;
+    return customers.find(c => c.id === invoice.customerId);
+  }, [invoice?.customerId, customers]);
 
   useEffect(() => {
     if (!id) return;
@@ -44,7 +51,7 @@ export default function InvoiceDetailPage() {
     return () => { cancelled = true; };
   }, [id]);
 
-  async function handleSend() {
+  async function handleMarkSentManual() {
     if (!invoice) return;
     setBusy('send');
     try {
@@ -53,6 +60,37 @@ export default function InvoiceDetailPage() {
     } catch (err) {
       console.error('[invoice] send failed:', err);
       window.alert('Failed to mark invoice sent.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleEmailSend(args: {
+    to: string;
+    cc?: string[];
+    bccSelf: boolean;
+    bodyText?: string;
+    attachLoadDocs: boolean;
+  }) {
+    if (!invoice) return;
+    setBusy('email');
+    try {
+      const { invoice: updated } = await railway.sendInvoice(invoice.id, {
+        method:         'email',
+        to:             args.to,
+        cc:             args.cc?.length ? args.cc : undefined,
+        bccSelf:        args.bccSelf,
+        bodyText:       args.bodyText?.trim() ? args.bodyText : undefined,
+        attachLoadDocs: args.attachLoadDocs,
+      });
+      setInvoice(updated);
+      setEmailOpen(false);
+    } catch (err) {
+      console.error('[invoice] email send failed:', err);
+      const msg = err instanceof RailwayError && err.status === 503
+        ? 'Email is not configured on the server yet (missing RESEND_API_KEY).'
+        : 'Email send failed. Check console for details.';
+      window.alert(msg);
     } finally {
       setBusy(null);
     }
@@ -213,12 +251,21 @@ export default function InvoiceDetailPage() {
 
                 <div className="border-t pt-3 mt-3 space-y-2" style={{ borderColor: 'var(--gc-border-light)' }}>
                   {invoice.status === 'draft' && (
-                    <button onClick={() => void handleSend()} disabled={busy !== null}
-                      className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"
-                      style={{ background: '#1a73e8', color: '#fff' }}>
-                      {busy === 'send' ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Send size={12} className="inline mr-1.5" />}
-                      Mark Sent
-                    </button>
+                    <>
+                      <button onClick={() => setEmailOpen(true)} disabled={busy !== null}
+                        className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"
+                        style={{ background: '#1a73e8', color: '#fff' }}
+                        title={broker?.invoiceEmail ? `Send to ${broker.invoiceEmail}` : 'Send invoice via email'}>
+                        <Mail size={12} className="inline mr-1.5" /> Email to broker
+                      </button>
+                      <button onClick={() => void handleMarkSentManual()} disabled={busy !== null}
+                        className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"
+                        style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+                        title="Skip sending — you already delivered the invoice elsewhere (portal, prior email, etc.)">
+                        {busy === 'send' ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Send size={12} className="inline mr-1.5" />}
+                        Mark sent manually
+                      </button>
+                    </>
                   )}
                   {(invoice.status === 'draft' || invoice.status === 'sent') && (
                     <button onClick={() => void handleMarkPaid()} disabled={busy !== null}
@@ -253,6 +300,16 @@ export default function InvoiceDetailPage() {
         )}
       </div>
 
+      {invoice && emailOpen && (
+        <EmailInvoiceDialog
+          invoice={invoice}
+          broker={broker}
+          defaultBcc={undefined}
+          busy={busy === 'email'}
+          onClose={() => setEmailOpen(false)}
+          onSend={(args) => void handleEmailSend(args)}
+        />
+      )}
     </div>
   );
 }
@@ -263,6 +320,130 @@ function Field({ label, value }: { label: string; value: string }) {
       <div className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>{label}</div>
       <div className="text-[12px] font-medium tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{value}</div>
     </>
+  );
+}
+
+interface EmailDialogProps {
+  invoice:    Invoice;
+  broker:     Customer | undefined;
+  defaultBcc: string | undefined;
+  busy:       boolean;
+  onClose:    () => void;
+  onSend:     (args: { to: string; cc?: string[]; bccSelf: boolean; bodyText?: string; attachLoadDocs: boolean }) => void;
+}
+
+function EmailInvoiceDialog({ invoice, broker, busy, onClose, onSend }: EmailDialogProps) {
+  // Pre-fill from the broker record. Empty string when missing — the
+  // user has to type one and we'll save it back to the customer in a
+  // follow-up.
+  const [to, setTo]                   = useState(broker?.invoiceEmail ?? '');
+  const [ccText, setCcText]           = useState('');
+  const [bccSelf, setBccSelf]         = useState(true);
+  const [attachLoadDocs, setAttach]   = useState(true);
+  const [bodyText, setBodyText]       = useState('');
+
+  function parseCc(s: string): string[] {
+    return s.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
+  }
+
+  const canSend = !busy && /.+@.+\..+/.test(to.trim());
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onClick={onClose}>
+      <div className="rounded-2xl overflow-hidden"
+        style={{ width: 520, maxWidth: '92vw', background: 'var(--gc-surface)', boxShadow: '0 16px 40px rgba(0,0,0,0.25)' }}
+        onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+          <Mail size={16} style={{ color: '#1a73e8' }} />
+          <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
+            Email invoice #{invoice.invoiceNumber} to broker
+          </div>
+          <button onClick={onClose} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)]" disabled={busy}>
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3 text-sm">
+          <Row label="To">
+            <input type="email"
+              value={to}
+              onChange={e => setTo(e.target.value)}
+              placeholder={broker?.invoiceEmail ?? 'ap@broker.com'}
+              disabled={busy}
+              className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
+            {!broker?.invoiceEmail && broker?.name && (
+              <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                No saved AP email for {broker.name}. Add one in the broker profile to skip this step next time.
+              </div>
+            )}
+          </Row>
+          <Row label="Cc">
+            <input type="text"
+              value={ccText}
+              onChange={e => setCcText(e.target.value)}
+              placeholder="Optional. Separate multiple with commas."
+              disabled={busy}
+              className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
+          </Row>
+          <Row label="Body">
+            <textarea
+              value={bodyText}
+              onChange={e => setBodyText(e.target.value)}
+              placeholder="Leave blank to auto-generate from the invoice."
+              rows={5}
+              disabled={busy}
+              className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)', fontFamily: 'inherit', resize: 'vertical' }} />
+          </Row>
+
+          <div className="space-y-2 pt-1">
+            <label className="flex items-center gap-2 text-[12.5px] cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
+              <input type="checkbox" checked={attachLoadDocs} onChange={e => setAttach(e.target.checked)} disabled={busy} />
+              <Paperclip size={12} />
+              Attach POD / BOL / lumper / scale docs for this load
+            </label>
+            <label className="flex items-center gap-2 text-[12.5px] cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
+              <input type="checkbox" checked={bccSelf} onChange={e => setBccSelf(e.target.checked)} disabled={busy} />
+              Bcc me a copy
+            </label>
+          </div>
+        </div>
+
+        <div className="px-5 py-3 flex items-center justify-end gap-2" style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+          <button onClick={onClose} disabled={busy}
+            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            Cancel
+          </button>
+          <button onClick={() => onSend({
+              to:             to.trim(),
+              cc:             parseCc(ccText),
+              bccSelf,
+              bodyText,
+              attachLoadDocs,
+            })}
+            disabled={!canSend}
+            className="text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+            style={{ background: '#1a73e8', color: '#fff' }}>
+            {busy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Send size={12} className="inline mr-1.5" />}
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid items-start gap-2" style={{ gridTemplateColumns: '60px 1fr' }}>
+      <div className="text-[12px] font-semibold pt-2.5" style={{ color: 'var(--gc-text-3)' }}>{label}</div>
+      <div>{children}</div>
+    </div>
   );
 }
 

@@ -49,6 +49,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { getOrgIdentity } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 
 const invoices = new Hono<{ Variables: AuthVariables }>();
@@ -341,8 +342,15 @@ async function buildSnapshot(
     dueAt = due.toISOString();
   }
 
+  // Freeze the Clerk org identity (name fallback + logo URL) into the
+  // snapshot so the invoice doesn't change if the org renames or
+  // re-uploads its logo later. imageUrl from Clerk is a public CDN URL
+  // and is safe to use directly in the PDF renderer.
+  const orgIdentity = await getOrgIdentity(orgId);
+
   const snapshot: InvoiceSnapshot = {
-    companyName:    invoiceSettings.companyName ?? "",
+    companyName:    invoiceSettings.companyName ?? orgIdentity?.name ?? "",
+    companyLogoUrl: orgIdentity?.imageUrl,
     addressLine1:   invoiceSettings.addressLine1,
     addressLine2:   invoiceSettings.addressLine2,
     city:           invoiceSettings.city,
@@ -646,18 +654,114 @@ invoices.patch("/:id", async (c) => {
 // ─────────────────────────────────────────────────────────────────────────
 
 invoices.post("/:id/send", async (c) => {
-  const orgId = c.get("orgId");
-  const id = c.req.param("id");
-  const body = await c.req.json<SendInvoiceRequest>();
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const id     = c.req.param("id");
+  const body   = await c.req.json<SendInvoiceRequest>();
 
   if (!body?.method || !["email", "portal", "manual"].includes(body.method)) {
     return badRequest(c, ["method must be 'email' | 'portal' | 'manual'"]);
   }
 
+  // For email sends, we need the invoice + (maybe) the load's docs
+  // BEFORE flipping status — if the send fails we want the row to
+  // stay in draft. Read the invoice up-front for all methods so we
+  // can fall through to the email branch with a populated object.
+  const { data: existing, error: fetchErr } = await supabase
+    .from("invoices")
+    .select(INVOICE_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (fetchErr) {
+    return c.json({ error: "fetch_failed", detail: fetchErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const invoice = rowToInvoice(existing as unknown as InvoiceRow);
+  if (invoice.status !== "draft") {
+    return c.json(
+      { error: "invalid_state", detail: `invoice is ${invoice.status}; only drafts can be sent` } satisfies ApiErrorResponse,
+      409,
+    );
+  }
+
+  // Resolve recipient for email sends. Fall back to the customer's
+  // invoice_email when the caller didn't supply one.
+  let recipient = body.to?.trim() || undefined;
+  if (body.method === "email" && !recipient && invoice.customerId) {
+    const { data: cust } = await supabase
+      .from("customers")
+      .select("invoice_email")
+      .eq("id", invoice.customerId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    recipient = (cust as { invoice_email: string | null } | null)?.invoice_email?.trim() || undefined;
+  }
+  if (body.method === "email" && !recipient) {
+    return badRequest(c, ["email send requires `to` (or a saved invoice_email on the broker)"]);
+  }
+
+  // Resolve BCC. Pull the sending user's email from Clerk so the
+  // dispatcher has a record of every invoice they emailed out. We
+  // intentionally don't surface this as a configurable address — it
+  // tracks the human, not a shared inbox.
+  let bccSender: string | undefined;
+  if (body.method === "email" && body.bccSelf) {
+    try {
+      const { clerk } = await import("../lib/clerk.js");
+      const user = await clerk().users.getUser(userId);
+      const primary = user.emailAddresses.find(e => e.id === user.primaryEmailAddressId);
+      bccSender = primary?.emailAddress;
+    } catch (err) {
+      console.warn("[POST /v1/invoices/:id/send] clerk user lookup failed:", err);
+    }
+  }
+
+  // Email send happens BEFORE the status flip so a Resend failure
+  // leaves the invoice in draft. If the row updates after a failed
+  // send the user has no way to retry without voiding + regenerating.
+  if (body.method === "email") {
+    try {
+      const { sendInvoiceEmail, resolveDefaultInvoiceAttachments, EmailNotConfiguredError } =
+        await import("../lib/invoiceEmail.js");
+
+      const attachLoadDocs = body.attachLoadDocs ?? true;
+      const extraPaths = attachLoadDocs
+        ? await resolveDefaultInvoiceAttachments(invoice.loadId, orgId)
+        : [];
+
+      const fmt = (iso?: string) => iso
+        ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+        : undefined;
+
+      await sendInvoiceEmail({
+        invoice,
+        to:         recipient!,
+        cc:         body.cc,
+        bccSender,
+        bodyText:   body.bodyText,
+        extraAttachmentPaths: extraPaths,
+        issuedDate: fmt(invoice.issuedAt),
+        dueDate:    fmt(invoice.dueAt),
+      });
+    } catch (err) {
+      const isConfig = err instanceof Error && err.name === "EmailNotConfiguredError";
+      console.error("[POST /v1/invoices/:id/send] email send failed:", err);
+      return c.json(
+        {
+          error: isConfig ? "email_not_configured" : "email_send_failed",
+          detail: (err as Error)?.message,
+        } satisfies ApiErrorResponse,
+        isConfig ? 503 : 502,
+      );
+    }
+  }
+
+  // Send succeeded (or method != email) — flip status to sent.
   const update = {
     status:      "sent",
     sent_at:     new Date().toISOString(),
-    sent_to:     body.to ?? null,
+    sent_to:     recipient ?? null,
     sent_method: body.method,
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -666,7 +770,7 @@ invoices.post("/:id/send", async (c) => {
     .update(update as any)
     .eq("id", id)
     .eq("org_id", orgId)
-    .eq("status", "draft")        // only drafts can transition to sent
+    .eq("status", "draft")
     .select(INVOICE_COLS)
     .single();
   if (error) {

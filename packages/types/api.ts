@@ -684,11 +684,30 @@ export interface UpdateInvoiceRequest {
 
 export interface UpdateInvoiceResponse { invoice: Invoice; }
 
-/** POST /v1/invoices/:id/send — mark sent (we don't actually wire email
- *  delivery here yet; Phase 4 does that). */
+/**
+ * POST /v1/invoices/:id/send — send and/or mark sent.
+ *
+ *   method='email'  → render PDF, attach optional bundle, fire via SMTP,
+ *                     flip status to 'sent' on success. `to` required.
+ *   method='portal' → just flip status (broker has their own portal).
+ *   method='manual' → just flip status (user sent it externally).
+ *
+ * For 'email':
+ *   - `to` defaults to the customer's invoice_email if you pass null/empty
+ *     (server resolves). If neither exists the request fails 400.
+ *   - `cc` / `bccSelf` are optional. bccSelf = true sends a copy to the
+ *     calling user's email (so they have a paper trail).
+ *   - `attachLoadDocs` defaults to true — auto-attaches the most-recent
+ *     POD/BOL/lumper/scale uploads for the load.
+ *   - `bodyText` overrides the auto-generated message body.
+ */
 export interface SendInvoiceRequest {
-  method: 'email' | 'portal' | 'manual';
-  to?:    string;
+  method:          'email' | 'portal' | 'manual';
+  to?:             string;
+  cc?:             string[];
+  bccSelf?:        boolean;
+  bodyText?:       string;
+  attachLoadDocs?: boolean;
 }
 
 export interface SendInvoiceResponse { invoice: Invoice; }
