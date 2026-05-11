@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2 } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -39,6 +39,7 @@ import { displayBrokerName } from '@/lib/customerMatch';
 import PdfCanvas from '@/components/pdf/PdfCanvas';
 import DocViewer from './DocViewer';
 import { FlagModal, type FlagReason } from './FlagModal';
+import InternalNotesModal from './InternalNotesModal';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 
@@ -312,6 +313,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
   }
 
+  // ── Internal notes ────────────────────────────────────────────────
+  // Opens an InternalNotesModal on top of the review queue. We pause
+  // the queue's keyboard handler while it's open so Esc / arrows /
+  // Cmd+Enter all belong to the notes composer.
+  const [notesOpen, setNotesOpen] = useState(false);
+
   // ── Upload paperwork ──────────────────────────────────────────────
   // Two-stage flow: file picker first, then a kind picker so the user
   // can categorize before the upload commits. Pending file lives here
@@ -372,9 +379,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const releaseRef = useRef(handleRelease);
   releaseRef.current = handleRelease;
   useEffect(() => {
-    // Don't fight the EventModal for the keyboard when it's stacked
-    // on top — its own Esc handler should close it, not our queue.
-    if (eventModalOpen) return;
+    // Don't fight the EventModal or the notes modal for the keyboard
+    // when they're stacked on top — their own handlers should own Esc
+    // / Cmd+Enter rather than us advancing the queue underneath.
+    if (eventModalOpen || notesOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (showFlag) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -387,7 +395,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showFlag, onClose, eventModalOpen]);
+  }, [showFlag, onClose, eventModalOpen, notesOpen]);
 
   // ── Render ────────────────────────────────────────────────────────
   if (!current) {
@@ -527,25 +535,60 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           </button>
         </div>
 
-        {/* Internal notes sticky banner */}
-        {(current.internalNotes ?? []).length > 0 && (
-          <div className="shrink-0 px-5 py-2.5"
-            style={{ background: '#fef9c3', borderBottom: '1px solid #fde68a' }}>
-            <div className="flex items-start gap-2">
-              <Pin size={13} style={{ color: '#a16207', marginTop: 3 }} />
-              <div className="flex-1 min-w-0">
-                {(current.internalNotes ?? []).map(n => (
-                  <div key={n.id} className="text-[13px]" style={{ color: '#78350f', whiteSpace: 'pre-wrap' }}>
-                    {n.text}
-                    <span className="text-[11px] ml-2" style={{ color: '#a16207' }}>
-                      — {n.author ?? 'Unknown'}, {new Date(n.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                ))}
+        {/* Internal notes — banner when there are notes, slim "Add note"
+            row when there aren't. Both surfaces open the full thread
+            modal so the user can read older entries / compose new ones. */}
+        {(() => {
+          const notes = current.internalNotes ?? [];
+          if (notes.length === 0) {
+            return (
+              <div className="shrink-0 flex items-center justify-between px-5 py-1.5"
+                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                  No internal notes on this load.
+                </span>
+                <button onClick={() => setNotesOpen(true)}
+                  className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors"
+                  style={{ color: 'var(--gc-blue)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(26,115,232,0.08)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <Plus size={11} /> Add note
+                </button>
+              </div>
+            );
+          }
+          return (
+            <div className="shrink-0 px-5 py-2.5"
+              style={{ background: '#fef9c3', borderBottom: '1px solid #fde68a' }}>
+              <div className="flex items-start gap-2">
+                <Pin size={13} style={{ color: '#a16207', marginTop: 3, flexShrink: 0 }} />
+                <div className="flex-1 min-w-0">
+                  {notes.map(n => (
+                    <div key={n.id} className="text-[13px]" style={{ color: '#78350f', whiteSpace: 'pre-wrap' }}>
+                      {n.text}
+                      <span className="text-[11px] ml-2" style={{ color: '#a16207' }}>
+                        — {n.author ?? 'Unknown'}, {new Date(n.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setNotesOpen(true)}
+                  className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-full transition-colors flex-shrink-0"
+                  style={{
+                    background: 'rgba(161, 98, 7, 0.15)',
+                    color:      '#854d0e',
+                    border:     '1px solid rgba(161, 98, 7, 0.3)',
+                  }}
+                  title="View all notes / add new"
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(161, 98, 7, 0.25)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'rgba(161, 98, 7, 0.15)')}>
+                  <MessageSquare size={10} />
+                  {notes.length > 1 ? `${notes.length} notes` : 'Add'}
+                </button>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Main: rate-con + uploaded docs (left) + sidebar (right) */}
         <div className="flex-1 flex min-h-0">
@@ -780,6 +823,20 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           loadLabel={`${current.title}${current.loadNum ? ` · #${current.loadNum}` : ''}`}
           onCancel={() => setShowFlag(false)}
           onConfirm={handleFlag}
+        />
+      )}
+
+      {notesOpen && (
+        <InternalNotesModal
+          load={current as Load}
+          actorName={user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined}
+          // z-[230] sits above the review queue (z-180) and any open
+          // EventModal (z-200) so the notes panel is always reachable
+          // and dismissible without keyboard ambiguity.
+          zIndex={230}
+          onClose={() => setNotesOpen(false)}
+          onSaved={() => { /* nothing to refresh — note appears
+                              optimistically in the modal's local thread */ }}
         />
       )}
     </>
