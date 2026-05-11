@@ -15,10 +15,13 @@
     "@clerk/backend": "^1.21.0",
     "@fleetcal/types": "*",
     "@hono/node-server": "^1.13.0",
+    "@react-pdf/renderer": "^4.5.1",
     "@supabase/supabase-js": "^2.105.1",
+    "@types/react": "^19.2.14",
     "dotenv": "^17.4.2",
     "hono": "^4.6.0",
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "react": "^19.2.6"
   },
   "devDependencies": {
     "@types/node": "^20",

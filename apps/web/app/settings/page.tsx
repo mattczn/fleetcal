@@ -1365,6 +1365,7 @@ function MockInvoice({ form, clerkOrg }: {
       issuedDate={fmtDate(issueDate)}
       dueDate={Number.isFinite(termsDays) ? fmtDate(dueDate) : '—'}
       logoUrl={clerkOrg?.imageUrl}
+      placeholdersOnEmpty
     />
   );
 }

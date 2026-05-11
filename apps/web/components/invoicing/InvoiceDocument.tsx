@@ -28,6 +28,11 @@ interface Props {
   /** Affects shadow + max-width. 'preview' is the in-app card; 'print'
    *  is full-bleed letter for the print stylesheet. */
   mode?:        'preview' | 'print';
+  /** When true, show "Street address", "Remit-to instructions appear
+   *  here", etc. as in-place hints for unset fields. Use ONLY on the
+   *  settings preview where the user is actively editing the source.
+   *  Real generated invoices never want these. */
+  placeholdersOnEmpty?: boolean;
 }
 
 export function InvoiceDocument({
@@ -37,6 +42,7 @@ export function InvoiceDocument({
   dueDate,
   logoUrl,
   mode = 'preview',
+  placeholdersOnEmpty = false,
 }: Props) {
   const fmtMoney = (n: number) =>
     n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -75,11 +81,11 @@ export function InvoiceDocument({
             {logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logoUrl} alt="" style={{ maxWidth: 110, maxHeight: 70, objectFit: 'contain' }} />
-            ) : (
+            ) : placeholdersOnEmpty ? (
               <div style={{ width: 110, height: 70, background: '#f1f3f4', borderRadius: 6 }} className="flex items-center justify-center text-[10px] uppercase tracking-wider">
                 <span style={{ color: '#9aa0a6' }}>Logo</span>
               </div>
-            )}
+            ) : null}
             {/* MC / DOT / EIN sit immediately under the logo so they
                 read as identity, not contact info. The broker AP team
                 often needs these to set up a vendor record. */}
@@ -101,7 +107,7 @@ export function InvoiceDocument({
         <div className="flex items-start justify-between mb-6 gap-8">
           <div className="flex-1">
             <div className="text-[14px] font-extrabold uppercase tracking-wide leading-tight">
-              {snapshot.companyName || <span style={{ opacity: 0.4 }}>Your Company Name</span>}
+              {snapshot.companyName || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>Your Company Name</span> : null)}
             </div>
           </div>
           <div className="shrink-0" style={{ minWidth: 240 }}>
@@ -115,7 +121,9 @@ export function InvoiceDocument({
         <div className="flex items-start justify-between mb-6 gap-8 pt-4" style={{ borderTop: '1px solid #e8eaed' }}>
           <div className="flex-1">
             <div className="text-[11px] font-extrabold uppercase tracking-wider mb-1.5" style={{ color: '#5f6368' }}>Bill to</div>
-            <div className="font-extrabold text-[13px]">{snapshot.brokerName || <span style={{ opacity: 0.4 }}>Broker name</span>}</div>
+            <div className="font-extrabold text-[13px]">
+              {snapshot.brokerName || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>Broker name</span> : null)}
+            </div>
             {(snapshot.brokerAddrLine1 || snapshot.brokerAddrLine2) && (
               <div className="leading-snug" style={{ color: '#3c4043' }}>
                 {snapshot.brokerAddrLine1}{snapshot.brokerAddrLine1 && <br/>}
@@ -190,30 +198,47 @@ export function InvoiceDocument({
         {/* Remit-to. The user-typed remit instructions sit on top; below
             we render the bare minimum the broker needs to mail a check
             (address, phone, email). Tax IDs live in the top-left
-            corner, so they're intentionally not repeated here. */}
-        <div className="flex justify-end pt-3" style={{ borderTop: '1px solid #e8eaed' }}>
-          <div className="text-right" style={{ maxWidth: 340 }}>
-            <div className="text-[15px] font-extrabold mb-1" style={{ color: '#1a73e8' }}>REMIT TO</div>
-            {snapshot.remitToInstructions ? (
-              <div className="whitespace-pre-line leading-snug">{snapshot.remitToInstructions}</div>
-            ) : (
-              <div className="italic" style={{ color: '#9aa0a6' }}>
-                Remit-to instructions appear here.
+            corner, so they're intentionally not repeated here. The
+            entire block hides on real invoices when none of the fields
+            are populated — no point in an empty REMIT TO header. */}
+        {(() => {
+          const hasAnyRemit =
+            !!snapshot.remitToInstructions ||
+            !!snapshot.addressLine1 ||
+            !!snapshot.addressLine2 ||
+            !!csz ||
+            !!snapshot.phone ||
+            !!snapshot.email;
+          if (!hasAnyRemit && !placeholdersOnEmpty) return null;
+          return (
+            <div className="flex justify-end pt-3" style={{ borderTop: '1px solid #e8eaed' }}>
+              <div className="text-right" style={{ maxWidth: 340 }}>
+                <div className="text-[15px] font-extrabold mb-1" style={{ color: '#1a73e8' }}>REMIT TO</div>
+                {snapshot.remitToInstructions ? (
+                  <div className="whitespace-pre-line leading-snug">{snapshot.remitToInstructions}</div>
+                ) : placeholdersOnEmpty ? (
+                  <div className="italic" style={{ color: '#9aa0a6' }}>
+                    Remit-to instructions appear here.
+                  </div>
+                ) : null}
+                {(snapshot.addressLine1 || snapshot.addressLine2 || csz || placeholdersOnEmpty) && (
+                  <div className="mt-2 leading-snug" style={{ color: '#3c4043' }}>
+                    {snapshot.addressLine1 || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>Street address</span> : null)}
+                    {(snapshot.addressLine1 || placeholdersOnEmpty) && <br/>}
+                    {snapshot.addressLine2 && <>{snapshot.addressLine2}<br/></>}
+                    {csz || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>City, ST ZIP</span> : null)}
+                  </div>
+                )}
+                {(snapshot.phone || snapshot.email) && (
+                  <div className="mt-1.5 leading-snug" style={{ color: '#3c4043' }}>
+                    {snapshot.phone && <>P: {snapshot.phone}<br/></>}
+                    {snapshot.email && <>{snapshot.email}</>}
+                  </div>
+                )}
               </div>
-            )}
-            <div className="mt-2 leading-snug" style={{ color: '#3c4043' }}>
-              {snapshot.addressLine1 || <span style={{ opacity: 0.4 }}>Street address</span>}<br/>
-              {snapshot.addressLine2 && <>{snapshot.addressLine2}<br/></>}
-              {csz || <span style={{ opacity: 0.4 }}>City, ST ZIP</span>}
             </div>
-            {(snapshot.phone || snapshot.email) && (
-              <div className="mt-1.5 leading-snug" style={{ color: '#3c4043' }}>
-                {snapshot.phone && <>P: {snapshot.phone}<br/></>}
-                {snapshot.email && <>{snapshot.email}</>}
-              </div>
-            )}
-          </div>
-        </div>
+          );
+        })()}
 
         {/* Footer notes */}
         {snapshot.invoiceFooterNotes && (

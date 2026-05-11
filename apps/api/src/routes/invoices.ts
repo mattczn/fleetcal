@@ -507,6 +507,74 @@ invoices.get("/:id", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /v1/invoices/:id/pdf — render the invoice to a PDF
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Streams application/pdf. The PDF is built fresh from the frozen
+// snapshot each call (no caching) — invoices are small and snapshots
+// are immutable for sent/paid/void rows, so caching adds complexity
+// without a real payoff. If volume grows we can stash the rendered
+// PDF on the row.
+//
+// ?download=1 forces Content-Disposition: attachment; otherwise the
+// PDF is served inline so the browser viewer can open it.
+
+invoices.get("/:id/pdf", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const url   = new URL(c.req.url);
+  const asDownload = url.searchParams.get("download") === "1";
+
+  const { data, error } = await supabase
+    .from("invoices")
+    .select(INVOICE_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const invoice = rowToInvoice(data as unknown as InvoiceRow);
+
+  // Format dates the same way the on-screen renderer does so the
+  // visible header text matches.
+  const fmt = (iso?: string) => iso
+    ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : undefined;
+
+  // Logo: pull from the snapshot if we ever start freezing the data
+  // URL onto it. For now snapshot.companyLogoUrl is unused, so the PDF
+  // renders without a logo. Phase-4 follow-up: when an invoice is
+  // generated, fetch the Clerk org image and inline it as base64 so
+  // the PDF is fully self-contained.
+  const logoData = invoice.snapshot.companyLogoUrl;
+
+  try {
+    const { renderInvoicePdf } = await import("../lib/invoicePdf.js");
+    const pdf = await renderInvoicePdf({
+      snapshot:      invoice.snapshot,
+      invoiceNumber: invoice.invoiceNumber,
+      issuedDate:    fmt(invoice.issuedAt),
+      dueDate:       fmt(invoice.dueAt),
+      logoData,
+    });
+    const filename = `invoice-${invoice.invoiceNumber}.pdf`;
+    return new Response(new Uint8Array(pdf), {
+      status: 200,
+      headers: {
+        "Content-Type":        "application/pdf",
+        "Content-Disposition": `${asDownload ? "attachment" : "inline"}; filename="${filename}"`,
+        "Cache-Control":       "private, max-age=0, no-store",
+      },
+    });
+  } catch (err) {
+    console.error("[GET /v1/invoices/:id/pdf] render failed:", err);
+    return c.json({ error: "pdf_render_failed", detail: (err as Error)?.message } satisfies ApiErrorResponse, 500);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // PATCH /v1/invoices/:id — edit a draft
 // ─────────────────────────────────────────────────────────────────────────
 

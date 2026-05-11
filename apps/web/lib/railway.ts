@@ -343,6 +343,22 @@ class RailwayClient {
   voidInvoice(id: string, body: VoidInvoiceRequest = {}) {
     return this.req<VoidInvoiceResponse>('POST', `/v1/invoices/${id}/void`, body);
   }
+  /**
+   * Fetch the rendered invoice PDF as a Blob. Uses authed fetch under
+   * the hood; callers turn the Blob into either a download link or
+   * an object URL for inline viewing.
+   */
+  async getInvoicePdfBlob(id: string, opts: { asDownload?: boolean } = {}): Promise<Blob> {
+    const qs = opts.asDownload ? '?download=1' : '';
+    const res = await this.rawFetch('GET', `/v1/invoices/${id}/pdf${qs}`);
+    if (!res.ok) {
+      const text = await res.text();
+      let detail: unknown = text;
+      try { detail = JSON.parse(text); } catch { /* keep raw */ }
+      throw new RailwayError(res.status, detail, `GET /v1/invoices/${id}/pdf → ${res.status}`);
+    }
+    return res.blob();
+  }
 
   // ── Stops ─────────────────────────────────────────────────────────────
   listRecentStops(query: { q: string; limit?: number }) {

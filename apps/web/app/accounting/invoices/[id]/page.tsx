@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
-import { ArrowLeft, Printer, Send, Check, X, Loader2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Download, ExternalLink, Send, Check, X, Loader2, AlertTriangle } from 'lucide-react';
 import type { Invoice } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import { InvoiceDocument } from '@/components/invoicing/InvoiceDocument';
@@ -30,6 +30,7 @@ export default function InvoiceDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | null>(null);
+  const [pdfBusy, setPdfBusy] = useState<'download' | 'view' | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -71,6 +72,50 @@ export default function InvoiceDetailPage() {
     }
   }
 
+  async function handleDownloadPdf() {
+    if (!invoice || pdfBusy) return;
+    setPdfBusy('download');
+    try {
+      const blob = await railway.getInvoicePdfBlob(invoice.id, { asDownload: true });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${invoice.invoiceNumber}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Release the blob asynchronously so the click handler has time
+      // to start the download (some browsers race on immediate revoke).
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (err) {
+      console.error('[invoice] download pdf failed:', err);
+      window.alert('Failed to download PDF.');
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  async function handleViewPdf() {
+    if (!invoice || pdfBusy) return;
+    setPdfBusy('view');
+    try {
+      const blob = await railway.getInvoicePdfBlob(invoice.id);
+      const url = URL.createObjectURL(blob);
+      // window.open is more reliable than navigating the current tab —
+      // the user keeps the detail page open and can close the PDF tab
+      // when they're done.
+      const win = window.open(url, '_blank', 'noopener');
+      if (!win) window.alert('Pop-up blocked. Enable pop-ups for this site to view the PDF.');
+      // Don't revoke immediately — the new tab is still rendering.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('[invoice] view pdf failed:', err);
+      window.alert('Failed to open PDF.');
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
   async function handleVoid() {
     if (!invoice) return;
     const reason = window.prompt('Void reason (optional):') ?? undefined;
@@ -104,11 +149,25 @@ export default function InvoiceDetailPage() {
         </div>
         {invoice && <StatusPill status={invoice.status} />}
         <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => window.print()}
-            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)]"
+          <button onClick={() => void handleViewPdf()}
+            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)] disabled:opacity-60"
             style={{ border: '1px solid var(--gc-border)' }}
-            disabled={!invoice}>
-            <Printer size={12} style={{ display: 'inline', marginRight: 4 }} /> Print
+            disabled={!invoice || pdfBusy !== null}
+            title="Open PDF in a new tab">
+            {pdfBusy === 'view'
+              ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
+              : <ExternalLink size={12} className="inline mr-1.5" />}
+            View PDF
+          </button>
+          <button onClick={() => void handleDownloadPdf()}
+            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+            style={{ background: '#1a73e8', color: '#fff' }}
+            disabled={!invoice || pdfBusy !== null}
+            title="Download as PDF">
+            {pdfBusy === 'download'
+              ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
+              : <Download size={12} className="inline mr-1.5" />}
+            Download PDF
           </button>
         </div>
       </div>
@@ -194,13 +253,6 @@ export default function InvoiceDetailPage() {
         )}
       </div>
 
-      {/* Print stylesheet — strip chrome and let the document fill the page */}
-      <style dangerouslySetInnerHTML={{ __html: `
-        @media print {
-          .print\\:hidden { display: none !important; }
-          body { background: #fff !important; }
-        }
-      ` }} />
     </div>
   );
 }
