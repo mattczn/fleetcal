@@ -57,6 +57,10 @@ export type OrgSettingsRow     = T["org_settings"]["Row"];
 export type OrgSettingsInsert  = T["org_settings"]["Insert"];
 export type OrgSettingsUpdate  = T["org_settings"]["Update"];
 
+export type InvoiceRow         = T["invoices"]["Row"];
+export type InvoiceInsert      = T["invoices"]["Insert"];
+export type InvoiceUpdate      = T["invoices"]["Update"];
+
 // ── Org — Clerk-derived (no Supabase row) ───────────────────────────────
 //
 // Clerk's Organization is the multi-tenancy boundary. This is the minimal

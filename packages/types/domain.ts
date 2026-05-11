@@ -473,3 +473,116 @@ export interface Load {
    */
   invoiceDocIds?: string[];
 }
+
+// ── Invoice ─────────────────────────────────────────────────────────────
+//
+// An invoice is the billable artifact for one load. The fields rendered
+// onto the document are snapshotted at issue time (see InvoiceSnapshot)
+// so updating org_settings or the load afterward never changes what the
+// broker sees on a sent invoice.
+
+export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'void';
+
+export const INVOICE_STATUSES: readonly InvoiceStatus[] = [
+  'draft', 'sent', 'paid', 'void',
+];
+
+/**
+ * Line items on an invoice. Linehaul + accessorials get flattened into
+ * this shape by the generator so the renderer doesn't have to special-
+ * case anything.
+ */
+export interface InvoiceLineItem {
+  description: string;
+  /** Per-unit rate. For a flat-rate linehaul this equals `amount`. */
+  rate:    number;
+  units:   number;
+  /** Free-form: "Flat", "Mile", "Hour", "Each". */
+  uom:     string;
+  amount:  number;
+}
+
+/** A stop as it renders on the invoice document. */
+export interface InvoiceSnapshotStop {
+  kind:      'Pickup' | 'Delivery' | 'Stop' | 'Drop' | 'Relay';
+  seq:       number;
+  facility:  string;
+  /** "CITY ST ZIP" uppercase, ready for direct render. */
+  cityState: string;
+  /** Combined reference numbers + piece counts in display order. */
+  refs:      string;
+}
+
+/**
+ * Everything needed to re-render an invoice exactly as it was issued.
+ * Stored in invoices.snapshot (jsonb). Adding a new field is safe; the
+ * renderer treats absent fields as defaults.
+ */
+export interface InvoiceSnapshot {
+  // ── Company / carrier identity at issue time ─────────────────────
+  companyName?:    string;
+  companyLogoUrl?: string;            // Clerk org imageUrl frozen at issue
+  addressLine1?:   string;
+  addressLine2?:   string;
+  city?:           string;
+  state?:          string;
+  zip?:            string;
+  phone?:          string;
+  email?:          string;
+  mcNumber?:       string;
+  dotNumber?:      string;
+  ein?:            string;
+  remitToInstructions?: string;
+  invoiceFooterNotes?:  string;
+
+  // ── Broker / bill-to ─────────────────────────────────────────────
+  brokerName?:        string;
+  brokerAddrLine1?:   string;
+  brokerAddrLine2?:   string;
+
+  // ── Order detail ─────────────────────────────────────────────────
+  orderNo?:        string;            // load_num — broker's load number
+  poNumber?:       string;
+  orderDate?:      string;            // YYYY-MM-DD
+  pickupDate?:     string;
+  deliveredDate?:  string;
+  loadNumber:      string;            // internal_load_id, stringified
+
+  stops:           InvoiceSnapshotStop[];
+  lineItems:       InvoiceLineItem[];
+
+  totalCharges:    number;
+  balanceDue:      number;
+}
+
+export interface Invoice {
+  id:             string;
+  orgId:          string;
+  loadId:         string;
+  customerId?:    string;
+
+  invoiceNumber:  string;
+  status:         InvoiceStatus;
+
+  total:          number;
+  issuedAt:       string;             // ISO timestamp
+  dueAt?:         string;             // ISO timestamp
+
+  snapshot:       InvoiceSnapshot;
+
+  // Send tracking
+  sentAt?:        string;
+  sentTo?:        string;
+  sentMethod?:    'email' | 'portal' | 'manual';
+
+  // Payment tracking
+  paidAt?:        string;
+  paidAmount?:    number;
+  paidMethod?:    'ach' | 'check' | 'wire' | 'other';
+  paidNote?:      string;
+
+  voidReason?:    string;
+
+  createdAt:      string;
+  updatedAt:      string;
+}

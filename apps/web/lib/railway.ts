@@ -45,6 +45,12 @@ import type {
   ListPayrollAdjustmentsResponse, CreatePayrollAdjustmentRequest, CreatePayrollAdjustmentResponse,
   ListPayrollRecordsResponse, UpsertPayrollRecordRequest, UpsertPayrollRecordResponse,
   GetOrgSettingsResponse, UpdateOrgSettingsRequest, UpdateOrgSettingsResponse,
+  CreateInvoiceRequest, CreateInvoiceResponse,
+  ListInvoicesResponse, GetInvoiceResponse,
+  UpdateInvoiceRequest, UpdateInvoiceResponse,
+  SendInvoiceRequest, SendInvoiceResponse,
+  MarkInvoicePaidRequest, MarkInvoicePaidResponse,
+  VoidInvoiceRequest, VoidInvoiceResponse,
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
   GetEventResponse,
   ListRecentStopsResponse,
@@ -306,6 +312,36 @@ class RailwayClient {
   getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }
   updateOrgSettings(body: UpdateOrgSettingsRequest) {
     return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
+  }
+
+  // ── Invoices ──────────────────────────────────────────────────────────
+  createInvoice(body: CreateInvoiceRequest) {
+    return this.req<CreateInvoiceResponse>('POST', '/v1/invoices', body);
+  }
+  listInvoices(query: { status?: string; loadId?: string; brokerId?: string; from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)   qs.set('status',   query.status);
+    if (query.loadId)   qs.set('loadId',   query.loadId);
+    if (query.brokerId) qs.set('brokerId', query.brokerId);
+    if (query.from)     qs.set('from',     query.from);
+    if (query.to)       qs.set('to',       query.to);
+    const s = qs.toString();
+    return this.req<ListInvoicesResponse>('GET', `/v1/invoices${s ? `?${s}` : ''}`);
+  }
+  getInvoice(id: string) {
+    return this.req<GetInvoiceResponse>('GET', `/v1/invoices/${id}`);
+  }
+  updateInvoice(id: string, body: UpdateInvoiceRequest) {
+    return this.req<UpdateInvoiceResponse>('PATCH', `/v1/invoices/${id}`, body);
+  }
+  sendInvoice(id: string, body: SendInvoiceRequest) {
+    return this.req<SendInvoiceResponse>('POST', `/v1/invoices/${id}/send`, body);
+  }
+  markInvoicePaid(id: string, body: MarkInvoicePaidRequest = {}) {
+    return this.req<MarkInvoicePaidResponse>('POST', `/v1/invoices/${id}/mark-paid`, body);
+  }
+  voidInvoice(id: string, body: VoidInvoiceRequest = {}) {
+    return this.req<VoidInvoiceResponse>('POST', `/v1/invoices/${id}/void`, body);
   }
 
   // ── Stops ─────────────────────────────────────────────────────────────

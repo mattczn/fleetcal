@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2 } from 'lucide-react';
+import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt } from 'lucide-react';
 
 const NAV_LINKS = [
-  { href: '/board',     label: 'Command Center', icon: LayoutDashboard },
-  { href: '/dashboard', label: 'Dashboard',      icon: BarChart2       },
-  { href: '/closeout',  label: 'Closeout',       icon: FileCheck2      },
-  { href: '/payroll',   label: 'Payroll',        icon: Users           },
+  { href: '/board',      label: 'Command Center', icon: LayoutDashboard },
+  { href: '/dashboard',  label: 'Dashboard',      icon: BarChart2       },
+  { href: '/closeout',   label: 'Closeout',       icon: FileCheck2      },
+  { href: '/accounting', label: 'Accounting',     icon: Receipt         },
+  { href: '/payroll',    label: 'Payroll',        icon: Users           },
 ];
 
 interface ManagementHeaderProps {

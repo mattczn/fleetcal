@@ -20,10 +20,11 @@
  */
 
 import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, FilePlus, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
-import { railway } from '@/lib/railway';
+import { railway, RailwayError } from '@/lib/railway';
+import { useRouter } from 'next/navigation';
 import type { Load, CalendarEvent } from '@/lib/types';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import { displayBrokerName } from '@/lib/customerMatch';
@@ -129,6 +130,11 @@ export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const { user } = useUser();
+  const router = useRouter();
+  // Per-load in-flight state for the Generate Invoice button so a slow
+  // request doesn't let the user double-fire it (which would 409 on the
+  // unique-active-invoice constraint).
+  const [generatingId, setGeneratingId] = useState<string | null>(null);
   // Clerk readiness gate — without this, a hard refresh on /closeout
   // fires the queue request before RailwayClientProvider has a chance
   // to wire the token (its useEffect runs after children's effects),
@@ -424,6 +430,56 @@ export default function CloseoutView() {
     await railway.updateLoadCloseout(targetId, { action: 'flag', flagReason: reason, flagNote: note, actorName });
     setFlagTarget(null);
     await refresh();
+  }
+
+  async function handleGenerateInvoice(load: Load) {
+    const loadId = load.loadId ?? load.id;
+    if (generatingId) return;
+    setGeneratingId(loadId);
+    try {
+      const { invoice } = await railway.createInvoice({ loadId });
+      router.push(`/accounting/invoices/${invoice.id}`);
+    } catch (err) {
+      // 409 = an active invoice already exists for this load. Take the
+      // user to the existing one rather than dead-ending.
+      if (err instanceof RailwayError && err.status === 409) {
+        try {
+          const { invoices: existing } = await railway.listInvoices({ loadId });
+          const open = existing.find(i => i.status !== 'void');
+          if (open) {
+            router.push(`/accounting/invoices/${open.id}`);
+            return;
+          }
+        } catch { /* fall through to alert */ }
+      }
+      console.error('[closeout] generateInvoice failed:', err);
+      window.alert('Failed to generate invoice. See console for details.');
+    } finally {
+      setGeneratingId(null);
+    }
+  }
+
+  async function handleViewInvoice(load: Load) {
+    const loadId = load.loadId ?? load.id;
+    if (generatingId) return;
+    setGeneratingId(loadId);
+    try {
+      const { invoices: existing } = await railway.listInvoices({ loadId });
+      // Prefer the non-void invoice (there can be at most one active).
+      // If we somehow only have voids, fall back to the newest.
+      const active = existing.find(i => i.status !== 'void');
+      const target = active ?? existing[0];
+      if (target) {
+        router.push(`/accounting/invoices/${target.id}`);
+      } else {
+        window.alert('No invoice found for this load.');
+      }
+    } catch (err) {
+      console.error('[closeout] viewInvoice failed:', err);
+      window.alert('Failed to look up invoice.');
+    } finally {
+      setGeneratingId(null);
+    }
   }
 
   async function handleTogglePriority(load: Load) {
@@ -905,6 +961,36 @@ export default function CloseoutView() {
                                   </button>
                                 )}
                               </>
+                            ) : tab === 'verified' ? (
+                              // Verified → ready to bill. Generates the
+                              // invoice row + frozen snapshot, then opens
+                              // the accounting detail page so the user
+                              // can review / send.
+                              <button onClick={() => void handleGenerateInvoice(load)}
+                                disabled={generatingId === (load.loadId ?? load.id)}
+                                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
+                                style={{ background: '#1a73e8', color: '#fff' }}
+                                title="Generate invoice from this load">
+                                {generatingId === (load.loadId ?? load.id)
+                                  ? <Loader2 size={11} className="animate-spin" style={{ display: 'inline', marginRight: 3 }} />
+                                  : <FilePlus size={11} style={{ display: 'inline', marginRight: 3 }} />}
+                                Generate invoice
+                              </button>
+                            ) : tab === 'invoiced' || tab === 'paid' ? (
+                              // Already invoiced — jump to the saved
+                              // invoice. Resolves the invoice id at click
+                              // time so we don't have to denormalize it
+                              // onto the closeout queue.
+                              <button onClick={() => void handleViewInvoice(load)}
+                                disabled={generatingId === (load.loadId ?? load.id)}
+                                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
+                                style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+                                title="View saved invoice">
+                                {generatingId === (load.loadId ?? load.id)
+                                  ? <Loader2 size={11} className="animate-spin" style={{ display: 'inline', marginRight: 3 }} />
+                                  : <FileText size={11} style={{ display: 'inline', marginRight: 3 }} />}
+                                View invoice
+                              </button>
                             ) : null}
                           </div>
                         </Td>

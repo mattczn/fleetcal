@@ -10,7 +10,7 @@
  * each section.
  */
 
-import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, InternalNote, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
+import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
@@ -627,6 +627,90 @@ export interface CreateCheckCallRequest {
 }
 
 export interface CreateCheckCallResponse { checkCall: CheckCall; }
+
+// ── /v1/invoices ────────────────────────────────────────────────────────
+//
+// Invoicing lifecycle is per-load: generate → (preview / edit) → send →
+// (paid | void). All endpoints scope to the caller's org; load_id must
+// belong to the org or 404.
+
+/**
+ * Body for POST /v1/invoices. Most fields are optional — when omitted
+ * the server derives them from the load and org_settings. Only the
+ * load_id is required; everything else is a hook for the editing UI
+ * to override before the snapshot is frozen.
+ */
+export interface CreateInvoiceRequest {
+  loadId:           string;
+  /** Override the invoice number. Defaults to internal_load_id with
+   *  the org's invoice_number_prefix. */
+  invoiceNumber?:   string;
+  /** Override line items. Default: linehaul + billable accessorials. */
+  lineItems?:       InvoiceLineItem[];
+  /** Override due date. Default: issued + default_payment_terms_days. */
+  dueAt?:           string;
+  /** Override remit-to. Default: org_settings.invoice_settings.remit_to_instructions. */
+  remitToInstructions?: string;
+  /** Override footer notes. Default: org_settings.invoice_settings.invoice_footer_notes. */
+  invoiceFooterNotes?:  string;
+}
+
+export interface CreateInvoiceResponse { invoice: Invoice; }
+
+/**
+ * GET /v1/invoices query params (all optional):
+ *   status   — comma-separated InvoiceStatus values
+ *   loadId   — filter to one load
+ *   brokerId — filter to one customer (uuid)
+ *   from     — issued_at >= this timestamp / date
+ *   to       — issued_at <= this timestamp / date
+ */
+export interface ListInvoicesResponse { invoices: Invoice[]; }
+
+export interface GetInvoiceResponse { invoice: Invoice; }
+
+/**
+ * Patch a draft invoice. Only allowed while status === 'draft' (server
+ * enforces). Sent/paid/void invoices are immutable from this endpoint
+ * — use the action endpoints for state transitions.
+ */
+export interface UpdateInvoiceRequest {
+  invoiceNumber?:       string;
+  lineItems?:           InvoiceLineItem[];
+  dueAt?:               string | null;
+  remitToInstructions?: string | null;
+  invoiceFooterNotes?:  string | null;
+}
+
+export interface UpdateInvoiceResponse { invoice: Invoice; }
+
+/** POST /v1/invoices/:id/send — mark sent (we don't actually wire email
+ *  delivery here yet; Phase 4 does that). */
+export interface SendInvoiceRequest {
+  method: 'email' | 'portal' | 'manual';
+  to?:    string;
+}
+
+export interface SendInvoiceResponse { invoice: Invoice; }
+
+/** POST /v1/invoices/:id/mark-paid */
+export interface MarkInvoicePaidRequest {
+  paidAt?:  string;
+  amount?:  number;
+  method?:  'ach' | 'check' | 'wire' | 'other';
+  note?:    string;
+}
+export interface MarkInvoicePaidResponse { invoice: Invoice; }
+
+/** POST /v1/invoices/:id/void */
+export interface VoidInvoiceRequest {
+  reason?: string;
+}
+export interface VoidInvoiceResponse { invoice: Invoice; }
+
+// Re-export the status enum from domain for callers that import from
+// this module exclusively.
+export type { InvoiceStatus };
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

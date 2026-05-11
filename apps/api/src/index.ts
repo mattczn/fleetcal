@@ -31,6 +31,7 @@ import driverAssetPrefsRoute from "./routes/driver-asset-prefs.js";
 import savedLocationsRoute from "./routes/saved-locations.js";
 import payrollRoute from "./routes/payroll.js";
 import orgSettingsRoute from "./routes/org-settings.js";
+import invoicesRoute from "./routes/invoices.js";
 import assistantRoute from "./routes/assistant.js";
 import checkCallsRoute from "./routes/check-calls.js";
 import stopsRoute from "./routes/stops.js";
@@ -99,6 +100,7 @@ authed.route("/driver-asset-prefs", driverAssetPrefsRoute);
 authed.route("/saved-locations", savedLocationsRoute);
 authed.route("/payroll", payrollRoute);
 authed.route("/org-settings", orgSettingsRoute);
+authed.route("/invoices", invoicesRoute);
 authed.route("/assistant", assistantRoute);
 authed.route("/stops", stopsRoute);
 // Top-level /check-calls/:id (DELETE). Per-load list/create paths are

@@ -11,6 +11,8 @@ import { useOnboardingStore } from '@/store/useOnboardingStore';
 import DataLoader from '@/components/DataLoader';
 import { ALL_FIELDS, DEFAULT_SECTION_ORDER, FieldDef, FieldSection, SECTION_LABELS, getEnabledFieldsForSection } from '@/lib/fields';
 import { buildRateConPrompt } from '@/lib/prompt';
+import { InvoiceDocument } from '@/components/invoicing/InvoiceDocument';
+import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
@@ -1293,11 +1295,10 @@ function InvoicingPanel() {
 
 // ─── Mock invoice preview ─────────────────────────────────────────────────────
 //
-// Live preview of what a generated invoice will look like with the
-// current InvoicingPanel values. Sample load + broker + line items
-// are hard-coded; this is purely a layout / letterhead visualizer for
-// the settings panel. The Phase-2 invoice renderer will use this same
-// general shape, replacing the sample data with real load data.
+// Settings-panel preview. Builds an InvoiceSnapshot from the editing
+// form + a hard-coded sample load and hands it to <InvoiceDocument>,
+// which is the same component the accounting page uses to render real
+// invoices. That way the user is editing exactly what they'll get.
 
 function MockInvoice({ form, clerkOrg }: {
   form: {
@@ -1312,139 +1313,59 @@ function MockInvoice({ form, clerkOrg }: {
   clerkOrg: { name?: string; imageUrl?: string } | null | undefined;
 }) {
   const companyName = form.companyName || clerkOrg?.name || 'Your Company Name';
-  const cityLine    = [form.city, form.state].filter(Boolean).join(', ');
-  const csz         = [cityLine, form.zip].filter(Boolean).join(' ');
   const issueDate   = new Date();
   const termsDays   = parseInt(form.defaultPaymentTermsDays, 10);
   const dueDate     = new Date(issueDate);
   if (Number.isFinite(termsDays)) dueDate.setDate(dueDate.getDate() + termsDays);
   const fmtDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const invoiceNum  = `${form.invoiceNumberPrefix || ''}15920358`;
-  // Hard-coded sample so the preview is meaningful even when invoice
-  // settings are empty.
-  const sample = {
-    broker:     'Acme Brokerage, LLC',
-    brokerAddr: '500 Broker Way\nDallas, TX 75201',
-    loadNum:    'L-0042',
-    pickup:     'Apr 23, 2026 — Salt Lake City, UT',
-    delivery:   'Apr 25, 2026 — Dallas, TX',
-    miles:      1198,
-    lineHaul:   2400,
-    detention:  150,
-    lumper:     85,
+
+  // Sample load that matches the screenshot the user shared — gives
+  // the user something representative to look at while they're editing
+  // letterhead fields.
+  const loadNumber  = '1002036';
+  const invoiceNum  = `${form.invoiceNumberPrefix || ''}${loadNumber}`;
+  const snapshot: InvoiceSnapshot = {
+    companyName,
+    addressLine1: form.addressLine1 || undefined,
+    addressLine2: form.addressLine2 || undefined,
+    city:         form.city         || undefined,
+    state:        form.state        || undefined,
+    zip:          form.zip          || undefined,
+    phone:        form.phone        || undefined,
+    email:        form.email        || undefined,
+    mcNumber:     form.mcNumber     || undefined,
+    dotNumber:    form.dotNumber    || undefined,
+    ein:          form.ein          || undefined,
+    remitToInstructions: form.remitToInstructions || undefined,
+    invoiceFooterNotes:  form.invoiceFooterNotes  || undefined,
+
+    brokerName:        'Echo Global Logistics',
+    brokerAddrLine1:   '600 W Chicago Ave STE 725',
+    brokerAddrLine2:   'Chicago IL 60654',
+    orderNo:           '67146467',
+    orderDate:         'Apr 30, 2026',
+    pickupDate:        'Apr 30, 2026',
+    deliveredDate:     'May 1, 2026',
+    loadNumber,
+    stops: [
+      { kind: 'Pickup',   seq: 1, facility: 'ALS WAREHOUSE - FG',    cityState: 'LOGAN UT 84321',       refs: 'PKU# 0101145152, EA. 5376' },
+      { kind: 'Delivery', seq: 1, facility: 'RDC WALMART DC 7026 P', cityState: 'GRANTSVILLE UT 84029', refs: 'DELV# 39551165, EA. 5376' },
+    ],
+    lineItems: [
+      { description: 'Linehaul', rate: 600, units: 1, uom: 'Flat', amount: 600 },
+    ],
+    totalCharges: 600,
+    balanceDue:   600,
   };
-  const total = sample.lineHaul + sample.detention + sample.lumper;
+
   return (
-    <div className="rounded-xl overflow-hidden"
-      style={{
-        background: '#fff',
-        border:     '1px solid var(--gc-border)',
-        boxShadow:  '0 8px 24px rgba(0,0,0,0.08)',
-        // Aspect roughly matches an 8.5x11" page at this width.
-        aspectRatio: '8.5 / 11',
-        // 1.75× the previous 520 — bigger preview so the user can
-        // really see the layout.
-        maxWidth: 910,
-      }}>
-      {/* All inner sizes scaled down so the page reads like a real
-          letter-size document rather than a poster. Body is 10px,
-          headers 14–17px, micro-labels 8px. */}
-      <div className="h-full overflow-y-auto px-12 py-10 text-[#202124] text-[10px] leading-normal"
-        style={{ fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' }}>
-        {/* Header: company on left, logo + invoice meta on right */}
-        <div className="flex items-start justify-between mb-7">
-          <div>
-            <div className="text-[17px] font-extrabold leading-tight">{companyName}</div>
-            <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
-              {form.addressLine1 || <span style={{ opacity: 0.4 }}>Street address</span>}<br/>
-              {form.addressLine2 && <>{form.addressLine2}<br/></>}
-              {csz || <span style={{ opacity: 0.4 }}>City, ST ZIP</span>}
-            </div>
-            <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
-              {form.phone && <>P: {form.phone}<br/></>}
-              {form.email && <>{form.email}<br/></>}
-              {form.mcNumber  && <>MC# {form.mcNumber}{form.dotNumber && <> · DOT# {form.dotNumber}</>}{form.ein && <> · EIN {form.ein}</>}</>}
-              {!form.mcNumber && form.dotNumber && <>DOT# {form.dotNumber}{form.ein && <> · EIN {form.ein}</>}</>}
-              {!form.mcNumber && !form.dotNumber && form.ein && <>EIN {form.ein}</>}
-            </div>
-          </div>
-          <div className="text-right shrink-0 ml-4">
-            {clerkOrg?.imageUrl && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={clerkOrg.imageUrl} alt="" style={{ maxWidth: 64, maxHeight: 64, marginLeft: 'auto', marginBottom: 8 }} />
-            )}
-            <div className="text-[15px] font-extrabold tracking-wide" style={{ color: '#1a73e8' }}>INVOICE</div>
-            <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
-              <div><span className="font-bold" style={{ color: '#202124' }}>#</span> {invoiceNum}</div>
-              <div>Issued {fmtDate(issueDate)}</div>
-              <div>Due {Number.isFinite(termsDays) ? fmtDate(dueDate) : '—'}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Bill-to */}
-        <div className="mb-5">
-          <div className="text-[8px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Bill to</div>
-          <div className="font-bold">{sample.broker}</div>
-          <div className="leading-snug whitespace-pre-line" style={{ color: '#5f6368' }}>{sample.brokerAddr}</div>
-        </div>
-
-        {/* Load detail */}
-        <div className="mb-5">
-          <div className="text-[8px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Load</div>
-          <div><span className="font-bold">{sample.loadNum}</span> · {sample.miles.toLocaleString()} mi</div>
-          <div style={{ color: '#5f6368' }}>Pickup: {sample.pickup}</div>
-          <div style={{ color: '#5f6368' }}>Delivery: {sample.delivery}</div>
-        </div>
-
-        {/* Line items */}
-        <table className="w-full mb-5" style={{ borderCollapse: 'collapse', fontSize: 10 }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid #dadce0' }}>
-              <th className="text-left py-1.5 font-extrabold uppercase tracking-wider text-[8px]" style={{ color: '#5f6368' }}>Description</th>
-              <th className="text-right py-1.5 font-extrabold uppercase tracking-wider text-[8px]" style={{ color: '#5f6368' }}>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style={{ borderBottom: '1px solid #f0f1f3' }}>
-              <td className="py-1.5">Line haul ({sample.miles.toLocaleString()} mi)</td>
-              <td className="py-1.5 text-right tabular-nums">${sample.lineHaul.toLocaleString()}.00</td>
-            </tr>
-            <tr style={{ borderBottom: '1px solid #f0f1f3' }}>
-              <td className="py-1.5">Detention</td>
-              <td className="py-1.5 text-right tabular-nums">${sample.detention.toLocaleString()}.00</td>
-            </tr>
-            <tr style={{ borderBottom: '1px solid #f0f1f3' }}>
-              <td className="py-1.5">Lumper</td>
-              <td className="py-1.5 text-right tabular-nums">${sample.lumper.toLocaleString()}.00</td>
-            </tr>
-            <tr>
-              <td className="pt-2 font-extrabold text-[11px]">Total due</td>
-              <td className="pt-2 text-right font-extrabold text-[11px] tabular-nums">${total.toLocaleString()}.00</td>
-            </tr>
-          </tbody>
-        </table>
-
-        {/* Remit-to */}
-        {form.remitToInstructions ? (
-          <div className="mb-4 px-3 py-2.5 rounded" style={{ background: '#f1f3f4' }}>
-            <div className="text-[8px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Remit to</div>
-            <div className="whitespace-pre-line leading-snug">{form.remitToInstructions}</div>
-          </div>
-        ) : (
-          <div className="mb-4 px-3 py-2.5 rounded text-[9px] italic" style={{ background: '#f1f3f4', color: '#5f6368' }}>
-            Remit-to instructions appear here.
-          </div>
-        )}
-
-        {/* Footer notes */}
-        {form.invoiceFooterNotes && (
-          <div className="text-[9px] leading-snug mt-3" style={{ color: '#5f6368' }}>
-            {form.invoiceFooterNotes}
-          </div>
-        )}
-      </div>
-    </div>
+    <InvoiceDocument
+      snapshot={snapshot}
+      invoiceNumber={invoiceNum}
+      issuedDate={fmtDate(issueDate)}
+      dueDate={Number.isFinite(termsDays) ? fmtDate(dueDate) : '—'}
+      logoUrl={clerkOrg?.imageUrl}
+    />
   );
 }
 

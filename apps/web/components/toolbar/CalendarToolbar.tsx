@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -762,6 +762,15 @@ export default function CalendarToolbar() {
               >
                 <FileCheck2 size={15} style={{ color: 'var(--gc-text-3)' }} />
                 Closeout
+              </Link>
+              <Link href="/accounting" onClick={() => setMoreOpen(false)}
+                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              >
+                <Receipt size={15} style={{ color: 'var(--gc-text-3)' }} />
+                Accounting
               </Link>
               <Link href="/payroll" onClick={() => setMoreOpen(false)}
                 className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"

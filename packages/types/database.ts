@@ -431,6 +431,90 @@ export type Database = {
           },
         ]
       }
+      invoices: {
+        Row: {
+          created_at: string
+          customer_id: string | null
+          due_at: string | null
+          id: string
+          invoice_number: string
+          issued_at: string
+          load_id: string
+          org_id: string
+          paid_amount: number | null
+          paid_at: string | null
+          paid_method: string | null
+          paid_note: string | null
+          sent_at: string | null
+          sent_method: string | null
+          sent_to: string | null
+          snapshot: Json
+          status: string
+          total: number
+          updated_at: string
+          void_reason: string | null
+        }
+        Insert: {
+          created_at?: string
+          customer_id?: string | null
+          due_at?: string | null
+          id?: string
+          invoice_number: string
+          issued_at?: string
+          load_id: string
+          org_id: string
+          paid_amount?: number | null
+          paid_at?: string | null
+          paid_method?: string | null
+          paid_note?: string | null
+          sent_at?: string | null
+          sent_method?: string | null
+          sent_to?: string | null
+          snapshot: Json
+          status?: string
+          total?: number
+          updated_at?: string
+          void_reason?: string | null
+        }
+        Update: {
+          created_at?: string
+          customer_id?: string | null
+          due_at?: string | null
+          id?: string
+          invoice_number?: string
+          issued_at?: string
+          load_id?: string
+          org_id?: string
+          paid_amount?: number | null
+          paid_at?: string | null
+          paid_method?: string | null
+          paid_note?: string | null
+          sent_at?: string | null
+          sent_method?: string | null
+          sent_to?: string | null
+          snapshot?: Json
+          status?: string
+          total?: number
+          updated_at?: string
+          void_reason?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "invoices_load_id_fkey"
+            columns: ["load_id"]
+            isOneToOne: false
+            referencedRelation: "loads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       load_documents: {
         Row: {
           event_id: string
