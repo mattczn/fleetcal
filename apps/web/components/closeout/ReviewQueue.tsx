@@ -495,9 +495,30 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [mergeSelection,  setMergeSelection]  = useState<Set<string>>(new Set());
   const [merging,         setMerging]         = useState(false);
+
+  // Sentinel id for the primary rate-con (loads.rate_con_pdf). When
+  // the rate con isn't represented by a kind=rate_con row in
+  // load_documents — which is the case for legacy loads + the
+  // first rate-con before the API mirror existed — we synthesize a
+  // virtual doc entry so the user can still pick it for merging.
+  const RATE_CON_PRIMARY_ID = '__rate_con_primary__';
+  const mergeCandidates = useMemo<LoadDocument[]>(() => {
+    const hasRateConDoc = docs.some(d => d.kind === 'rate_con');
+    if (!current?.rateConPdf || hasRateConDoc) return docs;
+    const virtual = {
+      id:         RATE_CON_PRIMARY_ID,
+      loadId:     loadId ?? null,
+      fileName:   `Rate Con${current?.loadNum ? ` — #${current.loadNum}` : ''}`,
+      mimeType:   undefined,
+      sizeBytes:  undefined,
+      kind:       'rate_con',
+      uploadedAt: '',
+    } as unknown as LoadDocument;
+    return [virtual, ...docs];
+  }, [docs, current?.rateConPdf, current?.loadNum, loadId]);
   const handleMergeSelected = async () => {
     if (!loadId || merging) return;
-    const selected = docs.filter(d => mergeSelection.has(d.id));
+    const selected = mergeCandidates.filter(d => mergeSelection.has(d.id));
     if (selected.length < 2) return;
     setMerging(true);
     try {
@@ -505,7 +526,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const cache = docsCacheRef.current.get(loadId);
       const files: File[] = [];
       for (const d of selected) {
-        const url = cache?.urlByDocId.get(d.id) ?? await getLoadDocumentSignedUrl(d.id);
+        // The virtual rate-con entry has no load_documents row — its
+        // signed URL comes from the rate-con cache slot or a fresh
+        // getRateConUrl. Everything else routes through the regular
+        // per-doc URL cache.
+        let url: string | null = null;
+        if (d.id === RATE_CON_PRIMARY_ID) {
+          url = cache?.rateConUrl ?? (await railway.getRateConUrl(loadId).then(r => r.url).catch(() => null));
+        } else {
+          url = cache?.urlByDocId.get(d.id) ?? await getLoadDocumentSignedUrl(d.id);
+        }
         if (!url) throw new Error(`No signed URL for ${d.fileName}`);
         const res = await fetch(url);
         if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
@@ -1151,9 +1181,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 <>
                 {/* "Merge files" — opens a popup with a fresh selection
                     list so the choice is decoupled from the invoice
-                    checkboxes above. Always visible when there are 2+
-                    docs on the load. */}
-                {docs.length >= 2 && (
+                    checkboxes above. Available when there are 2+
+                    mergeable files (docs + primary rate-con) on the
+                    load. */}
+                {mergeCandidates.length >= 2 && (
                   <button type="button"
                     onClick={() => {
                       // Default to nothing selected; the user picks
@@ -1328,14 +1359,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
       {mergeDialogOpen && (
         <MergeDialog
-          docs={docs}
+          docs={mergeCandidates}
           selected={mergeSelection}
           onToggle={(id) => setMergeSelection(prev => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id); else next.add(id);
             return next;
           })}
-          onSelectAll={() => setMergeSelection(new Set(docs.map(d => d.id)))}
+          onSelectAll={() => setMergeSelection(new Set(mergeCandidates.map(d => d.id)))}
           onSelectNone={() => setMergeSelection(new Set())}
           onCancel={() => { setMergeDialogOpen(false); setMergeSelection(new Set()); }}
           onConfirm={() => void handleMergeSelected()}
