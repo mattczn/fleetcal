@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '@clerk/nextjs';
 import {
   ArrowLeft, Download, Send, Mail, Check, X, Loader2,
   AlertTriangle, AlertCircle, Paperclip, ExternalLink as ExternalLinkIcon,
@@ -42,6 +43,13 @@ interface Props {
 export function InvoiceDetailView({
   invoiceId, mode, onClose, autoOpenEmail, onBrokerClick,
 }: Props) {
+  // Same Clerk readiness gate as the closeout + accounting pages:
+  // RailwayClientProvider wires the token in a useEffect that runs
+  // after children's effects, so a hard refresh of /accounting/
+  // invoices/[id] fires authed fetches before the token exists and
+  // the API 401s. Hold all requests until auth is loaded + signed in.
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
@@ -67,6 +75,7 @@ export function InvoiceDetailView({
 
   useEffect(() => {
     if (!invoiceId) return;
+    if (!authLoaded || !isSignedIn) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -75,13 +84,14 @@ export function InvoiceDetailView({
       .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load invoice'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [invoiceId]);
+  }, [invoiceId, authLoaded, isSignedIn]);
 
   // Inline-PDF fetch. Runs on first load + whenever something mutates
   // the persisted packet. Old blob URLs are revoked synchronously when
   // a fresh one lands so memory doesn't leak across long sessions.
   useEffect(() => {
     if (!invoiceId) return;
+    if (!authLoaded || !isSignedIn) return;
     let cancelled = false;
     let createdUrl: string | null = null;
     setPdfLoading(true);
@@ -113,7 +123,7 @@ export function InvoiceDetailView({
       // be reading. If the user navigates away entirely, browser GC
       // handles it.
     };
-  }, [invoiceId, pdfRefresh]);
+  }, [invoiceId, pdfRefresh, authLoaded, isSignedIn]);
 
   // Final cleanup on unmount — any lingering blob URL gets released.
   useEffect(() => () => {

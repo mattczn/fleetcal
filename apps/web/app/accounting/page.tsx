@@ -24,6 +24,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@clerk/nextjs';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers,
@@ -54,6 +55,11 @@ const fmtDate  = (iso?: string) => iso
 
 export default function AccountingPage() {
   const router    = useRouter();
+  // Clerk readiness gate — without this, a hard refresh on /accounting
+  // fires the listInvoices + closeout queue requests before
+  // RailwayClientProvider's useEffect wires the token, so the API
+  // rejects with 401. Same workaround as CloseoutView.
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const customers = useCalendarStore(s => s.customers);
   const customerById = useMemo(() => {
     const m = new Map<string, Customer>();
@@ -98,7 +104,11 @@ export default function AccountingPage() {
       setLoading(false);
     }
   }
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (!authLoaded || !isSignedIn) return;
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoaded, isSignedIn]);
 
   // ── Bucket stats ────────────────────────────────────────────────────
   const stats = useMemo(() => {
