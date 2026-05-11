@@ -310,9 +310,13 @@ const PDF_ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // Renders a PDF data URL to canvas elements via PDF.js with zoom controls.
 function UploadedDocsPanel({
-  docs, selectedId, onSelect, signedUrl, headerColor, loadId, onChange,
+  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange,
 }: {
   docs: import('@/lib/db').LoadDocument[];
+  /** Generated invoices for this load. Rendered as virtual rows at the
+   *  top of the docs list — clicking opens /accounting/invoices/[id]
+   *  in a new tab so the load modal stays open underneath. */
+  invoices?: import('@fleetcal/types').Invoice[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   signedUrl: string | null;
@@ -481,7 +485,44 @@ function UploadedDocsPanel({
     </div>
   ) : null;
 
-  if (docs.length === 0) {
+  // Virtual rows for generated invoices. Rendered as siblings of the
+  // uploaded docs so the user sees one unified list of artifacts on the
+  // load. Click opens the accounting page in a new tab — the load modal
+  // stays mounted underneath. We don't store these as load_documents
+  // rows because there's no PDF yet (Phase 4 will add the server-side
+  // PDF renderer + persist).
+  const invoiceRows = (invoices ?? []);
+  const invoiceTint = KIND_TINT.invoice ?? KIND_TINT.other;
+
+  const renderInvoiceRows = () => invoiceRows.map((inv) => (
+    <a key={`inv-${inv.id}`} href={`/accounting/invoices/${inv.id}`} target="_blank" rel="noopener noreferrer"
+      className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors"
+      style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', textDecoration: 'none' }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+      <div className="flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 8, background: invoiceTint.bg, flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+        <FileText size={16} style={{ color: invoiceTint.fg }} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: invoiceTint.fg, background: invoiceTint.bg, padding: '2px 7px', borderRadius: 999 }}>
+            Invoice
+          </span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)', padding: '1px 6px', borderRadius: 999 }}>
+            {inv.status}
+          </span>
+        </div>
+        <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
+          Invoice #{inv.invoiceNumber} · ${inv.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </div>
+        <div className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>
+          Issued {fmt(inv.issuedAt)}{inv.sentAt ? ` · Sent ${fmt(inv.sentAt)}` : ''}{inv.paidAt ? ` · Paid ${fmt(inv.paidAt)}` : ''}
+        </div>
+      </div>
+    </a>
+  ));
+
+  if (docs.length === 0 && invoiceRows.length === 0) {
     return (
       <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
         {uploadHeader}
@@ -498,6 +539,7 @@ function UploadedDocsPanel({
       <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
         {uploadHeader}
         <div className="flex-1 overflow-y-auto">
+        {renderInvoiceRows()}
         {docs.map((d) => {
           const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
           return (
@@ -1313,6 +1355,7 @@ export default function EventModal() {
   const [showMapPanel,   setShowMapPanel]   = useState(false);
   const [docsTab,        setDocsTab]        = useState<'rateCon' | 'uploaded'>('rateCon');
   const [loadDocuments,  setLoadDocuments]  = useState<import('@/lib/db').LoadDocument[]>([]);
+  const [loadInvoices,   setLoadInvoices]   = useState<import('@fleetcal/types').Invoice[]>([]);
   const [selectedDocUrl, setSelectedDocUrl] = useState<string | null>(null);
   const [selectedDocId,  setSelectedDocId]  = useState<string | null>(null);
 
@@ -1329,20 +1372,30 @@ export default function EventModal() {
     return () => { cancelled = true; };
   }, [modalOpen, modalEventId, orgId]);
 
-  // Lazy: load full docs (with signed URLs) only when the user opens the docs viewer
+  // Lazy: load full docs (with signed URLs) + invoices only when the
+  // user opens the docs viewer. Invoices live in their own table but
+  // surface in the same panel as virtual rows above the uploaded docs.
   useEffect(() => {
     if (!showPdfViewer || !modalEventId || !orgId) return;
-    if (loadDocuments.length > 0) return; // already loaded
+    if (loadDocuments.length > 0 || loadInvoices.length > 0) return; // already loaded
     const ev = events.find(e => e.id === modalEventId);
     if (!ev?.loadId) return; // documents are load-scoped
     let cancelled = false;
     (async () => {
-      const { fetchLoadDocuments } = await import('@/lib/db');
-      const docs = await fetchLoadDocuments(ev.loadId!, orgId);
-      if (!cancelled) setLoadDocuments(docs);
+      const [{ fetchLoadDocuments }, { railway }] = await Promise.all([
+        import('@/lib/db'),
+        import('@/lib/railway'),
+      ]);
+      const [docs, invRes] = await Promise.all([
+        fetchLoadDocuments(ev.loadId!, orgId),
+        railway.listInvoices({ loadId: ev.loadId! }).catch(() => ({ invoices: [] })),
+      ]);
+      if (cancelled) return;
+      setLoadDocuments(docs);
+      setLoadInvoices(invRes.invoices);
     })();
     return () => { cancelled = true; };
-  }, [showPdfViewer, modalEventId, orgId, loadDocuments.length, events]);
+  }, [showPdfViewer, modalEventId, orgId, loadDocuments.length, loadInvoices.length, events]);
 
   // When a doc gets selected, use the pre-fetched signed URL if we have one.
   useEffect(() => {
@@ -1392,7 +1445,9 @@ export default function EventModal() {
       .then(({ url }) => {
         if (cancelled) return;
         if (url) setPdfObjectUrl(url);
-        else console.error('[PDF] no rate-con URL for load:', ev.loadId);
+        // No rate-con on file is a normal state for loads that haven't
+        // had one uploaded yet — keep the URL empty and let the docs
+        // panel render "No rate con uploaded" without log noise.
       })
       .catch(err => { if (!cancelled) console.error('[PDF] rate-con URL fetch error:', err); });
     return () => { cancelled = true; };
@@ -1535,7 +1590,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -2894,7 +2949,7 @@ export default function EventModal() {
                   style={docsTab === 'uploaded'
                     ? { background: LOAD_ACCENT_BG, color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}` }
                     : { color: 'var(--gc-text-3)', border: '1px solid transparent' }}>
-                  Uploaded ({loadDocuments.length})
+                  Uploaded ({loadDocuments.length + loadInvoices.length})
                 </button>
               </div>
               <div className="flex items-center gap-1 flex-nowrap shrink-0">
@@ -2969,6 +3024,7 @@ export default function EventModal() {
             ) : (
               <UploadedDocsPanel
                 docs={loadDocuments}
+                invoices={loadInvoices}
                 selectedId={selectedDocId}
                 onSelect={setSelectedDocId}
                 signedUrl={selectedDocUrl}

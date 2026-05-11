@@ -66,24 +66,32 @@ export function InvoiceDocument({
         maxWidth: mode === 'preview' ? 910 : undefined,
         width:    mode === 'print'   ? '100%' : undefined,
       }}>
-      <div className="h-full overflow-y-auto px-10 py-9 text-[#202124] text-[11px] leading-normal"
+      <div className="h-full overflow-y-auto px-10 py-9 text-[#202124] text-[12.5px] leading-normal"
         style={{ fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' }}>
 
-        {/* Header row: logo left, big blue invoice # right */}
+        {/* Header row: logo + tax IDs (top-left) | big blue invoice # (top-right) */}
         <div className="flex items-start justify-between mb-6">
           <div className="shrink-0">
             {logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={logoUrl} alt="" style={{ maxWidth: 110, maxHeight: 70, objectFit: 'contain' }} />
             ) : (
-              <div style={{ width: 110, height: 70, background: '#f1f3f4', borderRadius: 6 }} className="flex items-center justify-center text-[9px] uppercase tracking-wider">
+              <div style={{ width: 110, height: 70, background: '#f1f3f4', borderRadius: 6 }} className="flex items-center justify-center text-[10px] uppercase tracking-wider">
                 <span style={{ color: '#9aa0a6' }}>Logo</span>
+              </div>
+            )}
+            {/* MC / DOT / EIN sit immediately under the logo so they
+                read as identity, not contact info. The broker AP team
+                often needs these to set up a vendor record. */}
+            {taxIdLine && (
+              <div className="mt-2 text-[11px] leading-snug font-semibold" style={{ color: '#3c4043', maxWidth: 220 }}>
+                {taxIdLine}
               </div>
             )}
           </div>
           <div className="text-right">
-            <div className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: '#5f6368' }}>Invoice #</div>
-            <div className="text-[28px] font-black leading-none mt-1" style={{ color: '#1a73e8' }}>
+            <div className="text-[11px] font-extrabold uppercase tracking-wider" style={{ color: '#5f6368' }}>Invoice #</div>
+            <div className="text-[30px] font-black leading-none mt-1" style={{ color: '#1a73e8' }}>
               {invoiceNumber || <span style={{ opacity: 0.4 }}>—</span>}
             </div>
           </div>
@@ -92,7 +100,7 @@ export function InvoiceDocument({
         {/* Company name (left) + invoice metadata (right) */}
         <div className="flex items-start justify-between mb-6 gap-8">
           <div className="flex-1">
-            <div className="text-[12.5px] font-extrabold uppercase tracking-wide leading-tight">
+            <div className="text-[14px] font-extrabold uppercase tracking-wide leading-tight">
               {snapshot.companyName || <span style={{ opacity: 0.4 }}>Your Company Name</span>}
             </div>
           </div>
@@ -106,8 +114,8 @@ export function InvoiceDocument({
         {/* Bill-to (left) + order metadata (right) */}
         <div className="flex items-start justify-between mb-6 gap-8 pt-4" style={{ borderTop: '1px solid #e8eaed' }}>
           <div className="flex-1">
-            <div className="text-[10px] font-extrabold uppercase tracking-wider mb-1.5" style={{ color: '#5f6368' }}>Bill to</div>
-            <div className="font-extrabold text-[12px]">{snapshot.brokerName || <span style={{ opacity: 0.4 }}>Broker name</span>}</div>
+            <div className="text-[11px] font-extrabold uppercase tracking-wider mb-1.5" style={{ color: '#5f6368' }}>Bill to</div>
+            <div className="font-extrabold text-[13px]">{snapshot.brokerName || <span style={{ opacity: 0.4 }}>Broker name</span>}</div>
             {(snapshot.brokerAddrLine1 || snapshot.brokerAddrLine2) && (
               <div className="leading-snug" style={{ color: '#3c4043' }}>
                 {snapshot.brokerAddrLine1}{snapshot.brokerAddrLine1 && <br/>}
@@ -118,7 +126,6 @@ export function InvoiceDocument({
           <div className="shrink-0" style={{ minWidth: 240 }}>
             {snapshot.orderNo      && <LabelRow label="Order No"     value={snapshot.orderNo} />}
             {snapshot.poNumber     && <LabelRow label="PO Number"    value={snapshot.poNumber} />}
-            {snapshot.orderDate    && <LabelRow label="Order Date"   value={snapshot.orderDate} />}
             {snapshot.pickupDate   && <LabelRow label="Pickup Date"  value={snapshot.pickupDate} />}
             {snapshot.deliveredDate&& <LabelRow label="Delivered"    value={snapshot.deliveredDate} />}
           </div>
@@ -130,8 +137,8 @@ export function InvoiceDocument({
             {snapshot.stops.map((s, i) => (
               <div key={i} className={i === 0 ? '' : 'mt-3 pt-3'} style={i === 0 ? undefined : { borderTop: '1px solid #f1f3f4' }}>
                 <div className="flex items-start gap-4">
-                  <div className="shrink-0" style={{ width: 90 }}>
-                    <div className="text-[11px] font-extrabold uppercase tracking-wide" style={{ color: s.kind === 'Pickup' ? '#137333' : '#1a73e8' }}>
+                  <div className="shrink-0" style={{ width: 95 }}>
+                    <div className="text-[12px] font-extrabold uppercase tracking-wide" style={{ color: s.kind === 'Pickup' ? '#137333' : '#1a73e8' }}>
                       {s.kind} {s.seq}
                     </div>
                   </div>
@@ -147,14 +154,14 @@ export function InvoiceDocument({
         )}
 
         {/* Line items */}
-        <table className="w-full mb-5" style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+        <table className="w-full mb-5" style={{ borderCollapse: 'collapse', fontSize: 12.5 }}>
           <thead>
             <tr style={{ borderTop: '2px solid #202124', borderBottom: '1px solid #dadce0' }}>
-              <th className="text-left  py-2 font-extrabold uppercase tracking-wider text-[9.5px]" style={{ color: '#3c4043' }}>Description</th>
-              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[9.5px]" style={{ color: '#3c4043' }}>Rate</th>
-              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[9.5px]" style={{ color: '#3c4043' }}>Units</th>
-              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[9.5px]" style={{ color: '#3c4043' }}>UOM</th>
-              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[9.5px]" style={{ color: '#3c4043' }}>Amount</th>
+              <th className="text-left  py-2 font-extrabold uppercase tracking-wider text-[10.5px]" style={{ color: '#3c4043' }}>Description</th>
+              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[10.5px]" style={{ color: '#3c4043' }}>Rate</th>
+              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[10.5px]" style={{ color: '#3c4043' }}>Units</th>
+              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[10.5px]" style={{ color: '#3c4043' }}>UOM</th>
+              <th className="text-right py-2 font-extrabold uppercase tracking-wider text-[10.5px]" style={{ color: '#3c4043' }}>Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -169,21 +176,24 @@ export function InvoiceDocument({
             ))}
             <tr>
               <td colSpan={3}></td>
-              <td className="pt-3 text-right font-extrabold uppercase tracking-wider text-[10px]" style={{ color: '#3c4043' }}>Total Charges</td>
+              <td className="pt-3 text-right font-extrabold uppercase tracking-wider text-[11px]" style={{ color: '#3c4043' }}>Total Charges</td>
               <td className="pt-3 text-right font-extrabold tabular-nums">${fmtMoney(snapshot.totalCharges)}</td>
             </tr>
             <tr>
               <td colSpan={3}></td>
-              <td className="pt-1.5 text-right font-extrabold uppercase tracking-wider text-[10px]" style={{ color: '#1a73e8' }}>Balance Due</td>
-              <td className="pt-1.5 text-right font-extrabold tabular-nums text-[13px]" style={{ color: '#1a73e8' }}>${fmtMoney(snapshot.balanceDue)}</td>
+              <td className="pt-1.5 text-right font-extrabold uppercase tracking-wider text-[11px]" style={{ color: '#1a73e8' }}>Balance Due</td>
+              <td className="pt-1.5 text-right font-extrabold tabular-nums text-[14.5px]" style={{ color: '#1a73e8' }}>${fmtMoney(snapshot.balanceDue)}</td>
             </tr>
           </tbody>
         </table>
 
-        {/* Remit-to + company contact */}
+        {/* Remit-to. The user-typed remit instructions sit on top; below
+            we render the bare minimum the broker needs to mail a check
+            (address, phone, email). Tax IDs live in the top-left
+            corner, so they're intentionally not repeated here. */}
         <div className="flex justify-end pt-3" style={{ borderTop: '1px solid #e8eaed' }}>
-          <div className="text-right" style={{ maxWidth: 320 }}>
-            <div className="text-[14px] font-extrabold mb-1" style={{ color: '#1a73e8' }}>REMIT TO</div>
+          <div className="text-right" style={{ maxWidth: 340 }}>
+            <div className="text-[15px] font-extrabold mb-1" style={{ color: '#1a73e8' }}>REMIT TO</div>
             {snapshot.remitToInstructions ? (
               <div className="whitespace-pre-line leading-snug">{snapshot.remitToInstructions}</div>
             ) : (
@@ -192,7 +202,6 @@ export function InvoiceDocument({
               </div>
             )}
             <div className="mt-2 leading-snug" style={{ color: '#3c4043' }}>
-              <div className="font-semibold" style={{ color: '#202124' }}>{snapshot.companyName}</div>
               {snapshot.addressLine1 || <span style={{ opacity: 0.4 }}>Street address</span>}<br/>
               {snapshot.addressLine2 && <>{snapshot.addressLine2}<br/></>}
               {csz || <span style={{ opacity: 0.4 }}>City, ST ZIP</span>}
@@ -203,17 +212,12 @@ export function InvoiceDocument({
                 {snapshot.email && <>{snapshot.email}</>}
               </div>
             )}
-            {taxIdLine && (
-              <div className="mt-1.5 leading-snug" style={{ color: '#5f6368' }}>
-                {taxIdLine}
-              </div>
-            )}
           </div>
         </div>
 
         {/* Footer notes */}
         {snapshot.invoiceFooterNotes && (
-          <div className="text-[10px] leading-snug mt-4 pt-3" style={{ color: '#5f6368', borderTop: '1px solid #e8eaed' }}>
+          <div className="text-[11px] leading-snug mt-4 pt-3" style={{ color: '#5f6368', borderTop: '1px solid #e8eaed' }}>
             {snapshot.invoiceFooterNotes}
           </div>
         )}
@@ -227,7 +231,7 @@ export function InvoiceDocument({
 function LabelRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-0.5">
-      <div className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: '#5f6368' }}>{label}</div>
+      <div className="text-[11px] font-extrabold uppercase tracking-wider" style={{ color: '#5f6368' }}>{label}</div>
       <div className="font-semibold tabular-nums">{value}</div>
     </div>
   );

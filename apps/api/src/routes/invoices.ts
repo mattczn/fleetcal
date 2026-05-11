@@ -364,7 +364,9 @@ async function buildSnapshot(
 
     orderNo:        load.load_num ?? undefined,
     poNumber:       undefined,
-    orderDate:      isoDayToDisplay(isoDay(firstStart)),
+    // orderDate intentionally left undefined — pickupDate already
+    // anchors the order timeline and the broker doesn't need both.
+    orderDate:      undefined,
     pickupDate:     isoDayToDisplay(isoDay(firstStart)),
     deliveredDate:  isoDayToDisplay(isoDay(lastEnd)),
     loadNumber:     String(load.internal_load_id),

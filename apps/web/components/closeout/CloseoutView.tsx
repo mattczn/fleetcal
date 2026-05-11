@@ -908,7 +908,13 @@ export default function CloseoutView() {
                               {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
                               {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
                               {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
-                              {(counts.invoice      ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
+                              {/* Invoice badge: either a real load_documents
+                                  invoice (Phase 4 PDF), or — for now — a
+                                  generated invoice row inferred from the
+                                  load's billing_status. */}
+                              {((counts.invoice ?? 0) > 0 || load.billingStatus === 'invoiced' || load.billingStatus === 'paid') && (
+                                <DocBadge label="Invoice" count={Math.max(counts.invoice ?? 0, 1)} />
+                              )}
                               {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
                               {!hasRC && Object.keys(counts).length === 0 && (
                                 <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
