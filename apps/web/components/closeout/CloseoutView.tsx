@@ -259,6 +259,27 @@ export default function CloseoutView() {
     });
   }, [rows]);
 
+  // For relay loads the kept row is the pickup leg, but its `end` is
+  // the handoff time — not the actual delivery date. Build a lookup
+  // from rows (which always contains both legs from the API) so we
+  // can swap in the delivery leg's end when computing Age + Delivered
+  // for relays.
+  const deliveryEndByLoadId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of rows) {
+      if (r.relayRole === 'delivery' && r.loadId && r.end) {
+        m.set(r.loadId, r.end);
+      }
+    }
+    return m;
+  }, [rows]);
+  const effectiveDeliveryEnd = (load: QueueRow): string => {
+    if (load.relayGroupId && load.relayRole === 'pickup' && load.loadId) {
+      return deliveryEndByLoadId.get(load.loadId) ?? load.end;
+    }
+    return load.end;
+  };
+
   // Per-column sort + filter state. Resets when changing tabs since
   // tabs have different shapes/actions. Filters apply to the current
   // page only — a known limitation now that the queue is paginated.
@@ -272,8 +293,8 @@ export default function CloseoutView() {
   // for numeric columns so the comparator orders them naturally.
   const projectRowForCol = (row: QueueRow, col: ColKey): string | number => {
     switch (col) {
-      case 'age':        return ageDays(row.end);
-      case 'delivered':  return row.end;
+      case 'age':        return ageDays(effectiveDeliveryEnd(row));
+      case 'delivered':  return effectiveDeliveryEnd(row);
       case 'internalId': return row.internalLoadId ?? 0;
       case 'loadNum':    return row.loadNum ?? '';
       case 'title':      return row.title ?? '';
@@ -292,10 +313,10 @@ export default function CloseoutView() {
   const formatRowForCol = (row: QueueRow, col: ColKey): string => {
     switch (col) {
       case 'age': {
-        const d = ageDays(row.end);
+        const d = ageDays(effectiveDeliveryEnd(row));
         return d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`;
       }
-      case 'delivered':  return fmtDate(row.end) || '—';
+      case 'delivered':  return fmtDate(effectiveDeliveryEnd(row)) || '—';
       case 'internalId': return row.internalLoadId != null ? String(row.internalLoadId) : '';
       case 'loadNum':    return row.loadNum ?? '';
       case 'title':      return row.title ?? '';
@@ -689,8 +710,9 @@ export default function CloseoutView() {
                 </thead>
                 <tbody>
                   {visible.map((load, rowIdx) => {
-                    const days = ageDays(load.end);
-                    const ac   = ageColor(days);
+                    const dvDate = effectiveDeliveryEnd(load);
+                    const days   = ageDays(dvDate);
+                    const ac     = ageColor(days);
                     const cust = displayBrokerName(load.broker, customers);
                     // Customer profile lookup — need the canonical id, not the raw name
                     const matchedCustomer = customers.find(c =>
@@ -725,7 +747,7 @@ export default function CloseoutView() {
                             </span>
                           </Td>
                         )}
-                        {visibleCols.delivered && <Td>{fmtDate(load.end)}</Td>}
+                        {visibleCols.delivered && <Td>{fmtDate(dvDate)}</Td>}
                         {/* Internal load ID — per-org sequence number,
                             distinct from the broker-assigned load_num.
                             Doubles as the invoice number, so it's
