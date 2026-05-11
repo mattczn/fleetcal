@@ -28,6 +28,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useUser } from '@clerk/nextjs';
 import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
@@ -386,15 +387,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   // ── Doc tab actions (rename + delete) ─────────────────────────────
   // Kebab menu collapses rename + delete into a single "•••" button
-  // per active tab so the strip stays compact when there are several
-  // docs.
-  const [tabMenuDocId, setTabMenuDocId] = useState<string | null>(null);
+  // per active tab. The dropdown is portaled to document.body because
+  // the docs strip has overflow-x: auto, which would otherwise clip
+  // it. Position is captured at click time from the button's bounding
+  // rect.
+  const [tabMenuDocId,  setTabMenuDocId]  = useState<string | null>(null);
+  const [tabMenuPos,    setTabMenuPos]    = useState<{ left: number; top: number } | null>(null);
   // Click-outside dismissal for the kebab menu.
   useEffect(() => {
     if (!tabMenuDocId) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('[data-tabmenu]')) setTabMenuDocId(null);
+      if (!target.closest('[data-tabmenu]')) {
+        setTabMenuDocId(null);
+        setTabMenuPos(null);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -870,36 +877,27 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
                       </button>
                       {active && (
-                        <div className="relative" data-tabmenu>
-                          <button onClick={() => setTabMenuDocId(prev => prev === d.id ? null : d.id)}
-                            className="rounded-full p-1.5 transition-colors"
-                            title="More"
-                            style={{ color: tint.bg, background: 'transparent' }}
-                            onMouseEnter={e => (e.currentTarget.style.background = tint.bg + '14')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                            <MoreHorizontal size={13} />
-                          </button>
-                          {tabMenuDocId === d.id && (
-                            <div className="absolute right-0 top-full mt-1 rounded-xl py-1 z-30"
-                              style={{
-                                background: 'var(--gc-surface)',
-                                border:     '1px solid var(--gc-border)',
-                                boxShadow:  '0 8px 24px rgba(0,0,0,0.15)',
-                                minWidth:   160,
-                              }}>
-                              <button onClick={() => { setTabMenuDocId(null); startRename(d.id, d.fileName); }}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
-                                style={{ color: 'var(--gc-text-1)' }}>
-                                <Pencil size={12} /> Rename
-                              </button>
-                              <button onClick={() => { setTabMenuDocId(null); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
-                                style={{ color: '#d93025' }}>
-                                <Trash2 size={12} /> Delete
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        <button data-tabmenu
+                          onClick={e => {
+                            // Capture position before toggling so we
+                            // don't end up with stale coords if the
+                            // viewport shifted between renders.
+                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            if (tabMenuDocId === d.id) {
+                              setTabMenuDocId(null);
+                              setTabMenuPos(null);
+                            } else {
+                              setTabMenuDocId(d.id);
+                              setTabMenuPos({ left: r.right - 160, top: r.bottom + 4 });
+                            }
+                          }}
+                          className="rounded-full p-1.5 transition-colors"
+                          title="More"
+                          style={{ color: tint.bg, background: 'transparent' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = tint.bg + '14')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <MoreHorizontal size={13} />
+                        </button>
                       )}
                     </div>
                   );
@@ -1193,6 +1191,42 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           }}
         />
       )}
+
+      {/* Kebab menu portaled to body so the docs-strip's overflow-x
+          auto can't clip it. Positioned via fixed coords captured at
+          the click. */}
+      {tabMenuDocId && tabMenuPos && typeof document !== 'undefined' && (() => {
+        const d = docs.find(x => x.id === tabMenuDocId);
+        if (!d) return null;
+        return createPortal(
+          <div data-tabmenu
+            className="rounded-xl py-1"
+            style={{
+              position:   'fixed',
+              left:       Math.max(8, tabMenuPos.left),
+              top:        tabMenuPos.top,
+              zIndex:     245, // above review queue (180) + EventModal (200/220) + delete confirm (240)
+              minWidth:   160,
+              background: 'var(--gc-surface)',
+              border:     '1px solid var(--gc-border)',
+              boxShadow:  '0 12px 32px rgba(0,0,0,0.18)',
+            }}>
+            <button type="button"
+              onClick={() => { setTabMenuDocId(null); setTabMenuPos(null); startRename(d.id, d.fileName); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
+              style={{ color: 'var(--gc-text-1)' }}>
+              <Pencil size={12} /> Rename
+            </button>
+            <button type="button"
+              onClick={() => { setTabMenuDocId(null); setTabMenuPos(null); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
+              style={{ color: '#d93025' }}>
+              <Trash2 size={12} /> Delete
+            </button>
+          </div>,
+          document.body,
+        );
+      })()}
     </>
   );
 }
