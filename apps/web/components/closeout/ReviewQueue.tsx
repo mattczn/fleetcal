@@ -747,6 +747,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
                   const active = i === activeDocIdx;
                   const renaming = renamingDocId === d.id;
+                  // Sequence among same-kind docs on this load. Only
+                  // shown when there are multiples — single POD stays
+                  // just "POD" but two PODs become "POD 1" / "POD 2".
+                  // Filename (often a redundant restating of
+                  // {loadNum}_{KIND}) goes to the tooltip instead so
+                  // the tab stays compact and scannable.
+                  const sameKindCount = docs.filter(x => x.kind === d.kind).length;
+                  const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
+                  const labelText     = KIND_LABEL[d.kind] ?? d.kind;
+                  const tabLabel      = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
                   if (renaming) {
                     // Swap the tab for an inline input. Enter commits,
                     // Esc cancels, blur commits to avoid losing input
@@ -777,6 +787,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   return (
                     <div key={d.id} className="flex items-center shrink-0">
                       <button onClick={() => setActiveDocIdx(i)}
+                        title={d.fileName}
                         className="flex items-center gap-1.5 px-2.5 py-1 rounded-l-full text-xs font-semibold whitespace-nowrap transition-colors"
                         style={{
                           background: active ? tint.bg : 'transparent',
@@ -784,7 +795,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                           border: `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
                           borderRight: active ? '0' : `1px solid ${'var(--gc-border-light)'}`,
                         }}>
-                        <FileText size={10} /> {KIND_LABEL[d.kind] ?? d.kind} · {d.fileName.replace(/\.[^.]+$/, '').slice(0, 18)}
+                        <FileText size={10} /> {tabLabel}
                       </button>
                       {active && (
                         <button onClick={() => startRename(d.id, d.fileName)}
