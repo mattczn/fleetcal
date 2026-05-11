@@ -279,7 +279,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
         <div className="flex items-center gap-2">
           <MapPin size={14} style={{ color: 'var(--gc-text-3)' }} />
           <span className="text-sm font-semibold" style={{ color: 'var(--gc-text-1)' }}>Route Map</span>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
+          <span className="text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
             {geocodedStops.length} of {stops.length} geocoded
           </span>
         </div>

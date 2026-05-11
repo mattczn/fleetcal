@@ -311,14 +311,14 @@ export default function BrokerProfileModal({
             style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
             <span className="text-xs mr-2" style={{ color: 'var(--gc-text-3)' }}>Unsaved changes</span>
             <button onClick={() => detailRef.current?.discard()}
-              className="px-4 py-2 rounded-full text-sm font-medium transition-colors"
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               style={{ color: '#d93025', background: 'transparent' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.07)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
               Discard
             </button>
             <button onClick={() => detailRef.current?.save()}
-              className="px-5 py-2 rounded-full text-sm font-semibold text-white transition-colors"
+              className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
               style={{ background: ACCENT }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = ACCENT)}>
@@ -504,7 +504,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           {broker.aliases.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
               {broker.aliases.map(a => (
-                <span key={a} className="px-2 py-0.5 rounded-full text-[10px] font-medium"
+                <span key={a} className="px-2 py-0.5 rounded-lg text-[10px] font-medium"
                   style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
                   {a}
                 </span>
@@ -635,7 +635,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           <SectionLabel>
             Loads
             {!loading && loads.length > 0 && (
-              <span className="ml-2 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+              <span className="ml-2 text-[10px] font-semibold px-2 py-0.5 rounded-lg"
                 style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
                 {loads.length}
               </span>
@@ -788,7 +788,7 @@ function LoadTable({ rows, sortField, sortDir, onSort, selectedLoadId, onSelectL
                   <span className="truncate block font-bold" title={ev.title}>{ev.title}</span>
                 </td>
                 <td style={{ padding: '9px 10px' }}>
-                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-lg whitespace-nowrap"
                     style={{ color: sm.color, background: sm.bg }}>
                     {sm.label}
                   </span>
@@ -847,7 +847,7 @@ function LoadDetailPanel({ load, assets, onClose, onOpenEditor }: {
           <span className="text-sm font-semibold" style={{ color: 'var(--gc-text-1)' }}>
             {load.loadNum ? `Load #${load.loadNum}` : 'Load Detail'}
           </span>
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg"
             style={{ color: sm.color, background: sm.bg }}>
             {sm.label}
           </span>
@@ -1020,7 +1020,7 @@ function DetailSectionLabel({ children }: { children: React.ReactNode }) {
 function GroupLabel({ color, bg, children }: { color: string; bg: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 mb-2">
-      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg"
         style={{ color, background: bg }}>
         {children}
       </span>
@@ -1034,7 +1034,7 @@ function ExpandButton({ expanded, count, label, onClick }: {
 }) {
   return (
     <button onClick={onClick}
-      className="mt-2 flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-full transition-colors"
+      className="mt-2 flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
       style={{ color: ACCENT }}
       onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>

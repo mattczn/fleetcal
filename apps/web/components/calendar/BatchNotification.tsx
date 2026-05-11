@@ -82,7 +82,7 @@ export default function BatchNotification() {
         <div className="flex flex-col items-center gap-2">
           <button
             onClick={() => setBatchMinimized(true)}
-            className="px-5 py-2.5 rounded-full text-sm font-medium transition-colors"
+            className="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
             style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'transparent' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -96,7 +96,7 @@ export default function BatchNotification() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => { setConfirmCancel(false); requestBatchCancel(); }}
-                  className="px-4 py-2 rounded-full text-sm font-medium transition-colors"
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                   style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' }}
                   onMouseEnter={e => (e.currentTarget.style.background = '#fee2e2')}
                   onMouseLeave={e => (e.currentTarget.style.background = '#fef2f2')}
@@ -105,7 +105,7 @@ export default function BatchNotification() {
                 </button>
                 <button
                   onClick={() => setConfirmCancel(false)}
-                  className="px-4 py-2 rounded-full text-sm font-medium transition-colors"
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                   style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'transparent' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -117,7 +117,7 @@ export default function BatchNotification() {
           ) : (
             <button
               onClick={() => setConfirmCancel(true)}
-              className="px-4 py-2 rounded-full text-sm font-medium transition-colors"
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
               style={{ color: '#dc2626', background: 'transparent' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#fef2f2')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}

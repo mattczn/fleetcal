@@ -111,14 +111,14 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
           {/* Footer */}
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose}
-              className="px-5 py-2 rounded-full text-sm font-medium transition-colors"
+              className="px-5 py-2 rounded-lg text-sm font-medium transition-colors"
               style={{ color: 'var(--gc-blue)' }}
               onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
               onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
               Cancel
             </button>
             <button type="submit" disabled={!name.trim()}
-              className="px-5 py-2 rounded-full text-sm font-medium text-white disabled:opacity-40 transition-colors"
+              className="px-5 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40 transition-colors"
               style={{ background: 'var(--gc-blue)' }}
               onMouseOver={e => { if (name.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
               onMouseOut={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>

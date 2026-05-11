@@ -2463,7 +2463,7 @@ export default function EventModal() {
 
   const driverPayLabelSuffix = driverPayPctValue !== null ? (
     <span className="flex items-center gap-1 normal-case tracking-normal font-semibold" style={{ fontSize: 10 }}>
-      <span className="px-1.5 py-0.5 rounded-full"
+      <span className="px-1.5 py-0.5 rounded-lg"
         style={{
           background: driverPayIsAuto ? '#dbeafe' : '#f1f3f4',
           color:      driverPayIsAuto ? '#1d4ed8' : 'var(--gc-text-3)',
@@ -2514,7 +2514,7 @@ export default function EventModal() {
     ? Math.round((relayTotalPay / relayLp) * 1000) / 10
     : null;
   const relayTotalSuffix = relayTotalPct !== null ? (
-    <span className="px-1.5 py-0.5 rounded-full normal-case tracking-normal font-semibold"
+    <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
       style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
       {relayTotalPct % 1 === 0 ? relayTotalPct.toFixed(0) : relayTotalPct.toFixed(1)}%
     </span>
@@ -3107,7 +3107,7 @@ export default function EventModal() {
                   );
                 })()}
                 {(isPickupLeg || isDeliveryLeg) && (
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg"
                     style={{ background: RELAY_COLOR, color: 'white' }}>
                     ⇄ {isPickupLeg ? 'Pickup Leg' : 'Delivery Leg'}
                   </span>
@@ -3162,7 +3162,7 @@ export default function EventModal() {
             )}
             {eventKind === 'revenue' && stops.length >= 2 && stops.some(s => s.geocodeStatus === 'success') && (
               <button type="button" onClick={() => { setShowMapPanel(v => !v); setShowPdfViewer(false); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
                 style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showMapPanel ? `${headerColor}22` : `${headerColor}12` }}
                 onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
                 onMouseLeave={e => (e.currentTarget.style.background = showMapPanel ? `${headerColor}22` : `${headerColor}12`)}>
@@ -3171,7 +3171,7 @@ export default function EventModal() {
             )}
             {eventKind === 'revenue' && (rateConPdf ? (
               <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
                 style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showPdfViewer ? `${headerColor}22` : `${headerColor}12` }}
                 onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
                 onMouseLeave={e => (e.currentTarget.style.background = showPdfViewer ? `${headerColor}22` : `${headerColor}12`)}>
@@ -3179,7 +3179,7 @@ export default function EventModal() {
               </button>
             ) : (
               <button type="button" onClick={() => attachFileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
                 style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
@@ -3258,7 +3258,7 @@ export default function EventModal() {
                     type="button"
                     onClick={() => { if (!isEdit) setEventKind(kind); }}
                     disabled={isEdit}
-                    className="text-xs px-3 py-1.5 rounded-full font-medium"
+                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
                     style={{
                       background: eventKind === kind ? (kind === 'revenue' ? 'var(--gc-blue)' : '#7c3aed') : 'var(--gc-hover)',
                       color: eventKind === kind ? '#fff' : 'var(--gc-text-2)',
@@ -3288,13 +3288,13 @@ export default function EventModal() {
                   })();
                   return (
                     <>
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-full whitespace-nowrap"
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg whitespace-nowrap"
                         title={`Billing: ${bsTint.label}`}
                         style={{ background: bsTint.bg, color: bsTint.fg, border: `1px solid ${bsTint.fg}30` }}>
                         Billing: {bsTint.label}
                       </span>
                       <button type="button" onClick={() => setReviewQueueOpen(true)}
-                        className="flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full transition-colors"
+                        className="flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-lg transition-colors"
                         title="Open the closeout review panel for this load"
                         style={{ background: '#15803d', color: '#fff' }}
                         onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
@@ -3406,7 +3406,7 @@ export default function EventModal() {
                       key={t}
                       type="button"
                       onClick={() => setNonRevenueType(t)}
-                      className="text-xs px-2.5 py-1 rounded-full transition-colors"
+                      className="text-xs px-2.5 py-1 rounded-lg transition-colors"
                       style={{
                         background: nonRevenueType === t ? '#7c3aed' : 'var(--gc-hover)',
                         color: nonRevenueType === t ? '#fff' : 'var(--gc-text-2)',
@@ -3623,7 +3623,7 @@ export default function EventModal() {
                                 )}
                               </div>
                               <button type="button" onClick={handleRelayRemove}
-                                className="text-xs px-3 py-1.5 rounded-full font-medium transition-colors shrink-0"
+                                className="text-xs px-3 py-1.5 rounded-lg font-medium transition-colors shrink-0"
                                 style={confirmRelayRemove ? { background: '#d93025', color: 'white' } : { color: '#d93025' }}
                                 onMouseEnter={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
                                 onMouseLeave={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'transparent'; }}>
@@ -3673,7 +3673,7 @@ export default function EventModal() {
                                   ? () => { setRelayActive(false); setConfirmRelayRemove(false); setStops(prev => prev.filter(s => s.type !== 'relay')); }
                                   : () => setConfirmRelayRemove(true)
                               }
-                              className="text-xs px-3 py-1.5 rounded-full font-medium transition-colors"
+                              className="text-xs px-3 py-1.5 rounded-lg font-medium transition-colors"
                               style={confirmRelayRemove ? { background: '#d93025', color: 'white' } : { color: '#d93025' }}
                               onMouseEnter={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
                               onMouseLeave={e => { if (!confirmRelayRemove) e.currentTarget.style.background = 'transparent'; }}>
@@ -3783,7 +3783,7 @@ export default function EventModal() {
                     const deliveryPct = pctOf(relayDeliveryNum);
                     const fmtPct = (p: number) => `${p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
                     const pctChip = (p: number | null) => p === null ? null : (
-                      <span className="px-1.5 py-0.5 rounded-full normal-case tracking-normal font-semibold"
+                      <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
                         style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
                         {fmtPct(p)}
                       </span>
@@ -4048,7 +4048,7 @@ export default function EventModal() {
             <div className="shrink-0 flex items-center justify-between px-8 py-5"
               style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
               <button type="button" onClick={handleBatchCancel}
-                className="px-4 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                className="px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                 style={confirmBatchCancel ? { background: '#d93025', color: 'white' } : { color: '#d93025', background: 'transparent' }}
                 onMouseEnter={e => { if (!confirmBatchCancel) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
                 onMouseLeave={e => { if (!confirmBatchCancel) e.currentTarget.style.background = 'transparent'; }}>
@@ -4056,7 +4056,7 @@ export default function EventModal() {
               </button>
               <div className="flex gap-2">
                 <button type="button" onClick={handleBatchSkip}
-                  className="px-6 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                  className="px-6 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                   style={confirmSkip
                     ? { background: '#e37400', color: 'white', border: '1px solid #e37400' }
                     : { color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', background: 'transparent' }}
@@ -4065,7 +4065,7 @@ export default function EventModal() {
                   {confirmSkip ? 'Confirm skip?' : 'Skip'}
                 </button>
                 <button type="button" onClick={() => handleBatchSave()} disabled={!title.trim() || !startDate || !endDate}
-                  className="px-6 py-2.5 rounded-full text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="px-6 py-2.5 rounded-lg text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   style={{ background: 'var(--gc-blue)' }}
                   onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
                   onMouseLeave={e => e.currentTarget.style.background = 'var(--gc-blue)'}>
@@ -4080,7 +4080,7 @@ export default function EventModal() {
                 {isEdit && (
                   <>
                     <button type="button" onClick={handleDelete}
-                      className="flex items-center gap-2 px-4 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                       style={confirmDel ? { background: '#d93025', color: 'white' } : { color: '#d93025', background: 'transparent' }}
                       onMouseEnter={e => { if (!confirmDel) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
                       onMouseLeave={e => { if (!confirmDel) e.currentTarget.style.background = 'transparent'; }}>
@@ -4090,7 +4090,7 @@ export default function EventModal() {
                     {!isPickupLeg && !isDeliveryLeg && (
                       <>
                         <button type="button" onClick={handleDuplicate}
-                          className="flex items-center gap-2 px-4 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                           style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -4098,7 +4098,7 @@ export default function EventModal() {
                           Duplicate
                         </button>
                         <button type="button" onClick={handlePlusOneWeek}
-                          className="flex items-center gap-2 px-4 py-2.5 rounded-full text-[13px] font-medium transition-all"
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                           style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -4111,14 +4111,14 @@ export default function EventModal() {
               </div>
               <div className="flex gap-2">
                 <button type="button" onClick={attemptClose}
-                  className="px-6 py-2.5 rounded-full text-[13px] font-medium transition-colors"
+                  className="px-6 py-2.5 rounded-lg text-[13px] font-medium transition-colors"
                   style={{ color: 'var(--gc-blue)' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                   Cancel
                 </button>
                 <button type="submit" disabled={!title.trim() || !startDate || !endDate || modalConflict === 'deleted'}
-                  className="px-6 py-2.5 rounded-full text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="px-6 py-2.5 rounded-lg text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   style={{ background: 'var(--gc-blue)' }}
                   onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
                   onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>

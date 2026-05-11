@@ -621,7 +621,7 @@ export default function DashboardView() {
         {fetching && (
           <div className="absolute inset-0 z-10 flex items-start justify-end p-4 pointer-events-none">
             <div
-              className="flex items-center gap-2 px-3 py-2 rounded-full text-xs font-medium"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
               style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', boxShadow: 'var(--shadow-1)', color: 'var(--gc-text-2)' }}
             >
               <Loader2 size={13} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
@@ -645,7 +645,7 @@ export default function DashboardView() {
                   <button
                     key={p.value}
                     onClick={() => setPeriod(p.value)}
-                    className="px-3 py-1 rounded-full text-[13px] font-medium transition-all"
+                    className="px-3 py-1 rounded-lg text-[13px] font-medium transition-all"
                     style={{
                       background: period === p.value ? 'var(--gc-surface)' : 'transparent',
                       color:      period === p.value ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
@@ -947,7 +947,7 @@ export default function DashboardView() {
               </p>
               <Link
                 href="/calendar"
-                className="mt-5 px-5 py-2 rounded-full text-sm font-medium"
+                className="mt-5 px-5 py-2 rounded-lg text-sm font-medium"
                 style={{ background: 'var(--gc-blue)', color: 'white' }}
               >
                 Go to Calendar

@@ -206,7 +206,7 @@ export default function DatePicker({ value, onChange, headerColor, min, required
             <button
               type="button"
               onClick={() => { onChange(today); setOpen(false); }}
-              className="px-4 py-1.5 rounded-full text-xs font-semibold transition-colors"
+              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors"
               style={{ color: headerColor }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}

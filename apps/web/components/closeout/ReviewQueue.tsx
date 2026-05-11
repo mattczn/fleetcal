@@ -939,7 +939,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   No internal notes on this load.
                 </span>
                 <button onClick={() => setNotesOpen(true)}
-                  className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors"
+                  className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-lg transition-colors"
                   style={{ color: 'var(--gc-blue)' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(26,115,232,0.08)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -964,7 +964,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   ))}
                 </div>
                 <button onClick={() => setNotesOpen(true)}
-                  className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-full transition-colors flex-shrink-0"
+                  className="flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors flex-shrink-0"
                   style={{
                     background: 'rgba(161, 98, 7, 0.15)',
                     color:      '#854d0e',
@@ -1003,7 +1003,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     return (
                       <button key={t.key} type="button"
                         onClick={() => setLeftPanelView(t.key)}
-                        className="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider transition-colors"
+                        className="px-3 py-1 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors"
                         style={{
                           background: active ? 'var(--gc-blue)' : 'transparent',
                           color:      active ? '#fff' : 'var(--gc-text-2)',
@@ -1022,7 +1022,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     <button type="button"
                       onClick={() => rateConInputRef.current?.click()}
                       disabled={rateConUploading}
-                      className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
                       style={{
                         background: KIND_TINT.rate_con.bg,
                         color:      KIND_TINT.rate_con.fg,
@@ -1082,7 +1082,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     <div key={d.id} className="flex items-center gap-1 shrink-0">
                       <button onClick={() => setActiveDocIdx(i)}
                         title={d.fileName}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-extrabold whitespace-nowrap transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold whitespace-nowrap transition-colors"
                         style={{
                           background: active ? tint.bg : 'transparent',
                           color:      active ? tint.fg : tint.bg,
@@ -1850,12 +1850,12 @@ function DocSelectionDialog({
         {/* Select-all + select-none bar */}
         <div className="flex items-center gap-2 px-5 pb-2">
           <button type="button" onClick={onSelectAll} disabled={busy || docs.length === 0}
-            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors disabled:opacity-50"
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
             style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
             Select all
           </button>
           <button type="button" onClick={onSelectNone} disabled={busy}
-            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors disabled:opacity-50"
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
             style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
             None
           </button>
@@ -1904,14 +1904,14 @@ function DocSelectionDialog({
         <div className="flex items-center justify-end gap-2 px-5 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button type="button" onClick={onCancel} disabled={busy}
-            className="text-[13px] font-bold px-4 py-2 rounded-full transition-colors disabled:opacity-50"
+            className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
             Cancel
           </button>
           <button type="button"
             onClick={() => { if (canConfirm) onConfirm(); }}
             disabled={!canConfirm}
-            className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-full transition-opacity text-white disabled:opacity-40"
+            className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-opacity text-white disabled:opacity-40"
             style={{ background: 'var(--gc-blue)' }}>
             {busy ? <Loader2 size={13} className="animate-spin" /> : actionIcon}
             {busy ? busyLabel : count >= minSelect ? actionLabel(count) : ctaWhenLow}

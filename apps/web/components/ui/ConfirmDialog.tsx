@@ -60,7 +60,7 @@ export default function ConfirmDialog({
         <div className="flex items-center justify-end gap-2 px-5 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button type="button" onClick={onCancel}
-            className="text-[13px] font-bold px-4 py-2 rounded-full transition-colors"
+            className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
@@ -68,7 +68,7 @@ export default function ConfirmDialog({
           </button>
           <button type="button" onClick={onConfirm}
             autoFocus
-            className="text-[13px] font-extrabold px-4 py-2 rounded-full transition-colors text-white"
+            className="text-[13px] font-extrabold px-4 py-2 rounded-lg transition-colors text-white"
             style={{ background: destructive ? '#d93025' : 'var(--gc-blue)' }}
             onMouseEnter={e => (e.currentTarget.style.background = destructive ? '#b1271b' : 'var(--gc-blue-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = destructive ? '#d93025' : 'var(--gc-blue)')}>

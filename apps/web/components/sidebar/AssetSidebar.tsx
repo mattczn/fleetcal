@@ -218,7 +218,7 @@ export default function AssetSidebar() {
           >
             <button
               onClick={() => setActiveCategoryFilter(null)}
-              className="shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors"
+              className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
               style={{
                 background: activeCategoryFilter === null ? 'var(--gc-blue-light)' : 'transparent',
                 color:      activeCategoryFilter === null ? 'var(--gc-blue)'       : 'var(--gc-text-3)',
@@ -231,7 +231,7 @@ export default function AssetSidebar() {
               <button
                 key={cat}
                 onClick={() => setActiveCategoryFilter(activeCategoryFilter === cat ? null : cat)}
-                className="shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors"
+                className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
                 style={{
                   background: activeCategoryFilter === cat ? 'var(--gc-blue-light)' : 'transparent',
                   color:      activeCategoryFilter === cat ? 'var(--gc-blue)'       : 'var(--gc-text-3)',

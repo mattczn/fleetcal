@@ -193,7 +193,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
         <div className="shrink-0 flex justify-end px-7 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button onClick={onClose}
-            className="px-6 py-2.5 rounded-full text-sm font-medium text-white transition-colors"
+            className="px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-colors"
             style={{ background: 'var(--gc-blue)' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
@@ -488,7 +488,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
                       {ev.loadNum && <span>· #{ev.loadNum}</span>}
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg shrink-0"
                     style={{ color: sm.color, background: sm.bg }}>
                     {sm.label}
                   </span>
@@ -508,7 +508,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
             </span>
             <button
               onClick={onRemove}
-              className="px-4 py-1.5 rounded-full text-sm font-medium text-white"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium text-white"
               style={{ background: '#d93025' }}
               onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
               onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
@@ -516,7 +516,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
             </button>
             <button
               onClick={() => setConfirmDelete(false)}
-              className="px-4 py-1.5 rounded-full text-sm font-medium transition-colors"
+              className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
               style={{ color: 'var(--gc-text-2)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -526,7 +526,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         ) : (
           <button
             onClick={() => setConfirmDelete(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             style={{ color: '#d93025' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.08)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>

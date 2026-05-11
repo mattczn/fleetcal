@@ -127,7 +127,7 @@ export function FlagModal({ loadLabel, onCancel, onConfirm }: FlagModalProps) {
         <div className="shrink-0 flex items-center justify-end gap-2 px-6 py-3"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button onClick={() => !busy && onCancel()}
-            className="px-4 py-2 rounded-full text-sm font-medium transition-colors"
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -136,7 +136,7 @@ export function FlagModal({ loadLabel, onCancel, onConfirm }: FlagModalProps) {
           </button>
           <button onClick={submit}
             disabled={!canSubmit}
-            className="px-5 py-2 rounded-full text-sm font-semibold transition-colors"
+            className="px-5 py-2 rounded-lg text-sm font-semibold transition-colors"
             style={{
               background: canSubmit ? '#d97706' : 'var(--gc-border)',
               color: '#fff',

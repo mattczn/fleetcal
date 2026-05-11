@@ -62,7 +62,7 @@ function LegBadge({ role }: { role: CalendarEvent['relayRole'] }) {
     : { label: 'Both',     bg: 'var(--gc-hover)', color: 'var(--gc-text-2)' };
   return (
     <span
-      className="px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap"
+      className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
       style={{ background: cfg.bg, color: cfg.color }}
     >
       {cfg.label}
@@ -265,7 +265,7 @@ function AdjustmentsSection({
         {mode === 'idle' && (
           <div className="flex items-center gap-1">
             <button onClick={openAdd}
-              className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full transition-colors"
+              className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg transition-colors"
               style={{ color: 'var(--gc-blue)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -273,7 +273,7 @@ function AdjustmentsSection({
             </button>
             {futureWeeks.length > 0 && (
               <button onClick={openDefer}
-                className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full transition-colors"
+                className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg transition-colors"
                 style={{ color: 'var(--gc-text-2)' }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -306,7 +306,7 @@ function AdjustmentsSection({
               const displayDesc = adj.description?.replace(/^\[[a-f0-9-]+\]\s*/, '') ?? undefined;
               return (
                 <div key={adj.id} className="flex items-center gap-3 text-sm group">
-                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap"
+                  <span className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
                     style={{
                       background: isDeferred ? '#6941c61a' : adj.amount >= 0 ? '#1e8e3e1a' : '#d9302514',
                       color: isDeferred ? '#6941c6' : adj.amount >= 0 ? '#1e8e3e' : '#d93025',
@@ -323,7 +323,7 @@ function AdjustmentsSection({
                     <button
                       onClick={() => handleUndoDefer(adj)}
                       disabled={isUndoing}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-lg"
                       style={{ color: '#6941c6', background: '#6941c61a', flexShrink: 0, whiteSpace: 'nowrap' }}
                       title="Undo this deferral (removes pay from this week and restores it to the source week)"
                     >
@@ -342,7 +342,7 @@ function AdjustmentsSection({
             })}
             {[...deferGroups.entries()].map(([targetLabel, { adjs, total }]) => (
               <div key={targetLabel} className="flex items-center gap-3 text-sm">
-                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap"
+                <span className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
                   style={{ background: '#6941c61a', color: '#6941c6' }}>
                   Deferred
                 </span>
@@ -643,7 +643,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
             <div className="flex items-center gap-2">
               <span className="font-semibold text-[15px]" style={{ color: 'var(--gc-blue)', textDecoration: 'underline', textUnderlineOffset: 2, textDecorationColor: 'rgba(26,115,232,0.35)' }}>{row.driverName}</span>
               {isFinalized && (
-                <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                <span className="flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-lg"
                   style={{ background: '#1e8e3e1a', color: '#1e8e3e' }}>
                   <Lock size={10} /> Paid
                 </span>
@@ -762,7 +762,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                         <PayCell load={load} />
                         {load.driverPay != null && load.loadPrice != null && load.loadPrice > 0 && (
                           <span
-                            className="print:hidden shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap"
+                            className="print:hidden shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg whitespace-nowrap"
                             style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-3)' }}
                           >
                             {Math.round((load.driverPay / load.loadPrice) * 100)}%
@@ -930,13 +930,13 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                     </span>
                     <button
                       onClick={() => removeAccAdj(adj.id)}
-                      className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full"
+                      className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg"
                       style={{ background: '#d93025', color: '#fff' }}>
                       <Check size={11} /> Remove
                     </button>
                     <button
                       onClick={() => setTrashConfirm(null)}
-                      className="text-xs px-2.5 py-1 rounded-full transition-colors"
+                      className="text-xs px-2.5 py-1 rounded-lg transition-colors"
                       style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -945,7 +945,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                   </>
                 ) : (
                   <>
-                    <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap"
+                    <span className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
                       style={{ background: '#1a73e81a', color: '#1a73e8' }}>
                       {adj.category}
                     </span>
@@ -987,7 +987,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         <div className="flex items-center gap-2">
           {isFinalized ? (
             <button onClick={handleReopen}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -999,13 +999,13 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                 Record {fmtMoney(totalPay)} for {row.driverName}?
               </span>
               <button onClick={handleFinalize} disabled={finalizing}
-                className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-full"
+                className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg"
                 style={{ background: '#1e8e3e', color: '#fff', opacity: finalizing ? 0.7 : 1 }}>
                 {finalizing ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
                 Confirm
               </button>
               <button onClick={() => setConfirmFin(false)}
-                className="text-sm px-3 py-1.5 rounded-full transition-colors"
+                className="text-sm px-3 py-1.5 rounded-lg transition-colors"
                 style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -1014,7 +1014,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
             </>
           ) : (
             <button onClick={() => setConfirmFin(true)}
-              className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-full transition-colors"
+              className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
               style={{ background: 'var(--gc-blue)', color: '#fff' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#1558d6')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
@@ -1054,7 +1054,7 @@ function WeekSelector({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-medium"
+        className="flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium"
         style={{
           background: 'var(--gc-surface)',
           border: '1px solid var(--gc-border)',
@@ -1205,7 +1205,7 @@ export default function PayrollView() {
         {fetching && (
           <div className="absolute inset-0 z-10 flex items-start justify-end p-4 pointer-events-none">
             <div
-              className="flex items-center gap-2 px-3 py-2 rounded-full text-xs font-medium"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium"
               style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', boxShadow: 'var(--shadow-1)', color: 'var(--gc-text-2)' }}
             >
               <Loader2 size={13} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
@@ -1276,7 +1276,7 @@ export default function PayrollView() {
               </p>
               <Link
                 href="/calendar"
-                className="mt-5 px-5 py-2 rounded-full text-sm font-medium"
+                className="mt-5 px-5 py-2 rounded-lg text-sm font-medium"
                 style={{ background: 'var(--gc-blue)', color: 'white' }}
               >
                 Go to Calendar

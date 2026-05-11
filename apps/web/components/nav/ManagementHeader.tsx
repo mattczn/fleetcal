@@ -31,7 +31,7 @@ export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot 
         <button
           type="button"
           onClick={onBack}
-          className="flex items-center gap-2 px-3 py-[7px] rounded-full text-[13px] font-medium transition-colors"
+          className="flex items-center gap-2 px-3 py-[7px] rounded-lg text-[13px] font-medium transition-colors"
           style={{ color: 'rgba(255,255,255,0.85)', border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.12)', cursor: 'pointer' }}
           onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.22)'; }}
           onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; }}
@@ -42,7 +42,7 @@ export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot 
       ) : (
         <Link
           href="/calendar"
-          className="flex items-center gap-2 px-3 py-[7px] rounded-full text-[13px] font-medium transition-colors"
+          className="flex items-center gap-2 px-3 py-[7px] rounded-lg text-[13px] font-medium transition-colors"
           style={{ color: 'rgba(255,255,255,0.85)', border: '1px solid rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.12)' }}
           onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.22)'; }}
           onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; }}
@@ -72,7 +72,7 @@ export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot 
             <Link
               key={href}
               href={href}
-              className="flex items-center gap-1.5 px-3 py-[7px] rounded-full text-[13px] font-medium transition-colors"
+              className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[13px] font-medium transition-colors"
               style={{
                 color: active ? '#1a73e8' : 'rgba(255,255,255,0.9)',
                 background: active ? '#fff' : 'transparent',

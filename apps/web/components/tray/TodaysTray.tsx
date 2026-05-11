@@ -185,7 +185,7 @@ function LoadRow({
           const cm = STATUS_META[chip.key];
           return (
             <button key={chip.key} type="button" onClick={e => { e.stopPropagation(); handleChip(chip.key); }}
-              className="text-[11px] font-medium px-2 py-0.5 rounded-full transition-all"
+              className="text-[11px] font-medium px-2 py-0.5 rounded-lg transition-all"
               style={{ background: active ? cm.bg : 'transparent', color: active ? cm.color : 'var(--gc-text-3)', border: `1px solid ${active ? cm.border : 'var(--gc-border)'}`, cursor: 'pointer' }}
               onMouseEnter={e => { if (!active) { e.currentTarget.style.background = cm.bg; e.currentTarget.style.color = cm.color; e.currentTarget.style.borderColor = cm.border; } }}
               onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; } }}>
@@ -204,7 +204,7 @@ function LoadRow({
           const cm = STATUS_META[chip.key];
           return (
             <button key={chip.key} type="button" onClick={e => { e.stopPropagation(); handleChip(chip.key); }}
-              className="text-[11px] font-medium px-2 py-0.5 rounded-full transition-all"
+              className="text-[11px] font-medium px-2 py-0.5 rounded-lg transition-all"
               style={{ background: active ? cm.bg : 'transparent', color: active ? cm.color : 'var(--gc-text-3)', border: `1px solid ${active ? cm.border : 'var(--gc-border)'}`, cursor: 'pointer' }}
               onMouseEnter={e => { if (!active) { e.currentTarget.style.background = cm.bg; e.currentTarget.style.color = cm.color; e.currentTarget.style.borderColor = cm.border; } }}
               onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; } }}>
@@ -349,17 +349,17 @@ export default function TodaysTray() {
           className="flex items-center gap-3 flex-1 cursor-pointer min-w-0">
           <Layers size={15} style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }} />
           <span className="text-sm font-semibold" style={{ color: '#fff' }}>{isAtNow ? "Today's Loads" : fmtPivot(pivotTime)}</span>
-          <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}>
             {todayLoads.length}
           </span>
           {inProgressCount > 0 && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+            <span className="text-xs font-medium px-2 py-0.5 rounded-lg"
               style={{ background: 'rgba(255,255,255,0.18)', color: '#fff' }}>
               {inProgressCount} in progress
             </span>
           )}
           {exceptionCount > 0 && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
+            <span className="text-xs font-medium px-2 py-0.5 rounded-lg"
               style={{ background: 'rgba(255,200,150,0.25)', color: '#ffe0b2' }}>
               {exceptionCount} exception{exceptionCount > 1 ? 's' : ''}
             </span>
@@ -399,7 +399,7 @@ export default function TodaysTray() {
                 const count  = filterCounts[f.key];
                 return (
                   <button key={f.key} type="button" onClick={() => setFilter(f.key)}
-                    className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full transition-all"
+                    className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg transition-all"
                     style={{
                       background: active ? '#1a73e8' : 'transparent',
                       color:      active ? '#fff'     : 'var(--gc-text-2)',
@@ -521,7 +521,7 @@ export default function TodaysTray() {
                 const cm = STATUS_META[chip.key];
                 return (
                   <button key={chip.key} type="button" onClick={() => handleBatchApply(chip.key)}
-                    className="text-xs font-semibold px-3 py-1.5 rounded-full"
+                    className="text-xs font-semibold px-3 py-1.5 rounded-lg"
                     style={{ background: cm.bg, color: cm.color, border: `1px solid ${cm.border}`, cursor: 'pointer' }}
                     onMouseEnter={e => { e.currentTarget.style.opacity = '0.75'; }}
                     onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}>

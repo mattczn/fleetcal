@@ -196,7 +196,7 @@ export default function CalendarToolbar() {
 
       {/* Today */}
       <button onClick={goToday}
-        className="px-4 py-[7px] rounded-full text-sm font-medium transition-all"
+        className="px-4 py-[7px] rounded-lg text-sm font-medium transition-all"
         style={{
           border: `1px solid ${today ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
           color: today ? 'var(--gc-blue)' : 'var(--gc-text-1)',
@@ -229,7 +229,7 @@ export default function CalendarToolbar() {
       {/* Command Center */}
       <Link
         href="/board"
-        className="flex items-center gap-1.5 px-3 py-[7px] rounded-full text-[13px] font-semibold transition-colors"
+        className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[13px] font-semibold transition-colors"
         style={{ background: '#1a73e8', color: '#fff', border: '1px solid #1a73e8' }}
         onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = '#1558d6'; (e.currentTarget as HTMLElement).style.borderColor = '#1558d6'; }}
         onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = '#1a73e8'; (e.currentTarget as HTMLElement).style.borderColor = '#1a73e8'; }}
@@ -251,7 +251,7 @@ export default function CalendarToolbar() {
           if (!show) return null;
           const current = Math.min(batchParseProgress + 1, batchParseTotal);
           return (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full mr-1"
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg mr-1"
               style={{
                 background: isParsing ? 'var(--gc-hover)' : '#f0fdf4',
                 border: `1px solid ${isParsing ? 'var(--gc-border)' : '#bbf7d0'}`,
@@ -267,7 +267,7 @@ export default function CalendarToolbar() {
                       <span className="text-xs" style={{ color: 'var(--gc-text-3)', marginLeft: 2 }}>Cancel?</span>
                       <button
                         onClick={() => { setConfirmCancelBatch(false); requestBatchCancel(); }}
-                        className="text-xs font-semibold px-2 py-0.5 rounded-full transition-colors"
+                        className="text-xs font-semibold px-2 py-0.5 rounded-lg transition-colors"
                         style={{ color: '#dc2626', background: '#fef2f2', border: '1px solid #fecaca' }}
                         onMouseEnter={e => (e.currentTarget.style.background = '#fee2e2')}
                         onMouseLeave={e => (e.currentTarget.style.background = '#fef2f2')}>
@@ -311,7 +311,7 @@ export default function CalendarToolbar() {
                       <span className="text-xs" style={{ color: 'var(--gc-text-3)', marginLeft: 2 }}>Discard?</span>
                       <button
                         onClick={() => { setConfirmCancelBatch(false); clearBatch(); }}
-                        className="text-xs font-semibold px-2 py-0.5 rounded-full transition-colors"
+                        className="text-xs font-semibold px-2 py-0.5 rounded-lg transition-colors"
                         style={{ color: '#dc2626', background: '#fef2f2', border: '1px solid #fecaca' }}
                         onMouseEnter={e => (e.currentTarget.style.background = '#fee2e2')}
                         onMouseLeave={e => (e.currentTarget.style.background = '#fef2f2')}>
@@ -446,7 +446,7 @@ export default function CalendarToolbar() {
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => { setTrashOpen(false); setTrashAllOpen(true); setTrashQuery(''); }}
-                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full transition-colors"
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-colors"
                     style={{ color: 'var(--gc-blue)' }}
                     onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
                     onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
@@ -593,7 +593,7 @@ export default function CalendarToolbar() {
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button onClick={() => { handleRestore(ev.id, ev.start); }}
-                            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full transition-colors"
+                            className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg transition-colors"
                             style={{ color: 'var(--gc-blue)', border: '1px solid var(--gc-blue)' }}
                             onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
                             onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
@@ -624,7 +624,7 @@ export default function CalendarToolbar() {
                     </span>
                     <button
                       onClick={() => { clearTrash(); setConfirmClearTrash(false); }}
-                      className="text-xs px-3 py-1.5 rounded-full transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg transition-colors"
                       style={{ background: '#d93025', color: '#fff' }}
                       onMouseOver={e => (e.currentTarget.style.background = '#b31412')}
                       onMouseOut={e => (e.currentTarget.style.background = '#d93025')}>
@@ -632,7 +632,7 @@ export default function CalendarToolbar() {
                     </button>
                     <button
                       onClick={() => setConfirmClearTrash(false)}
-                      className="text-xs px-3 py-1.5 rounded-full transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg transition-colors"
                       style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
                       onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                       onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
@@ -647,7 +647,7 @@ export default function CalendarToolbar() {
                     {deletedEvents.some(e => daysUntilPurge(e.deletedAt) === 0) && (
                       <button
                         onClick={() => setConfirmClearTrash(true)}
-                        className="text-xs px-2.5 py-1 rounded-full transition-colors"
+                        className="text-xs px-2.5 py-1 rounded-lg transition-colors"
                         style={{ color: '#d93025' }}
                         onMouseOver={e => (e.currentTarget.style.background = 'rgba(217,48,37,.08)')}
                         onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
@@ -714,7 +714,7 @@ export default function CalendarToolbar() {
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
-              className="px-3 py-1 rounded-full text-[13px] font-medium transition-all capitalize"
+              className="px-3 py-1 rounded-lg text-[13px] font-medium transition-all capitalize"
               style={{
                 background: viewMode === mode ? 'var(--gc-surface)' : 'transparent',
                 color:      viewMode === mode ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
@@ -730,7 +730,7 @@ export default function CalendarToolbar() {
         <div ref={moreContainer} style={{ position: 'relative' }}>
           <button
             onClick={() => setMoreOpen(o => !o)}
-            className="flex items-center gap-1.5 px-3 py-[7px] rounded-full text-[13px] font-medium transition-colors"
+            className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[13px] font-medium transition-colors"
             style={{
               color: moreOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)',
               border: `1px solid ${moreOpen ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,

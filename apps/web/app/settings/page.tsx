@@ -98,7 +98,7 @@ function ModalPreview({ fieldSettings, sectionOrder }: { fieldSettings: Record<s
             <div className="text-xs font-medium" style={{ color: 'var(--gc-text-1)' }}>Truck 01 · Driver Name</div>
           </div>
         </div>
-        <div className="rounded-full px-3 py-1 text-[10px] font-semibold" style={{ background: '#e8f0fe', color: PREVIEW_COLOR }}>Scheduled</div>
+        <div className="rounded-lg px-3 py-1 text-[10px] font-semibold" style={{ background: '#e8f0fe', color: PREVIEW_COLOR }}>Scheduled</div>
       </div>
 
       {/* Body */}
@@ -128,7 +128,7 @@ function ModalPreview({ fieldSettings, sectionOrder }: { fieldSettings: Record<s
             <div key="locations" style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 16, marginTop: 16 }}>
               <div className="flex items-center justify-between mb-3">
                 <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#7c3aed' }}>Locations</div>
-                <div className="text-xs px-2.5 py-0.5 rounded-full font-medium" style={{ background: '#f5f3ff', color: '#7c3aed' }}>+ Add stop</div>
+                <div className="text-xs px-2.5 py-0.5 rounded-lg font-medium" style={{ background: '#f5f3ff', color: '#7c3aed' }}>+ Add stop</div>
               </div>
               <div className="space-y-2">
                 {(['Pickup', 'Delivery'] as const).map(lbl => (
@@ -152,8 +152,8 @@ function ModalPreview({ fieldSettings, sectionOrder }: { fieldSettings: Record<s
       {/* Footer */}
       <div className="px-6 py-3 flex items-center justify-end gap-2"
         style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-        <div className="px-4 py-1.5 rounded-full text-xs font-medium" style={{ color: 'var(--gc-text-2)' }}>Cancel</div>
-        <div className="px-4 py-1.5 rounded-full text-xs font-semibold text-white" style={{ background: PREVIEW_COLOR }}>Create load</div>
+        <div className="px-4 py-1.5 rounded-lg text-xs font-medium" style={{ color: 'var(--gc-text-2)' }}>Cancel</div>
+        <div className="px-4 py-1.5 rounded-lg text-xs font-semibold text-white" style={{ background: PREVIEW_COLOR }}>Create load</div>
       </div>
     </div>
   );
@@ -200,8 +200,8 @@ function FieldSectionCard({
         </div>
         <span className="text-xs font-bold uppercase tracking-wider flex-1" style={{ color: c.text }}>{SECTION_LABELS[section]}</span>
         {isLocations
-          ? <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: c.border, color: c.text }}>Always shown</span>
-          : <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: c.border, color: c.text }}>{enabledInSection}/{fields.length}</span>
+          ? <span className="text-xs px-2 py-0.5 rounded-lg font-medium" style={{ background: c.border, color: c.text }}>Always shown</span>
+          : <span className="text-xs px-2 py-0.5 rounded-lg font-medium" style={{ background: c.border, color: c.text }}>{enabledInSection}/{fields.length}</span>
         }
       </div>
       {isLocations && (
@@ -280,7 +280,7 @@ function LoadFieldsPanel() {
             </p>
           </div>
           <button onClick={() => setSectionOrder(DEFAULT_SECTION_ORDER)}
-            className="text-xs px-2.5 py-1 rounded-full shrink-0"
+            className="text-xs px-2.5 py-1 rounded-lg shrink-0"
             style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-1)'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
@@ -293,7 +293,7 @@ function LoadFieldsPanel() {
           <div className="flex items-center gap-2.5 px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border-light)', background: '#f0fdf4' }}>
             <span className="text-xs font-bold uppercase tracking-wider flex-1" style={{ color: '#15803d' }}>Driver Pay Default</span>
             {driverPayPct != null && (
-              <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: '#bbf7d0', color: '#15803d' }}>{driverPayPct}% of load price</span>
+              <span className="text-xs px-2 py-0.5 rounded-lg font-medium" style={{ background: '#bbf7d0', color: '#15803d' }}>{driverPayPct}% of load price</span>
             )}
           </div>
           <div className="px-4 py-4 space-y-3">
@@ -320,7 +320,7 @@ function LoadFieldsPanel() {
               </div>
               {driverPayPct != null && (
                 <button type="button" onClick={() => { setDriverPayPct(null); setPctInput(''); }}
-                  className="text-xs px-2.5 py-1 rounded-full"
+                  className="text-xs px-2.5 py-1 rounded-lg"
                   style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
                   onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = '#dc2626'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
@@ -674,7 +674,7 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
           </div>
           {!editing ? (
             <button onClick={startEdit}
-              className="px-4 py-2 rounded-full text-xs font-semibold transition-colors"
+              className="px-4 py-2 rounded-lg text-xs font-semibold transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-1)'; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'var(--gc-surface)'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}>
@@ -683,14 +683,14 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
           ) : (
             <div className="flex items-center gap-2">
               <button onClick={cancelEdit}
-                className="px-4 py-2 rounded-full text-xs font-medium transition-colors"
+                className="px-4 py-2 rounded-lg text-xs font-medium transition-colors"
                 style={{ color: 'var(--gc-text-2)' }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                 Cancel
               </button>
               <button onClick={confirmEdit}
-                className="px-4 py-2 rounded-full text-xs font-semibold text-white transition-colors"
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-white transition-colors"
                 style={{ background: '#1a73e8' }}
                 onMouseEnter={e => (e.currentTarget.style.background = '#1557b0')}
                 onMouseLeave={e => (e.currentTarget.style.background = '#1a73e8')}>
@@ -1309,7 +1309,7 @@ function CardLayoutPanel() {
         <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <GripVertical size={15} style={{ color: 'transparent' }} />
           <span className="text-sm font-semibold" style={{ color: 'var(--gc-text-1)' }}>Title</span>
-          <span className="ml-auto text-[11px] px-2 py-0.5 rounded-full font-medium" style={{ background: 'var(--gc-blue-light)', color: 'var(--gc-blue-text)' }}>Always on</span>
+          <span className="ml-auto text-[11px] px-2 py-0.5 rounded-lg font-medium" style={{ background: 'var(--gc-blue-light)', color: 'var(--gc-blue-text)' }}>Always on</span>
         </div>
 
         {cardFields.length === 0 ? (
@@ -1364,7 +1364,7 @@ function CardLayoutPanel() {
               <button
                 key={def.key}
                 onClick={() => add(def.key)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
                 style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)' }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-blue-light)'; e.currentTarget.style.color = 'var(--gc-blue-text)'; e.currentTarget.style.borderColor = 'var(--gc-blue)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'var(--gc-surface)'; e.currentTarget.style.color = 'var(--gc-text-2)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
@@ -1882,7 +1882,7 @@ function DispatchersPanel() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{d.name}</span>
                   {d.isDefault && (
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: '#dbeafe', color: '#1d4ed8' }}>Default</span>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-lg" style={{ background: '#dbeafe', color: '#1d4ed8' }}>Default</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1">

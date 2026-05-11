@@ -411,7 +411,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
             <button
               type="button"
               onClick={onActivateRelay}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
               style={{ color: '#7c3aed', border: '1px solid #ddd6fe', background: 'transparent' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#f5f3ff')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -420,13 +420,13 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
             </button>
           )}
           {loadedMiles != null && (
-            <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
+            <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold"
               style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG }}>
               <MapPin size={11} /> {loadedMiles.toLocaleString()} loaded mi
             </span>
           )}
           {ratePerMile != null && (
-            <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
+            <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold"
               style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG }}>
               ${ratePerMile.toFixed(2)}/mi
             </span>
@@ -435,7 +435,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
             <button
               type="button"
               onClick={onMapRoute}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
               style={{ color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}`, background: LOAD_ACCENT_BG }}
               onMouseEnter={e => (e.currentTarget.style.background = LOAD_ACCENT_BG_HOVER)}
               onMouseLeave={e => (e.currentTarget.style.background = LOAD_ACCENT_BG)}
@@ -464,7 +464,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
           const divider = isRelayHandoff ? (
             <div key={`divider-${stop.id}`} className="flex items-center gap-2 px-1 py-0.5">
               <div className="flex-1 h-px" style={{ background: '#ddd6fe' }} />
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
+              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-lg"
                 style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}>
                 {relayRole === 'pickup' ? 'Pickup leg ends here' : 'Delivery leg starts here'}
               </span>

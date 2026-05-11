@@ -608,7 +608,7 @@ export default function CloseoutView() {
               const count = tabCount(value);
               return (
                 <button key={value} onClick={() => setTab(value)}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[13px] font-semibold transition-colors"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition-colors"
                   style={{
                     border: `1px solid ${active ? '#1a73e8' : 'var(--gc-border)'}`,
                     background: active ? '#1a73e8' : 'var(--gc-surface)',
@@ -628,7 +628,7 @@ export default function CloseoutView() {
             <div className="flex-1" />
             {(tab === 'pending' || tab === 'flagged') && visible.length > 0 && (
               <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
-                className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-full text-white transition-colors"
+                className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-lg text-white transition-colors"
                 style={{ background: '#15803d' }}
                 onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
                 onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
@@ -638,7 +638,7 @@ export default function CloseoutView() {
             {/* Columns visibility menu */}
             <div className="relative" ref={colsMenuRef}>
               <button onClick={() => setColsMenuOpen(o => !o)}
-                className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+                className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
                 style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
                 <Columns3 size={12} /> Columns
               </button>
@@ -660,7 +660,7 @@ export default function CloseoutView() {
               )}
             </div>
             <button onClick={() => void refresh()}
-              className="text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+              className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
               Refresh
             </button>
@@ -697,7 +697,7 @@ export default function CloseoutView() {
                         Docs
                         {activeFilterCount > 0 && (
                           <button onClick={clearAllFilters}
-                            className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                            className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg"
                             style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
                             title="Clear all filters">
                             <X size={9} /> clear ({activeFilterCount})
@@ -886,20 +886,20 @@ export default function CloseoutView() {
                             {tab === 'pending' || tab === 'flagged' ? (
                               <>
                                 <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
-                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
                                   style={{ background: '#15803d', color: '#fff' }}
                                   title="Open in review queue">
                                   <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
                                 </button>
                                 <button onClick={() => void handleVerify(load)}
-                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
                                   style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
                                   title="Release without opening review queue">
                                   <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
                                 </button>
                                 {tab === 'pending' && (
                                   <button onClick={() => handleFlag(load)}
-                                    className="text-[11px] font-semibold px-2.5 py-1 rounded-full transition-colors"
+                                    className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
                                     style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
                                     <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
                                   </button>
@@ -1027,7 +1027,7 @@ const DOC_BADGE_TINT: Record<string, string> = {
 function DocBadge({ label, count }: { label: string; count?: number }) {
   const bg = DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
   return (
-    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums"
+    <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
       title={`${count ?? ''} ${label}`.trim()}
       style={{
         background: bg,
@@ -1096,7 +1096,7 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
       }}>
       <MessageSquare size={11} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
       {has && count > 1 && (
-        <span className="absolute -top-1 -right-1 text-[8px] font-bold rounded-full px-1 leading-3 tabular-nums"
+        <span className="absolute -top-1 -right-1 text-[8px] font-bold rounded-lg px-1 leading-3 tabular-nums"
           style={{ background: '#1a73e8', color: '#fff', minWidth: 12, textAlign: 'center' }}>
           {count}
         </span>
@@ -1130,7 +1130,7 @@ function PaginationFooter({
           type="button"
           onClick={onPrev}
           disabled={atStart}
-          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-full transition-colors"
+          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
           style={{
             border:     '1px solid var(--gc-border)',
             background: 'var(--gc-surface)',
@@ -1144,7 +1144,7 @@ function PaginationFooter({
           type="button"
           onClick={onNext}
           disabled={atEnd}
-          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-full transition-colors"
+          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
           style={{
             border:     '1px solid var(--gc-border)',
             background: 'var(--gc-surface)',
@@ -1169,7 +1169,7 @@ function FlagChip({ reason }: { reason: string }) {
     other:              'Other',
   } as Record<string, string>)[reason] ?? reason;
   return (
-    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
       style={{ background: '#fef3c7', color: '#92400e' }}>
       <Flag size={9} /> {label}
     </span>
@@ -1185,7 +1185,7 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
         <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>No matches</div>
         <div className="text-sm mb-3">Filters hide every load on this page.</div>
         <button onClick={onClearFilters}
-          className="text-xs font-semibold px-3 py-1.5 rounded-full"
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg"
           style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
           Clear filters
         </button>
@@ -1245,7 +1245,7 @@ function MenuTh({
         ) : null}
         {filterActive && (
           <span title={`${selectedCount} selected`}
-            className="text-[9px] font-bold tabular-nums px-1 rounded-full"
+            className="text-[9px] font-bold tabular-nums px-1 rounded-lg"
             style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px' }}>
             {selectedCount}
           </span>

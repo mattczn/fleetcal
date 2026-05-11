@@ -140,7 +140,7 @@ export default function InternalNotesModal({
             </div>
             <button onClick={handleSave}
               disabled={!text.trim() || saving}
-              className="text-[12px] font-semibold px-3.5 py-1.5 rounded-full transition-opacity"
+              className="text-[12px] font-semibold px-3.5 py-1.5 rounded-lg transition-opacity"
               style={{
                 background: '#1a73e8',
                 color:      '#fff',

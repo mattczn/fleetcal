@@ -161,7 +161,7 @@ export default function EditAssetDialog({ asset, onClose }: { asset: Asset; onCl
             <button
               type="button"
               onClick={onClose}
-              className="px-5 py-2 rounded-full text-sm font-medium transition-colors"
+              className="px-5 py-2 rounded-lg text-sm font-medium transition-colors"
               style={{ color: 'var(--gc-blue)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -171,7 +171,7 @@ export default function EditAssetDialog({ asset, onClose }: { asset: Asset; onCl
             <button
               type="submit"
               disabled={!name.trim()}
-              className="px-5 py-2 rounded-full text-sm font-medium text-white disabled:opacity-40 transition-colors"
+              className="px-5 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40 transition-colors"
               style={{ background: color }}
               onMouseEnter={e => { if (name.trim()) e.currentTarget.style.opacity = '0.88'; }}
               onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
