@@ -28,9 +28,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -385,28 +384,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // Cmd+Enter all belong to the notes composer.
   const [notesOpen, setNotesOpen] = useState(false);
 
-  // ── Doc tab actions (rename + delete) ─────────────────────────────
-  // Kebab menu collapses rename + delete into a single "•••" button
-  // per active tab. The dropdown is portaled to document.body because
-  // the docs strip has overflow-x: auto, which would otherwise clip
-  // it. Position is captured at click time from the button's bounding
-  // rect.
-  const [tabMenuDocId,  setTabMenuDocId]  = useState<string | null>(null);
-  const [tabMenuPos,    setTabMenuPos]    = useState<{ left: number; top: number } | null>(null);
-  // Click-outside dismissal for the kebab menu.
-  useEffect(() => {
-    if (!tabMenuDocId) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('[data-tabmenu]')) {
-        setTabMenuDocId(null);
-        setTabMenuPos(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [tabMenuDocId]);
-
   // ── Inline doc rename ──────────────────────────────────────────────
   // When the user clicks Rename in the kebab menu we swap that tab
   // into an inline text input. The keyboard handler pauses while a
@@ -507,6 +484,67 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [uploading, setUploading]       = useState(false);
   const [uploadError, setUploadError]   = useState<string | null>(null);
   const [mergeStatus, setMergeStatus]   = useState<string | null>(null);
+
+  // Merge selected docs into a single PDF. The "include in invoice"
+  // checkboxes double as a multi-select for this — when ≥2 boxes are
+  // checked the dispatcher gets a Merge button that:
+  //   - downloads each selected file via its signed URL
+  //   - runs pdfMerge (PDFs copy page-for-page, images embed as pages)
+  //   - uploads the merged blob as a new doc with kind = first
+  //     selected doc's kind (load# + kind go into the auto-generated
+  //     filename via the API)
+  //   - deletes the originals so the invoice picker only carries the
+  //     merged result
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
+  const [merging,          setMerging]          = useState(false);
+  const handleMergeSelected = async () => {
+    if (!loadId || merging) return;
+    const selected = docs.filter(d => includedDocIds.has(d.id));
+    if (selected.length < 2) return;
+    setMerging(true);
+    try {
+      // Fetch bytes for each selected doc (prefer cache).
+      const cache = docsCacheRef.current.get(loadId);
+      const files: File[] = [];
+      for (const d of selected) {
+        const url = cache?.urlByDocId.get(d.id) ?? await getLoadDocumentSignedUrl(d.id);
+        if (!url) throw new Error(`No signed URL for ${d.fileName}`);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+        const blob = await res.blob();
+        files.push(new File([blob], d.fileName, { type: blob.type || 'application/octet-stream' }));
+      }
+      const { mergeFilesToPdf } = await import('@/lib/pdfMerge');
+      const mergedBlob = await mergeFilesToPdf(files);
+      const mergedFile = new File([mergedBlob], `merged.pdf`, { type: 'application/pdf' });
+      // Kind = the most common kind among selected (or first if tied).
+      // For dispatchers this is almost always all-PODs merging into one POD.
+      const kindCounts = new Map<string, number>();
+      for (const d of selected) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
+      const mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selected[0].kind) as import('@fleetcal/types').DocumentKind;
+      const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
+      // Delete originals in parallel.
+      await Promise.all(selected.map(d => railway.deleteDocument(d.id).catch(err => {
+        console.warn('[review queue] failed to delete original after merge:', d.fileName, err);
+      })));
+      // Refresh: invalidate cache + re-prefetch.
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, !!current?.rateConPdf);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) {
+        setDocs(fresh.docs);
+        setActiveDocIdx(0);
+        // Carry the merged doc forward as the only selected doc.
+        setIncludedDocIds(new Set([newDoc.id]));
+      }
+    } catch (err) {
+      console.error('[review queue] merge failed:', err);
+      alert(`Merge failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setMerging(false);
+      setMergeConfirmOpen(false);
+    }
+  };
 
   // Rate-con replace shortcut — separate ref so the user can swap or
   // add a new rate con without going through the multi-step "Add
@@ -946,29 +984,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
                         <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
                       </button>
-                      {active && (
-                        <button data-tabmenu
-                          onClick={e => {
-                            // Capture position before toggling so we
-                            // don't end up with stale coords if the
-                            // viewport shifted between renders.
-                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                            if (tabMenuDocId === d.id) {
-                              setTabMenuDocId(null);
-                              setTabMenuPos(null);
-                            } else {
-                              setTabMenuDocId(d.id);
-                              setTabMenuPos({ left: r.right - 160, top: r.bottom + 4 });
-                            }
-                          }}
-                          className="rounded-full p-1.5 transition-colors"
-                          title="More"
-                          style={{ color: tint.bg, background: 'transparent' }}
-                          onMouseEnter={e => (e.currentTarget.style.background = tint.bg + '14')}
-                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                          <MoreHorizontal size={13} />
-                        </button>
-                      )}
                     </div>
                   );
                 })}
@@ -1161,12 +1176,32 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   Nothing to include yet.
                 </div>
               ) : (
+                <>
+                {/* Multi-select merge bar — only shown when 2+ docs are
+                    checked. Clicking opens a confirm dialog (irreversible
+                    since the originals are deleted after merging). */}
+                {includedDocIds.size >= 2 && (
+                  <button type="button"
+                    onClick={() => setMergeConfirmOpen(true)}
+                    disabled={merging}
+                    className="w-full flex items-center justify-center gap-1.5 mb-2 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                    style={{
+                      background: 'var(--gc-blue)',
+                      color:      '#fff',
+                      textShadow: '0 1px 1px rgba(0,0,0,0.2)',
+                      boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
+                    }}>
+                    {merging ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+                    Merge {includedDocIds.size} into one PDF
+                  </button>
+                )}
                 <div className="space-y-1.5">
                   {docs.map(d => {
                     const checked = includedDocIds.has(d.id);
                     const tint    = KIND_TINT[d.kind] ?? KIND_TINT.other;
                     return (
-                      <label key={d.id} className="flex items-start gap-2 cursor-pointer rounded-lg px-1.5 py-1.5 transition-colors hover:bg-[var(--gc-hover)]">
+                      <label key={d.id}
+                        className="group flex items-start gap-2 cursor-pointer rounded-lg px-1.5 py-1.5 transition-colors hover:bg-[var(--gc-hover)]">
                         <input type="checkbox" checked={checked} className="mt-1"
                           style={{ accentColor: tint.bg }}
                           onChange={() => {
@@ -1185,10 +1220,34 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                             {d.fileName}
                           </div>
                         </div>
+                        {/* Hover-revealed row actions. Live here instead
+                            of the top doc-tab strip so they're closer
+                            to where the user is reviewing the list. */}
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button type="button"
+                            onClick={e => { e.preventDefault(); startRename(d.id, d.fileName); }}
+                            className="rounded-full p-1 transition-colors"
+                            title={`Rename — ${d.fileName}`}
+                            style={{ color: tint.bg, background: 'transparent' }}
+                            onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                            <Pencil size={11} />
+                          </button>
+                          <button type="button"
+                            onClick={e => { e.preventDefault(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                            className="rounded-full p-1 transition-colors"
+                            title={`Delete — ${d.fileName}`}
+                            style={{ color: '#d93025', background: 'transparent' }}
+                            onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
                       </label>
                     );
                   })}
                 </div>
+                </>
               )}
             </div>
 
@@ -1264,41 +1323,22 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         />
       )}
 
-      {/* Kebab menu portaled to body so the docs-strip's overflow-x
-          auto can't clip it. Positioned via fixed coords captured at
-          the click. */}
-      {tabMenuDocId && tabMenuPos && typeof document !== 'undefined' && (() => {
-        const d = docs.find(x => x.id === tabMenuDocId);
-        if (!d) return null;
-        return createPortal(
-          <div data-tabmenu
-            className="rounded-xl py-1"
-            style={{
-              position:   'fixed',
-              left:       Math.max(8, tabMenuPos.left),
-              top:        tabMenuPos.top,
-              zIndex:     245, // above review queue (180) + EventModal (200/220) + delete confirm (240)
-              minWidth:   160,
-              background: 'var(--gc-surface)',
-              border:     '1px solid var(--gc-border)',
-              boxShadow:  '0 12px 32px rgba(0,0,0,0.18)',
-            }}>
-            <button type="button"
-              onClick={() => { setTabMenuDocId(null); setTabMenuPos(null); startRename(d.id, d.fileName); }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
-              style={{ color: 'var(--gc-text-1)' }}>
-              <Pencil size={12} /> Rename
-            </button>
-            <button type="button"
-              onClick={() => { setTabMenuDocId(null); setTabMenuPos(null); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
-              style={{ color: '#d93025' }}>
-              <Trash2 size={12} /> Delete
-            </button>
-          </div>,
-          document.body,
+      {mergeConfirmOpen && (() => {
+        const count = includedDocIds.size;
+        return (
+          <ConfirmDialog
+            title={`Merge ${count} documents?`}
+            message={`The ${count} selected docs will be combined into a single PDF. The originals will be deleted — this can't be undone.`}
+            confirmLabel={merging ? 'Merging…' : 'Merge'}
+            cancelLabel="Cancel"
+            destructive
+            zIndex={240}
+            onCancel={() => setMergeConfirmOpen(false)}
+            onConfirm={() => void handleMergeSelected()}
+          />
         );
       })()}
+
     </>
   );
 }
