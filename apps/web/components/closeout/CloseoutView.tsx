@@ -522,38 +522,54 @@ export default function CloseoutView() {
               after a 250ms debounce. When the query is set, the
               pending tab lifts its end<=now filter so upcoming loads
               are reachable too. */}
-          <div className="relative">
-            <Search size={14}
-              style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--gc-text-3)' }} />
-            <input
-              type="text"
-              value={searchInput}
-              onChange={e => setSearchInput(e.target.value)}
-              placeholder={`Search ${tab} loads — broker, load #, title, driver, notes…`}
-              className="w-full text-sm rounded-full outline-none"
-              style={{
-                background: 'var(--gc-surface)',
-                border:     `1px solid ${searchQuery ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
-                color:      'var(--gc-text-1)',
-                padding:    '8px 36px 8px 36px',
-              }}
-            />
-            {searchInput && (
-              <button onClick={() => setSearchInput('')}
-                className="rounded-full p-1 hover:bg-[var(--gc-hover)]"
-                title="Clear search"
-                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--gc-text-3)' }}>
-                <X size={12} />
-              </button>
-            )}
+          <div>
+            <div className="relative">
+              <Search size={16}
+                style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: searchQuery ? 'var(--gc-blue)' : 'var(--gc-text-2)', pointerEvents: 'none' }} />
+              <input
+                type="text"
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                placeholder={`Search ${tab} loads — broker, load #, title, driver, notes…`}
+                className="w-full text-[13px] rounded-full outline-none"
+                style={{
+                  background: 'var(--gc-surface)',
+                  border:     `1px solid ${searchQuery ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+                  color:      'var(--gc-text-1)',
+                  height:     38,
+                  paddingLeft:  40,
+                  paddingRight: searchInput ? 36 : 14,
+                }}
+              />
+              {searchInput && (
+                <button onClick={() => setSearchInput('')}
+                  className="rounded-full"
+                  title="Clear search"
+                  style={{
+                    position:  'absolute',
+                    right:     8,
+                    top:       '50%',
+                    transform: 'translateY(-50%)',
+                    width:     22,
+                    height:    22,
+                    display:   'flex',
+                    alignItems:     'center',
+                    justifyContent: 'center',
+                    color:      'var(--gc-text-2)',
+                    background: 'var(--gc-hover)',
+                  }}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
             {searchInput && !searchQuery && searchInput.trim().length < 2 && (
-              <div className="text-[11px] mt-1 ml-3" style={{ color: 'var(--gc-text-3)' }}>
+              <div className="text-[11px] mt-1.5 ml-3" style={{ color: 'var(--gc-text-3)' }}>
                 Type at least 2 characters to search.
               </div>
             )}
             {searchQuery && (
-              <div className="text-[11px] mt-1 ml-3 flex items-center gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
-                <Search size={9} /> Showing {tab} loads matching <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>&ldquo;{searchQuery}&rdquo;</span>
+              <div className="text-[11px] mt-1.5 ml-3 flex items-center gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                <Search size={10} style={{ color: 'var(--gc-blue)' }} /> Showing {tab} loads matching <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>&ldquo;{searchQuery}&rdquo;</span>
                 {tab === 'pending' && <span style={{ color: 'var(--gc-text-3)' }}>(including upcoming)</span>}
               </div>
             )}
