@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3 } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -141,6 +141,25 @@ export default function CloseoutView() {
   const page = pageByTab[tab];
   const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
 
+  // Search across all loads in the current tab (not just the page on
+  // screen). Live input lives in `searchInput`; the debounced value
+  // (`searchQuery`) is what feeds the fetch + cache key so we don't
+  // pummel the API on every keystroke.
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    // The API ignores <2-char queries; normalize that here too so the
+    // cache key + fetch don't churn while the user is mid-typing.
+    const effective = trimmed.length >= 2 ? trimmed : '';
+    const t = setTimeout(() => setSearchQuery(effective), 250);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+  // New search → reset to page 0 in the active tab; the user expects
+  // results to start from the top, not from wherever they were
+  // paginated to before searching.
+  useEffect(() => { setPage(0); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [searchQuery]);
+
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [docCounts, setDocCounts] = useState<Record<string, Record<string, number>>>({});
@@ -159,7 +178,9 @@ export default function CloseoutView() {
   // contents (verify / flag / etc).
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
 
-  const cacheKey = `${tab}:${page}`;
+  // Cache key includes the search query so search results don't trip
+  // over plain-queue results in the cache (and vice versa).
+  const cacheKey = `${tab}:${page}:${searchQuery}`;
 
   const renderFromCache = (key: string): boolean => {
     const cached = cacheRef.current.get(key);
@@ -175,9 +196,13 @@ export default function CloseoutView() {
     setError(null);
     try {
       const offset = page * PAGE_SIZE;
-      const { loads, docCounts, total } = await railway.listCloseoutQueue(tab, { limit: PAGE_SIZE, offset });
+      const { loads, docCounts, total } = await railway.listCloseoutQueue(tab, {
+        limit:  PAGE_SIZE,
+        offset,
+        q:      searchQuery || undefined,
+      });
       const entry: CacheEntry = { loads, docCounts, total, fetchedAt: Date.now() };
-      cacheRef.current.set(`${tab}:${page}`, entry);
+      cacheRef.current.set(`${tab}:${page}:${searchQuery}`, entry);
       // Only update view state if user is still on this tab/page —
       // background refetches for previous pages shouldn't clobber the
       // current view.
@@ -192,17 +217,20 @@ export default function CloseoutView() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page, mergeEvents]);
+  }, [tab, page, searchQuery, mergeEvents]);
 
   // Invalidate every cached page for the active tab — call after any
-  // action that mutates membership (verify, flag, reopen).
+  // action that mutates membership (verify, flag, reopen). Search
+  // results for this tab are wiped too since their membership might
+  // have changed as well.
   const invalidateTab = (t: Tab) => {
     for (const k of Array.from(cacheRef.current.keys())) {
       if (k.startsWith(`${t}:`)) cacheRef.current.delete(k);
     }
   };
 
-  // Render cached data on tab/page change, then refresh in the background.
+  // Render cached data on tab/page/search change, then refresh in the
+  // background.
   useEffect(() => {
     if (!authLoaded || !isSignedIn) return;
     const had = renderFromCache(cacheKey);
@@ -488,6 +516,48 @@ export default function CloseoutView() {
       <ManagementHeader title="Closeout" icon={FileCheck2} />
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-[1600px] mx-auto space-y-4">
+
+          {/* Search bar — searches all loads in the active tab, not
+              just the page on screen. Hits /v1/closeout/queue?q=…
+              after a 250ms debounce. When the query is set, the
+              pending tab lifts its end<=now filter so upcoming loads
+              are reachable too. */}
+          <div className="relative">
+            <Search size={14}
+              style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--gc-text-3)' }} />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              placeholder={`Search ${tab} loads — broker, load #, title, driver, notes…`}
+              className="w-full text-sm rounded-full outline-none"
+              style={{
+                background: 'var(--gc-surface)',
+                border:     `1px solid ${searchQuery ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+                color:      'var(--gc-text-1)',
+                padding:    '8px 36px 8px 36px',
+              }}
+            />
+            {searchInput && (
+              <button onClick={() => setSearchInput('')}
+                className="rounded-full p-1 hover:bg-[var(--gc-hover)]"
+                title="Clear search"
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--gc-text-3)' }}>
+                <X size={12} />
+              </button>
+            )}
+            {searchInput && !searchQuery && searchInput.trim().length < 2 && (
+              <div className="text-[11px] mt-1 ml-3" style={{ color: 'var(--gc-text-3)' }}>
+                Type at least 2 characters to search.
+              </div>
+            )}
+            {searchQuery && (
+              <div className="text-[11px] mt-1 ml-3 flex items-center gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                <Search size={9} /> Showing {tab} loads matching <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>&ldquo;{searchQuery}&rdquo;</span>
+                {tab === 'pending' && <span style={{ color: 'var(--gc-text-3)' }}>(including upcoming)</span>}
+              </div>
+            )}
+          </div>
 
           {/* Tab pills */}
           <div className="flex items-center gap-1.5">

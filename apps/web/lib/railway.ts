@@ -112,11 +112,12 @@ class RailwayClient {
   // ── Closeout / POD verification queue ─────────────────────────────────
   listCloseoutQueue(
     tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' = 'pending',
-    opts?: { limit?: number; offset?: number },
+    opts?: { limit?: number; offset?: number; q?: string },
   ) {
     const params = new URLSearchParams({ tab });
     if (opts?.limit  != null) params.set('limit',  String(opts.limit));
     if (opts?.offset != null) params.set('offset', String(opts.offset));
+    if (opts?.q && opts.q.trim().length >= 2) params.set('q', opts.q.trim());
     return this.req<{
       loads: import('@fleetcal/types').Load[];
       /** Per-loadId map of doc-kind counts: { [loadId]: { pod: 2, bol: 1, lumper: 1 } } */

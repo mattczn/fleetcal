@@ -44,11 +44,55 @@ closeout.get("/queue", async (c) => {
   const tab = ((c.req.query("tab") ?? "pending") as Tab);
   const limit  = Math.min(Math.max(Number(c.req.query("limit") ?? "50"), 1), 200);
   const offset = Math.max(Number(c.req.query("offset") ?? "0"), 0);
+  // Search query — empty / <2 chars disables search. When active, we
+  // also lift the date filter on the pending tab so the search reaches
+  // upcoming loads, not just the overdue working set.
+  const qRaw = (c.req.query("q") ?? "").trim();
+  const searching = qRaw.length >= 2;
 
   // Fetch revenue events whose load matches the requested billing-status
   // filter. We pull events (not loads) so each leg is a row — the client
   // can dedup by load_id when needed.
   const nowIso = new Date().toISOString();
+
+  // When searching by load-level fields, PostgREST's .or() can't span
+  // a foreign relation in one shot. Mirror the /v1/loads/search pattern:
+  // first resolve matching load ids from the loads table, then OR that
+  // set with event-level field matches in the main query.
+  let searchLoadIds: string[] | null = null;
+  let searchEventOr: string | null = null;
+  if (searching) {
+    // Escape PostgREST-special chars in the LIKE pattern.
+    const escaped = qRaw.replace(/[%,()]/g, "\\$&");
+    const pattern = `%${escaped}%`;
+    const parsedNum = /^\d+$/.test(qRaw) ? Number(qRaw) : NaN;
+    const numericId = Number.isFinite(parsedNum) && parsedNum <= 2147483647 ? parsedNum : null;
+    const loadOr = numericId !== null
+      ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`
+      : `load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`;
+    const { data: loadIdRows, error: loadIdErr } = await supabase
+      .from("loads")
+      .select("id")
+      .eq("org_id", orgId)
+      .is("deleted_at", null)
+      .or(loadOr)
+      .limit(500);
+    if (loadIdErr) {
+      console.error("[GET /v1/closeout/queue] load-side search failed:", loadIdErr);
+      return c.json({ error: "search_failed", detail: loadIdErr.message } satisfies ApiErrorResponse, 500);
+    }
+    searchLoadIds = ((loadIdRows ?? []) as Array<{ id: string }>).map(r => r.id);
+    // Event-level OR — title / driver_name / notes plus the load_id set
+    // (when non-empty). If neither matches, no rows pass the filter, so
+    // we still emit a no-op OR to short-circuit cleanly.
+    const eventOrParts: string[] = [
+      `title.ilike.${pattern}`,
+      `driver_name.ilike.${pattern}`,
+      `notes.ilike.${pattern}`,
+    ];
+    if (searchLoadIds.length > 0) eventOrParts.push(`load_id.in.(${searchLoadIds.join(",")})`);
+    searchEventOr = eventOrParts.join(",");
+  }
 
   let query = supabase
     .from("events")
@@ -61,9 +105,10 @@ closeout.get("/queue", async (c) => {
   if (tab === "pending") {
     // Anything still in the queue: due (end <= now), not yet released,
     // and not currently flagged. Cancelled is already excluded above.
-    query = query
-      .lte("end", nowIso)
-      .eq("load.billing_status", "pending");
+    // When searching, drop the end-date constraint so upcoming loads
+    // are reachable — the search is the working filter then, not date.
+    if (!searching) query = query.lte("end", nowIso);
+    query = query.eq("load.billing_status", "pending");
   } else if (tab === "flagged") {
     query = query.eq("load.billing_status", "on_hold");
   } else if (tab === "verified") {
@@ -74,6 +119,10 @@ closeout.get("/queue", async (c) => {
     query = query.eq("load.billing_status", "paid");
   }
   // "all" — no extra filter.
+
+  if (searchEventOr) {
+    query = query.or(searchEventOr);
+  }
 
   // Priority loads always pin to the top of every page so dispatchers
   // see them first regardless of which page they're paginating through.
