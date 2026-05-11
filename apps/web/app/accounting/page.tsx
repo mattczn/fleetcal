@@ -1,34 +1,32 @@
 'use client';
 
 /**
- * /accounting — billing workflow.
+ * /accounting — billing pipeline.
  *
- * Modeled on Alvys's bucket layout:
- *   - Released      → loads that closeout marked verified; ready to invoice
- *   - Queued        → invoices that exist as drafts (PDF generated, unsent)
- *   - Invoiced      → invoices that were sent to the broker
- *   - Paid          → invoices that were paid
- *   - All           → everything except voids
+ * Workflow split (vs /closeout):
+ *   - /closeout    = "is this paperwork correct?"  POD verification.
+ *   - /accounting  = "let's bill and get paid."    Billing pipeline.
  *
- * Each bucket shows count + total $ in a tile up top. Selecting a tile
- * filters the table below. The Released bucket lists LOADS (because no
- * invoice exists yet for them); the rest list invoices.
+ * Loads transition between the two via the Release action in closeout.
+ * Anything billing-related happens here.
  *
- * Batch actions are bucket-specific:
- *   - Released: Generate Invoice / Create & Send (Invoice Summary modal)
- *   - Queued:   Submit Invoice  (batch send to broker AP)
- *   - Invoiced: Mark Paid
+ * Bucket structure (Alvys-style):
+ *   Released   — verified loads waiting to be invoiced
+ *   Queued     — invoices drafted, not yet sent
+ *   Invoiced   — sent invoices, awaiting payment
+ *   Paid       — paid invoices (closed)
+ *   All        — everything except voids
  *
- * Future buckets: Payment Discrepancies (Phase 5).
+ * Visual chrome mirrors /closeout (sortable headers, copyable cells,
+ * doc badges, polished hover) so the two queues feel like one product.
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '@clerk/nextjs';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers,
 } from 'lucide-react';
+import { useAuth } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import DataLoader from '@/components/DataLoader';
 import { railway, RailwayError } from '@/lib/railway';
@@ -36,29 +34,44 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
-import type { Invoice, InvoiceStatus, Customer, Load, BatchGenerateInvoicesResponse, BatchSendInvoicesResponse } from '@fleetcal/types';
+import {
+  Th, Td, SortTh, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
+  moneyFmt, fmtShortDate, daysSince, ageColor,
+} from '@/components/queue/QueueTablePrimitives';
+import type {
+  Invoice, InvoiceStatus, Customer, Load,
+  BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
+} from '@fleetcal/types';
+
+// ─── Bucket config ──────────────────────────────────────────────────────
 
 type Bucket = 'released' | 'queued' | 'invoiced' | 'paid' | 'all';
 
-const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>; tint: string }> = [
-  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8' },
-  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea' },
-  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8' },
-  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a' },
-  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368' },
+const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>; tint: string; subtitle: string }> = [
+  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', subtitle: 'Ready to invoice' },
+  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea', subtitle: 'Drafts, unsent'   },
+  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8', subtitle: 'Awaiting payment' },
+  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a', subtitle: 'Closed out'       },
+  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'Everything'       },
 ];
 
-const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-const fmtDate  = (iso?: string) => iso
+// Per-bucket sort keys. We use distinct types so swapping buckets
+// resets sort cleanly without surfacing nonsense column keys.
+type ReleasedSort = 'released' | 'delivered' | 'internalId' | 'loadNum' | 'customer' | 'driver' | 'amount' | 'method';
+type InvoiceSort  = 'issued' | 'sent' | 'paid' | 'due' | 'dso' | 'invoiceNum' | 'loadNum' | 'customer' | 'amount' | 'status';
+type AnySortKey   = ReleasedSort | InvoiceSort;
+
+interface SortState { key: AnySortKey | null; dir: 'asc' | 'desc' }
+
+const PAGE_SIZE = 50;
+
+const fmtDateLong = (iso?: string) => iso
   ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
   : '—';
 
+// ─── Page ───────────────────────────────────────────────────────────────
+
 export default function AccountingPage() {
-  const router    = useRouter();
-  // Clerk readiness gate — without this, a hard refresh on /accounting
-  // fires the listInvoices + closeout queue requests before
-  // RailwayClientProvider's useEffect wires the token, so the API
-  // rejects with 401. Same workaround as CloseoutView.
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const customers = useCalendarStore(s => s.customers);
   const customerById = useMemo(() => {
@@ -67,25 +80,31 @@ export default function AccountingPage() {
     return m;
   }, [customers]);
 
-  // ── Bucket state ────────────────────────────────────────────────────
   const [bucket, setBucket] = useState<Bucket>('released');
   const [releasedLoads, setReleasedLoads] = useState<Load[]>([]);
+  const [docCounts,     setDocCounts]     = useState<Record<string, Record<string, number>>>({});
   const [allInvoices,   setAllInvoices]   = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
 
-  // ── Selection + modals ──────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search,   setSearch]   = useState('');
+  const [sort,     setSort]     = useState<SortState>({ key: null, dir: 'asc' });
+  const [page,     setPage]     = useState(0);
+
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const [invoiceModalId,  setInvoiceModalId]  = useState<string | null>(null);
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
   const [markPaidBusy,    setMarkPaidBusy]    = useState(false);
 
-  // Clear selection whenever the active bucket changes so a stale id
-  // can't get acted on against the wrong list.
-  useEffect(() => { setSelected(new Set()); }, [bucket]);
+  // Tab change → drop selection / sort / pagination so we never act
+  // on a stale id from a different bucket.
+  useEffect(() => {
+    setSelected(new Set());
+    setSort({ key: null, dir: 'asc' });
+    setPage(0);
+  }, [bucket]);
 
   // ── Data fetch ──────────────────────────────────────────────────────
   async function refresh() {
@@ -94,9 +113,10 @@ export default function AccountingPage() {
     try {
       const [releasedRes, invoicesRes] = await Promise.all([
         railway.listCloseoutQueue('verified', { limit: 200 }),
-        railway.listInvoices({ /* fetch all so the tiles can show counts */ }),
+        railway.listInvoices({}),
       ]);
       setReleasedLoads(releasedRes.loads);
+      setDocCounts(releasedRes.docCounts ?? {});
       setAllInvoices(invoicesRes.invoices);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounting data');
@@ -112,58 +132,93 @@ export default function AccountingPage() {
 
   // ── Bucket stats ────────────────────────────────────────────────────
   const stats = useMemo(() => {
-    const sumLoads     = (xs: Load[])    => xs.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
-    const sumInvoices  = (xs: Invoice[]) => xs.reduce((s, i) => s + i.total, 0);
-    const queued     = allInvoices.filter(i => i.status === 'draft');
-    const invoiced   = allInvoices.filter(i => i.status === 'sent');
-    const paid       = allInvoices.filter(i => i.status === 'paid');
-    const allLive    = allInvoices.filter(i => i.status !== 'void');
+    const sumLoads    = (xs: Load[])    => xs.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+    const sumInvoices = (xs: Invoice[]) => xs.reduce((s, i) => s + i.total, 0);
+    const queued    = allInvoices.filter(i => i.status === 'draft');
+    const invoiced  = allInvoices.filter(i => i.status === 'sent');
+    const paid      = allInvoices.filter(i => i.status === 'paid');
+    const live      = allInvoices.filter(i => i.status !== 'void');
     return {
       released: { count: releasedLoads.length, total: sumLoads(releasedLoads) },
       queued:   { count: queued.length,        total: sumInvoices(queued) },
       invoiced: { count: invoiced.length,      total: sumInvoices(invoiced) },
       paid:     { count: paid.length,          total: sumInvoices(paid) },
-      all:      { count: allLive.length,       total: sumInvoices(allLive) },
+      all:      { count: live.length,          total: sumInvoices(live) },
     };
   }, [releasedLoads, allInvoices]);
 
-  // ── Rows for the active bucket + search ─────────────────────────────
-  const rows = useMemo(() => {
+  // ── Filter + search + sort ──────────────────────────────────────────
+  const matchesSearch = (text: string) => {
     const q = search.trim().toLowerCase();
-    if (bucket === 'released') {
-      const filtered = q
-        ? releasedLoads.filter(l => {
-            return (l.broker ?? '').toLowerCase().includes(q)
-              || (l.loadNum ?? '').toLowerCase().includes(q)
-              || String(l.internalLoadId ?? '').toLowerCase().includes(q);
-          })
-        : releasedLoads;
-      return { kind: 'loads' as const, loads: filtered };
+    return !q || text.toLowerCase().includes(q);
+  };
+
+  // Released bucket rows: loads from closeout queue (billing_status='verified').
+  const releasedView = useMemo(() => {
+    let xs = releasedLoads;
+    if (search.trim()) {
+      xs = xs.filter(l => {
+        const customer = l.customerId ? customerById.get(l.customerId) : undefined;
+        return matchesSearch(customer?.name ?? l.broker ?? '')
+          || matchesSearch(l.loadNum ?? '')
+          || matchesSearch(String(l.internalLoadId ?? ''))
+          || matchesSearch(l.driverName ?? '');
+      });
     }
-    let base: Invoice[];
-    if      (bucket === 'queued')   base = allInvoices.filter(i => i.status === 'draft');
-    else if (bucket === 'invoiced') base = allInvoices.filter(i => i.status === 'sent');
-    else if (bucket === 'paid')     base = allInvoices.filter(i => i.status === 'paid');
-    else                            base = allInvoices.filter(i => i.status !== 'void');
-    const filtered = q
-      ? base.filter(inv => {
-          const broker = (inv.snapshot.brokerName ?? '').toLowerCase();
-          return inv.invoiceNumber.toLowerCase().includes(q)
-              || broker.includes(q)
-              || (inv.snapshot.loadNumber ?? '').toLowerCase().includes(q);
-        })
-      : base;
-    return { kind: 'invoices' as const, invoices: filtered };
-  }, [bucket, releasedLoads, allInvoices, search]);
+    if (sort.key) {
+      const k = sort.key as ReleasedSort;
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      xs = [...xs].sort((a, b) => {
+        const cmp = compareReleased(a, b, k, customerById);
+        return cmp * dir;
+      });
+    }
+    return xs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [releasedLoads, customerById, search, sort.key, sort.dir]);
+
+  // Invoice buckets share a filter/sort path keyed on a different field set.
+  const invoicesForBucket = useMemo(() => {
+    if      (bucket === 'queued')   return allInvoices.filter(i => i.status === 'draft');
+    else if (bucket === 'invoiced') return allInvoices.filter(i => i.status === 'sent');
+    else if (bucket === 'paid')     return allInvoices.filter(i => i.status === 'paid');
+    else if (bucket === 'all')      return allInvoices.filter(i => i.status !== 'void');
+    return [];
+  }, [bucket, allInvoices]);
+
+  const invoiceView = useMemo(() => {
+    let xs = invoicesForBucket;
+    if (search.trim()) {
+      xs = xs.filter(inv => {
+        const customer = inv.customerId ? customerById.get(inv.customerId) : undefined;
+        return matchesSearch(inv.invoiceNumber)
+          || matchesSearch(customer?.name ?? inv.snapshot.brokerName ?? '')
+          || matchesSearch(inv.snapshot.loadNumber ?? '');
+      });
+    }
+    if (sort.key) {
+      const k = sort.key as InvoiceSort;
+      const dir = sort.dir === 'asc' ? 1 : -1;
+      xs = [...xs].sort((a, b) => compareInvoice(a, b, k, customerById) * dir);
+    }
+    return xs;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoicesForBucket, customerById, search, sort.key, sort.dir]);
+
+  // ── Pagination slice ────────────────────────────────────────────────
+  const fullList: Load[] | Invoice[] = bucket === 'released' ? releasedView : invoiceView;
+  const total = fullList.length;
+  const paged = useMemo(() => fullList.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [fullList, page]);
 
   // ── Selection helpers ───────────────────────────────────────────────
   const selectableIds = useMemo(() => {
-    if (rows.kind === 'loads') return rows.loads.map(l => l.loadId ?? l.id);
-    if (bucket === 'paid' || bucket === 'all') return [];
-    return rows.invoices.map(i => i.id);
-  }, [rows, bucket]);
-  const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
+    if (bucket === 'released') return (paged as Load[]).map(l => l.loadId ?? l.id);
+    if (bucket === 'queued' || bucket === 'invoiced') return (paged as Invoice[]).map(i => i.id);
+    return [];
+  }, [bucket, paged]);
+  const allSelected  = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
   const someSelected = selected.size > 0;
+
   function toggleId(id: string) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -172,30 +227,24 @@ export default function AccountingPage() {
     });
   }
   function toggleAll() {
-    setSelected(prev => allSelected ? new Set() : new Set(selectableIds));
+    setSelected(prev => allSelected ? new Set() : new Set([...prev, ...selectableIds]));
   }
 
-  // Resolved selected objects (for the action bar + modal previews).
-  const selectedLoads = useMemo(
-    () => rows.kind === 'loads'
-      ? rows.loads.filter(l => selected.has(l.loadId ?? l.id))
+  const selectedLoads = useMemo(() =>
+    bucket === 'released'
+      ? (paged as Load[]).filter(l => selected.has(l.loadId ?? l.id))
       : [],
-    [rows, selected],
-  );
-  const selectedInvoices = useMemo(
-    () => rows.kind === 'invoices'
-      ? rows.invoices.filter(i => selected.has(i.id))
+    [bucket, paged, selected]);
+  const selectedInvoices = useMemo(() =>
+    (bucket === 'queued' || bucket === 'invoiced')
+      ? (paged as Invoice[]).filter(i => selected.has(i.id))
       : [],
-    [rows, selected],
-  );
+    [bucket, paged, selected]);
 
-  // ── Actions ─────────────────────────────────────────────────────────
   async function handleMarkPaid() {
     if (selectedInvoices.length === 0 || markPaidBusy) return;
     setMarkPaidBusy(true);
     try {
-      // No batch endpoint for mark-paid yet — call sequentially.
-      // Small volumes so the wall-clock cost is fine.
       for (const inv of selectedInvoices) {
         try { await railway.markInvoicePaid(inv.id, {}); }
         catch (err) { console.warn('[accounting] markPaid failed for', inv.invoiceNumber, err); }
@@ -215,6 +264,12 @@ export default function AccountingPage() {
 
       <div className="flex-1 overflow-auto" style={{ background: 'var(--gc-bg)' }}>
         <div className="px-6 py-5 space-y-4">
+
+          {/* Purpose hint */}
+          <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
+            Billing pipeline. Loads land in <strong>Released</strong> once Closeout marks them verified.
+            Generate invoices here, track delivery, mark paid.
+          </div>
 
           {/* Bucket tiles */}
           <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
@@ -237,25 +292,26 @@ export default function AccountingPage() {
                     <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
                   </div>
                   <div className="mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-                    {fmtMoney(s.total)}
+                    {moneyFmt.format(s.total)}
+                  </div>
+                  <div className="mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                    {b.subtitle}
                   </div>
                 </button>
               );
             })}
           </div>
 
-          {/* Toolbar: search + (bucket-specific actions on right) */}
+          {/* Toolbar */}
           <div className="flex items-center gap-3">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }} />
-              <input
-                type="text"
+              <input type="text"
                 placeholder="Search broker, invoice #, load #…"
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={e => { setSearch(e.target.value); setPage(0); }}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
-                style={{ width: 300, background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
-              />
+                style={{ width: 300, background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
               {search && (
                 <button onClick={() => setSearch('')}
                   className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-[var(--gc-hover)]">
@@ -265,12 +321,8 @@ export default function AccountingPage() {
             </div>
             <div className="flex-1" />
             {someSelected && (
-              <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                {selected.size} selected
-              </span>
+              <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>{selected.size} selected</span>
             )}
-            {/* Action buttons appear when selection has rows + bucket
-                supports actions */}
             {bucket === 'released' && someSelected && (
               <>
                 <button onClick={() => setSummaryAction('generate')}
@@ -301,46 +353,63 @@ export default function AccountingPage() {
                 Mark {selected.size} paid
               </button>
             )}
+            <button onClick={() => void refresh()}
+              className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
+              style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
+              Refresh
+            </button>
           </div>
 
           {/* Table */}
-          <div className="rounded-2xl overflow-hidden"
-            style={{ border: '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
-            {loading ? (
-              <div className="flex items-center justify-center py-16">
-                <Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
-              </div>
-            ) : error ? (
-              <div className="flex items-center justify-center py-16 text-sm" style={{ color: 'var(--gc-text-2)' }}>
-                <AlertTriangle size={16} style={{ display: 'inline', marginRight: 6, color: '#dc2626' }} />
-                {error}
-              </div>
-            ) : rows.kind === 'loads' ? (
-              <LoadsTable
-                loads={rows.loads}
-                selected={selected}
-                allSelected={allSelected}
-                onToggle={toggleId}
-                onToggleAll={toggleAll}
-                customerById={customerById}
-                customers={customers}
-                onOpenBroker={(id) => setBrokerProfileId(id)}
-              />
-            ) : (
-              <InvoicesTable
-                invoices={rows.invoices}
-                bucket={bucket}
-                selected={selected}
-                allSelected={allSelected}
-                onToggle={toggleId}
-                onToggleAll={toggleAll}
-                customerById={customerById}
-                customers={customers}
-                onOpenBroker={(id) => setBrokerProfileId(id)}
-                onOpenInvoice={(id) => setInvoiceModalId(id)}
-              />
-            )}
-          </div>
+          {loading ? (
+            <div className="flex items-center justify-center py-24" style={{ color: 'var(--gc-text-3)' }}>
+              <Loader2 size={20} className="animate-spin" />
+            </div>
+          ) : error ? (
+            <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
+              {error}
+            </div>
+          ) : (
+            <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+              {bucket === 'released' ? (
+                <ReleasedTable
+                  loads={paged as Load[]}
+                  total={total}
+                  customerById={customerById}
+                  customers={customers}
+                  docCounts={docCounts}
+                  selected={selected}
+                  allSelected={allSelected}
+                  onToggle={toggleId}
+                  onToggleAll={toggleAll}
+                  sort={sort}
+                  onSort={setSort}
+                  onOpenBroker={(id) => setBrokerProfileId(id)}
+                />
+              ) : (
+                <InvoicesTable
+                  invoices={paged as Invoice[]}
+                  bucket={bucket}
+                  total={total}
+                  customerById={customerById}
+                  customers={customers}
+                  selected={selected}
+                  allSelected={allSelected}
+                  onToggle={toggleId}
+                  onToggleAll={toggleAll}
+                  sort={sort}
+                  onSort={setSort}
+                  onOpenBroker={(id) => setBrokerProfileId(id)}
+                  onOpenInvoice={(id) => setInvoiceModalId(id)}
+                />
+              )}
+              {total > PAGE_SIZE && (
+                <PaginationFooter page={page} pageSize={PAGE_SIZE} total={total}
+                  onPrev={() => setPage(Math.max(0, page - 1))}
+                  onNext={() => setPage(page + 1)} />
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -360,12 +429,7 @@ export default function AccountingPage() {
           action={summaryAction}
           onClose={() => setSummaryAction(null)}
           onOpenBroker={(id) => setBrokerProfileId(id)}
-          onComplete={() => {
-            setSummaryAction(null);
-            setSelected(new Set());
-            void refresh();
-          }}
-        />
+          onComplete={() => { setSummaryAction(null); setSelected(new Set()); void refresh(); }} />
       )}
       {batchSendOpen && (
         <BatchSendDialog
@@ -373,102 +437,191 @@ export default function AccountingPage() {
           customerById={customerById}
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchSendOpen(false)}
-          onComplete={() => { setBatchSendOpen(false); setSelected(new Set()); void refresh(); }}
-        />
+          onComplete={() => { setBatchSendOpen(false); setSelected(new Set()); void refresh(); }} />
       )}
     </div>
   );
 }
 
-// ─── Loads table (Released bucket) ───────────────────────────────────────
+// ─── Sort comparators ───────────────────────────────────────────────────
 
-interface LoadsTableProps {
+function compareReleased(a: Load, b: Load, key: ReleasedSort, customerById: Map<string, Customer>): number {
+  switch (key) {
+    case 'released':    // Newest delivered first when asc=desc-by-date
+      return ageDaysOf(a) - ageDaysOf(b);
+    case 'delivered':
+      return a.end.localeCompare(b.end);
+    case 'internalId':
+      return (a.internalLoadId ?? 0) - (b.internalLoadId ?? 0);
+    case 'loadNum':
+      return (a.loadNum ?? '').localeCompare(b.loadNum ?? '');
+    case 'customer': {
+      const aN = (a.customerId ? customerById.get(a.customerId)?.name : a.broker) ?? '';
+      const bN = (b.customerId ? customerById.get(b.customerId)?.name : b.broker) ?? '';
+      return aN.localeCompare(bN);
+    }
+    case 'driver':
+      return (a.driverName ?? '').localeCompare(b.driverName ?? '');
+    case 'amount':
+      return (a.loadPrice ?? 0) - (b.loadPrice ?? 0);
+    case 'method': {
+      const aM = (a.customerId ? customerById.get(a.customerId)?.invoiceMethod : null) ?? 'email';
+      const bM = (b.customerId ? customerById.get(b.customerId)?.invoiceMethod : null) ?? 'email';
+      return aM.localeCompare(bM);
+    }
+  }
+}
+
+function compareInvoice(a: Invoice, b: Invoice, key: InvoiceSort, customerById: Map<string, Customer>): number {
+  switch (key) {
+    case 'issued':     return a.issuedAt.localeCompare(b.issuedAt);
+    case 'sent':       return (a.sentAt ?? '').localeCompare(b.sentAt ?? '');
+    case 'paid':       return (a.paidAt ?? '').localeCompare(b.paidAt ?? '');
+    case 'due':        return (a.dueAt ?? '').localeCompare(b.dueAt ?? '');
+    case 'dso': {
+      const aRef = a.sentAt ?? a.issuedAt;
+      const bRef = b.sentAt ?? b.issuedAt;
+      return daysSince(aRef) - daysSince(bRef);
+    }
+    case 'invoiceNum': return a.invoiceNumber.localeCompare(b.invoiceNumber);
+    case 'loadNum':    return (a.snapshot.loadNumber ?? '').localeCompare(b.snapshot.loadNumber ?? '');
+    case 'customer': {
+      const aN = (a.customerId ? customerById.get(a.customerId)?.name : a.snapshot.brokerName) ?? '';
+      const bN = (b.customerId ? customerById.get(b.customerId)?.name : b.snapshot.brokerName) ?? '';
+      return aN.localeCompare(bN);
+    }
+    case 'amount':     return a.total - b.total;
+    case 'status':     return a.status.localeCompare(b.status);
+  }
+}
+
+function ageDaysOf(l: Load): number {
+  return daysSince(l.end);
+}
+
+// ─── Released table ─────────────────────────────────────────────────────
+
+interface ReleasedTableProps {
   loads:        Load[];
+  total:        number;
+  customerById: Map<string, Customer>;
+  customers:    Customer[];
+  docCounts:    Record<string, Record<string, number>>;
   selected:     Set<string>;
   allSelected:  boolean;
   onToggle:     (id: string) => void;
   onToggleAll:  () => void;
-  customerById: Map<string, Customer>;
-  customers:    Customer[];
+  sort:         SortState;
+  onSort:       (s: SortState) => void;
   onOpenBroker: (id: string) => void;
 }
 
-function LoadsTable({
-  loads, selected, allSelected, onToggle, onToggleAll, customerById, customers, onOpenBroker,
-}: LoadsTableProps) {
-  if (loads.length === 0) {
+function ReleasedTable({
+  loads, total, customerById, customers, docCounts, selected, allSelected,
+  onToggle, onToggleAll, sort, onSort, onOpenBroker,
+}: ReleasedTableProps) {
+  if (total === 0) {
     return (
       <Empty
-        icon={<AlertOctagon size={28} style={{ color: 'var(--gc-text-3)' }} />}
-        title="No released loads"
+        icon={<AlertOctagon size={28} style={{ color: '#1a73e8' }} />}
+        title="Nothing released yet"
         sub="Loads land here once Closeout marks them verified."
       />
     );
   }
   return (
-    <table className="w-full text-[13px]">
+    <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
       <thead>
         <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-          <Th><input type="checkbox" checked={allSelected} onChange={onToggleAll} /></Th>
-          <Th>Customer</Th>
-          <Th>Order #</Th>
-          <Th>Load #</Th>
-          <Th align="right">Amount</Th>
-          <Th>Schedule</Th>
-          <Th>Driver</Th>
-          <Th>Invoice method</Th>
+          <Th><input type="checkbox" checked={allSelected} onChange={onToggleAll}
+            style={{ accentColor: '#1a73e8' }} /></Th>
+          <SortTh<ReleasedSort> colKey="released"   label="Age"       sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="delivered"  label="Delivered" sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="internalId" label="Load ID"   sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="loadNum"    label="Load #"    sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="customer"   label="Customer"  sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="driver"     label="Driver(s)" sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="amount"     label="Amount"    align="right" sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<ReleasedSort> colKey="method"     label="Method"    sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <Th>Docs</Th>
         </tr>
       </thead>
       <tbody>
         {loads.map((l) => {
           const id = l.loadId ?? l.id;
+          const days = ageDaysOf(l);
+          const ac   = ageColor(days);
           const customer = l.customerId ? customerById.get(l.customerId) : undefined;
-          const brokerLabel = displayBrokerName(customer?.name ?? l.broker ?? '', customers) || '—';
+          const cust = displayBrokerName(customer?.name ?? l.broker ?? '', customers);
           const method = customer?.invoiceMethod ?? 'email';
           const missingEmail = method === 'email' && !customer?.invoiceEmail;
+          const counts = docCounts[id] ?? {};
+          const hasRC = !!l.rateConPdf;
           return (
             <tr key={id}
-              className="transition-colors hover:bg-[var(--gc-hover)]"
-              style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              style={{ borderBottom: '1px solid var(--gc-border-light)' }}
+              className="hover:bg-[var(--gc-hover)]">
               <Td>
-                <input type="checkbox"
-                  checked={selected.has(id)}
-                  onChange={() => onToggle(id)} />
+                <input type="checkbox" checked={selected.has(id)} onChange={() => onToggle(id)}
+                  style={{ accentColor: '#1a73e8' }} />
+              </Td>
+              <Td>
+                <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                  {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
+                </span>
+              </Td>
+              <Td>{fmtShortDate(l.end)}</Td>
+              <Td>
+                {l.internalLoadId != null
+                  ? <CopyableCell value={String(l.internalLoadId)} displayValue={String(l.internalLoadId)} title="Copy load ID / invoice #" />
+                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+              </Td>
+              <Td>
+                {l.loadNum
+                  ? <CopyableLoadNum value={l.loadNum} />
+                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
               </Td>
               <Td>
                 <div className="flex items-center gap-1.5">
                   {customer ? (
                     <button onClick={() => onOpenBroker(customer.id)}
-                      className="font-medium text-left hover:underline"
-                      style={{ color: 'var(--gc-text-1)' }}
-                      title="Open broker profile">
-                      {brokerLabel}
+                      className="text-left hover:underline truncate max-w-[180px]"
+                      style={{ color: 'var(--gc-blue)' }}
+                      title={`Open profile — ${cust}`}>
+                      {cust}
                     </button>
                   ) : (
-                    <span style={{ color: 'var(--gc-text-3)' }}>{brokerLabel}</span>
+                    <span className="truncate max-w-[180px]" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>{cust || '—'}</span>
                   )}
                   {missingEmail && (
                     <button onClick={() => customer && onOpenBroker(customer.id)}
-                      className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
                       style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-                      title="No invoice email set for this broker">
-                      <AlertCircle size={10} /> No email
+                      title="No invoice email set">
+                      <AlertCircle size={9} /> No email
                     </button>
                   )}
                 </div>
               </Td>
-              <Td className="tabular-nums">{l.loadNum ?? '—'}</Td>
-              <Td className="tabular-nums">{l.internalLoadId ?? '—'}</Td>
+              <Td>{l.driverName ?? <span style={{ color: 'var(--gc-text-3)' }}>—</span>}</Td>
               <Td align="right" className="font-semibold tabular-nums">
-                {l.loadPrice != null ? fmtMoney(l.loadPrice) : '—'}
+                {l.loadPrice != null ? moneyFmt.format(l.loadPrice) : '—'}
               </Td>
-              <Td>{fmtDate(l.start)}</Td>
-              <Td>{l.driverName ?? '—'}</Td>
               <Td>
-                <span className="text-[11px] font-medium uppercase tracking-wider"
+                <span className="text-[11px] font-semibold uppercase tracking-wider"
                   style={{ color: method === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
                   {method === 'portal' ? 'Portal' : 'Email'}
                 </span>
+              </Td>
+              <Td>
+                <div className="flex flex-wrap gap-1">
+                  {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+                  {(counts.pod    ?? 0) > 0 && <DocBadge label="POD"    count={counts.pod}    />}
+                  {(counts.bol    ?? 0) > 0 && <DocBadge label="BOL"    count={counts.bol}    />}
+                  {(counts.lumper ?? 0) > 0 && <DocBadge label="Lumper" count={counts.lumper} />}
+                  {(counts.scale  ?? 0) > 0 && <DocBadge label="Scale"  count={counts.scale}  />}
+                  {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                </div>
               </Td>
             </tr>
           );
@@ -478,99 +631,128 @@ function LoadsTable({
   );
 }
 
-// ─── Invoices table (Queued / Invoiced / Paid / All) ─────────────────────
+// ─── Invoices table ─────────────────────────────────────────────────────
 
 interface InvoicesTableProps {
   invoices:      Invoice[];
   bucket:        Bucket;
+  total:         number;
+  customerById:  Map<string, Customer>;
+  customers:     Customer[];
   selected:      Set<string>;
   allSelected:   boolean;
   onToggle:      (id: string) => void;
   onToggleAll:   () => void;
-  customerById:  Map<string, Customer>;
-  customers:     Customer[];
+  sort:          SortState;
+  onSort:        (s: SortState) => void;
   onOpenBroker:  (id: string) => void;
   onOpenInvoice: (id: string) => void;
 }
 
 function InvoicesTable({
-  invoices, bucket, selected, allSelected, onToggle, onToggleAll, customerById, customers, onOpenBroker, onOpenInvoice,
+  invoices, bucket, total, customerById, customers, selected, allSelected,
+  onToggle, onToggleAll, sort, onSort, onOpenBroker, onOpenInvoice,
 }: InvoicesTableProps) {
   const selectable = bucket === 'queued' || bucket === 'invoiced';
   const showStatus = bucket === 'all';
-  if (invoices.length === 0) {
+  const showDSO    = bucket === 'invoiced';
+  const showPaid   = bucket === 'paid';
+
+  if (total === 0) {
     const map: Record<Bucket, { title: string; sub: string }> = {
-      released: { title: 'No released loads',     sub: '' },
-      queued:   { title: 'Nothing queued',        sub: 'Generated invoices waiting to be sent show up here.' },
-      invoiced: { title: 'Nothing invoiced',      sub: 'Sent invoices show up here until they\'re marked paid.' },
-      paid:     { title: 'Nothing paid yet',      sub: 'Paid invoices show up here for record-keeping.' },
-      all:      { title: 'No invoices yet',       sub: 'Generate one from the Released bucket.' },
+      released: { title: '',                     sub: '' },
+      queued:   { title: 'Nothing queued',       sub: 'Generated invoices waiting to be sent show up here.' },
+      invoiced: { title: 'Nothing invoiced',     sub: 'Sent invoices show up here until they\'re marked paid.' },
+      paid:     { title: 'Nothing paid yet',     sub: 'Paid invoices show up here for record-keeping.' },
+      all:      { title: 'No invoices yet',      sub: 'Generate one from the Released bucket.' },
     };
     const m = map[bucket];
     return <Empty icon={<Receipt size={28} style={{ color: 'var(--gc-text-3)' }} />} title={m.title} sub={m.sub} />;
   }
+
   return (
-    <table className="w-full text-[13px]">
+    <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
       <thead>
         <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
           {selectable && (
-            <Th><input type="checkbox" checked={allSelected} onChange={onToggleAll} /></Th>
+            <Th><input type="checkbox" checked={allSelected} onChange={onToggleAll}
+              style={{ accentColor: '#1a73e8' }} /></Th>
           )}
-          <Th>Invoice #</Th>
-          <Th>Customer</Th>
-          <Th>Load</Th>
-          <Th>Issued</Th>
-          <Th>Due</Th>
-          <Th align="right">Total</Th>
-          {showStatus && <Th>Status</Th>}
+          <SortTh<InvoiceSort> colKey="invoiceNum" label="Invoice #" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<InvoiceSort> colKey="loadNum"    label="Load"      sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<InvoiceSort> colKey="customer"   label="Customer"  sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          <SortTh<InvoiceSort> colKey="issued"     label="Issued"    sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          {bucket === 'invoiced' && <SortTh<InvoiceSort> colKey="sent" label="Sent" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
+          {showPaid && <SortTh<InvoiceSort> colKey="paid" label="Paid" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
+          <SortTh<InvoiceSort> colKey="due" label="Due" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          {showDSO && <SortTh<InvoiceSort> colKey="dso" label="DSO" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
+          <SortTh<InvoiceSort> colKey="amount" label="Amount" align="right" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
+          {showStatus && <SortTh<InvoiceSort> colKey="status" label="Status" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
         </tr>
       </thead>
       <tbody>
-        {invoices.map((inv) => {
+        {invoices.map(inv => {
           const customer = inv.customerId ? customerById.get(inv.customerId) : undefined;
-          const brokerName  = customer?.name ?? inv.snapshot.brokerName ?? '';
+          const brokerName = customer?.name ?? inv.snapshot.brokerName ?? '';
           const brokerLabel = displayBrokerName(brokerName, customers) || '—';
-          const method      = customer?.invoiceMethod ?? 'email';
+          const method = customer?.invoiceMethod ?? 'email';
           const missingEmail = inv.status === 'draft' && method === 'email' && !customer?.invoiceEmail;
+          const dsoRef = inv.sentAt ?? inv.issuedAt;
+          const dsoDays = daysSince(dsoRef);
+          const dsoColor = ageColor(dsoDays);
           return (
             <tr key={inv.id}
               className="cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
               style={{ borderBottom: '1px solid var(--gc-border-light)' }}
               onClick={() => onOpenInvoice(inv.id)}>
               {selectable && (
-                <Td onClickStopProp>
-                  <input type="checkbox"
-                    checked={selected.has(inv.id)}
-                    onChange={() => onToggle(inv.id)}
-                    onClick={e => e.stopPropagation()} />
+                <Td onClick={e => e.stopPropagation()}>
+                  <input type="checkbox" checked={selected.has(inv.id)} onChange={() => onToggle(inv.id)}
+                    style={{ accentColor: '#1a73e8' }} />
                 </Td>
               )}
-              <Td><span className="font-semibold tabular-nums" style={{ color: '#1a73e8' }}>#{inv.invoiceNumber}</span></Td>
-              <Td onClickStopProp>
+              <Td>
+                <span className="font-bold tabular-nums" style={{ color: '#1a73e8' }}>#{inv.invoiceNumber}</span>
+              </Td>
+              <Td>
+                {inv.snapshot.loadNumber
+                  ? <CopyableCell value={inv.snapshot.loadNumber} displayValue={inv.snapshot.loadNumber} title="Copy load ID" />
+                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+              </Td>
+              <Td onClick={e => e.stopPropagation()}>
                 <div className="flex items-center gap-1.5">
                   {customer ? (
-                    <button onClick={(e) => { e.stopPropagation(); onOpenBroker(customer.id); }}
-                      className="font-medium text-left hover:underline"
-                      style={{ color: 'var(--gc-text-1)' }}>
+                    <button onClick={() => onOpenBroker(customer.id)}
+                      className="text-left hover:underline truncate max-w-[180px]"
+                      style={{ color: 'var(--gc-blue)' }}>
                       {brokerLabel}
                     </button>
                   ) : (
                     <span style={{ color: 'var(--gc-text-3)' }}>{brokerLabel}</span>
                   )}
                   {missingEmail && (
-                    <button onClick={(e) => { e.stopPropagation(); customer && onOpenBroker(customer.id); }}
-                      className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-                      title="No invoice email set for this broker">
-                      <AlertCircle size={10} /> No email
+                    <button onClick={() => customer && onOpenBroker(customer.id)}
+                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
+                      <AlertCircle size={9} /> No email
                     </button>
                   )}
                 </div>
               </Td>
-              <Td className="tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{inv.snapshot.loadNumber}</Td>
-              <Td>{fmtDate(inv.issuedAt)}</Td>
-              <Td>{fmtDate(inv.dueAt)}</Td>
-              <Td align="right" className="font-semibold tabular-nums">{fmtMoney(inv.total)}</Td>
+              <Td>{fmtShortDate(inv.issuedAt)}</Td>
+              {bucket === 'invoiced' && <Td>{inv.sentAt ? fmtShortDate(inv.sentAt) : '—'}</Td>}
+              {showPaid && <Td>{inv.paidAt ? fmtShortDate(inv.paidAt) : '—'}</Td>}
+              <Td>{inv.dueAt ? fmtShortDate(inv.dueAt) : '—'}</Td>
+              {showDSO && (
+                <Td>
+                  <span style={{ background: dsoColor.bg, color: dsoColor.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                    {dsoDays}d
+                  </span>
+                </Td>
+              )}
+              <Td align="right" className="font-semibold tabular-nums">
+                {moneyFmt.format(inv.total)}
+              </Td>
               {showStatus && <Td><StatusPill status={inv.status} /></Td>}
             </tr>
           );
@@ -600,8 +782,6 @@ function InvoiceSummaryModal({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BatchGenerateInvoicesResponse | null>(null);
 
-  // Group by broker for the result-summary view + the missing-email
-  // pre-flight banner.
   const groups = useMemo(() => {
     const byBroker = new Map<string, { broker: Customer | null; loads: Load[] }>();
     for (const l of loads) {
@@ -625,10 +805,7 @@ function InvoiceSummaryModal({
     try {
       const loadIds = loads.map(l => l.loadId ?? l.id);
       const res = await railway.batchGenerateInvoices({
-        loadIds,
-        thenSend: willSend,
-        bccSelf,
-        attachLoadDocs,
+        loadIds, thenSend: willSend, bccSelf, attachLoadDocs,
       });
       setResult(res);
     } catch (err) {
@@ -654,7 +831,7 @@ function InvoiceSummaryModal({
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
             {result
               ? 'Invoice summary — results'
-              : `Invoice summary — ${loads.length} load${loads.length === 1 ? '' : 's'}, ${fmtMoney(totalAmount)}`
+              : `Invoice summary — ${loads.length} load${loads.length === 1 ? '' : 's'}, ${moneyFmt.format(totalAmount)}`
             }
           </div>
           <button onClick={onClose} disabled={busy} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)] disabled:opacity-50">
@@ -670,11 +847,9 @@ function InvoiceSummaryModal({
                   style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}>
                   <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
                   Some brokers have no saved AP email — their invoices will be created but skipped at the send step.
-                  Open those broker profiles to add an email, or run Generate Invoice only (no send) for now.
                 </div>
               )}
 
-              {/* Per-load summary table — mimics Alvys's modal. */}
               <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--gc-border-light)' }}>
                 <table className="w-full text-[12.5px]">
                   <thead>
@@ -701,15 +876,13 @@ function InvoiceSummaryModal({
                               ) : <span style={{ color: 'var(--gc-text-3)' }}>{brokerName}</span>}
                               {noEmail && (
                                 <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full"
-                                  style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
-                                  No email
-                                </span>
+                                  style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>No email</span>
                               )}
                             </div>
                           </Td>
-                          <Td className="tabular-nums" style={{ color: 'var(--gc-text-2)' }}>{l.internalLoadId ?? '—'}</Td>
-                          <Td align="right" className="tabular-nums font-semibold" style={{ color: '#15803d' }}>
-                            {l.loadPrice != null ? fmtMoney(l.loadPrice) : '—'}
+                          <Td className="tabular-nums">{l.internalLoadId ?? '—'}</Td>
+                          <Td align="right" className="tabular-nums font-semibold">
+                            <span style={{ color: '#15803d' }}>{l.loadPrice != null ? moneyFmt.format(l.loadPrice) : '—'}</span>
                           </Td>
                         </tr>
                       );
@@ -745,8 +918,6 @@ function InvoiceSummaryModal({
                 Clear All
               </button>
               <div className="flex items-center gap-2">
-                {/* Allow flipping between the two modes from inside
-                    the modal — Alvys shows both as final actions. */}
                 {action === 'generateSend' ? (
                   <button onClick={() => setAction('generate')} disabled={busy}
                     className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
@@ -788,17 +959,12 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
   return (
     <div className="space-y-3">
       {result.created.length > 0 && (
-        <ResultStrip
-          tone={{ bg: '#dcfce7', fg: '#166534', border: '#86efac' }}
-          label={`${result.created.length} invoice${result.created.length === 1 ? '' : 's'} generated`}
-        />
+        <ResultStrip tone={{ bg: '#dcfce7', fg: '#166534', border: '#86efac' }}
+          label={`${result.created.length} invoice${result.created.length === 1 ? '' : 's'} generated`} />
       )}
       {result.failed.length > 0 && (
         <div className="space-y-1">
-          <ResultStrip
-            tone={{ bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }}
-            label={`${result.failed.length} failed`}
-          />
+          <ResultStrip tone={{ bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }} label={`${result.failed.length} failed`} />
           <ul className="text-[11.5px] pl-3 space-y-0.5" style={{ color: '#991b1b' }}>
             {result.failed.map(f => <li key={f.loadId}>• {f.error}</li>)}
           </ul>
@@ -838,7 +1004,7 @@ function ResultStrip({ tone, label }: { tone: { bg: string; fg: string; border: 
   );
 }
 
-// ─── Batch send dialog (drafts → sent) ───────────────────────────────────
+// ─── Batch send dialog ──────────────────────────────────────────────────
 
 interface BatchSendDialogProps {
   invoices:     Invoice[];
@@ -875,9 +1041,8 @@ function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComp
     setBusy(true);
     try {
       const res = await railway.batchSendInvoices({
-        invoiceIds:     invoices.map(i => i.id),
-        bccSelf,
-        attachLoadDocs,
+        invoiceIds: invoices.map(i => i.id),
+        bccSelf, attachLoadDocs,
       });
       setResult(res);
     } catch (err) {
@@ -924,41 +1089,39 @@ function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComp
               )}
 
               <div className="space-y-2">
-                {groups.map((g, i) => {
-                  return (
-                    <div key={i} className="px-3 py-2 rounded-lg" style={{ border: '1px solid var(--gc-border-light)' }}>
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          {g.broker ? (
-                            onOpenBroker ? (
-                              <button onClick={() => onOpenBroker(g.broker!.id)}
-                                className="font-semibold text-[13px] truncate hover:underline"
-                                style={{ color: '#1a73e8' }}>
-                                {g.broker.name}
-                              </button>
-                            ) : (
-                              <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--gc-text-1)' }}>{g.broker.name}</div>
-                            )
+                {groups.map((g, i) => (
+                  <div key={i} className="px-3 py-2 rounded-lg" style={{ border: '1px solid var(--gc-border-light)' }}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        {g.broker ? (
+                          onOpenBroker ? (
+                            <button onClick={() => onOpenBroker(g.broker!.id)}
+                              className="font-semibold text-[13px] truncate hover:underline"
+                              style={{ color: '#1a73e8' }}>
+                              {g.broker.name}
+                            </button>
                           ) : (
-                            <div className="font-semibold text-[13px] truncate" style={{ color: '#dc2626' }}>(no broker set)</div>
+                            <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--gc-text-1)' }}>{g.broker.name}</div>
+                          )
+                        ) : (
+                          <div className="font-semibold text-[13px] truncate" style={{ color: '#dc2626' }}>(no broker set)</div>
+                        )}
+                        <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                          {g.broker?.invoiceEmail ?? (
+                            <span style={{ color: '#9a3412' }}>
+                              (no AP email — {onOpenBroker && g.broker ? (
+                                <button onClick={() => onOpenBroker(g.broker!.id)} className="underline font-semibold">fix in profile</button>
+                              ) : 'set one in profile'})
+                            </span>
                           )}
-                          <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                            {g.broker?.invoiceEmail ?? (
-                              <span style={{ color: '#9a3412' }}>
-                                (no AP email — {onOpenBroker && g.broker ? (
-                                  <button onClick={() => onOpenBroker(g.broker!.id)} className="underline font-semibold">fix in profile</button>
-                                ) : 'set one in profile'})
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-[12px] text-right shrink-0" style={{ color: 'var(--gc-text-2)' }}>
-                          {g.rows.length} invoice{g.rows.length === 1 ? '' : 's'}
                         </div>
                       </div>
+                      <div className="text-[12px] text-right shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+                        {g.rows.length} invoice{g.rows.length === 1 ? '' : 's'}
+                      </div>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
 
               <div className="space-y-2 pt-1">
@@ -1026,26 +1189,7 @@ function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComp
   );
 }
 
-// ─── Primitives ─────────────────────────────────────────────────────────
-
-function Th({ children, align }: { children: React.ReactNode; align?: 'right' }) {
-  return (
-    <th className="px-4 py-2.5 text-[11px] uppercase tracking-wider font-semibold"
-      style={{ color: 'var(--gc-text-3)', textAlign: align ?? 'left' }}>
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, align, className, style, onClickStopProp }: { children: React.ReactNode; align?: 'right'; className?: string; style?: React.CSSProperties; onClickStopProp?: boolean }) {
-  return (
-    <td className={`px-4 py-2.5 ${className ?? ''}`}
-      style={{ textAlign: align ?? 'left', ...(style ?? {}) }}
-      onClick={onClickStopProp ? (e) => e.stopPropagation() : undefined}>
-      {children}
-    </td>
-  );
-}
+// ─── Empty + StatusPill ─────────────────────────────────────────────────
 
 function StatusPill({ status }: { status: InvoiceStatus }) {
   const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string; label: string }> = {
@@ -1065,10 +1209,14 @@ function StatusPill({ status }: { status: InvoiceStatus }) {
 
 function Empty({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 gap-3 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+    <div className="flex flex-col items-center justify-center py-24 gap-3 text-sm text-center" style={{ color: 'var(--gc-text-3)' }}>
       {icon}
-      <div>{title}</div>
-      {sub && <div className="text-[12px]">{sub}</div>}
+      <div className="text-base font-semibold" style={{ color: 'var(--gc-text-1)' }}>{title}</div>
+      {sub && <div className="text-[12.5px]">{sub}</div>}
     </div>
   );
 }
+
+// Suppress unused-import lint when fmtDateLong isn't called in the
+// active code path. Kept for future detail views.
+void fmtDateLong;

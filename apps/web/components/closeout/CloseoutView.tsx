@@ -1,30 +1,30 @@
 'use client';
 
 /**
- * /closeout — POD verification + release queue.
+ * /closeout — POD verification + release.
  *
- * Tabs:
- *  Pending     — loads delivered/due that haven't been released yet
- *  Flagged     — held back pending follow-up (missing POD, rate dispute, …)
- *  Released    — released for invoicing, awaiting accounting batch
- *                (DB billing_status is still "verified" — the Release
- *                action sets it.)
- *  Invoiced    — sent to broker, awaiting payment
- *  Paid        — closed out
+ * Workflow split (vs /accounting):
+ *   - /closeout    = "is this paperwork correct?"  POD verification.
+ *   - /accounting  = "let's bill and get paid."    Billing pipeline.
  *
- * Default is Pending, sorted oldest delivery first. Click a row → opens
- * the existing event modal (the focused review-queue mode is the next
- * iteration). Fetched events are merged into the calendar store so the
- * modal can find them even when they're outside the calendar's loaded
- * window.
+ * Pending / Flagged are the actionable tabs — operations checks
+ * paperwork and either Releases (sets billing_status='verified') or
+ * flags for follow-up. Once released, the load is handed off to
+ * accounting; the Released / Invoiced / Paid tabs here are
+ * informational only (point users at /accounting for actions).
+ *
+ * Default is Pending, sorted oldest delivery first. Click a row →
+ * opens the event modal. Fetched events are merged into the calendar
+ * store so the modal can find them even when they're outside the
+ * calendar's loaded window.
  */
 
 import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, FilePlus, Send, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search, Receipt } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
-import { railway, RailwayError } from '@/lib/railway';
-import { useRouter } from 'next/navigation';
+import { railway } from '@/lib/railway';
+import Link from 'next/link';
 import type { Load, CalendarEvent } from '@/lib/types';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import { displayBrokerName } from '@/lib/customerMatch';
@@ -131,7 +131,6 @@ export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const { user } = useUser();
-  const router = useRouter();
   // Per-load in-flight state for the Generate Invoice button so a slow
   // request doesn't let the user double-fire it (which would 409 on the
   // unique-active-invoice constraint).
@@ -433,39 +432,6 @@ export default function CloseoutView() {
     await refresh();
   }
 
-  async function handleGenerateInvoice(load: Load, opts: { thenSend?: boolean } = {}) {
-    const loadId = load.loadId ?? load.id;
-    if (generatingId) return;
-    setGeneratingId(loadId);
-    try {
-      const { invoice } = await railway.createInvoice({ loadId });
-      // thenSend=true → drop the user into the detail page with the
-      // email dialog auto-opened. The detail page reads ?send=1 from
-      // the URL on mount. Generate-only keeps the existing behavior
-      // so the user can review before sending.
-      const suffix = opts.thenSend ? '?send=1' : '';
-      router.push(`/accounting/invoices/${invoice.id}${suffix}`);
-    } catch (err) {
-      // 409 = an active invoice already exists for this load. Take the
-      // user to the existing one rather than dead-ending.
-      if (err instanceof RailwayError && err.status === 409) {
-        try {
-          const { invoices: existing } = await railway.listInvoices({ loadId });
-          const open = existing.find(i => i.status !== 'void');
-          if (open) {
-            const suffix = opts.thenSend && open.status === 'draft' ? '?send=1' : '';
-            router.push(`/accounting/invoices/${open.id}${suffix}`);
-            return;
-          }
-        } catch { /* fall through to alert */ }
-      }
-      console.error('[closeout] generateInvoice failed:', err);
-      window.alert('Failed to generate invoice. See console for details.');
-    } finally {
-      setGeneratingId(null);
-    }
-  }
-
   // Closeout View-invoice opens an InvoiceDetailModal in-place so the
   // user keeps their position in the queue. The full-page route still
   // exists for direct links / the Generate-and-send flow.
@@ -611,6 +577,14 @@ export default function CloseoutView() {
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-[1600px] mx-auto space-y-4">
 
+          {/* Purpose hint — keeps the split between Closeout and
+              Accounting visible while users are still building muscle
+              memory. */}
+          <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
+            POD verification. Check paperwork and release loads for billing.
+            Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Accounting</Link>.
+          </div>
+
           {/* Search bar — searches all loads in the active tab, not
               just the page on screen. Hits /v1/closeout/queue?q=…
               after a 250ms debounce. When the query is set, the
@@ -702,6 +676,15 @@ export default function CloseoutView() {
                 onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
                 <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
+            )}
+            {(tab === 'verified' || tab === 'invoiced' || tab === 'paid') && (
+              // Released and beyond is accounting's surface. Link
+              // there so the user has a clear next step.
+              <Link href="/accounting"
+                className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                style={{ background: '#1a73e8', color: '#fff' }}>
+                <Receipt size={12} /> Go to Accounting
+              </Link>
             )}
             {/* Columns visibility menu */}
             <div className="relative" ref={colsMenuRef}>
@@ -980,34 +963,11 @@ export default function CloseoutView() {
                                 )}
                               </>
                             ) : tab === 'verified' ? (
-                              // Verified → ready to bill. Two paths:
-                              //   • Generate: creates a draft invoice
-                              //     and opens the detail page for review
-                              //     (then the user clicks Email).
-                              //   • Generate & send: creates the draft
-                              //     and lands on the detail page with
-                              //     the email dialog auto-opened so it's
-                              //     two clicks instead of three.
-                              <>
-                                <button onClick={() => void handleGenerateInvoice(load, { thenSend: true })}
-                                  disabled={generatingId === (load.loadId ?? load.id)}
-                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
-                                  style={{ background: '#1a73e8', color: '#fff' }}
-                                  title="Generate invoice and immediately email it to the broker">
-                                  {generatingId === (load.loadId ?? load.id)
-                                    ? <Loader2 size={11} className="animate-spin" style={{ display: 'inline', marginRight: 3 }} />
-                                    : <Send size={11} style={{ display: 'inline', marginRight: 3 }} />}
-                                  Generate &amp; send
-                                </button>
-                                <button onClick={() => void handleGenerateInvoice(load)}
-                                  disabled={generatingId === (load.loadId ?? load.id)}
-                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
-                                  style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
-                                  title="Generate invoice as draft so you can review before sending">
-                                  <FilePlus size={11} style={{ display: 'inline', marginRight: 3 }} />
-                                  Generate
-                                </button>
-                              </>
+                              // Released → handoff complete. Operations
+                              // is done; billing lives on /accounting.
+                              // No actions here intentionally — see the
+                              // "Go to Accounting" link in the toolbar.
+                              <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
                             ) : tab === 'invoiced' || tab === 'paid' ? (
                               // Already invoiced — jump to the saved
                               // invoice. Resolves the invoice id at click
