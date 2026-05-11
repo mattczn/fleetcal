@@ -478,17 +478,19 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 function StatusPill({ status }: { status: Invoice['status'] }) {
-  const palette: Record<Invoice['status'], { bg: string; fg: string; border: string }> = {
-    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1' },
-    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe' },
-    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac' },
-    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' },
+  // DB enum stays 'draft'; the UI says "Unsent" because the PDF is
+  // already final once generated — the only thing missing is delivery.
+  const palette: Record<Invoice['status'], { bg: string; fg: string; border: string; label: string }> = {
+    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Unsent' },
+    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Sent'   },
+    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid'   },
+    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Void'   },
   };
   const p = palette[status];
   return (
     <span className="text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
       style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
-      {status}
+      {p.label}
     </span>
   );
 }

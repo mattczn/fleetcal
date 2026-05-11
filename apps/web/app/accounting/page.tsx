@@ -3,10 +3,14 @@
 /**
  * /accounting — invoices AR list.
  *
- * Tabs: All / Draft / Sent / Paid / Void. The Sent tab is the working
- * AR queue. The Draft tab adds a multi-select column + "Send selected"
- * action that groups by broker and fires one email per unique
- * customer with all selected drafts attached as packets.
+ * Tabs: All / Unsent / Sent / Paid / Void. The DB status enum still
+ * calls the pre-send state 'draft' for historical reasons; the UI
+ * labels it "Unsent" because every invoice in that state is a fully
+ * rendered, ready-to-deliver PDF — nothing "draft" about it.
+ *
+ * The Unsent tab adds a multi-select column + "Send selected" action
+ * that groups by broker and fires one email per unique customer with
+ * all selected packets attached.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -22,11 +26,11 @@ import type { Invoice, InvoiceStatus, Customer, BatchSendInvoicesResponse } from
 type Tab = 'all' | 'draft' | 'sent' | 'paid' | 'void';
 
 const TABS: { value: Tab; label: string }[] = [
-  { value: 'all',   label: 'All'   },
-  { value: 'draft', label: 'Draft' },
-  { value: 'sent',  label: 'Sent'  },
-  { value: 'paid',  label: 'Paid'  },
-  { value: 'void',  label: 'Void'  },
+  { value: 'all',   label: 'All'    },
+  { value: 'draft', label: 'Unsent' },
+  { value: 'sent',  label: 'Sent'   },
+  { value: 'paid',  label: 'Paid'   },
+  { value: 'void',  label: 'Void'   },
 ];
 
 export default function AccountingPage() {
@@ -196,7 +200,7 @@ export default function AccountingPage() {
               <button onClick={() => setBatchOpen(true)}
                 className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
                 style={{ background: '#1a73e8', color: '#fff' }}>
-                <Send size={12} className="inline mr-1.5" /> Send {selected.size} draft{selected.size === 1 ? '' : 's'}
+                <Send size={12} className="inline mr-1.5" /> Send {selected.size} invoice{selected.size === 1 ? '' : 's'}
               </button>
             )}
           </div>
@@ -350,17 +354,20 @@ function Td({ children, align }: { children: React.ReactNode; align?: 'right' })
 }
 
 function StatusPill({ status }: { status: InvoiceStatus }) {
-  const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string }> = {
-    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1' },
-    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe' },
-    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac' },
-    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' },
+  const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string; label: string }> = {
+    // 'draft' is the DB value but UI says "Unsent" — the invoice IS a
+    // finished PDF the moment it's generated; the only thing missing
+    // is delivery.
+    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Unsent' },
+    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Sent'   },
+    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid'   },
+    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Void'   },
   };
   const p = palette[status];
   return (
     <span className="text-[10.5px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block"
       style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
-      {status}
+      {p.label}
     </span>
   );
 }
@@ -426,7 +433,7 @@ function BatchSendDialog({ invoices, customerById, onClose, onComplete }: BatchS
         <div className="px-5 py-4 flex items-center gap-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <Send size={16} style={{ color: '#1a73e8' }} />
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
-            {result ? 'Batch send results' : `Send ${invoices.length} draft${invoices.length === 1 ? '' : 's'} — ${groups.length} broker${groups.length === 1 ? '' : 's'}`}
+            {result ? 'Batch send results' : `Send ${invoices.length} invoice${invoices.length === 1 ? '' : 's'} — ${groups.length} broker${groups.length === 1 ? '' : 's'}`}
           </div>
           <button onClick={onClose} disabled={busy} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)] disabled:opacity-50">
             <X size={14} />
@@ -526,7 +533,7 @@ function BatchSendDialog({ invoices, customerById, onClose, onComplete }: BatchS
                 className="text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors disabled:opacity-60"
                 style={{ background: '#1a73e8', color: '#fff' }}>
                 {busy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Send size={12} className="inline mr-1.5" />}
-                Send {invoices.length} draft{invoices.length === 1 ? '' : 's'}
+                Send {invoices.length} invoice{invoices.length === 1 ? '' : 's'}
               </button>
             </>
           ) : (

@@ -500,7 +500,7 @@ loads.get("/:id/documents", async (c) => {
 
   const { data: rows, error } = await supabase
     .from("load_documents")
-    .select("id,load_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at")
+    .select("id,load_id,invoice_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at")
     .eq("load_id", loadId)
     .eq("org_id", orgId)
     .order("uploaded_at", { ascending: false });
@@ -510,7 +510,8 @@ loads.get("/:id/documents", async (c) => {
   }
 
   type DocRow = {
-    id: string; load_id: string | null; storage_path: string;
+    id: string; load_id: string | null; invoice_id: string | null;
+    storage_path: string;
     file_name: string; mime_type: string | null; size_bytes: number | null;
     kind: string; uploaded_at: string;
   };
@@ -535,6 +536,7 @@ loads.get("/:id/documents", async (c) => {
   const documents: DocumentSummary[] = docs.map((d) => ({
     id:         d.id,
     loadId:     d.load_id,
+    invoiceId:  d.invoice_id  ?? undefined,
     fileName:   d.file_name,
     mimeType:   d.mime_type   ?? undefined,
     sizeBytes:  d.size_bytes  ?? undefined,

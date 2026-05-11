@@ -488,10 +488,20 @@ function UploadedDocsPanel({
   // Virtual rows for generated invoices. Rendered as siblings of the
   // uploaded docs so the user sees one unified list of artifacts on the
   // load. Click opens the accounting page in a new tab — the load modal
-  // stays mounted underneath. We don't store these as load_documents
-  // rows because there's no PDF yet (Phase 4 will add the server-side
-  // PDF renderer + persist).
-  const invoiceRows = (invoices ?? []);
+  // stays mounted underneath.
+  //
+  // Dedupe: an invoice that's been persisted to load_documents (Phase 4)
+  // already shows up as a real row via `docs`. Drop the virtual entry
+  // for those — the persisted PDF is the canonical one and supports
+  // direct view/download without leaving the modal. We only render
+  // virtual rows for invoices that haven't been archived yet (e.g. when
+  // the load_documents.invoice_id migration hasn't been applied).
+  const persistedInvoiceIds = new Set(
+    docs
+      .filter(d => d.kind === 'invoice' && d.invoiceId)
+      .map(d => d.invoiceId as string),
+  );
+  const invoiceRows = (invoices ?? []).filter(inv => !persistedInvoiceIds.has(inv.id));
   const invoiceTint = KIND_TINT.invoice ?? KIND_TINT.other;
 
   const renderInvoiceRows = () => invoiceRows.map((inv) => (
@@ -509,7 +519,9 @@ function UploadedDocsPanel({
             Invoice
           </span>
           <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)', padding: '1px 6px', borderRadius: 999 }}>
-            {inv.status}
+            {/* DB enum says 'draft' but the PDF is final the moment it
+                exists — surface that to the user as 'Unsent' instead. */}
+            {inv.status === 'draft' ? 'Unsent' : inv.status}
           </span>
         </div>
         <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>

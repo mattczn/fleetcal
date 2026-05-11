@@ -380,10 +380,16 @@ export const DOCUMENT_KINDS: readonly DocumentKind[] = [
  * Document summary shape returned by list/show endpoints. `signedUrl` is
  * populated by the list endpoint (1-hour signed URL minted server-side);
  * call GET /v1/documents/:id/url to mint a fresh one.
+ *
+ * `invoiceId` is set when the doc is the archived PDF of a generated
+ * invoice (kind === 'invoice', column load_documents.invoice_id). Web
+ * uses it to dedupe against the virtual invoice rows the docs panel
+ * renders from /v1/invoices.
  */
 export interface DocumentSummary {
   id:          string;
   loadId:      string | null;        // null for legacy non-revenue-event docs
+  invoiceId?:  string;               // set when kind='invoice' (Phase-4 packet archive)
   fileName:    string;
   mimeType?:   string;
   sizeBytes?:  number;
