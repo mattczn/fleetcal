@@ -419,13 +419,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   };
 
   // ── Upload paperwork ──────────────────────────────────────────────
-  // Two-stage flow: file picker first, then a kind picker so the user
-  // can categorize before the upload commits. Pending file lives here
-  // so the user can change the kind without re-picking the file.
+  // Two-stage flow: file picker (multi-select allowed) → kind picker.
+  // Multiple files get merged into a single PDF locally via pdfMerge
+  // before upload so the broker invoice packet stays as one PDF per
+  // doc kind. Pending list lives here so the user can re-order /
+  // remove / change kind without re-picking files.
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [uploading, setUploading]     = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploading, setUploading]       = useState(false);
+  const [uploadError, setUploadError]   = useState<string | null>(null);
+  const [mergeStatus, setMergeStatus]   = useState<string | null>(null);
 
   function pickFile() {
     setUploadError(null);
@@ -433,11 +436,31 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   }
 
   async function uploadAs(kind: import('@fleetcal/types').DocumentKind) {
-    if (!pendingFile || !loadId || uploading) return;
+    if (pendingFiles.length === 0 || !loadId || uploading) return;
     setUploading(true);
     setUploadError(null);
+    setMergeStatus(null);
     try {
-      const { document } = await railway.uploadLoadDocument(loadId, pendingFile, kind);
+      // Single-file fast path: skip the merge entirely so PDF →
+      // upload is byte-for-byte the original file. Multi-file path
+      // funnels every input through pdfMerge so we hand the API one
+      // PDF blob regardless of mix.
+      let toUpload: File;
+      if (pendingFiles.length === 1) {
+        toUpload = pendingFiles[0];
+      } else {
+        const { mergeFilesToPdf } = await import('@/lib/pdfMerge');
+        const mergedBlob = await mergeFilesToPdf(pendingFiles, {
+          onProgress: (i, total, name) => {
+            setMergeStatus(`Merging ${i + 1} of ${total}: ${name}`);
+          },
+        });
+        // Name is cosmetic — the API rewrites to {LoadNum}_{KIND}.pdf
+        // on insert, so anything sensible works here.
+        toUpload = new File([mergedBlob], `merged-${kind}.pdf`, { type: 'application/pdf' });
+        setMergeStatus(`Uploading…`);
+      }
+      const { document } = await railway.uploadLoadDocument(loadId, toUpload, kind);
       const newDoc: LoadDocument = {
         id:         document.id,
         loadId:     document.loadId ?? loadId,
@@ -465,7 +488,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       // Switch the viewer to the freshly uploaded doc so the user can
       // sanity-check the right page is up.
       setActiveDocIdx(docs.length); // length pre-update == new index
-      setPendingFile(null);
+      setPendingFiles([]);
+      setMergeStatus(null);
     } catch (err) {
       console.error('[review queue] upload failed:', err);
       setUploadError((err as Error).message ?? 'Upload failed');
@@ -849,7 +873,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
                 Add paperwork
               </div>
-              {!pendingFile ? (
+              {pendingFiles.length === 0 ? (
                 <button onClick={pickFile} disabled={uploading}
                   className="w-full flex items-center justify-center gap-2 rounded-lg text-[12px] font-semibold py-2 transition-colors"
                   style={{
@@ -859,24 +883,53 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
-                  <Upload size={13} /> Pick file
+                  <Upload size={13} /> Pick file{pendingFiles.length === 0 ? 's' : ''}
                 </button>
               ) : (
                 <div className="space-y-2">
-                  {/* Filename row + cancel */}
-                  <div className="flex items-center gap-1.5 text-[12px]">
-                    <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
-                    <span className="truncate flex-1" title={pendingFile.name} style={{ color: 'var(--gc-text-1)' }}>
-                      {pendingFile.name}
-                    </span>
-                    <button onClick={() => { setPendingFile(null); setUploadError(null); }}
-                      className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Cancel">
-                      <X size={11} style={{ color: 'var(--gc-text-3)' }} />
+                  {/* File list — each row has a remove button. Order
+                      is the merge order, so listing top→bottom matches
+                      page order in the resulting PDF. */}
+                  <div className="space-y-1">
+                    {pendingFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-1.5 text-[12px] px-1.5 py-1 rounded"
+                        style={{ background: 'var(--gc-bg)' }}>
+                        <span className="text-[10px] font-bold tabular-nums" style={{ color: 'var(--gc-text-3)', minWidth: 14 }}>
+                          {i + 1}.
+                        </span>
+                        <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+                        <span className="truncate flex-1" title={f.name} style={{ color: 'var(--gc-text-1)' }}>
+                          {f.name}
+                        </span>
+                        <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                          disabled={uploading}
+                          className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Remove from list">
+                          <X size={11} style={{ color: 'var(--gc-text-3)' }} />
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={pickFile} disabled={uploading}
+                      className="w-full flex items-center justify-center gap-1.5 text-[11px] py-1 rounded transition-colors"
+                      style={{ color: 'var(--gc-blue)', background: 'transparent', border: '1px dashed var(--gc-border-light)' }}>
+                      <Plus size={11} /> Add more
                     </button>
                   </div>
+
+                  {/* Merge banner — shown only for multi-file. Sets
+                      expectation about what the kind chips will do. */}
+                  {pendingFiles.length > 1 && (
+                    <div className="text-[10px] px-2 py-1 rounded flex items-start gap-1.5"
+                      style={{ background: '#e0f2fe', color: '#0c4a6e' }}>
+                      <FileText size={10} style={{ marginTop: 1, flexShrink: 0 }} />
+                      <span>
+                        {pendingFiles.length} files will be merged into one PDF before upload.
+                      </span>
+                    </div>
+                  )}
+
                   {/* Kind picker */}
                   <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
-                    What is this?
+                    {pendingFiles.length > 1 ? 'Save merged PDF as' : 'What is this?'}
                   </div>
                   <div className="grid grid-cols-2 gap-1.5">
                     {KIND_OPTIONS.map(opt => (
@@ -890,6 +943,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       </button>
                     ))}
                   </div>
+                  {/* Live merge / upload progress */}
+                  {uploading && mergeStatus && (
+                    <div className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded"
+                      style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
+                      <Loader2 size={10} className="animate-spin" />
+                      <span className="truncate flex-1">{mergeStatus}</span>
+                    </div>
+                  )}
                 </div>
               )}
               {uploadError && (
@@ -897,15 +958,17 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} /> {uploadError}
                 </div>
               )}
-              {/* Hidden file input — wired by pickFile() */}
+              {/* Hidden file input — wired by pickFile(). multiple=true
+                  so a single OS file picker can pick the whole stack. */}
               <input
                 ref={fileInputRef}
                 type="file"
                 accept=".pdf,application/pdf,image/*"
+                multiple
                 style={{ display: 'none' }}
                 onChange={e => {
-                  const f = e.target.files?.[0];
-                  if (f) setPendingFile(f);
+                  const picked = Array.from(e.target.files ?? []);
+                  if (picked.length > 0) setPendingFiles(prev => [...prev, ...picked]);
                   e.target.value = '';
                 }}
               />
