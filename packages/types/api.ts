@@ -586,6 +586,7 @@ export interface GetOrgSettingsResponse { settings: OrgSettings; }
 export interface UpdateOrgSettingsRequest {
   showDriverPay?:    boolean;
   rateConSettings?:  import("./domain").RateConSettings | null;
+  invoiceSettings?:  import("./domain").InvoiceSettings | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 

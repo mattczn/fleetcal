@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect } from 'react';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone } from 'lucide-react';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText } from 'lucide-react';
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -13,7 +13,7 @@ import { buildRateConPrompt } from '@/lib/prompt';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -953,6 +953,309 @@ function vehicleLabel(v: MotiveVehicle) {
   if (v.make)  parts.push(v.make);
   if (v.model) parts.push(v.model);
   return parts.join(' ');
+}
+
+// ─── Invoicing panel ──────────────────────────────────────────────────────────
+//
+// Lets the user fill in everything that prints on a generated invoice:
+// company letterhead, MC/DOT, billing address, payment terms, remit-to
+// instructions, optional factor info, optional footer notes / number
+// prefix. Settings live on org_settings.invoice_settings (JSONB) so we
+// can iterate on the shape without DDL.
+function InvoicingPanel() {
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+  const [err,     setErr]     = useState<string | null>(null);
+
+  // Single state blob keyed to InvoiceSettings — keeps the form
+  // straightforward. Empty strings for unset fields so the inputs
+  // always have a controlled value.
+  const [form, setForm] = useState({
+    companyName:             '',
+    mcNumber:                '',
+    dotNumber:               '',
+    ein:                     '',
+    addressLine1:            '',
+    addressLine2:            '',
+    city:                    '',
+    state:                   '',
+    zip:                     '',
+    phone:                   '',
+    email:                   '',
+    defaultPaymentTermsDays: '',
+    remitToInstructions:     '',
+    invoiceFooterNotes:      '',
+    invoiceNumberPrefix:     '',
+    factorCompanyName:       '',
+    factorNoticeText:        '',
+  });
+  const updateField = (key: keyof typeof form, value: string) => {
+    setForm(prev => ({ ...prev, [key]: value }));
+    setSaved(false);
+  };
+
+  // Hydrate on mount.
+  useEffect(() => {
+    let cancelled = false;
+    void import('@/lib/railway').then(({ railway }) => railway.getOrgSettings())
+      .then(({ settings }) => {
+        if (cancelled) return;
+        const inv = settings.invoiceSettings ?? {};
+        setForm({
+          companyName:             inv.companyName             ?? '',
+          mcNumber:                inv.mcNumber                ?? '',
+          dotNumber:               inv.dotNumber               ?? '',
+          ein:                     inv.ein                     ?? '',
+          addressLine1:            inv.addressLine1            ?? '',
+          addressLine2:            inv.addressLine2            ?? '',
+          city:                    inv.city                    ?? '',
+          state:                   inv.state                   ?? '',
+          zip:                     inv.zip                     ?? '',
+          phone:                   inv.phone                   ?? '',
+          email:                   inv.email                   ?? '',
+          defaultPaymentTermsDays: inv.defaultPaymentTermsDays != null ? String(inv.defaultPaymentTermsDays) : '',
+          remitToInstructions:     inv.remitToInstructions     ?? '',
+          invoiceFooterNotes:      inv.invoiceFooterNotes      ?? '',
+          invoiceNumberPrefix:     inv.invoiceNumberPrefix     ?? '',
+          factorCompanyName:       inv.factorCompanyName       ?? '',
+          factorNoticeText:        inv.factorNoticeText        ?? '',
+        });
+        setLoading(false);
+      })
+      .catch(e => {
+        if (cancelled) return;
+        console.error('[InvoicingPanel] fetch failed:', e);
+        setErr((e as Error).message ?? 'Failed to load');
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const { railway } = await import('@/lib/railway');
+      const parsedTerms = form.defaultPaymentTermsDays.trim() === '' ? undefined : parseInt(form.defaultPaymentTermsDays, 10);
+      // Send only non-empty strings as values; empty input → undefined
+      // so the JSONB stores a clean record instead of "" everywhere.
+      const cleaned: Partial<import('@fleetcal/types').InvoiceSettings> = {
+        companyName:             form.companyName.trim()             || undefined,
+        mcNumber:                form.mcNumber.trim()                || undefined,
+        dotNumber:               form.dotNumber.trim()                || undefined,
+        ein:                     form.ein.trim()                     || undefined,
+        addressLine1:            form.addressLine1.trim()            || undefined,
+        addressLine2:            form.addressLine2.trim()            || undefined,
+        city:                    form.city.trim()                    || undefined,
+        state:                   form.state.trim()                   || undefined,
+        zip:                     form.zip.trim()                     || undefined,
+        phone:                   form.phone.trim()                   || undefined,
+        email:                   form.email.trim()                   || undefined,
+        defaultPaymentTermsDays: Number.isFinite(parsedTerms) ? parsedTerms : undefined,
+        remitToInstructions:     form.remitToInstructions.trim()     || undefined,
+        invoiceFooterNotes:      form.invoiceFooterNotes.trim()      || undefined,
+        invoiceNumberPrefix:     form.invoiceNumberPrefix.trim()     || undefined,
+        factorCompanyName:       form.factorCompanyName.trim()       || undefined,
+        factorNoticeText:        form.factorNoticeText.trim()        || undefined,
+      };
+      await railway.updateOrgSettings({ invoiceSettings: cleaned });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      console.error('[InvoicingPanel] save failed:', e);
+      setErr((e as Error).message ?? 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm" style={{ width: 640, color: 'var(--gc-text-3)' }}>
+        <Loader2 size={16} className="animate-spin" /> Loading invoice settings…
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: 640 }} className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Invoicing</h2>
+        <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
+          Letterhead, contact info, and payment instructions that appear on every invoice you generate.
+          Per-broker invoice routing (email vs portal) lives on each customer&rsquo;s profile.
+        </p>
+      </div>
+
+      {/* Company identity */}
+      <Card title="Company identity" subtitle="Carrier info printed at the top of every invoice.">
+        <FieldRow label="Company name" subtitle="As it should appear on the invoice (legal entity or DBA).">
+          <Input value={form.companyName} onChange={v => updateField('companyName', v)} placeholder="Acme Trucking LLC" />
+        </FieldRow>
+        <FieldRow label="MC #">
+          <Input value={form.mcNumber} onChange={v => updateField('mcNumber', v)} placeholder="MC-123456" />
+        </FieldRow>
+        <FieldRow label="DOT #">
+          <Input value={form.dotNumber} onChange={v => updateField('dotNumber', v)} placeholder="1234567" />
+        </FieldRow>
+        <FieldRow label="EIN" subtitle="Tax ID. Some brokers require it on the invoice.">
+          <Input value={form.ein} onChange={v => updateField('ein', v)} placeholder="12-3456789" />
+        </FieldRow>
+      </Card>
+
+      {/* Billing address */}
+      <Card title="Billing address" subtitle="Used as the &ldquo;from&rdquo; block on the invoice.">
+        <FieldRow label="Address line 1">
+          <Input value={form.addressLine1} onChange={v => updateField('addressLine1', v)} placeholder="123 Main St" />
+        </FieldRow>
+        <FieldRow label="Address line 2" subtitle="Suite / unit (optional)">
+          <Input value={form.addressLine2} onChange={v => updateField('addressLine2', v)} placeholder="Suite 200" />
+        </FieldRow>
+        <FieldRow label="City">
+          <Input value={form.city} onChange={v => updateField('city', v)} placeholder="Salt Lake City" />
+        </FieldRow>
+        <FieldRow label="State / ZIP">
+          <div className="grid grid-cols-2 gap-2 flex-1">
+            <Input value={form.state} onChange={v => updateField('state', v.toUpperCase())} placeholder="UT" maxLength={2} />
+            <Input value={form.zip} onChange={v => updateField('zip', v)} placeholder="84101" />
+          </div>
+        </FieldRow>
+      </Card>
+
+      {/* Contact */}
+      <Card title="Contact" subtitle="Shown on invoices so brokers know who to ask about payment.">
+        <FieldRow label="AR / accounting email">
+          <Input value={form.email} onChange={v => updateField('email', v)} placeholder="ar@acmetrucking.com" type="email" />
+        </FieldRow>
+        <FieldRow label="Phone">
+          <Input value={form.phone} onChange={v => updateField('phone', v)} placeholder="(555) 123-4567" />
+        </FieldRow>
+      </Card>
+
+      {/* Payment terms + remit-to */}
+      <Card title="Payment" subtitle="How and when brokers should pay.">
+        <FieldRow label="Default payment terms (days)" subtitle="Net 30 = 30. Brokers can override on their profile.">
+          <Input value={form.defaultPaymentTermsDays}
+            onChange={v => updateField('defaultPaymentTermsDays', v.replace(/[^\d]/g, ''))}
+            placeholder="30" />
+        </FieldRow>
+        <FieldRow label="Remit-to instructions" subtitle="Free-form. Banking / ACH details, check-mailing address, etc. Goes in a block at the bottom of the invoice.">
+          <Textarea value={form.remitToInstructions} onChange={v => updateField('remitToInstructions', v)}
+            placeholder={'Make checks payable to:\nAcme Trucking LLC\n123 Main St, Salt Lake City, UT 84101\n\nACH: Routing 123456789 / Acct 987654321'}
+            rows={6} />
+        </FieldRow>
+      </Card>
+
+      {/* Template tweaks */}
+      <Card title="Template" subtitle="Optional overrides for the generated invoice.">
+        <FieldRow label="Invoice number prefix" subtitle="Prepended to the load&rsquo;s internal ID. Leave blank to use the ID by itself.">
+          <Input value={form.invoiceNumberPrefix} onChange={v => updateField('invoiceNumberPrefix', v)} placeholder="INV-" />
+        </FieldRow>
+        <FieldRow label="Footer notes" subtitle="Optional. Prints under the totals on every invoice.">
+          <Textarea value={form.invoiceFooterNotes} onChange={v => updateField('invoiceFooterNotes', v)}
+            placeholder="Thank you for your business. Payment due per terms above."
+            rows={3} />
+        </FieldRow>
+      </Card>
+
+      {/* Factor (optional) */}
+      <Card title="Factoring" subtitle="Skip if you invoice brokers directly.">
+        <FieldRow label="Factor company name">
+          <Input value={form.factorCompanyName} onChange={v => updateField('factorCompanyName', v)} placeholder="Triumph Business Capital" />
+        </FieldRow>
+        <FieldRow label="Notice of assignment text" subtitle="Required language some factors want printed on the invoice.">
+          <Textarea value={form.factorNoticeText} onChange={v => updateField('factorNoticeText', v)}
+            placeholder="This account has been assigned to and is owned by …" rows={3} />
+        </FieldRow>
+      </Card>
+
+      {/* Save bar */}
+      <div className="flex items-center gap-3">
+        <button onClick={() => void save()} disabled={saving}
+          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-bold text-white transition-colors disabled:opacity-50"
+          style={{ background: 'var(--gc-blue)' }}
+          onMouseEnter={e => { if (!saving) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {saved && (
+          <span className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#15803d' }}>
+            <Check size={14} /> Saved
+          </span>
+        )}
+        {err && (
+          <span className="text-sm" style={{ color: '#d93025' }}>{err}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tiny presentational helpers (panel-local) ────────────────────────────────
+
+function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
+      <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>{title}</div>
+        {subtitle && <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{subtitle}</div>}
+      </div>
+      <div className="p-5 space-y-4">{children}</div>
+    </div>
+  );
+}
+
+function FieldRow({ label, subtitle, children }: { label: string; subtitle?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-4">
+      <div style={{ width: 200, flexShrink: 0 }}>
+        <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{label}</div>
+        {subtitle && <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{subtitle}</div>}
+      </div>
+      <div className="flex-1 flex">{children}</div>
+    </div>
+  );
+}
+
+function Input({ value, onChange, placeholder, type = 'text', maxLength }: { value: string; onChange: (v: string) => void; placeholder?: string; type?: string; maxLength?: number }) {
+  return (
+    <input type={type}
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      maxLength={maxLength}
+      className="w-full text-sm px-3 py-2 rounded-lg outline-none transition-colors"
+      style={{
+        background: 'var(--gc-surface)',
+        border:     '1px solid var(--gc-border)',
+        color:      'var(--gc-text-1)',
+      }}
+      onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
+      onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+    />
+  );
+}
+
+function Textarea({ value, onChange, placeholder, rows }: { value: string; onChange: (v: string) => void; placeholder?: string; rows?: number }) {
+  return (
+    <textarea
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows ?? 3}
+      className="w-full text-sm px-3 py-2 rounded-lg outline-none resize-y transition-colors"
+      style={{
+        background: 'var(--gc-surface)',
+        border:     '1px solid var(--gc-border)',
+        color:      'var(--gc-text-1)',
+        minHeight:  60,
+      }}
+      onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
+      onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+    />
+  );
 }
 
 function IntegrationsPanel() {
@@ -2135,6 +2438,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'load-fields',      label: 'Load Fields',      icon: <LayoutList size={15} /> },
       { id: 'card-layout',      label: 'Card Layout',      icon: <Layers size={15} /> },
       { id: 'ratecon-ai',       label: 'Rate Con AI',      icon: <Bot size={15} /> },
+      { id: 'invoicing',        label: 'Invoicing',        icon: <FileText size={15} /> },
       { id: 'integrations',     label: 'Integrations',     icon: <Plug size={15} /> },
       { id: 'driver-app',       label: 'Driver App',       icon: <Smartphone size={15} /> },
     ],
@@ -2242,6 +2546,7 @@ export default function SettingsPage() {
           {active === 'load-fields'  && <LoadFieldsPanel />}
           {active === 'card-layout'  && <CardLayoutPanel />}
           {active === 'ratecon-ai'   && <RateConAIPanel setActive={setActive} />}
+          {active === 'invoicing'    && <InvoicingPanel />}
           {active === 'integrations'    && <IntegrationsPanel />}
           {active === 'saved-locations' && <SavedLocationsPanel />}
           {active === 'dispatchers'     && <DispatchersPanel />}

@@ -162,10 +162,59 @@ export interface RateConSettings {
   fieldSettings?:      Record<string, boolean>;
 }
 
+/**
+ * Org-level invoicing configuration. The values here render on every
+ * generated invoice (company letterhead, MC#, remit-to, default terms)
+ * and feed the broker batch flow downstream. Free-form remit-to lets
+ * the user describe ACH or check-mailing details without us storing
+ * raw account numbers in a structured column.
+ */
+export interface InvoiceSettings {
+  // ── Identity ────────────────────────────────────────────
+  /** Carrier name as it appears on the invoice. May differ from the
+   *  org's display name (e.g. legal entity vs DBA). */
+  companyName?: string;
+  mcNumber?:    string;
+  dotNumber?:   string;
+  ein?:         string;
+
+  // ── Billing address (the "from" block on the invoice) ──
+  addressLine1?: string;
+  addressLine2?: string;
+  city?:         string;
+  state?:        string;
+  zip?:          string;
+
+  // ── Contact (shown so brokers know who to ask) ─────────
+  phone?: string;
+  /** AR / accounting email — broker reaches out here with payment Qs. */
+  email?: string;
+
+  // ── Template config ────────────────────────────────────
+  /** Default payment terms in days. 30 = "Net 30". */
+  defaultPaymentTermsDays?: number;
+  /** Free-form "Make checks payable to … / ACH to …" block. Kept as
+   *  prose so the user controls exactly what gets printed. */
+  remitToInstructions?: string;
+  /** Optional footer / disclaimer printed on every invoice. */
+  invoiceFooterNotes?: string;
+  /** Optional prefix prepended to the invoice number (which defaults
+   *  to internal_load_id). Empty string = no prefix. */
+  invoiceNumberPrefix?: string;
+
+  // ── Factoring (optional) ───────────────────────────────
+  /** If invoices are routed through a factor, the factor's name +
+   *  notice text appear on the invoice. Left blank for non-factored. */
+  factorCompanyName?: string;
+  factorNoticeText?:  string;
+}
+
 export interface OrgSettings {
   showDriverPay: boolean;
   /** Per-org rate-con AI parsing config. See RateConSettings for shape. */
   rateConSettings?: RateConSettings;
+  /** Per-org invoice template + identity config. See InvoiceSettings. */
+  invoiceSettings?: InvoiceSettings;
 }
 
 // ── Customer ────────────────────────────────────────────────────────────

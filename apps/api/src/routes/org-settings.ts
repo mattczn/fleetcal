@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import {
   type GetOrgSettingsResponse,
   type RateConSettings,
+  type InvoiceSettings,
   type UpdateOrgSettingsRequest,
   type UpdateOrgSettingsResponse,
   type ApiErrorResponse,
@@ -27,18 +28,23 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings")
+    .select("show_driver_pay,rate_con_settings,invoice_settings")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
     console.error("[GET /v1/org-settings] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const row = data as { show_driver_pay: boolean; rate_con_settings: RateConSettings | null } | null;
+  const row = data as {
+    show_driver_pay:   boolean;
+    rate_con_settings: RateConSettings | null;
+    invoice_settings:  InvoiceSettings  | null;
+  } | null;
   const res: GetOrgSettingsResponse = {
     settings: {
       showDriverPay:    row?.show_driver_pay   ?? false,
       rateConSettings:  row?.rate_con_settings ?? {},
+      invoiceSettings:  row?.invoice_settings  ?? {},
     },
   };
   return c.json(res);
@@ -49,25 +55,35 @@ orgSettings.patch("/", async (c) => {
   const body = await c.req.json<UpdateOrgSettingsRequest>();
   // At least one allowed key must be present.
   if (
-    body.showDriverPay  === undefined &&
-    body.rateConSettings === undefined
+    body.showDriverPay   === undefined &&
+    body.rateConSettings === undefined &&
+    body.invoiceSettings === undefined
   ) {
-    return c.json({ error: "validation_failed", errors: ["showDriverPay or rateConSettings required"] } satisfies ApiErrorResponse, 400);
+    return c.json({ error: "validation_failed", errors: ["showDriverPay, rateConSettings, or invoiceSettings required"] } satisfies ApiErrorResponse, 400);
   }
 
   // Read existing row first so we can patch the JSONB partially without
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings")
+    .select("show_driver_pay,rate_con_settings,invoice_settings")
     .eq("org_id", orgId)
     .maybeSingle();
-  const existingRow = existing as { show_driver_pay: boolean; rate_con_settings: RateConSettings | null } | null;
+  const existingRow = existing as {
+    show_driver_pay:   boolean;
+    rate_con_settings: RateConSettings | null;
+    invoice_settings:  InvoiceSettings  | null;
+  } | null;
 
-  const nextShowDriverPay = body.showDriverPay  ?? existingRow?.show_driver_pay  ?? false;
+  const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
+  // Each JSONB column patches by spread-merge so the caller can update
+  // a single field without re-sending the rest.
   const mergedRateCon: RateConSettings = body.rateConSettings === undefined
     ? (existingRow?.rate_con_settings ?? {})
     : { ...(existingRow?.rate_con_settings ?? {}), ...(body.rateConSettings ?? {}) };
+  const mergedInvoice: InvoiceSettings = body.invoiceSettings === undefined
+    ? (existingRow?.invoice_settings ?? {})
+    : { ...(existingRow?.invoice_settings ?? {}), ...(body.invoiceSettings ?? {}) };
 
   const { error } = await supabase
     .from("org_settings")
@@ -76,6 +92,7 @@ orgSettings.patch("/", async (c) => {
         org_id:            orgId,
         show_driver_pay:   nextShowDriverPay,
         rate_con_settings: mergedRateCon as never,
+        invoice_settings:  mergedInvoice as never,
       } as never,
       { onConflict: "org_id" },
     );
@@ -84,7 +101,11 @@ orgSettings.patch("/", async (c) => {
     return c.json({ error: "upsert_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   const res: UpdateOrgSettingsResponse = {
-    settings: { showDriverPay: nextShowDriverPay, rateConSettings: mergedRateCon },
+    settings: {
+      showDriverPay:   nextShowDriverPay,
+      rateConSettings: mergedRateCon,
+      invoiceSettings: mergedInvoice,
+    },
   };
   return c.json(res);
 });
