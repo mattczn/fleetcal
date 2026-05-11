@@ -309,14 +309,75 @@ const PDF_ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // Renders a PDF data URL to canvas elements via PDF.js with zoom controls.
 function UploadedDocsPanel({
-  docs, selectedId, onSelect, signedUrl, headerColor,
+  docs, selectedId, onSelect, signedUrl, headerColor, loadId, onChange,
 }: {
   docs: import('@/lib/db').LoadDocument[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   signedUrl: string | null;
   headerColor: string;
+  /** Required for upload + delete. Without it, the panel renders
+   *  read-only — covers the create-mode case where no load exists yet. */
+  loadId?: string;
+  /** Fires after a successful upload or delete so the parent can
+   *  re-fetch the docs list. */
+  onChange?: () => void;
 }) {
+  const addFileRef = useRef<HTMLInputElement>(null);
+  // Two-stage upload: pick file → choose kind → commit. Pending file
+  // stays in state so the user can change kind without re-picking.
+  const [pendingFile,   setPendingFile]   = useState<File | null>(null);
+  const [uploading,     setUploading]     = useState(false);
+  const [uploadError,   setUploadError]   = useState<string | null>(null);
+  const [deletingId,    setDeletingId]    = useState<string | null>(null);
+
+  const KIND_UPLOAD_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string }> = [
+    { kind: 'pod',          label: 'POD' },
+    { kind: 'rate_con',     label: 'Rate Con' },
+    { kind: 'bol',          label: 'BOL' },
+    { kind: 'lumper',       label: 'Lumper' },
+    { kind: 'scale',        label: 'Scale' },
+    { kind: 'receipt',      label: 'Receipt' },
+    { kind: 'driver_sheet', label: 'Driver Sheet' },
+    { kind: 'invoice',      label: 'Invoice' },
+    { kind: 'other',        label: 'Other' },
+  ];
+
+  const uploadAs = async (kind: import('@fleetcal/types').DocumentKind) => {
+    if (!pendingFile || !loadId || uploading) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.uploadLoadDocument(loadId, pendingFile, kind);
+      setPendingFile(null);
+      onChange?.();
+    } catch (err) {
+      console.error('[UploadedDocsPanel] upload failed:', err);
+      setUploadError((err as Error).message ?? 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDelete = async (docId: string, fileName: string) => {
+    if (!loadId) return;
+    const ok = window.confirm(`Delete "${fileName}"? This can't be undone.`);
+    if (!ok) return;
+    setDeletingId(docId);
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.deleteDocument(docId);
+      onSelect(null);
+      onChange?.();
+    } catch (err) {
+      console.error('[UploadedDocsPanel] delete failed:', err);
+      alert(`Delete failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   // Doc category styling. Mirror of the KIND_TINT in closeout
   // ReviewQueue and the Google-Material palette already used by
   // STATUSES at the top of this file. Keeping them in sync is a
@@ -351,20 +412,86 @@ function UploadedDocsPanel({
   const isImage = (mime?: string, name?: string) =>
     (mime ?? '').startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(name ?? '');
 
+  const selected = selectedId ? docs.find(d => d.id === selectedId) ?? null : null;
+
+  // Upload header — always rendered when loadId is known so the user
+  // can add docs even from the empty state.
+  const uploadHeader = loadId ? (
+    <div className="shrink-0 px-3 py-2"
+      style={{ background: 'var(--gc-surface)', borderBottom: '1px solid var(--gc-border-light)' }}>
+      {!pendingFile ? (
+        <button onClick={() => addFileRef.current?.click()}
+          type="button"
+          className="w-full flex items-center justify-center gap-1.5 text-[12px] font-semibold py-1.5 rounded-lg transition-colors"
+          style={{ color: 'var(--gc-text-2)', background: 'var(--gc-bg)', border: '1px dashed var(--gc-border)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
+          <Plus size={12} /> Add document
+        </button>
+      ) : (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 text-[12px]">
+            <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+            <span className="truncate flex-1" title={pendingFile.name} style={{ color: 'var(--gc-text-1)' }}>
+              {pendingFile.name}
+            </span>
+            <button onClick={() => { setPendingFile(null); setUploadError(null); }} type="button"
+              className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Cancel">
+              <X size={11} style={{ color: 'var(--gc-text-3)' }} />
+            </button>
+          </div>
+          <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+            What is this?
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            {KIND_UPLOAD_OPTIONS.map(opt => {
+              const tint = KIND_TINT[opt.kind] ?? KIND_TINT.other;
+              return (
+                <button key={opt.kind} type="button"
+                  onClick={() => void uploadAs(opt.kind)}
+                  disabled={uploading}
+                  className="flex items-center justify-center gap-1 rounded-md text-[10px] font-bold py-1 transition-opacity disabled:opacity-50"
+                  style={{ background: tint.bg, color: tint.fg, border: `1px solid ${tint.fg}30` }}>
+                  {uploading ? <Loader2 size={10} className="animate-spin" /> : null}
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          {uploadError && (
+            <div className="text-[10px] flex items-start gap-1" style={{ color: '#d93025' }}>
+              <AlertCircle size={10} style={{ marginTop: 1, flexShrink: 0 }} /> {uploadError}
+            </div>
+          )}
+        </div>
+      )}
+      <input ref={addFileRef} type="file" accept=".pdf,application/pdf,image/*"
+        style={{ display: 'none' }}
+        onChange={e => {
+          const f = e.target.files?.[0];
+          if (f) { setPendingFile(f); setUploadError(null); }
+          e.target.value = '';
+        }} />
+    </div>
+  ) : null;
+
   if (docs.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
-        No documents uploaded for this load yet.
+      <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+        {uploadHeader}
+        <div className="flex-1 flex items-center justify-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
+          No documents uploaded for this load yet.
+        </div>
       </div>
     );
   }
 
-  const selected = selectedId ? docs.find(d => d.id === selectedId) ?? null : null;
-
   // List view — when no doc is selected
   if (!selected) {
     return (
-      <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+      <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+        {uploadHeader}
+        <div className="flex-1 overflow-y-auto">
         {docs.map((d) => {
           const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
           return (
@@ -388,6 +515,7 @@ function UploadedDocsPanel({
             </button>
           );
         })}
+        </div>
       </div>
     );
   }
@@ -395,6 +523,7 @@ function UploadedDocsPanel({
   // Viewer — when a doc is selected
   return (
     <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+      {uploadHeader}
       <div className="shrink-0 flex items-center gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
         <button type="button" onClick={() => onSelect(null)}
           className="text-xs font-medium px-2 py-1 rounded transition-colors"
@@ -412,6 +541,18 @@ function UploadedDocsPanel({
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <Download size={11} style={{ display: 'inline', marginRight: 4 }} /> Download
           </a>
+        )}
+        {loadId && (
+          <button type="button"
+            onClick={() => void handleDelete(selected.id, selected.fileName)}
+            disabled={deletingId === selected.id}
+            className="text-xs font-medium px-2 py-1 rounded transition-colors disabled:opacity-50"
+            title={`Delete — ${selected.fileName}`}
+            style={{ color: '#d93025', border: '1px solid #fcd2cf', background: '#fce8e6' }}
+            onMouseEnter={e => (e.currentTarget.style.background = '#fad5d2')}
+            onMouseLeave={e => (e.currentTarget.style.background = '#fce8e6')}>
+            <Trash2 size={11} style={{ display: 'inline', marginRight: 4 }} /> Delete
+          </button>
         )}
       </div>
       <div className="flex-1 overflow-auto flex items-center justify-center" style={{ background: '#1a1a1a' }}>
@@ -2809,6 +2950,18 @@ export default function EventModal() {
                 onSelect={setSelectedDocId}
                 signedUrl={selectedDocUrl}
                 headerColor={headerColor}
+                loadId={(() => {
+                  const ev = events.find(e => e.id === modalEventId);
+                  return ev?.loadId;
+                })()}
+                onChange={async () => {
+                  // Re-fetch the docs list after add/delete.
+                  const ev = events.find(e => e.id === modalEventId);
+                  if (!ev?.loadId || !orgId) return;
+                  const { fetchLoadDocuments } = await import('@/lib/db');
+                  const fresh = await fetchLoadDocuments(ev.loadId, orgId);
+                  setLoadDocuments(fresh);
+                }}
               />
             )}
           </div>

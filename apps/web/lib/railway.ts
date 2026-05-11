@@ -194,6 +194,9 @@ class RailwayClient {
   renameDocument(documentId: string, fileName: string) {
     return this.req<{ ok: true; fileName: string }>('PATCH', `/v1/documents/${documentId}`, { fileName });
   }
+  deleteDocument(documentId: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/documents/${documentId}`);
+  }
   /** Multipart upload — bypasses the JSON `req` helper because file
    *  bodies need FormData and a different Content-Type. */
   async uploadLoadDocument(loadId: string, file: File, kind: import('@fleetcal/types').DocumentKind) {

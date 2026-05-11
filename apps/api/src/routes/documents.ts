@@ -2,8 +2,9 @@
  * /v1/documents — driver-uploaded document URLs.
  *
  * Endpoints:
- *   GET   /v1/documents/:id/url   — fresh 1-hour signed URL
- *   PATCH /v1/documents/:id       — rename (file_name only for now)
+ *   GET    /v1/documents/:id/url  — fresh 1-hour signed URL
+ *   PATCH  /v1/documents/:id      — rename (file_name only for now)
+ *   DELETE /v1/documents/:id      — remove the row + storage blob
  *
  * Listing happens via load scope: GET /v1/loads/:loadId/documents
  * Uploads happen via POST /v1/loads/:loadId/documents (loads.ts) or
@@ -77,6 +78,41 @@ documents.patch("/:id", async (c) => {
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   return c.json({ ok: true, fileName: cleanName });
+});
+
+// DELETE /v1/documents/:id — remove the row + storage object. Orphan
+// blobs are cleaner than half-deleted rows, so we tolerate (and log) a
+// storage-remove failure rather than rolling back the row delete.
+documents.delete("/:id", async (c) => {
+  const orgId = c.get("orgId");
+  const docId = c.req.param("id");
+
+  const { data, error: fetchErr } = await supabase
+    .from("load_documents")
+    .select("storage_path")
+    .eq("id", docId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (fetchErr) {
+    console.error("[DELETE /v1/documents/:id] read failed:", fetchErr);
+    return c.json({ error: "fetch_failed", detail: fetchErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const path = (data as { storage_path: string }).storage_path;
+  const { error: delErr } = await supabase
+    .from("load_documents")
+    .delete()
+    .eq("id", docId)
+    .eq("org_id", orgId);
+  if (delErr) {
+    console.error("[DELETE /v1/documents/:id] row delete failed:", delErr);
+    return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const { error: blobErr } = await supabase.storage.from("load-documents").remove([path]);
+  if (blobErr) console.warn("[DELETE /v1/documents/:id] storage remove failed (orphan blob ok):", blobErr);
+
+  return c.json({ ok: true });
 });
 
 export default documents;

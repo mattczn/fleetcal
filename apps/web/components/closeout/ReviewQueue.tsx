@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2 } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -426,6 +426,43 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
   };
 
+  // Delete a doc — confirms first since the storage blob is also
+  // removed and the action isn't undoable. Updates the local docs
+  // list, the prefetch cache, the active tab index (so the viewer
+  // doesn't try to render a stale id), and the includedDocIds set.
+  const handleDeleteDoc = async (docId: string, fileName: string) => {
+    if (!loadId) return;
+    const ok = window.confirm(`Delete "${fileName}"? This can't be undone.`);
+    if (!ok) return;
+    try {
+      await railway.deleteDocument(docId);
+      const removedIdx = docs.findIndex(d => d.id === docId);
+      const nextDocs   = docs.filter(d => d.id !== docId);
+      setDocs(nextDocs);
+      // Cache stays in sync so leaving + returning to this load
+      // doesn't bring the doc back from a stale snapshot.
+      const entry = docsCacheRef.current.get(loadId);
+      if (entry) {
+        docsCacheRef.current.set(loadId, { ...entry, docs: nextDocs });
+      }
+      // If we just removed the active doc (or one before it), pull
+      // activeDocIdx back so the viewer points at something valid.
+      if (removedIdx !== -1 && removedIdx <= activeDocIdx) {
+        setActiveDocIdx(Math.max(0, Math.min(activeDocIdx - 1, nextDocs.length - 1)));
+      }
+      // Drop from invoice-included set if it was checked.
+      setIncludedDocIds(prev => {
+        if (!prev.has(docId)) return prev;
+        const next = new Set(prev);
+        next.delete(docId);
+        return next;
+      });
+    } catch (err) {
+      console.error('[review queue] delete failed:', err);
+      alert(`Delete failed: ${(err as Error).message ?? 'Unknown error'}`);
+    }
+  };
+
   // ── Upload paperwork ──────────────────────────────────────────────
   // Two-stage flow: file picker (multi-select allowed) → kind picker.
   // Multiple files get merged into a single PDF locally via pdfMerge
@@ -805,14 +842,24 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
                       </button>
                       {active && (
-                        <button onClick={() => startRename(d.id, d.fileName)}
-                          className="rounded-full p-1.5 transition-colors"
-                          title={`Rename — ${d.fileName}`}
-                          style={{ color: tint.fg, background: 'transparent' }}
-                          onMouseEnter={e => (e.currentTarget.style.background = tint.bg)}
-                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                          <Pencil size={11} />
-                        </button>
+                        <>
+                          <button onClick={() => startRename(d.id, d.fileName)}
+                            className="rounded-full p-1.5 transition-colors"
+                            title={`Rename — ${d.fileName}`}
+                            style={{ color: tint.fg, background: 'transparent' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = tint.bg)}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                            <Pencil size={11} />
+                          </button>
+                          <button onClick={() => void handleDeleteDoc(d.id, d.fileName)}
+                            className="rounded-full p-1.5 transition-colors"
+                            title={`Delete — ${d.fileName}`}
+                            style={{ color: '#d93025', background: 'transparent' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#fce8e6')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                            <Trash2 size={11} />
+                          </button>
+                        </>
                       )}
                     </div>
                   );
