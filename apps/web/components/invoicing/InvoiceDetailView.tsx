@@ -16,14 +16,12 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { useOrganization } from '@clerk/nextjs';
 import {
-  ArrowLeft, Download, ExternalLink, Send, Mail, Check, X, Loader2,
+  ArrowLeft, Download, Send, Mail, Check, X, Loader2,
   AlertTriangle, AlertCircle, Paperclip, ExternalLink as ExternalLinkIcon,
 } from 'lucide-react';
 import type { Invoice, Customer } from '@fleetcal/types';
 import { railway, RailwayError } from '@/lib/railway';
-import { InvoiceDocument } from '@/components/invoicing/InvoiceDocument';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
 interface Props {
@@ -44,14 +42,22 @@ interface Props {
 export function InvoiceDetailView({
   invoiceId, mode, onClose, autoOpenEmail, onBrokerClick,
 }: Props) {
-  const { organization } = useOrganization();
-
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | 'email' | null>(null);
-  const [pdfBusy, setPdfBusy] = useState<'download-packet' | 'view-packet' | 'download-invoice' | 'view-invoice' | null>(null);
+  const [pdfBusy, setPdfBusy] = useState<'download-packet' | 'download-invoice' | 'view-invoice' | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
+
+  // Inline PDF state. We fetch the packet PDF as a blob via the authed
+  // client, then mount it in an iframe — the browser's built-in PDF
+  // viewer is the canvas. `pdfRefresh` increments whenever something
+  // mutates the underlying file (send / mark-paid / void) so the
+  // view reflects the current persisted artifact.
+  const [packetUrl, setPacketUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(true);
+  const [pdfError, setPdfError]     = useState<string | null>(null);
+  const [pdfRefresh, setPdfRefresh] = useState(0);
 
   const customers = useCalendarStore(s => s.customers);
   const broker: Customer | undefined = useMemo(() => {
@@ -71,6 +77,52 @@ export function InvoiceDetailView({
     return () => { cancelled = true; };
   }, [invoiceId]);
 
+  // Inline-PDF fetch. Runs on first load + whenever something mutates
+  // the persisted packet. Old blob URLs are revoked synchronously when
+  // a fresh one lands so memory doesn't leak across long sessions.
+  useEffect(() => {
+    if (!invoiceId) return;
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    setPdfLoading(true);
+    setPdfError(null);
+    railway.getInvoicePacketBlob(invoiceId)
+      .then((blob) => {
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(blob);
+        // Revoke whatever the previous render put up before we swap
+        // so the user doesn't see a flash of "blank then PDF".
+        setPacketUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return createdUrl;
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof RailwayError && err.status === 404
+          ? 'Invoice PDF not available yet.'
+          : 'Failed to load invoice PDF.';
+        setPdfError(msg);
+        console.error('[invoice] packet fetch failed:', err);
+      })
+      .finally(() => { if (!cancelled) setPdfLoading(false); });
+    return () => {
+      cancelled = true;
+      // The blob URL set in this effect lives on until the next run
+      // revokes it (above) — don't revoke here, the iframe may still
+      // be reading. If the user navigates away entirely, browser GC
+      // handles it.
+    };
+  }, [invoiceId, pdfRefresh]);
+
+  // Final cleanup on unmount — any lingering blob URL gets released.
+  useEffect(() => () => {
+    setPacketUrl((url) => {
+      if (url) URL.revokeObjectURL(url);
+      return null;
+    });
+  }, []);
+
   // Auto-open the email dialog on the generate-and-send flow. Gated on
   // status so a stale ?send=1 doesn't pop the dialog for a sent invoice.
   useEffect(() => {
@@ -84,6 +136,7 @@ export function InvoiceDetailView({
     try {
       const { invoice: updated } = await railway.sendInvoice(invoice.id, { method: 'manual' });
       setInvoice(updated);
+      setPdfRefresh(n => n + 1);
     } catch (err) {
       console.error('[invoice] send failed:', err);
       window.alert('Failed to mark invoice sent.');
@@ -112,6 +165,7 @@ export function InvoiceDetailView({
       });
       setInvoice(updated);
       setEmailOpen(false);
+      setPdfRefresh(n => n + 1);
     } catch (err) {
       console.error('[invoice] email send failed:', err);
       const msg = err instanceof RailwayError && err.status === 503
@@ -137,8 +191,11 @@ export function InvoiceDetailView({
     }
   }
 
+  // PDF actions. The packet is shown inline in the iframe; these
+  // handlers cover the explicit download + the standalone-invoice
+  // preview that opens in a new tab.
   async function fetchPdf(
-    label: 'download-packet' | 'view-packet' | 'download-invoice' | 'view-invoice',
+    label: 'download-packet' | 'download-invoice' | 'view-invoice',
     fetcher: (opts: { asDownload?: boolean }) => Promise<Blob>,
     filename: string,
     asDownload: boolean,
@@ -171,8 +228,6 @@ export function InvoiceDetailView({
 
   const handleDownloadPacket = () =>
     invoice && fetchPdf('download-packet', (o) => railway.getInvoicePacketBlob(invoice.id, o), `invoice-packet-${invoice.invoiceNumber}.pdf`, true);
-  const handleViewPacket = () =>
-    invoice && fetchPdf('view-packet', (o) => railway.getInvoicePacketBlob(invoice.id, o), `invoice-packet-${invoice.invoiceNumber}.pdf`, false);
   const handleViewInvoice = () =>
     invoice && fetchPdf('view-invoice', (o) => railway.getInvoicePdfBlob(invoice.id, o), `invoice-${invoice.invoiceNumber}.pdf`, false);
 
@@ -183,6 +238,7 @@ export function InvoiceDetailView({
     try {
       const { invoice: updated } = await railway.voidInvoice(invoice.id, reason ? { reason } : {});
       setInvoice(updated);
+      setPdfRefresh(n => n + 1);
     } catch (err) {
       console.error('[invoice] void failed:', err);
       window.alert('Failed to void invoice.');
@@ -211,6 +267,8 @@ export function InvoiceDetailView({
         </div>
         {invoice && <StatusPill status={invoice.status} />}
         <div className="ml-auto flex items-center gap-2">
+          {/* Invoice-only opens the standalone PDF in a new tab. The
+              main canvas always shows the packet (broker-facing). */}
           <button onClick={handleViewInvoice}
             className="text-[12px] font-semibold px-2.5 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)] disabled:opacity-60"
             style={{ color: 'var(--gc-text-3)' }}
@@ -219,22 +277,11 @@ export function InvoiceDetailView({
             {pdfBusy === 'view-invoice' ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
             Invoice only
           </button>
-          <div style={{ width: 1, height: 18, background: 'var(--gc-border)' }} />
-          <button onClick={handleViewPacket}
-            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors hover:bg-[var(--gc-hover)] disabled:opacity-60"
-            style={{ border: '1px solid var(--gc-border)' }}
-            disabled={!invoice || pdfBusy !== null}
-            title="Open the full broker packet (invoice + rate-con + POD) in a new tab">
-            {pdfBusy === 'view-packet'
-              ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
-              : <ExternalLink size={12} className="inline mr-1.5" />}
-            View packet
-          </button>
           <button onClick={handleDownloadPacket}
             className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
             style={{ background: '#1a73e8', color: '#fff' }}
             disabled={!invoice || pdfBusy !== null}
-            title="Download the full broker packet">
+            title="Download the full broker packet (invoice + rate-con + POD)">
             {pdfBusy === 'download-packet'
               ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
               : <Download size={12} className="inline mr-1.5" />}
@@ -243,24 +290,44 @@ export function InvoiceDetailView({
         </div>
       </div>
 
-      <div className="flex gap-6 px-6 py-6 flex-1 overflow-auto" style={mode === 'page' ? { minHeight: 'calc(100vh - 64px)' } : undefined}>
-        {/* Document canvas */}
-        <div className="flex-1 flex justify-center">
-          {loading && <Loader2 className="animate-spin" size={20} />}
+      <div className="flex gap-6 px-6 py-6 flex-1 overflow-hidden" style={mode === 'page' ? { minHeight: 'calc(100vh - 64px)' } : undefined}>
+        {/* Document canvas — embeds the actual rendered packet PDF
+            via the browser's built-in viewer. No HTML re-render, no
+            drift from what the broker actually gets. */}
+        <div className="flex-1 flex justify-center items-stretch min-w-0">
+          {loading && <div className="self-center"><Loader2 className="animate-spin" size={20} /></div>}
           {error && (
-            <div className="text-center text-sm" style={{ color: 'var(--gc-text-2)' }}>
+            <div className="self-center text-center text-sm" style={{ color: 'var(--gc-text-2)' }}>
               <AlertTriangle size={20} style={{ display: 'inline', marginRight: 6, color: '#dc2626' }} />
               {error}
             </div>
           )}
-          {invoice && (
-            <InvoiceDocument
-              snapshot={invoice.snapshot}
-              invoiceNumber={invoice.invoiceNumber}
-              issuedDate={fmtDate(invoice.issuedAt)}
-              dueDate={fmtDate(invoice.dueAt)}
-              logoUrl={organization?.imageUrl}
-            />
+          {invoice && !error && (
+            <div className="rounded-xl overflow-hidden relative w-full"
+              style={{ background: '#fff', border: '1px solid var(--gc-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.08)', maxWidth: 920 }}>
+              {pdfLoading && !packetUrl && (
+                <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'var(--gc-bg)' }}>
+                  <Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
+                </div>
+              )}
+              {pdfError && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm p-6 text-center" style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)' }}>
+                  <AlertTriangle size={20} style={{ color: '#dc2626' }} />
+                  <div>{pdfError}</div>
+                  <button onClick={() => setPdfRefresh(n => n + 1)}
+                    className="mt-2 text-[12px] font-semibold px-3 py-1.5 rounded-lg"
+                    style={{ background: '#1a73e8', color: '#fff' }}>
+                    Retry
+                  </button>
+                </div>
+              )}
+              {packetUrl && (
+                <iframe key={packetUrl}
+                  src={packetUrl}
+                  title={`Invoice #${invoice.invoiceNumber} packet`}
+                  style={{ width: '100%', height: '100%', minHeight: 600, border: 'none', display: 'block' }} />
+              )}
+            </div>
           )}
         </div>
 
