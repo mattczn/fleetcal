@@ -30,7 +30,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -952,17 +952,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   TONU — POD not required
                 </div>
               )}
+              {/* Only show actually-required checks. Lumper / scale
+                  rows that don't apply to this load are filtered out
+                  entirely — the Accessorials banner above this section
+                  already shows what's relevant, so the "(n/a)" rows
+                  just added noise. */}
               <div className="space-y-1.5">
-                {checklist.map(c => (
-                  <div key={c.id} className="flex items-center gap-2 text-[13px]"
-                    style={{ color: c.skip ? 'var(--gc-text-3)' : c.pass ? 'var(--gc-text-1)' : '#dc2626', opacity: c.skip ? 0.6 : 1 }}>
-                    {c.skip
-                      ? <Clock      size={13} style={{ color: 'var(--gc-text-3)' }} />
-                      : c.pass
-                        ? <CheckCircle2 size={13} style={{ color: '#15803d' }} />
-                        : <AlertCircle size={13} style={{ color: '#dc2626' }} />}
+                {checklist.filter(c => !c.skip).map(c => (
+                  <div key={c.id} className="flex items-center gap-2 text-[13px] font-semibold"
+                    style={{ color: c.pass ? 'var(--gc-text-1)' : '#dc2626' }}>
+                    {c.pass
+                      ? <CheckCircle2 size={13} style={{ color: '#15803d' }} />
+                      : <AlertCircle  size={13} style={{ color: '#dc2626' }} />}
                     <span>{c.label}</span>
-                    {c.skip && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>(n/a)</span>}
                   </div>
                 ))}
               </div>
