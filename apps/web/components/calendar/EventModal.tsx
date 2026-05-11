@@ -2982,43 +2982,6 @@ export default function EventModal() {
                 {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </StyledSelect>
             )}
-            {/* Billing status pill + Review button — only shown for
-                revenue loads in edit mode. Lets the user jump straight
-                into the closeout review panel from inside the load
-                modal so they can release / flag / upload docs / add
-                notes without leaving the calendar context. */}
-            {eventKind === 'revenue' && isEdit && (() => {
-              const ev = events.find(e => e.id === modalEventId);
-              if (!ev) return null;
-              const bs = ev.billingStatus;
-              const bsTint: { bg: string; fg: string; label: string } = (() => {
-                switch (bs) {
-                  case 'pending':   return { bg: '#fef3c7', fg: '#92400e', label: 'Pending' };
-                  case 'on_hold':   return { bg: '#fee2e2', fg: '#991b1b', label: 'Flagged' };
-                  case 'verified':  return { bg: '#dbeafe', fg: '#1e40af', label: 'Released' };
-                  case 'invoiced':  return { bg: '#dcfce7', fg: '#15803d', label: 'Invoiced' };
-                  case 'paid':      return { bg: '#d1fae5', fg: '#065f46', label: 'Paid' };
-                  default:          return { bg: 'var(--gc-border-light)', fg: 'var(--gc-text-3)', label: '—' };
-                }
-              })();
-              return (
-                <>
-                  <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"
-                    title={`Billing: ${bsTint.label}`}
-                    style={{ background: bsTint.bg, color: bsTint.fg, border: `1px solid ${bsTint.fg}30` }}>
-                    Billing: {bsTint.label}
-                  </span>
-                  <button type="button" onClick={() => setReviewQueueOpen(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors"
-                    title="Open the closeout review panel for this load"
-                    style={{ background: '#15803d', color: '#fff' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
-                    onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
-                    <Play size={11} fill="currentColor" /> Review
-                  </button>
-                </>
-              );
-            })()}
             {eventKind === 'revenue' && stops.length >= 2 && stops.some(s => s.geocodeStatus === 'success') && (
               <button type="button" onClick={() => { setShowMapPanel(v => !v); setShowPdfViewer(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
@@ -3071,26 +3034,66 @@ export default function EventModal() {
                 e.target.value = '';
               }} />
 
-            {/* Event kind toggle */}
-            <div className="flex items-center justify-center gap-2 pb-3">
-              {(['revenue', 'non_revenue'] as const).map(kind => (
-                <button
-                  key={kind}
-                  type="button"
-                  onClick={() => { if (!isEdit) setEventKind(kind); }}
-                  disabled={isEdit}
-                  className="text-xs px-3 py-1.5 rounded-full font-medium"
-                  style={{
-                    background: eventKind === kind ? (kind === 'revenue' ? 'var(--gc-blue)' : '#7c3aed') : 'var(--gc-hover)',
-                    color: eventKind === kind ? '#fff' : 'var(--gc-text-2)',
-                    cursor: isEdit ? 'default' : 'pointer',
-                    opacity: isEdit && eventKind !== kind ? 0.35 : 1,
-                    transition: isEdit ? 'none' : 'colors 150ms',
-                  }}
-                >
-                  {kind === 'revenue' ? 'Revenue' : 'Non-Revenue'}
-                </button>
-              ))}
+            {/* Event kind toggle + closeout billing badge + Review jump.
+                Three-column flex: empty spacer (left) keeps the toggle
+                visually centered while the billing pill + Review button
+                anchor to the right corner of the same row. */}
+            <div className="flex items-center pb-3 gap-2">
+              <div className="flex-1" />
+              <div className="flex items-center gap-2">
+                {(['revenue', 'non_revenue'] as const).map(kind => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => { if (!isEdit) setEventKind(kind); }}
+                    disabled={isEdit}
+                    className="text-xs px-3 py-1.5 rounded-full font-medium"
+                    style={{
+                      background: eventKind === kind ? (kind === 'revenue' ? 'var(--gc-blue)' : '#7c3aed') : 'var(--gc-hover)',
+                      color: eventKind === kind ? '#fff' : 'var(--gc-text-2)',
+                      cursor: isEdit ? 'default' : 'pointer',
+                      opacity: isEdit && eventKind !== kind ? 0.35 : 1,
+                      transition: isEdit ? 'none' : 'colors 150ms',
+                    }}
+                  >
+                    {kind === 'revenue' ? 'Revenue' : 'Non-Revenue'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex-1 flex items-center justify-end gap-2">
+                {eventKind === 'revenue' && isEdit && (() => {
+                  const ev = events.find(e => e.id === modalEventId);
+                  if (!ev) return null;
+                  const bs = ev.billingStatus;
+                  const bsTint = (() => {
+                    switch (bs) {
+                      case 'pending':   return { bg: '#fef3c7', fg: '#92400e', label: 'Pending' };
+                      case 'on_hold':   return { bg: '#fee2e2', fg: '#991b1b', label: 'Flagged' };
+                      case 'verified':  return { bg: '#dbeafe', fg: '#1e40af', label: 'Released' };
+                      case 'invoiced':  return { bg: '#dcfce7', fg: '#15803d', label: 'Invoiced' };
+                      case 'paid':      return { bg: '#d1fae5', fg: '#065f46', label: 'Paid' };
+                      default:          return { bg: 'var(--gc-border-light)', fg: 'var(--gc-text-3)', label: '—' };
+                    }
+                  })();
+                  return (
+                    <>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-full whitespace-nowrap"
+                        title={`Billing: ${bsTint.label}`}
+                        style={{ background: bsTint.bg, color: bsTint.fg, border: `1px solid ${bsTint.fg}30` }}>
+                        Billing: {bsTint.label}
+                      </span>
+                      <button type="button" onClick={() => setReviewQueueOpen(true)}
+                        className="flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full transition-colors"
+                        title="Open the closeout review panel for this load"
+                        style={{ background: '#15803d', color: '#fff' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
+                        onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
+                        <Play size={10} fill="currentColor" /> Review
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
             </div>
 
             {/* AI disclaimer for batch parse */}

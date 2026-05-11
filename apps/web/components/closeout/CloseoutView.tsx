@@ -728,13 +728,16 @@ export default function CloseoutView() {
                         {visibleCols.delivered && <Td>{fmtDate(load.end)}</Td>}
                         {/* Internal load ID — per-org sequence number,
                             distinct from the broker-assigned load_num.
-                            Useful for quick reference + searchable. */}
+                            Doubles as the invoice number, so it's
+                            copyable just like load #. */}
                         {visibleCols.internalId && (
                           <Td>
                             {load.internalLoadId != null
-                              ? <span className="tabular-nums text-[13px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
-                                  {load.internalLoadId}
-                                </span>
+                              ? <CopyableCell
+                                  value={String(load.internalLoadId)}
+                                  displayValue={String(load.internalLoadId)}
+                                  title="Copy ID / invoice #"
+                                />
                               : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
                           </Td>
                         )}
@@ -1001,6 +1004,20 @@ function DocBadge({ label, count }: { label: string; count?: number }) {
 
 /** Load # button with a 1.5s "Copied" confirmation flip. */
 function CopyableLoadNum({ value }: { value: string }) {
+  return <CopyableCell value={value} displayValue={`#${value}`} title="Copy load #" />;
+}
+
+/** Click-to-copy text cell with a 1.5s "Copied!" green flip. Used for
+ *  load # and internal load id (which doubles as the invoice number). */
+function CopyableCell({
+  value, displayValue, title,
+}: {
+  value: string;
+  /** What's shown inside the button — usually `value` with a "#" prefix. */
+  displayValue: string;
+  /** Hover title in the default state. */
+  title: string;
+}) {
   const [copied, setCopied] = useState(false);
   return (
     <button type="button"
@@ -1012,15 +1029,15 @@ function CopyableLoadNum({ value }: { value: string }) {
           setTimeout(() => setCopied(false), 1500);
         } catch { /* clipboard API blocked — silent */ }
       }}
-      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors"
+      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums"
       style={{
         color:      copied ? '#15803d' : 'var(--gc-text-1)',
         background: copied ? '#dcfce7' : 'transparent',
       }}
-      title={copied ? 'Copied!' : 'Copy load #'}
+      title={copied ? 'Copied!' : title}
       onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
       onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
-      #{value}
+      {displayValue}
       {copied
         ? <Check size={11} style={{ color: '#15803d' }} />
         : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
