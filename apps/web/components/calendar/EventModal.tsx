@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
@@ -360,10 +361,12 @@ function UploadedDocsPanel({
     }
   };
 
-  const handleDelete = async (docId: string, fileName: string) => {
+  // Doc delete — actual call is split from the trigger so we can route
+  // the trigger through the ConfirmDialog (styled yes/no surface). The
+  // dialog state lives on `deleteTarget`; on confirm we call this.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const performDelete = async (docId: string) => {
     if (!loadId) return;
-    const ok = window.confirm(`Delete "${fileName}"? This can't be undone.`);
-    if (!ok) return;
     setDeletingId(docId);
     try {
       const { railway } = await import('@/lib/railway');
@@ -438,19 +441,24 @@ function UploadedDocsPanel({
               <X size={11} style={{ color: 'var(--gc-text-3)' }} />
             </button>
           </div>
-          <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="text-[11px] uppercase tracking-wider font-extrabold" style={{ color: 'var(--gc-text-2)' }}>
             What is this?
           </div>
-          <div className="grid grid-cols-3 gap-1">
+          <div className="grid grid-cols-3 gap-1.5">
             {KIND_UPLOAD_OPTIONS.map(opt => {
               const tint = KIND_TINT[opt.kind] ?? KIND_TINT.other;
               return (
                 <button key={opt.kind} type="button"
                   onClick={() => void uploadAs(opt.kind)}
                   disabled={uploading}
-                  className="flex items-center justify-center gap-1 rounded-md text-[10px] font-bold py-1 transition-opacity disabled:opacity-50"
-                  style={{ background: tint.bg, color: tint.fg, border: `1px solid ${tint.fg}30` }}>
-                  {uploading ? <Loader2 size={10} className="animate-spin" /> : null}
+                  className="flex items-center justify-center gap-1 rounded-lg text-[11px] font-black uppercase tracking-wider py-2 transition-opacity disabled:opacity-50"
+                  style={{
+                    background: tint.bg,
+                    color:      tint.fg,
+                    boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
+                    textShadow: '0 1px 1px rgba(0,0,0,0.25)',
+                  }}>
+                  {uploading ? <Loader2 size={11} className="animate-spin" /> : null}
                   {opt.label}
                 </button>
               );
@@ -542,7 +550,7 @@ function UploadedDocsPanel({
         )}
         {loadId && (
           <button type="button"
-            onClick={() => void handleDelete(selected.id, selected.fileName)}
+            onClick={() => setDeleteTarget({ id: selected.id, name: selected.fileName })}
             disabled={deletingId === selected.id}
             className="text-xs font-medium px-2 py-1 rounded transition-colors disabled:opacity-50"
             title={`Delete — ${selected.fileName}`}
@@ -563,6 +571,23 @@ function UploadedDocsPanel({
           <iframe src={signedUrl} title={selected.fileName} style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }} />
         )}
       </div>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete document?"
+          message={`"${deleteTarget.name}" will be removed. This can't be undone.`}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          destructive
+          // Above EventModal main (z-200) and confirms (z-220).
+          zIndex={240}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const id = deleteTarget.id;
+            setDeleteTarget(null);
+            void performDelete(id);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2 } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, Clock, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, MoreHorizontal } from 'lucide-react';
 import type { Load, CalendarEvent } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -40,6 +40,7 @@ import PdfCanvas from '@/components/pdf/PdfCanvas';
 import DocViewer from './DocViewer';
 import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 
@@ -383,13 +384,34 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // Cmd+Enter all belong to the notes composer.
   const [notesOpen, setNotesOpen] = useState(false);
 
+  // ── Doc tab actions (rename + delete) ─────────────────────────────
+  // Kebab menu collapses rename + delete into a single "•••" button
+  // per active tab so the strip stays compact when there are several
+  // docs.
+  const [tabMenuDocId, setTabMenuDocId] = useState<string | null>(null);
+  // Click-outside dismissal for the kebab menu.
+  useEffect(() => {
+    if (!tabMenuDocId) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-tabmenu]')) setTabMenuDocId(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [tabMenuDocId]);
+
   // ── Inline doc rename ──────────────────────────────────────────────
-  // When the user clicks the pencil on a doc tab we swap that tab into
-  // an inline text input. The keyboard handler pauses while a rename
-  // input has focus (covered by the existing INPUT/TEXTAREA tag check).
+  // When the user clicks Rename in the kebab menu we swap that tab
+  // into an inline text input. The keyboard handler pauses while a
+  // rename input has focus (covered by the existing INPUT/TEXTAREA
+  // tag check).
   const [renamingDocId, setRenamingDocId]     = useState<string | null>(null);
   const [renameDraft,   setRenameDraft]       = useState('');
   const [renameSaving,  setRenameSaving]      = useState(false);
+
+  // Confirm dialog for delete — replaces window.confirm with a styled
+  // yes/no surface that fits the rest of the app.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const startRename = (docId: string, currentName: string) => {
     setRenamingDocId(docId);
@@ -430,14 +452,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
   };
 
-  // Delete a doc — confirms first since the storage blob is also
-  // removed and the action isn't undoable. Updates the local docs
-  // list, the prefetch cache, the active tab index (so the viewer
-  // doesn't try to render a stale id), and the includedDocIds set.
-  const handleDeleteDoc = async (docId: string, fileName: string) => {
+  // Delete a doc — irreversible (the storage blob is removed too).
+  // Confirmation is gated on the ConfirmDialog higher up; this fn
+  // is only invoked after the user clicks "Delete" there.
+  // Updates the local docs list, the prefetch cache, the active tab
+  // index (so the viewer doesn't try to render a stale id), and the
+  // includedDocIds set.
+  const handleDeleteDoc = async (docId: string) => {
     if (!loadId) return;
-    const ok = window.confirm(`Delete "${fileName}"? This can't be undone.`);
-    if (!ok) return;
     try {
       await railway.deleteDocument(docId);
       const removedIdx = docs.findIndex(d => d.id === docId);
@@ -848,24 +870,36 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
                       </button>
                       {active && (
-                        <>
-                          <button onClick={() => startRename(d.id, d.fileName)}
+                        <div className="relative" data-tabmenu>
+                          <button onClick={() => setTabMenuDocId(prev => prev === d.id ? null : d.id)}
                             className="rounded-full p-1.5 transition-colors"
-                            title={`Rename — ${d.fileName}`}
+                            title="More"
                             style={{ color: tint.bg, background: 'transparent' }}
                             onMouseEnter={e => (e.currentTarget.style.background = tint.bg + '14')}
                             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                            <Pencil size={11} />
+                            <MoreHorizontal size={13} />
                           </button>
-                          <button onClick={() => void handleDeleteDoc(d.id, d.fileName)}
-                            className="rounded-full p-1.5 transition-colors"
-                            title={`Delete — ${d.fileName}`}
-                            style={{ color: '#d93025', background: 'transparent' }}
-                            onMouseEnter={e => (e.currentTarget.style.background = '#fce8e6')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                            <Trash2 size={11} />
-                          </button>
-                        </>
+                          {tabMenuDocId === d.id && (
+                            <div className="absolute right-0 top-full mt-1 rounded-xl py-1 z-30"
+                              style={{
+                                background: 'var(--gc-surface)',
+                                border:     '1px solid var(--gc-border)',
+                                boxShadow:  '0 8px 24px rgba(0,0,0,0.15)',
+                                minWidth:   160,
+                              }}>
+                              <button onClick={() => { setTabMenuDocId(null); startRename(d.id, d.fileName); }}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
+                                style={{ color: 'var(--gc-text-1)' }}>
+                                <Pencil size={12} /> Rename
+                              </button>
+                              <button onClick={() => { setTabMenuDocId(null); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-left transition-colors hover:bg-[var(--gc-hover)]"
+                                style={{ color: '#d93025' }}>
+                                <Trash2 size={12} /> Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
@@ -1004,9 +1038,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       <button key={opt.kind}
                         onClick={() => void uploadAs(opt.kind)}
                         disabled={uploading}
-                        className="flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-extrabold py-2 transition-opacity disabled:opacity-50"
-                        style={{ background: opt.tint.bg, color: opt.tint.fg, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-                        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                        className="flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-black uppercase tracking-wider py-2.5 transition-opacity disabled:opacity-50"
+                        style={{
+                          background:  opt.tint.bg,
+                          color:       opt.tint.fg,
+                          boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
+                          textShadow:  '0 1px 1px rgba(0,0,0,0.25)',
+                        }}>
+                        {uploading ? <Loader2 size={12} className="animate-spin" /> : null}
                         {opt.label}
                       </button>
                     ))}
@@ -1133,6 +1172,25 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           onClose={() => setNotesOpen(false)}
           onSaved={() => { /* nothing to refresh — note appears
                               optimistically in the modal's local thread */ }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete document?"
+          message={`"${deleteTarget.name}" will be removed. This can't be undone.`}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          destructive
+          // Sits above the review queue (z-180) but below the notes
+          // modal (z-230) so behavior matches expected stacking.
+          zIndex={240}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            const id = deleteTarget.id;
+            setDeleteTarget(null);
+            void handleDeleteDoc(id);
+          }}
         />
       )}
     </>
