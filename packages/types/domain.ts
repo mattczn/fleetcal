@@ -201,12 +201,6 @@ export interface InvoiceSettings {
   /** Optional prefix prepended to the invoice number (which defaults
    *  to internal_load_id). Empty string = no prefix. */
   invoiceNumberPrefix?: string;
-
-  // ── Factoring (optional) ───────────────────────────────
-  /** If invoices are routed through a factor, the factor's name +
-   *  notice text appear on the invoice. Left blank for non-factored. */
-  factorCompanyName?: string;
-  factorNoticeText?:  string;
 }
 
 export interface OrgSettings {

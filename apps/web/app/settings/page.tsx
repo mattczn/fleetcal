@@ -996,8 +996,6 @@ function InvoicingPanel() {
     remitToInstructions:     '',
     invoiceFooterNotes:      '',
     invoiceNumberPrefix:     '',
-    factorCompanyName:       '',
-    factorNoticeText:        '',
   });
   const updateField = (key: keyof typeof form, value: string) => {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -1048,8 +1046,6 @@ function InvoicingPanel() {
           remitToInstructions:     inv.remitToInstructions     ?? '',
           invoiceFooterNotes:      inv.invoiceFooterNotes      ?? '',
           invoiceNumberPrefix:     inv.invoiceNumberPrefix     ?? '',
-          factorCompanyName:       inv.factorCompanyName       ?? '',
-          factorNoticeText:        inv.factorNoticeText        ?? '',
         });
         setAutofilledFromClerk(filled);
         setLoading(false);
@@ -1087,8 +1083,6 @@ function InvoicingPanel() {
         remitToInstructions:     form.remitToInstructions.trim()     || undefined,
         invoiceFooterNotes:      form.invoiceFooterNotes.trim()      || undefined,
         invoiceNumberPrefix:     form.invoiceNumberPrefix.trim()     || undefined,
-        factorCompanyName:       form.factorCompanyName.trim()       || undefined,
-        factorNoticeText:        form.factorNoticeText.trim()        || undefined,
       };
       await railway.updateOrgSettings({ invoiceSettings: cleaned });
       setSaved(true);
@@ -1110,21 +1104,23 @@ function InvoicingPanel() {
   }
 
   return (
-    <div style={{ width: 640 }} className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Invoicing</h2>
-        <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
-          Letterhead, contact info, and payment instructions that appear on every invoice you generate.
-          Per-broker invoice routing (email vs portal) lives on each customer&rsquo;s profile.
-        </p>
-        {clerkOrg && (
-          <div className="text-xs mt-2 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
-            <Sparkles size={12} />
-            Company name auto-fills from your Clerk org ({clerkOrg.name}).
-            {clerkOrg.imageUrl && <> Logo from your Clerk org image is used on the invoice.</>}
-          </div>
-        )}
-      </div>
+    <div className="flex items-start gap-8" style={{ minWidth: 1080 }}>
+      {/* Left: form */}
+      <div className="space-y-6" style={{ width: 560, flexShrink: 0 }}>
+        <div>
+          <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Invoicing</h2>
+          <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
+            Letterhead, contact info, and payment instructions that appear on every invoice you generate.
+            Per-broker invoice routing (email vs portal) lives on each customer&rsquo;s profile.
+          </p>
+          {clerkOrg && (
+            <div className="text-xs mt-2 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+              <Sparkles size={12} />
+              Company name auto-fills from your Clerk org ({clerkOrg.name}).
+              {clerkOrg.imageUrl && <> Logo from your Clerk org image is used on the invoice.</>}
+            </div>
+          )}
+        </div>
 
       {/* Company identity */}
       <Card title="Company identity" subtitle="Carrier info printed at the top of every invoice.">
@@ -1187,10 +1183,17 @@ function InvoicingPanel() {
             onChange={v => updateField('defaultPaymentTermsDays', v.replace(/[^\d]/g, ''))}
             placeholder="30" />
         </FieldRow>
-        <FieldRow label="Remit-to instructions" subtitle="Free-form. Banking / ACH details, check-mailing address, etc. Goes in a block at the bottom of the invoice.">
-          <Textarea value={form.remitToInstructions} onChange={v => updateField('remitToInstructions', v)}
-            placeholder={'Make checks payable to:\nAcme Trucking LLC\n123 Main St, Salt Lake City, UT 84101\n\nACH: Routing 123456789 / Acct 987654321'}
-            rows={6} />
+        <FieldRow label="Remit-to instructions" subtitle="Free-form block at the bottom of the invoice.">
+          <div className="flex-1 flex flex-col gap-1">
+            <Textarea value={form.remitToInstructions} onChange={v => updateField('remitToInstructions', v)}
+              placeholder={'Make checks payable to:\nAcme Trucking LLC\nP.O. Box 1234, Salt Lake City, UT 84101\n\nACH inquiries: ar@acmetrucking.com'}
+              rows={6} />
+            <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+              <strong style={{ color: '#92400e' }}>Heads-up:</strong> invoices travel through brokers, AP staff, and factor archives.
+              Putting full ACH routing + account numbers in plain text on the invoice exposes them widely.
+              Safer pattern: bank name + last-4 digits, with &ldquo;Contact AR for full ACH details.&rdquo;
+            </div>
+          </div>
         </FieldRow>
       </Card>
 
@@ -1206,34 +1209,188 @@ function InvoicingPanel() {
         </FieldRow>
       </Card>
 
-      {/* Factor (optional) */}
-      <Card title="Factoring" subtitle="Skip if you invoice brokers directly.">
-        <FieldRow label="Factor company name">
-          <Input value={form.factorCompanyName} onChange={v => updateField('factorCompanyName', v)} placeholder="Triumph Business Capital" />
-        </FieldRow>
-        <FieldRow label="Notice of assignment text" subtitle="Required language some factors want printed on the invoice.">
-          <Textarea value={form.factorNoticeText} onChange={v => updateField('factorNoticeText', v)}
-            placeholder="This account has been assigned to and is owned by …" rows={3} />
-        </FieldRow>
-      </Card>
+        {/* Save bar */}
+        <div className="flex items-center gap-3">
+          <button onClick={() => void save()} disabled={saving}
+            className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-bold text-white transition-colors disabled:opacity-50"
+            style={{ background: 'var(--gc-blue)' }}
+            onMouseEnter={e => { if (!saving) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+            onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          {saved && (
+            <span className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#15803d' }}>
+              <Check size={14} /> Saved
+            </span>
+          )}
+          {err && (
+            <span className="text-sm" style={{ color: '#d93025' }}>{err}</span>
+          )}
+        </div>
+      </div>{/* end left column */}
 
-      {/* Save bar */}
-      <div className="flex items-center gap-3">
-        <button onClick={() => void save()} disabled={saving}
-          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-bold text-white transition-colors disabled:opacity-50"
-          style={{ background: 'var(--gc-blue)' }}
-          onMouseEnter={e => { if (!saving) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
-          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-          {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-        {saved && (
-          <span className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#15803d' }}>
-            <Check size={14} /> Saved
-          </span>
+      {/* Right: sticky mock invoice preview. Renders directly from the
+          form state so the user sees their changes immediately. Uses
+          fixed sample data for load/broker/line-items since real load
+          rendering happens in Phase 2 — this is just for visualizing
+          the letterhead + payment block layout. */}
+      <div className="flex-1 sticky top-0" style={{ minWidth: 480 }}>
+        <div className="text-xs font-bold uppercase tracking-wider mb-2"
+          style={{ color: 'var(--gc-text-3)' }}>
+          Preview
+        </div>
+        <MockInvoice form={form} clerkOrg={clerkOrg} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Mock invoice preview ─────────────────────────────────────────────────────
+//
+// Live preview of what a generated invoice will look like with the
+// current InvoicingPanel values. Sample load + broker + line items
+// are hard-coded; this is purely a layout / letterhead visualizer for
+// the settings panel. The Phase-2 invoice renderer will use this same
+// general shape, replacing the sample data with real load data.
+
+function MockInvoice({ form, clerkOrg }: {
+  form: {
+    companyName: string; mcNumber: string; dotNumber: string; ein: string;
+    addressLine1: string; addressLine2: string; city: string; state: string; zip: string;
+    phone: string; email: string;
+    defaultPaymentTermsDays: string;
+    remitToInstructions: string;
+    invoiceFooterNotes: string;
+    invoiceNumberPrefix: string;
+  };
+  clerkOrg: { name?: string; imageUrl?: string } | null | undefined;
+}) {
+  const companyName = form.companyName || clerkOrg?.name || 'Your Company Name';
+  const cityLine    = [form.city, form.state].filter(Boolean).join(', ');
+  const csz         = [cityLine, form.zip].filter(Boolean).join(' ');
+  const issueDate   = new Date();
+  const termsDays   = parseInt(form.defaultPaymentTermsDays, 10);
+  const dueDate     = new Date(issueDate);
+  if (Number.isFinite(termsDays)) dueDate.setDate(dueDate.getDate() + termsDays);
+  const fmtDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const invoiceNum  = `${form.invoiceNumberPrefix || ''}15920358`;
+  // Hard-coded sample so the preview is meaningful even when invoice
+  // settings are empty.
+  const sample = {
+    broker:     'Acme Brokerage, LLC',
+    brokerAddr: '500 Broker Way\nDallas, TX 75201',
+    loadNum:    'L-0042',
+    pickup:     'Apr 23, 2026 — Salt Lake City, UT',
+    delivery:   'Apr 25, 2026 — Dallas, TX',
+    miles:      1198,
+    lineHaul:   2400,
+    detention:  150,
+    lumper:     85,
+  };
+  const total = sample.lineHaul + sample.detention + sample.lumper;
+  return (
+    <div className="rounded-xl overflow-hidden"
+      style={{
+        background: '#fff',
+        border:     '1px solid var(--gc-border)',
+        boxShadow:  '0 8px 24px rgba(0,0,0,0.08)',
+        // Aspect roughly matches an 8.5x11" page at this width.
+        aspectRatio: '8.5 / 11',
+        maxWidth: 520,
+      }}>
+      <div className="h-full overflow-y-auto px-8 py-7 text-[#202124] text-[11px]" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' }}>
+        {/* Header: company on left, logo + invoice meta on right */}
+        <div className="flex items-start justify-between mb-6">
+          <div>
+            <div className="text-[20px] font-extrabold leading-tight">{companyName}</div>
+            <div className="mt-1 leading-snug" style={{ color: '#5f6368' }}>
+              {form.addressLine1 || <span style={{ opacity: 0.4 }}>Street address</span>}<br/>
+              {form.addressLine2 && <>{form.addressLine2}<br/></>}
+              {csz || <span style={{ opacity: 0.4 }}>City, ST ZIP</span>}
+            </div>
+            <div className="mt-2 leading-snug" style={{ color: '#5f6368' }}>
+              {form.phone && <>P: {form.phone}<br/></>}
+              {form.email && <>{form.email}<br/></>}
+              {form.mcNumber  && <>MC# {form.mcNumber}{form.dotNumber && <> · DOT# {form.dotNumber}</>}{form.ein && <> · EIN {form.ein}</>}</>}
+              {!form.mcNumber && form.dotNumber && <>DOT# {form.dotNumber}{form.ein && <> · EIN {form.ein}</>}</>}
+              {!form.mcNumber && !form.dotNumber && form.ein && <>EIN {form.ein}</>}
+            </div>
+          </div>
+          <div className="text-right shrink-0 ml-4">
+            {clerkOrg?.imageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={clerkOrg.imageUrl} alt="" style={{ maxWidth: 80, maxHeight: 80, marginLeft: 'auto', marginBottom: 8 }} />
+            )}
+            <div className="text-[18px] font-extrabold tracking-wide" style={{ color: '#1a73e8' }}>INVOICE</div>
+            <div className="mt-2 leading-snug" style={{ color: '#5f6368' }}>
+              <div><span className="font-bold" style={{ color: '#202124' }}>#</span> {invoiceNum}</div>
+              <div>Issued {fmtDate(issueDate)}</div>
+              <div>Due {Number.isFinite(termsDays) ? fmtDate(dueDate) : '—'}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bill-to */}
+        <div className="mb-5">
+          <div className="text-[9px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Bill to</div>
+          <div className="font-bold">{sample.broker}</div>
+          <div className="leading-snug whitespace-pre-line" style={{ color: '#5f6368' }}>{sample.brokerAddr}</div>
+        </div>
+
+        {/* Load detail */}
+        <div className="mb-5">
+          <div className="text-[9px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Load</div>
+          <div><span className="font-bold">{sample.loadNum}</span> · {sample.miles.toLocaleString()} mi</div>
+          <div style={{ color: '#5f6368' }}>Pickup: {sample.pickup}</div>
+          <div style={{ color: '#5f6368' }}>Delivery: {sample.delivery}</div>
+        </div>
+
+        {/* Line items */}
+        <table className="w-full mb-5" style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #dadce0' }}>
+              <th className="text-left py-1.5 font-extrabold uppercase tracking-wider text-[9px]" style={{ color: '#5f6368' }}>Description</th>
+              <th className="text-right py-1.5 font-extrabold uppercase tracking-wider text-[9px]" style={{ color: '#5f6368' }}>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style={{ borderBottom: '1px solid #f0f1f3' }}>
+              <td className="py-1.5">Line haul ({sample.miles.toLocaleString()} mi)</td>
+              <td className="py-1.5 text-right tabular-nums">${sample.lineHaul.toLocaleString()}.00</td>
+            </tr>
+            <tr style={{ borderBottom: '1px solid #f0f1f3' }}>
+              <td className="py-1.5">Detention</td>
+              <td className="py-1.5 text-right tabular-nums">${sample.detention.toLocaleString()}.00</td>
+            </tr>
+            <tr style={{ borderBottom: '1px solid #f0f1f3' }}>
+              <td className="py-1.5">Lumper</td>
+              <td className="py-1.5 text-right tabular-nums">${sample.lumper.toLocaleString()}.00</td>
+            </tr>
+            <tr>
+              <td className="pt-2 font-extrabold text-[12px]">Total due</td>
+              <td className="pt-2 text-right font-extrabold text-[12px] tabular-nums">${total.toLocaleString()}.00</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Remit-to */}
+        {form.remitToInstructions ? (
+          <div className="mb-4 px-3 py-2.5 rounded" style={{ background: '#f1f3f4' }}>
+            <div className="text-[9px] font-extrabold uppercase tracking-wider mb-1" style={{ color: '#5f6368' }}>Remit to</div>
+            <div className="whitespace-pre-line leading-snug">{form.remitToInstructions}</div>
+          </div>
+        ) : (
+          <div className="mb-4 px-3 py-2.5 rounded text-[10px] italic" style={{ background: '#f1f3f4', color: '#5f6368' }}>
+            Remit-to instructions appear here.
+          </div>
         )}
-        {err && (
-          <span className="text-sm" style={{ color: '#d93025' }}>{err}</span>
+
+        {/* Footer notes */}
+        {form.invoiceFooterNotes && (
+          <div className="text-[10px] leading-snug mt-3" style={{ color: '#5f6368' }}>
+            {form.invoiceFooterNotes}
+          </div>
         )}
       </div>
     </div>
