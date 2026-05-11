@@ -1634,38 +1634,54 @@ function StopsView({ stops }: { stops: Stop[] }) {
   );
 }
 
+// Stop-type styling — matches the canonical palette used by
+// StopsSection in the load modal so the closeout view feels like
+// the same product. `color` is the darker text/border tint;
+// `bg` is the pale fill version used for label chips.
+const STOP_TINT: Record<string, { color: string; bg: string; label: string }> = {
+  pickup:    { color: '#166534', bg: '#dcfce7', label: 'Pickup'   },
+  delivery:  { color: '#991b1b', bg: '#fee2e2', label: 'Delivery' },
+  drop:      { color: '#0e7490', bg: '#cffafe', label: 'Drop'     },
+  drop_hook: { color: '#1e40af', bg: '#dbeafe', label: 'D&H'      },
+  stop:      { color: '#92400e', bg: '#fef3c7', label: 'Stop'     },
+  relay:     { color: '#6d28d9', bg: '#f5f3ff', label: 'Relay'    },
+};
+
 function StopRow({ stop, index, isLast }: { stop: Stop; index: number; isLast: boolean }) {
-  const isPickup   = stop.type === 'pickup';
-  const isDelivery = stop.type === 'delivery' || stop.type === 'drop';
-  const isRelay    = stop.type === 'relay';
-  const tint = isPickup     ? { bg: '#188038', fg: '#fff', label: 'Pickup'   }
-             : isDelivery   ? { bg: '#1a73e8', fg: '#fff', label: stop.type === 'drop' ? 'Drop' : 'Delivery' }
-             : isRelay      ? { bg: '#7b1fa2', fg: '#fff', label: 'Relay'    }
-             : stop.type === 'drop_hook' ? { bg: '#e37400', fg: '#fff', label: 'Drop & hook' }
-                                         : { bg: '#5f6368', fg: '#fff', label: 'Stop' };
+  const tint = STOP_TINT[stop.type] ?? STOP_TINT.stop;
   const arrived = !!stop.arrivedAt;
   const apptText = fmtApptWindow(stop.apptStart, stop.apptEnd, stop.timezone);
   const arrivedText = stop.arrivedAt ? fmtArrived(stop.arrivedAt) : null;
   return (
     <div className="relative">
-      {/* Connector line between stops */}
+      {/* Connector line between stops. Drawn at zIndex 0 so the card
+          + circle (zIndex 1) sit on top of it — without explicit
+          z-indexes, absolute-positioned siblings render on top of
+          static ones, putting the line in front of the card. */}
       {!isLast && (
         <div style={{
           position: 'absolute',
           left:     19,
-          top:      40,
+          top:      20,
           bottom:   -10,
           width:    2,
           background: 'var(--gc-border)',
+          zIndex:   0,
         }} />
       )}
       <div className="flex items-start gap-3 rounded-xl p-3"
-        style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
+        style={{
+          background: 'var(--gc-surface)',
+          border:     '1px solid var(--gc-border-light)',
+          boxShadow:  '0 1px 2px rgba(0,0,0,0.04)',
+          position:   'relative',
+          zIndex:     1,
+        }}>
         {/* Type chip + sequence */}
         <div className="flex items-center justify-center font-black text-xs tabular-nums"
           style={{
             width: 40, height: 40, borderRadius: '50%',
-            background: tint.bg, color: tint.fg,
+            background: tint.color, color: '#fff',
             textShadow: '0 1px 1px rgba(0,0,0,0.25)',
             boxShadow:  '0 1px 3px rgba(0,0,0,0.15)',
             flexShrink: 0,
@@ -1675,7 +1691,7 @@ function StopRow({ stop, index, isLast }: { stop: Stop; index: number; isLast: b
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
-              style={{ background: tint.bg, color: tint.fg }}>
+              style={{ background: tint.bg, color: tint.color }}>
               {tint.label}
             </span>
             {arrived && (
