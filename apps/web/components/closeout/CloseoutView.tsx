@@ -49,6 +49,7 @@ interface CacheEntry {
 type ColKey =
   | 'age'
   | 'delivered'
+  | 'internalId'
   | 'loadNum'
   | 'title'
   | 'customer'
@@ -69,6 +70,7 @@ type FilterState = Partial<Record<ColKey, string[]>>;
 type ToggleableCol =
   | 'age'
   | 'delivered'
+  | 'internalId'
   | 'loadNum'
   | 'title'
   | 'customer'
@@ -80,6 +82,7 @@ type ToggleableCol =
 const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
   { key: 'age',          label: 'Age'          },
   { key: 'delivered',    label: 'Delivered'    },
+  { key: 'internalId',   label: 'ID'           },
   { key: 'loadNum',      label: 'Load #'       },
   { key: 'title',        label: 'Title'        },
   { key: 'customer',     label: 'Customer'     },
@@ -269,13 +272,14 @@ export default function CloseoutView() {
   // for numeric columns so the comparator orders them naturally.
   const projectRowForCol = (row: QueueRow, col: ColKey): string | number => {
     switch (col) {
-      case 'age':       return ageDays(row.end);
-      case 'delivered': return row.end;
-      case 'loadNum':   return row.loadNum ?? '';
-      case 'title':     return row.title ?? '';
-      case 'customer':  return displayBrokerName(row.broker, customers) ?? '';
-      case 'driver':    return row.driverName ?? '';
-      case 'rate':      return row.loadPrice ?? 0;
+      case 'age':        return ageDays(row.end);
+      case 'delivered':  return row.end;
+      case 'internalId': return row.internalLoadId ?? 0;
+      case 'loadNum':    return row.loadNum ?? '';
+      case 'title':      return row.title ?? '';
+      case 'customer':   return displayBrokerName(row.broker, customers) ?? '';
+      case 'driver':     return row.driverName ?? '';
+      case 'rate':       return row.loadPrice ?? 0;
       case 'accessorials':
         return (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
     }
@@ -291,11 +295,12 @@ export default function CloseoutView() {
         const d = ageDays(row.end);
         return d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`;
       }
-      case 'delivered': return fmtDate(row.end) || '—';
-      case 'loadNum':   return row.loadNum ?? '';
-      case 'title':     return row.title ?? '';
-      case 'customer':  return displayBrokerName(row.broker, customers) ?? '';
-      case 'driver':    return row.driverName ?? '';
+      case 'delivered':  return fmtDate(row.end) || '—';
+      case 'internalId': return row.internalLoadId != null ? String(row.internalLoadId) : '';
+      case 'loadNum':    return row.loadNum ?? '';
+      case 'title':      return row.title ?? '';
+      case 'customer':   return displayBrokerName(row.broker, customers) ?? '';
+      case 'driver':     return row.driverName ?? '';
       // Rate + accessorials don't get filter dropdowns — these branches
       // are unused but kept exhaustive for future-proofing.
       case 'rate':         return row.loadPrice != null ? moneyFmt.format(row.loadPrice) : '';
@@ -530,7 +535,7 @@ export default function CloseoutView() {
                 type="text"
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
-                placeholder={`Search ${tab} loads — broker, load #, title, driver, notes…`}
+                placeholder={`Search ${tab} loads — broker, load #, ID, title, driver, notes…`}
                 className="w-full text-[13px] rounded-full outline-none"
                 style={{
                   background: 'var(--gc-surface)',
@@ -658,6 +663,7 @@ export default function CloseoutView() {
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
                     {visibleCols.age          && <MenuTh col="age"          label="Age"          align="left"  sort={sort} selectedCount={(filters.age          ?? []).length} setHeaderRef={el => { headerRefs.current.age = el; }}          onClick={() => setOpenHeaderCol(p => p === 'age'          ? null : 'age')} />}
                     {visibleCols.delivered    && <MenuTh col="delivered"    label="Delivered"    align="left"  sort={sort} selectedCount={(filters.delivered    ?? []).length} setHeaderRef={el => { headerRefs.current.delivered = el; }}    onClick={() => setOpenHeaderCol(p => p === 'delivered'    ? null : 'delivered')} />}
+                    {visibleCols.internalId   && <MenuTh col="internalId"   label="ID"           align="left"  sort={sort} selectedCount={(filters.internalId   ?? []).length} setHeaderRef={el => { headerRefs.current.internalId = el; }}   onClick={() => setOpenHeaderCol(p => p === 'internalId'   ? null : 'internalId')} />}
                     {visibleCols.loadNum      && <MenuTh col="loadNum"      label="Load #"       align="left"  sort={sort} selectedCount={(filters.loadNum      ?? []).length} setHeaderRef={el => { headerRefs.current.loadNum = el; }}      onClick={() => setOpenHeaderCol(p => p === 'loadNum'      ? null : 'loadNum')} />}
                     {visibleCols.title        && <MenuTh col="title"        label="Title"        align="left"  sort={sort} selectedCount={(filters.title        ?? []).length} setHeaderRef={el => { headerRefs.current.title = el; }}        onClick={() => setOpenHeaderCol(p => p === 'title'        ? null : 'title')} />}
                     {visibleCols.customer     && <MenuTh col="customer"     label="Customer"     align="left"  sort={sort} selectedCount={(filters.customer     ?? []).length} setHeaderRef={el => { headerRefs.current.customer = el; }}     onClick={() => setOpenHeaderCol(p => p === 'customer'     ? null : 'customer')} />}
@@ -720,6 +726,18 @@ export default function CloseoutView() {
                           </Td>
                         )}
                         {visibleCols.delivered && <Td>{fmtDate(load.end)}</Td>}
+                        {/* Internal load ID — per-org sequence number,
+                            distinct from the broker-assigned load_num.
+                            Useful for quick reference + searchable. */}
+                        {visibleCols.internalId && (
+                          <Td>
+                            {load.internalLoadId != null
+                              ? <span className="tabular-nums text-[13px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                                  {load.internalLoadId}
+                                </span>
+                              : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                          </Td>
+                        )}
                         {/* Load # — copyable with visual confirmation */}
                         {visibleCols.loadNum && (
                           <Td>
