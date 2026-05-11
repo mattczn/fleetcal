@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin } from 'lucide-react';
+import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play } from 'lucide-react';
+import ReviewQueue from '@/components/closeout/ReviewQueue';
 import { useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
@@ -994,6 +995,7 @@ export default function EventModal() {
     trailers,
     driverPayPct,
     eldLocations,
+    mergeEvents,
   } = useCalendarStore();
 
   const { user } = useUser();
@@ -1023,6 +1025,10 @@ export default function EventModal() {
   const [historyExpanded,      setHistoryExpanded]      = useState(false);
   const [auditLog,             setAuditLog]             = useState<LoadAuditEntry[]>([]);
   const [confirmRemoveRateCon, setConfirmRemoveRateCon] = useState(false);
+  // Closeout review queue launched from this modal — single-load mode.
+  // Mounted at z-250 so it stacks above the modal (z-200) and any
+  // confirm dialogs the modal might own (z-220).
+  const [reviewQueueOpen,      setReviewQueueOpen]      = useState(false);
   const [loadIdCopied, setLoadIdCopied] = useState(false);
   const [confirmSkip,          setConfirmSkip]          = useState(false);
   const [confirmBatchCancel,   setConfirmBatchCancel]   = useState(false);
@@ -2976,6 +2982,43 @@ export default function EventModal() {
                 {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </StyledSelect>
             )}
+            {/* Billing status pill + Review button — only shown for
+                revenue loads in edit mode. Lets the user jump straight
+                into the closeout review panel from inside the load
+                modal so they can release / flag / upload docs / add
+                notes without leaving the calendar context. */}
+            {eventKind === 'revenue' && isEdit && (() => {
+              const ev = events.find(e => e.id === modalEventId);
+              if (!ev) return null;
+              const bs = ev.billingStatus;
+              const bsTint: { bg: string; fg: string; label: string } = (() => {
+                switch (bs) {
+                  case 'pending':   return { bg: '#fef3c7', fg: '#92400e', label: 'Pending' };
+                  case 'on_hold':   return { bg: '#fee2e2', fg: '#991b1b', label: 'Flagged' };
+                  case 'verified':  return { bg: '#dbeafe', fg: '#1e40af', label: 'Released' };
+                  case 'invoiced':  return { bg: '#dcfce7', fg: '#15803d', label: 'Invoiced' };
+                  case 'paid':      return { bg: '#d1fae5', fg: '#065f46', label: 'Paid' };
+                  default:          return { bg: 'var(--gc-border-light)', fg: 'var(--gc-text-3)', label: '—' };
+                }
+              })();
+              return (
+                <>
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"
+                    title={`Billing: ${bsTint.label}`}
+                    style={{ background: bsTint.bg, color: bsTint.fg, border: `1px solid ${bsTint.fg}30` }}>
+                    Billing: {bsTint.label}
+                  </span>
+                  <button type="button" onClick={() => setReviewQueueOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors"
+                    title="Open the closeout review panel for this load"
+                    style={{ background: '#15803d', color: '#fff' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#166534')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
+                    <Play size={11} fill="currentColor" /> Review
+                  </button>
+                </>
+              );
+            })()}
             {eventKind === 'revenue' && stops.length >= 2 && stops.some(s => s.geocodeStatus === 'success') && (
               <button type="button" onClick={() => { setShowMapPanel(v => !v); setShowPdfViewer(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
@@ -3882,6 +3925,43 @@ export default function EventModal() {
         <BrokerProfileModal
           initialBrokerId={linkedCustomer.id}
           onClose={() => setShowBrokerProfile(false)}
+        />
+      );
+    })()}
+
+    {/* Closeout review panel launched from the load modal. Resolves
+        the relay pickup leg before launching since ReviewQueue's
+        meta + relay-partner lookup assumes pickup leg. Stacked at
+        z-250 — above EventModal main (z-200) and its confirm
+        dialogs (z-220). On successful release/flag we refetch the
+        load and merge into the calendar store so the modal's
+        billing status pill reflects the new state without a full
+        page refresh. */}
+    {reviewQueueOpen && (() => {
+      const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+      if (!currentEv) return null;
+      const reviewLoad: CalendarEvent =
+        currentEv.relayRole === 'delivery' && currentEv.relayGroupId
+          ? (events.find(e =>
+              e.id !== currentEv.id &&
+              e.relayRole === 'pickup' &&
+              ((currentEv.loadId && e.loadId === currentEv.loadId) ||
+               (currentEv.relayGroupId && e.relayGroupId === currentEv.relayGroupId)),
+            ) ?? currentEv)
+          : currentEv;
+      return (
+        <ReviewQueue
+          loads={[reviewLoad]}
+          zIndex={250}
+          onClose={() => setReviewQueueOpen(false)}
+          onLoadResolved={async (loadId) => {
+            try {
+              const { loads } = await import('@/lib/railway').then(m => m.railway.getLoad(loadId));
+              mergeEvents(loads as CalendarEvent[]);
+            } catch (err) {
+              console.error('[EventModal] post-review refetch failed:', err);
+            }
+          }}
         />
       );
     })()}

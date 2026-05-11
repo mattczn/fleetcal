@@ -55,6 +55,10 @@ interface Props {
    *  dismiss the review queue when this fires (the modals don't stack —
    *  EventModal sits at a lower z-index). */
   onOpenLoadModal?: (load: CalendarEvent) => void;
+  /** Override the modal's z-index. Defaults to 180 (closeout page).
+   *  Pass a higher value (e.g. 250) when launched from inside the
+   *  EventModal (z-200) so the review queue stacks on top. */
+  zIndex?: number;
 }
 
 // Color tokens per document kind. Used by the doc-tab strip + the
@@ -117,7 +121,7 @@ function ageDays(iso: string): number {
   return Math.floor((Date.now() - t) / 86_400_000);
 }
 
-export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved, onOpenLoadModal }: Props) {
+export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved, onOpenLoadModal, zIndex = 180 }: Props) {
   const customers = useCalendarStore(s => s.customers);
   // Used to look up the delivery partner of a relay so the meta line
   // can show the actual delivery date, not the pickup-leg's end (which
@@ -523,7 +527,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // ── Render ────────────────────────────────────────────────────────
   if (!current) {
     return (
-      <Shell onClose={onClose} blocked={eventModalOpen}>
+      <Shell onClose={onClose} blocked={eventModalOpen} zIndex={zIndex}>
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center" style={{ color: 'var(--gc-text-3)' }}>
             <CheckCircle2 size={32} className="mx-auto mb-2" style={{ color: '#15803d' }} />
@@ -572,7 +576,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   return (
     <>
-      <Shell onClose={onClose} blocked={eventModalOpen}>
+      <Shell onClose={onClose} blocked={eventModalOpen} zIndex={zIndex}>
         {/* Top bar */}
         <div className="shrink-0 flex items-center gap-3 px-5 py-3"
           style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
@@ -1079,7 +1083,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   );
 }
 
-function Shell({ children, onClose, blocked }: { children: React.ReactNode; onClose: () => void; blocked?: boolean }) {
+function Shell({ children, onClose, blocked, zIndex }: { children: React.ReactNode; onClose: () => void; blocked?: boolean; zIndex: number }) {
   // Centered modal with a dim backdrop. The closeout page stays visible
   // behind so opening the review queue doesn't feel like leaving — just
   // a focused work surface on top of the existing context. Backdrop
@@ -1088,8 +1092,8 @@ function Shell({ children, onClose, blocked }: { children: React.ReactNode; onCl
   // user doesn't accidentally lose their queue position when the click
   // bubbles past EventModal's backdrop.
   return (
-    <div className="fixed inset-0 z-[180] flex items-center justify-center p-4"
-      style={{ background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(2px)' }}
+    <div className="fixed inset-0 flex items-center justify-center p-4"
+      style={{ background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(2px)', zIndex }}
       onMouseDown={e => { if (!blocked && e.target === e.currentTarget) onClose(); }}>
       <div
         className="flex flex-col rounded-2xl overflow-hidden"
