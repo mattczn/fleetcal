@@ -712,6 +712,44 @@ export interface SendInvoiceRequest {
 
 export interface SendInvoiceResponse { invoice: Invoice; }
 
+/**
+ * POST /v1/invoices/batch-send — send a set of draft invoices grouped
+ * by broker (one email per unique broker, all of that broker's
+ * selected drafts as separate packet attachments).
+ *
+ *   - All invoice ids must reference DRAFT invoices in the caller's
+ *     org. Mixed-status sets fail 400.
+ *   - All invoices must have a customer_id (no anonymous-broker
+ *     batches). Invoices missing customer_id fail 400.
+ *   - Per-broker recipient = customer.invoice_email. Brokers without
+ *     a saved invoice_email are reported in `skipped` and their
+ *     invoices stay in draft.
+ *   - On any group's send failure, ONLY that broker's invoices stay
+ *     in draft; successful groups still flip to sent. The response
+ *     reports per-group status so the UI can show what shipped.
+ */
+export interface BatchSendInvoicesRequest {
+  invoiceIds: string[];
+  cc?:        string[];
+  bccSelf?:   boolean;
+  bodyText?:  string;
+  attachLoadDocs?: boolean;
+}
+
+export interface BatchSendInvoicesResponse {
+  /** Per-broker group results, in arbitrary order. */
+  groups: Array<{
+    customerId:  string;
+    brokerName:  string;
+    to:          string | null;
+    /** 'sent', 'skipped_no_email', 'failed'. */
+    status:      'sent' | 'skipped_no_email' | 'failed';
+    invoiceIds:  string[];
+    error?:      string;
+    messageId?:  string;
+  }>;
+}
+
 /** POST /v1/invoices/:id/mark-paid */
 export interface MarkInvoicePaidRequest {
   paidAt?:  string;

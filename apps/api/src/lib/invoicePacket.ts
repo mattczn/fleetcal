@@ -264,3 +264,125 @@ export async function resolveRateConPathForLoad(loadId: string, orgId: string): 
   if (!val || val.startsWith("data:")) return null;
   return val;
 }
+
+// ─── Persistence ────────────────────────────────────────────────────────
+//
+// Each generated invoice gets a permanent copy of its merged packet
+// PDF stored as a `load_documents` row (kind='invoice'). This makes
+// the artifact appear in the load's docs panel alongside POD/BOL,
+// and gives accounting an immutable "what we sent" trail when an
+// invoice gets voided or regenerated.
+//
+// We DON'T store the standalone invoice PDF — the packet is the
+// broker-facing artifact, and the standalone version can always be
+// re-rendered from the snapshot via /v1/invoices/:id/pdf if needed.
+
+const DOC_BUCKET = "load-documents";
+
+/**
+ * Replace (or create) the persisted packet PDF for an invoice. Looks
+ * up any existing load_documents row tied to this invoice_id, deletes
+ * the old storage object + DB row, then uploads + inserts the new
+ * version. Safe to call repeatedly — the latest render always wins.
+ *
+ * Best-effort: callers should catch errors and log rather than fail
+ * the parent request. A missing archive doesn't break invoice
+ * functionality (the live /packet.pdf endpoint still works).
+ */
+export async function persistInvoicePacket(args: {
+  invoice:   Invoice;
+  orgId:     string;
+  /** Optional pre-built buffer to skip re-rendering. Callers like the
+   *  email-send path that have a fresh packet pass it in. */
+  prebuilt?: Buffer;
+}): Promise<{ documentId: string; storagePath: string }> {
+  const { invoice, orgId } = args;
+
+  // Need an event_id for the load_documents row (legacy NOT NULL).
+  // Prefer the pickup leg so per-event scoped queries land naturally
+  // on the start-of-the-load event.
+  const { data: legsRaw, error: legsErr } = await supabase
+    .from("events")
+    .select("id,relay_role")
+    .eq("load_id", invoice.loadId)
+    .eq("org_id", orgId)
+    .is("deleted_at", null);
+  if (legsErr) throw new Error(`event lookup failed: ${legsErr.message}`);
+  const legs = (legsRaw ?? []) as Array<{ id: string; relay_role: string | null }>;
+  const eventId =
+       legs.find(e => e.relay_role === "pickup")?.id
+    ?? legs[0]?.id;
+  if (!eventId) throw new Error("no active event for load");
+
+  // Clear out any previous archived packet for this invoice. Storage
+  // object first (best-effort — Supabase tolerates missing keys), then
+  // the DB row. Re-uploading to the same path also works via
+  // `upsert: true` but tracking history would be harder.
+  const { data: existing } = await supabase
+    .from("load_documents")
+    .select("id,storage_path")
+    .eq("invoice_id", invoice.id)
+    .eq("org_id", orgId);
+  const existingRows = (existing ?? []) as Array<{ id: string; storage_path: string }>;
+  if (existingRows.length) {
+    await supabase.storage.from(DOC_BUCKET).remove(existingRows.map(r => r.storage_path)).catch(() => undefined);
+    await supabase
+      .from("load_documents")
+      .delete()
+      .in("id", existingRows.map(r => r.id))
+      .eq("org_id", orgId);
+  }
+
+  // Build the packet now if the caller didn't hand one in.
+  let buffer = args.prebuilt;
+  if (!buffer) {
+    const [extraDocPaths, rateConPath] = await Promise.all([
+      resolvePacketDocsForLoad(invoice.loadId, orgId),
+      resolveRateConPathForLoad(invoice.loadId, orgId),
+    ]);
+    const fmt = (iso?: string) => iso
+      ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      : undefined;
+    const built = await buildInvoicePacket({
+      invoice,
+      rateConPath,
+      extraDocPaths,
+      issuedDate: fmt(invoice.issuedAt),
+      dueDate:    fmt(invoice.dueAt),
+    });
+    buffer = built.buffer;
+  }
+
+  const ts          = Date.now();
+  const storagePath = `${orgId}/${eventId}/${ts}_invoice-${invoice.id}.pdf`;
+  const fileName    = `Invoice-Packet-${invoice.invoiceNumber}.pdf`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from(DOC_BUCKET)
+    .upload(storagePath, buffer, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+  if (uploadErr) throw new Error(`storage upload failed: ${uploadErr.message}`);
+
+  const { data: row, error: insertErr } = await supabase
+    .from("load_documents")
+    .insert({
+      event_id:     eventId,
+      load_id:      invoice.loadId,
+      org_id:       orgId,
+      storage_path: storagePath,
+      file_name:    fileName,
+      mime_type:    "application/pdf",
+      size_bytes:   buffer.length,
+      kind:         "invoice",
+      invoice_id:   invoice.id,
+    })
+    .select("id")
+    .single();
+  if (insertErr || !row) {
+    void supabase.storage.from(DOC_BUCKET).remove([storagePath]);
+    throw new Error(`load_documents insert failed: ${insertErr?.message}`);
+  }
+  return { documentId: (row as { id: string }).id, storagePath };
+}

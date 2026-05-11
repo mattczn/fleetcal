@@ -49,6 +49,7 @@ import type {
   ListInvoicesResponse, GetInvoiceResponse,
   UpdateInvoiceRequest, UpdateInvoiceResponse,
   SendInvoiceRequest, SendInvoiceResponse,
+  BatchSendInvoicesRequest, BatchSendInvoicesResponse,
   MarkInvoicePaidRequest, MarkInvoicePaidResponse,
   VoidInvoiceRequest, VoidInvoiceResponse,
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
@@ -336,6 +337,9 @@ class RailwayClient {
   }
   sendInvoice(id: string, body: SendInvoiceRequest) {
     return this.req<SendInvoiceResponse>('POST', `/v1/invoices/${id}/send`, body);
+  }
+  batchSendInvoices(body: BatchSendInvoicesRequest) {
+    return this.req<BatchSendInvoicesResponse>('POST', '/v1/invoices/batch-send', body);
   }
   markInvoicePaid(id: string, body: MarkInvoicePaidRequest = {}) {
     return this.req<MarkInvoicePaidResponse>('POST', `/v1/invoices/${id}/mark-paid`, body);

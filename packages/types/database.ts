@@ -520,6 +520,7 @@ export type Database = {
           event_id: string
           file_name: string
           id: string
+          invoice_id: string | null
           kind: string
           load_id: string | null
           mime_type: string | null
@@ -534,6 +535,7 @@ export type Database = {
           event_id: string
           file_name: string
           id?: string
+          invoice_id?: string | null
           kind?: string
           load_id?: string | null
           mime_type?: string | null
@@ -548,6 +550,7 @@ export type Database = {
           event_id?: string
           file_name?: string
           id?: string
+          invoice_id?: string | null
           kind?: string
           load_id?: string | null
           mime_type?: string | null
