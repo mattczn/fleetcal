@@ -378,22 +378,20 @@ function UploadedDocsPanel({
     }
   };
 
-  // Doc category styling. Mirror of the KIND_TINT in closeout
-  // ReviewQueue and the Google-Material palette already used by
-  // STATUSES at the top of this file. Keeping them in sync is a
-  // manual chore but extracting a shared module would mean cross-
-  // component coupling without much payoff. If a third surface
-  // needs these, extract then.
+  // Doc category styling — solid fill + white text, same as calendar
+  // event cards. Mirror of KIND_TINT in closeout ReviewQueue. Keeping
+  // them in sync is a manual chore but extracting a shared module
+  // would mean cross-component coupling without much payoff.
   const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-    rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },  // Indigo
-    pod:          { bg: '#e6f4ea', fg: '#188038' },  // Google green
-    bol:          { bg: '#e8f0fe', fg: '#1a73e8' },  // Google blue
-    scale:        { bg: '#fef3e2', fg: '#e37400' },  // Google orange
-    lumper:       { bg: '#fef3c7', fg: '#92400e' },  // Amber
-    receipt:      { bg: '#fce4ec', fg: '#c2185b' },  // Pink
-    driver_sheet: { bg: '#e0f7fa', fg: '#00838f' },  // Teal
-    invoice:      { bg: '#f3e5f5', fg: '#7b1fa2' },  // Google purple
-    other:        { bg: '#f1f3f4', fg: '#3c4043' },  // Gray
+    rate_con:     { bg: '#5b21b6', fg: '#fff' },  // Indigo
+    pod:          { bg: '#188038', fg: '#fff' },  // Google green
+    bol:          { bg: '#1a73e8', fg: '#fff' },  // Google blue
+    scale:        { bg: '#e37400', fg: '#fff' },  // Google orange
+    lumper:       { bg: '#a16207', fg: '#fff' },  // Amber, darkened for white text
+    receipt:      { bg: '#c2185b', fg: '#fff' },  // Pink
+    driver_sheet: { bg: '#00838f', fg: '#fff' },  // Teal
+    invoice:      { bg: '#7b1fa2', fg: '#fff' },  // Purple
+    other:        { bg: '#5f6368', fg: '#fff' },  // Gray
   };
   const KIND_LABEL: Record<string, string> = {
     rate_con:     'Rate Con',
@@ -500,17 +498,17 @@ function UploadedDocsPanel({
               style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <div className="flex items-center justify-center" style={{ width: 32, height: 32, borderRadius: 8, background: tint.bg, flexShrink: 0 }}>
-                <FileText size={15} style={{ color: tint.fg }} />
+              <div className="flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 8, background: tint.bg, flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                <FileText size={16} style={{ color: tint.fg }} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
-                  <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: tint.fg, background: tint.bg, padding: '1px 6px', borderRadius: 999 }}>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: tint.fg, background: tint.bg, padding: '2px 7px', borderRadius: 999 }}>
                     {KIND_LABEL[d.kind] ?? d.kind}
                   </span>
                 </div>
-                <div className="text-sm font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</div>
-                <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{fmt(d.uploadedAt)}</div>
+                <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</div>
+                <div className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>{fmt(d.uploadedAt)}</div>
               </div>
             </button>
           );

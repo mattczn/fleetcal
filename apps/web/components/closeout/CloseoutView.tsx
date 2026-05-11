@@ -995,8 +995,8 @@ export default function CloseoutView() {
 
 function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 'left' | 'right' }) {
   return (
-    <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider"
-      style={{ color: 'var(--gc-text-3)', textAlign: align }}>
+    <th className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider"
+      style={{ color: 'var(--gc-text-2)', textAlign: align }}>
       {children}
     </th>
   );
@@ -1004,20 +1004,35 @@ function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 
 
 function Td({ children, align = 'left', className, onClick }: { children: React.ReactNode; align?: 'left' | 'right'; className?: string; onClick?: (e: React.MouseEvent) => void }) {
   return (
-    <td className={`px-3 py-2.5 ${className ?? ''}`} style={{ textAlign: align, color: 'var(--gc-text-1)' }} onClick={onClick}>
+    <td className={`px-3 py-2.5 font-medium ${className ?? ''}`} style={{ textAlign: align, color: 'var(--gc-text-1)' }} onClick={onClick}>
       {children}
     </td>
   );
 }
 
+// Doc-presence chip in the table. Each kind uses the same solid +
+// white-text palette as the doc-tabs in the review queue, so the
+// closeout chrome reads as one coherent surface.
+const DOC_BADGE_TINT: Record<string, string> = {
+  RC:       '#5b21b6', // Rate Con — Indigo
+  POD:      '#188038', // Green
+  BOL:      '#1a73e8', // Blue
+  Scale:    '#e37400', // Orange
+  Lumper:   '#a16207', // Amber
+  Receipt:  '#c2185b', // Pink
+  Driver:   '#00838f', // Teal — driver_sheet
+  Invoice:  '#7b1fa2', // Purple
+  Other:    '#5f6368', // Gray
+};
 function DocBadge({ label, count }: { label: string; count?: number }) {
+  const bg = DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
   return (
-    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold tabular-nums"
+    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold tabular-nums"
       title={`${count ?? ''} ${label}`.trim()}
       style={{
-        background: '#dcfce7',
-        color:      '#15803d',
-        border:     '1px solid #86efac',
+        background: bg,
+        color:      '#fff',
+        boxShadow:  '0 1px 2px rgba(0,0,0,0.08)',
       }}>
       {label}{count && count > 1 ? ` ×${count}` : ''}
     </span>
@@ -1214,9 +1229,9 @@ function MenuTh({
     <th
       ref={setHeaderRef}
       onClick={onClick}
-      className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors"
+      className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors"
       style={{
-        color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+        color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
         background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
       }}

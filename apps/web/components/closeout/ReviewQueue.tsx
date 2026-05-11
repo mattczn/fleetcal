@@ -67,16 +67,20 @@ interface Props {
 // instead of like a different design system bolted on. Pairs of
 // foreground / lighter background — saturated enough to read at a
 // glance, pale background so multi-chip rows stay readable.
+// Solid saturated background + white text — mirrors how Google
+// Calendar event cards render (asset color fill + white text +
+// bold weights), so the closeout chrome reads as "the same product"
+// instead of a tinted variant.
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-  rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },  // Indigo  — same as "Assigned"
-  pod:          { bg: '#e6f4ea', fg: '#188038' },  // Green   — same as "Delivered"
-  bol:          { bg: '#e8f0fe', fg: '#1a73e8' },  // Blue    — same as "Scheduled"
-  scale:        { bg: '#fef3e2', fg: '#e37400' },  // Orange  — same as "En Route"
-  lumper:       { bg: '#fef3c7', fg: '#92400e' },  // Amber   — same as "TONU"
-  receipt:      { bg: '#fce4ec', fg: '#c2185b' },  // Pink    (Google pink)
-  driver_sheet: { bg: '#e0f7fa', fg: '#00838f' },  // Teal
-  invoice:      { bg: '#f3e5f5', fg: '#7b1fa2' },  // Purple  — same as "Picked Up"
-  other:        { bg: '#f1f3f4', fg: '#3c4043' },  // Graphite gray
+  rate_con:     { bg: '#5b21b6', fg: '#fff' },  // Indigo
+  pod:          { bg: '#188038', fg: '#fff' },  // Google green
+  bol:          { bg: '#1a73e8', fg: '#fff' },  // Google blue
+  scale:        { bg: '#e37400', fg: '#fff' },  // Google orange
+  lumper:       { bg: '#a16207', fg: '#fff' },  // Amber, darkened for white-text contrast
+  receipt:      { bg: '#c2185b', fg: '#fff' },  // Pink
+  driver_sheet: { bg: '#00838f', fg: '#fff' },  // Teal
+  invoice:      { bg: '#7b1fa2', fg: '#fff' },  // Purple
+  other:        { bg: '#5f6368', fg: '#fff' },  // Graphite gray
 };
 
 // Display label per kind. snake_case → "Title Case" for the docs UI.
@@ -807,10 +811,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     // Esc cancels, blur commits to avoid losing input
                     // if the user clicks away.
                     return (
-                      <div key={d.id} className="flex items-center gap-1.5 px-2 py-1 rounded-full shrink-0"
-                        style={{ background: tint.bg, border: `1px solid ${tint.fg}50` }}>
-                        <FileText size={10} style={{ color: tint.fg }} />
-                        <span className="text-[11px] font-semibold" style={{ color: tint.fg }}>
+                      <div key={d.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full shrink-0"
+                        style={{ background: tint.bg }}>
+                        <FileText size={11} style={{ color: tint.fg }} />
+                        <span className="text-[12px] font-extrabold" style={{ color: tint.fg }}>
                           {KIND_LABEL[d.kind] ?? d.kind} ·
                         </span>
                         <input
@@ -823,8 +827,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                             if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
                           }}
                           onBlur={() => { if (!renameSaving) void commitRename(); }}
-                          className="text-[11px] font-semibold bg-transparent outline-none border-b"
-                          style={{ color: tint.fg, borderColor: tint.fg + '70', minWidth: 140, maxWidth: 240 }}
+                          className="text-[12px] font-extrabold bg-transparent outline-none border-b"
+                          style={{ color: tint.fg, borderColor: 'rgba(255,255,255,0.5)', minWidth: 140, maxWidth: 240 }}
                         />
                       </div>
                     );
@@ -833,12 +837,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     <div key={d.id} className="flex items-center gap-1 shrink-0">
                       <button onClick={() => setActiveDocIdx(i)}
                         title={d.fileName}
-                        className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-extrabold whitespace-nowrap transition-colors"
                         style={{
                           background: active ? tint.bg : 'transparent',
-                          color:      active ? tint.fg : 'var(--gc-text-2)',
-                          border:     `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
-                        }}>
+                          color:      active ? tint.fg : tint.bg,
+                          border:     `1.5px solid ${tint.bg}`,
+                        }}
+                        onMouseEnter={e => { if (!active) e.currentTarget.style.background = tint.bg + '14'; }}
+                        onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
                         <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
                       </button>
                       {active && (
@@ -846,8 +852,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                           <button onClick={() => startRename(d.id, d.fileName)}
                             className="rounded-full p-1.5 transition-colors"
                             title={`Rename — ${d.fileName}`}
-                            style={{ color: tint.fg, background: 'transparent' }}
-                            onMouseEnter={e => (e.currentTarget.style.background = tint.bg)}
+                            style={{ color: tint.bg, background: 'transparent' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = tint.bg + '14')}
                             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                             <Pencil size={11} />
                           </button>
@@ -998,9 +1004,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       <button key={opt.kind}
                         onClick={() => void uploadAs(opt.kind)}
                         disabled={uploading}
-                        className="flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-bold py-1.5 transition-opacity disabled:opacity-50"
-                        style={{ background: opt.tint.bg, color: opt.tint.fg, border: `1px solid ${opt.tint.fg}30` }}>
-                        {uploading ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
+                        className="flex items-center justify-center gap-1.5 rounded-lg text-[12px] font-extrabold py-2 transition-opacity disabled:opacity-50"
+                        style={{ background: opt.tint.bg, color: opt.tint.fg, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                         {opt.label}
                       </button>
                     ))}
@@ -1046,12 +1052,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   Nothing to include yet.
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   {docs.map(d => {
                     const checked = includedDocIds.has(d.id);
+                    const tint    = KIND_TINT[d.kind] ?? KIND_TINT.other;
                     return (
-                      <label key={d.id} className="flex items-start gap-2 cursor-pointer rounded px-1 py-1 transition-colors hover:bg-[var(--gc-hover)]">
-                        <input type="checkbox" checked={checked} className="mt-0.5"
+                      <label key={d.id} className="flex items-start gap-2 cursor-pointer rounded-lg px-1.5 py-1.5 transition-colors hover:bg-[var(--gc-hover)]">
+                        <input type="checkbox" checked={checked} className="mt-1"
+                          style={{ accentColor: tint.bg }}
                           onChange={() => {
                             setIncludedDocIds(prev => {
                               const next = new Set(prev);
@@ -1060,10 +1068,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                             });
                           }} />
                         <div className="flex-1 min-w-0">
-                          <div className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          <span className="inline-block text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                            style={{ background: tint.bg, color: tint.fg }}>
                             {KIND_LABEL[d.kind] ?? d.kind}
-                          </div>
-                          <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                          </span>
+                          <div className="text-[12px] font-semibold truncate mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
                             {d.fileName}
                           </div>
                         </div>
