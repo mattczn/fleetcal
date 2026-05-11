@@ -61,18 +61,22 @@ interface Props {
   zIndex?: number;
 }
 
-// Color tokens per document kind. Used by the doc-tab strip + the
-// upload chips so the visual language stays consistent.
+// Color tokens per document kind. Pulled from the same Google Material
+// Design palette EventModal's STATUSES uses (and the existing --gc-blue
+// css vars) so the doc UI feels consistent with the rest of the app
+// instead of like a different design system bolted on. Pairs of
+// foreground / lighter background — saturated enough to read at a
+// glance, pale background so multi-chip rows stay readable.
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-  rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },
-  pod:          { bg: '#dcfce7', fg: '#15803d' },
-  bol:          { bg: '#e8f0fe', fg: '#1558d6' },
-  scale:        { bg: '#fff7ed', fg: '#9a3412' },
-  lumper:       { bg: '#fef3c7', fg: '#92400e' },
-  receipt:      { bg: '#fce7f3', fg: '#9d174d' },
-  driver_sheet: { bg: '#e0f2fe', fg: '#0c4a6e' },
-  invoice:      { bg: '#fef9c3', fg: '#854d0e' },
-  other:        { bg: '#f1f3f4', fg: '#3c4043' },
+  rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },  // Indigo  — same as "Assigned"
+  pod:          { bg: '#e6f4ea', fg: '#188038' },  // Green   — same as "Delivered"
+  bol:          { bg: '#e8f0fe', fg: '#1a73e8' },  // Blue    — same as "Scheduled"
+  scale:        { bg: '#fef3e2', fg: '#e37400' },  // Orange  — same as "En Route"
+  lumper:       { bg: '#fef3c7', fg: '#92400e' },  // Amber   — same as "TONU"
+  receipt:      { bg: '#fce4ec', fg: '#c2185b' },  // Pink    (Google pink)
+  driver_sheet: { bg: '#e0f7fa', fg: '#00838f' },  // Teal
+  invoice:      { bg: '#f3e5f5', fg: '#7b1fa2' },  // Purple  — same as "Picked Up"
+  other:        { bg: '#f1f3f4', fg: '#3c4043' },  // Graphite gray
 };
 
 // Display label per kind. snake_case → "Title Case" for the docs UI.
@@ -789,29 +793,25 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     );
                   }
                   return (
-                    <div key={d.id} className="flex items-center shrink-0">
+                    <div key={d.id} className="flex items-center gap-1 shrink-0">
                       <button onClick={() => setActiveDocIdx(i)}
                         title={d.fileName}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-l-full text-xs font-semibold whitespace-nowrap transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-colors"
                         style={{
                           background: active ? tint.bg : 'transparent',
-                          color: active ? tint.fg : 'var(--gc-text-3)',
-                          border: `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
-                          borderRight: active ? '0' : `1px solid ${'var(--gc-border-light)'}`,
+                          color:      active ? tint.fg : 'var(--gc-text-2)',
+                          border:     `1px solid ${active ? tint.fg + '50' : 'var(--gc-border-light)'}`,
                         }}>
-                        <FileText size={10} /> {tabLabel}
+                        <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
                       </button>
                       {active && (
                         <button onClick={() => startRename(d.id, d.fileName)}
-                          className="px-1.5 py-1 rounded-r-full transition-colors"
+                          className="rounded-full p-1.5 transition-colors"
                           title={`Rename — ${d.fileName}`}
-                          style={{
-                            background: tint.bg,
-                            color: tint.fg,
-                            border: `1px solid ${tint.fg + '50'}`,
-                            borderLeft: '0',
-                          }}>
-                          <Pencil size={10} />
+                          style={{ color: tint.fg, background: 'transparent' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = tint.bg)}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <Pencil size={11} />
                         </button>
                       )}
                     </div>

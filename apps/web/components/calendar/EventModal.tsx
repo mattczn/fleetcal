@@ -317,20 +317,22 @@ function UploadedDocsPanel({
   signedUrl: string | null;
   headerColor: string;
 }) {
-  // Doc category styling. Mirror of the same map in the closeout
-  // ReviewQueue — keeping them in sync is a manual chore but extracting
-  // a shared module would mean cross-component coupling without much
-  // payoff. If a third surface needs these, extract then.
+  // Doc category styling. Mirror of the KIND_TINT in closeout
+  // ReviewQueue and the Google-Material palette already used by
+  // STATUSES at the top of this file. Keeping them in sync is a
+  // manual chore but extracting a shared module would mean cross-
+  // component coupling without much payoff. If a third surface
+  // needs these, extract then.
   const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-    rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },
-    pod:          { bg: '#dcfce7', fg: '#15803d' },
-    bol:          { bg: '#e8f0fe', fg: '#1558d6' },
-    scale:        { bg: '#fff7ed', fg: '#9a3412' },
-    lumper:       { bg: '#fef3c7', fg: '#92400e' },
-    receipt:      { bg: '#fce7f3', fg: '#9d174d' },
-    driver_sheet: { bg: '#e0f2fe', fg: '#0c4a6e' },
-    invoice:      { bg: '#fef9c3', fg: '#854d0e' },
-    other:        { bg: '#f1f3f4', fg: '#3c4043' },
+    rate_con:     { bg: '#ede9fe', fg: '#5b21b6' },  // Indigo
+    pod:          { bg: '#e6f4ea', fg: '#188038' },  // Google green
+    bol:          { bg: '#e8f0fe', fg: '#1a73e8' },  // Google blue
+    scale:        { bg: '#fef3e2', fg: '#e37400' },  // Google orange
+    lumper:       { bg: '#fef3c7', fg: '#92400e' },  // Amber
+    receipt:      { bg: '#fce4ec', fg: '#c2185b' },  // Pink
+    driver_sheet: { bg: '#e0f7fa', fg: '#00838f' },  // Teal
+    invoice:      { bg: '#f3e5f5', fg: '#7b1fa2' },  // Google purple
+    other:        { bg: '#f1f3f4', fg: '#3c4043' },  // Gray
   };
   const KIND_LABEL: Record<string, string> = {
     rate_con:     'Rate Con',
