@@ -502,6 +502,61 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [mergeSelection,  setMergeSelection]  = useState<Set<string>>(new Set());
   const [merging,         setMerging]         = useState(false);
 
+  // Convert non-PDF docs into PDF copies. Driver phone uploads often
+  // land as JPEG/HEIC; brokers usually want PDF for invoice packets,
+  // so let the user batch-convert what they have. Originals stay; a
+  // new PDF doc with the same kind is added per source.
+  const [convertDialogOpen, setConvertDialogOpen] = useState(false);
+  const [convertSelection,  setConvertSelection]  = useState<Set<string>>(new Set());
+  const [converting,        setConverting]        = useState(false);
+  const isPdfDoc = (d: LoadDocument): boolean =>
+    (d.mimeType ?? '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(d.fileName);
+  // Convert candidates = load_documents that aren't already PDF. The
+  // virtual rate-con primary is excluded since we don't reliably know
+  // its mime type without an extra fetch.
+  const convertCandidates = useMemo<LoadDocument[]>(() => docs.filter(d => !isPdfDoc(d)), [docs]);
+  const handleConvertSelected = async () => {
+    if (!loadId || converting) return;
+    const selected = convertCandidates.filter(d => convertSelection.has(d.id));
+    if (selected.length === 0) return;
+    setConverting(true);
+    try {
+      const cache = docsCacheRef.current.get(loadId);
+      const { mergeFilesToPdf } = await import('@/lib/pdfMerge');
+      for (const d of selected) {
+        const url = cache?.urlByDocId.get(d.id) ?? await getLoadDocumentSignedUrl(d.id);
+        if (!url) continue;
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const sourceFile = new File([blob], d.fileName, { type: blob.type || 'application/octet-stream' });
+        // mergeFilesToPdf with a single file wraps it as a single-page
+        // PDF (image → embed; HEIC routes through heic2any first).
+        const pdfBlob = await mergeFilesToPdf([sourceFile]);
+        const pdfFile = new File(
+          [pdfBlob],
+          d.fileName.replace(/\.[^.]+$/, '') + '.pdf',
+          { type: 'application/pdf' },
+        );
+        await railway.uploadLoadDocument(loadId, pdfFile, d.kind as import('@fleetcal/types').DocumentKind);
+      }
+      // Refresh: invalidate cache + re-prefetch.
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, !!current?.rateConPdf);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) {
+        setDocs(fresh.docs);
+      }
+    } catch (err) {
+      console.error('[review queue] convert failed:', err);
+      alert(`Conversion failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setConverting(false);
+      setConvertDialogOpen(false);
+      setConvertSelection(new Set());
+    }
+  };
+
   // Sentinel id for the primary rate-con (loads.rate_con_pdf). When
   // the rate con isn't represented by a kind=rate_con row in
   // load_documents — which is the case for legacy loads + the
@@ -1255,6 +1310,28 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     Merge files
                   </button>
                 )}
+                {/* "Convert to PDF" — batch-converts non-PDF docs
+                    (camera-roll JPEGs / HEICs / etc) into PDF copies.
+                    Hidden when everything on the load is already PDF.
+                    Creates a new doc per source so dispatchers keep
+                    the originals if they need them. */}
+                {convertCandidates.length >= 1 && (
+                  <button type="button"
+                    onClick={() => {
+                      setConvertSelection(new Set());
+                      setConvertDialogOpen(true);
+                    }}
+                    disabled={converting}
+                    className="w-full flex items-center justify-center gap-1.5 mb-2 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                    style={{
+                      background: 'var(--gc-surface)',
+                      color:      'var(--gc-blue)',
+                      border:     '1.5px solid var(--gc-blue)',
+                    }}>
+                    {converting ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
+                    Convert to PDF
+                  </button>
+                )}
                 <div className="space-y-1.5">
                   {docs.map(d => {
                     const checked = includedDocIds.has(d.id);
@@ -1409,7 +1486,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       )}
 
       {mergeDialogOpen && (
-        <MergeDialog
+        <DocSelectionDialog
+          title="Merge files"
+          description="Pick the documents to combine into a single PDF. Originals stay in the list."
           docs={mergeCandidates}
           selected={mergeSelection}
           onToggle={(id) => setMergeSelection(prev => {
@@ -1421,7 +1500,39 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           onSelectNone={() => setMergeSelection(new Set())}
           onCancel={() => { setMergeDialogOpen(false); setMergeSelection(new Set()); }}
           onConfirm={() => void handleMergeSelected()}
-          merging={merging}
+          busy={merging}
+          busyLabel="Merging…"
+          minSelect={2}
+          actionIcon={<Layers size={13} />}
+          actionLabel={count => `Merge ${count} files`}
+          ctaWhenLow="Pick at least 2"
+          kindLabel={KIND_LABEL}
+          kindTint={KIND_TINT}
+        />
+      )}
+
+      {convertDialogOpen && (
+        <DocSelectionDialog
+          title="Convert to PDF"
+          description="Pick non-PDF documents to convert. A PDF copy is added per source; originals stay in the list."
+          docs={convertCandidates}
+          selected={convertSelection}
+          onToggle={(id) => setConvertSelection(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          })}
+          onSelectAll={() => setConvertSelection(new Set(convertCandidates.map(d => d.id)))}
+          onSelectNone={() => setConvertSelection(new Set())}
+          onCancel={() => { setConvertDialogOpen(false); setConvertSelection(new Set()); }}
+          onConfirm={() => void handleConvertSelected()}
+          busy={converting}
+          busyLabel="Converting…"
+          minSelect={1}
+          actionIcon={<FileText size={13} />}
+          actionLabel={count => count === 1 ? 'Convert 1 file' : `Convert ${count} files`}
+          ctaWhenLow="Pick at least 1"
+          emptyMessage="Every document on this load is already a PDF."
           kindLabel={KIND_LABEL}
           kindTint={KIND_TINT}
         />
@@ -1656,15 +1767,23 @@ function NoDocPanel({ label }: { label: string }) {
 }
 
 /**
- * MergeDialog — popup with a list of all docs on the load and
- * checkboxes for selecting which ones to merge. The result becomes a
- * NEW doc appended to the load; originals stay (delete manually if
- * undesired).
+ * DocSelectionDialog — popup with a list of docs and checkboxes,
+ * parameterized for any "pick some, then do X" workflow. Used for
+ * Merge files (≥2 selected, combines into one PDF) and Convert to
+ * PDF (≥1 selected, wraps each non-PDF in its own PDF). The result
+ * is appended to the doc list as new entries; originals stay.
  */
-function MergeDialog({
-  docs, selected, onToggle, onSelectAll, onSelectNone, onCancel, onConfirm, merging,
+function DocSelectionDialog({
+  title, description,
+  docs, selected, onToggle, onSelectAll, onSelectNone, onCancel, onConfirm,
+  busy, busyLabel,
+  minSelect,
+  actionIcon, actionLabel, ctaWhenLow,
   kindLabel, kindTint,
+  emptyMessage,
 }: {
+  title: string;
+  description: string;
   docs: LoadDocument[];
   selected: Set<string>;
   onToggle: (id: string) => void;
@@ -1672,16 +1791,22 @@ function MergeDialog({
   onSelectNone: () => void;
   onCancel: () => void;
   onConfirm: () => void;
-  merging: boolean;
+  busy: boolean;
+  busyLabel: string;
+  minSelect: number;
+  actionIcon: React.ReactNode;
+  actionLabel: (count: number) => string;
+  ctaWhenLow: string;
   kindLabel: Record<string, string>;
   kindTint:  Record<string, { bg: string; fg: string }>;
+  emptyMessage?: string;
 }) {
   const count = selected.size;
-  const canMerge = count >= 2 && !merging;
+  const canConfirm = count >= minSelect && !busy;
   return (
     <div className="fixed inset-0 flex items-center justify-center px-4"
       style={{ background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
-      onMouseDown={e => { if (e.target === e.currentTarget && !merging) onCancel(); }}>
+      onMouseDown={e => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div className="rounded-2xl flex flex-col w-full"
         style={{
           maxWidth:   480,
@@ -1694,13 +1819,13 @@ function MergeDialog({
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
           <div>
             <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
-              Merge files
+              {title}
             </div>
             <div className="text-[12px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
-              Pick the documents to combine into a single PDF. Originals stay in the list.
+              {description}
             </div>
           </div>
-          <button onClick={onCancel} disabled={merging}
+          <button onClick={onCancel} disabled={busy}
             className="p-1 rounded-full hover:bg-[var(--gc-hover)]" title="Close">
             <X size={16} />
           </button>
@@ -1708,18 +1833,18 @@ function MergeDialog({
 
         {/* Select-all + select-none bar */}
         <div className="flex items-center gap-2 px-5 pb-2">
-          <button type="button" onClick={onSelectAll} disabled={merging}
-            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors"
+          <button type="button" onClick={onSelectAll} disabled={busy || docs.length === 0}
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors disabled:opacity-50"
             style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
             Select all
           </button>
-          <button type="button" onClick={onSelectNone} disabled={merging}
-            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors"
+          <button type="button" onClick={onSelectNone} disabled={busy}
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors disabled:opacity-50"
             style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
             None
           </button>
           <div className="flex-1" />
-          <span className="text-[11px] font-bold" style={{ color: count >= 2 ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+          <span className="text-[11px] font-bold" style={{ color: canConfirm ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
             {count} selected
           </span>
         </div>
@@ -1728,7 +1853,7 @@ function MergeDialog({
         <div className="flex-1 overflow-y-auto px-5 pb-3" style={{ minHeight: 80 }}>
           {docs.length === 0 ? (
             <div className="text-[13px] italic py-8 text-center" style={{ color: 'var(--gc-text-3)' }}>
-              No documents on this load.
+              {emptyMessage ?? 'No documents on this load.'}
             </div>
           ) : (
             <ul className="space-y-1">
@@ -1739,7 +1864,7 @@ function MergeDialog({
                   <li key={d.id}>
                     <label className="flex items-start gap-2 cursor-pointer rounded-lg px-2 py-2 transition-colors hover:bg-[var(--gc-hover)]"
                       style={{ background: isOn ? 'rgba(26,115,232,0.06)' : 'transparent' }}>
-                      <input type="checkbox" checked={isOn} disabled={merging} className="mt-1"
+                      <input type="checkbox" checked={isOn} disabled={busy} className="mt-1"
                         style={{ accentColor: 'var(--gc-blue)' }}
                         onChange={() => onToggle(d.id)} />
                       <div className="flex-1 min-w-0">
@@ -1762,18 +1887,18 @@ function MergeDialog({
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-          <button type="button" onClick={onCancel} disabled={merging}
+          <button type="button" onClick={onCancel} disabled={busy}
             className="text-[13px] font-bold px-4 py-2 rounded-full transition-colors disabled:opacity-50"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
             Cancel
           </button>
           <button type="button"
-            onClick={() => { if (canMerge) onConfirm(); }}
-            disabled={!canMerge}
+            onClick={() => { if (canConfirm) onConfirm(); }}
+            disabled={!canConfirm}
             className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-full transition-opacity text-white disabled:opacity-40"
             style={{ background: 'var(--gc-blue)' }}>
-            {merging ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
-            {merging ? 'Merging…' : count >= 2 ? `Merge ${count} files` : 'Pick at least 2'}
+            {busy ? <Loader2 size={13} className="animate-spin" /> : actionIcon}
+            {busy ? busyLabel : count >= minSelect ? actionLabel(count) : ctaWhenLow}
           </button>
         </div>
       </div>
