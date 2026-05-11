@@ -29,8 +29,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers } from 'lucide-react';
-import type { Load, CalendarEvent } from '@/lib/types';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin } from 'lucide-react';
+import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
 import { railway } from '@/lib/railway';
@@ -384,6 +384,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // Cmd+Enter all belong to the notes composer.
   const [notesOpen, setNotesOpen] = useState(false);
 
+  // Left panel toggle — dispatcher's choice of seeing the rate-con
+  // (default) vs the load's stops list. Stops view is useful when
+  // verifying delivery against the planned route or when the rate-
+  // con doesn't carry the appointment / facility detail.
+  const [leftPanelView, setLeftPanelView] = useState<'rateCon' | 'stops'>('rateCon');
+
   // ── Inline doc rename ──────────────────────────────────────────────
   // When the user clicks Rename in the kebab menu we swap that tab
   // into an inline text input. The keyboard handler pauses while a
@@ -733,6 +739,25 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const cust = displayBrokerName(current.broker, customers);
   const stops = current.stops ?? [];
 
+  // Combined-stops list for the Stops view in the left panel. For
+  // non-relays this is just the load's stops; for relays we append
+  // the delivery-leg's stops so the panel shows the entire journey.
+  const allStopsForView: typeof stops = (() => {
+    const own = current.stops ?? [];
+    if (current.relayRole === 'pickup' && current.relayGroupId) {
+      const partner = allEvents.find(e =>
+        e.id !== current.id &&
+        e.relayRole === 'delivery' &&
+        ((current.loadId && e.loadId === current.loadId) ||
+         (current.relayGroupId && e.relayGroupId === current.relayGroupId)),
+      );
+      if (partner?.stops?.length) {
+        return [...own, ...partner.stops];
+      }
+    }
+    return own;
+  })();
+
   // Pickup date = pickup leg's start. For non-relays it's also delivery
   // start; for relays we want the *actual* delivery date which lives on
   // the delivery leg's end. If we can find the partner in the calendar
@@ -905,16 +930,40 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         <div className="flex-1 flex min-h-0">
           {/* Left/middle: PDFs */}
           <div className="flex-1 flex min-h-0">
-            {/* Rate Con */}
+            {/* Left panel — toggle between Rate Con and Stops. The
+                stops view is handy when verifying delivery against
+                the planned route, or when the rate-con doesn't carry
+                appointment / facility detail clearly. */}
             <div className="flex-1 flex flex-col min-w-0 border-r" style={{ borderColor: 'var(--gc-border-light)' }}>
-              <div className="shrink-0 flex items-center justify-between px-3 py-2"
+              <div className="shrink-0 flex items-center justify-between px-3 py-2 gap-2"
                 style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                <span className="text-[11px] font-extrabold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>
-                  Rate Con
-                </span>
+                {/* Tab toggle (Rate Con / Stops) */}
+                <div className="flex items-center gap-0.5 p-0.5 rounded-full"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+                  {([
+                    { key: 'rateCon' as const, label: 'Rate Con' },
+                    { key: 'stops'   as const, label: `Stops${allStopsForView.length ? ` (${allStopsForView.length})` : ''}` },
+                  ]).map(t => {
+                    const active = leftPanelView === t.key;
+                    return (
+                      <button key={t.key} type="button"
+                        onClick={() => setLeftPanelView(t.key)}
+                        className="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-wider transition-colors"
+                        style={{
+                          background: active ? 'var(--gc-blue)' : 'transparent',
+                          color:      active ? '#fff' : 'var(--gc-text-2)',
+                          textShadow: active ? '0 1px 1px rgba(0,0,0,0.25)' : undefined,
+                        }}>
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
                 <div className="flex items-center gap-2">
-                  {!current.rateConPdf && <span className="text-xs font-bold" style={{ color: '#dc2626' }}>Not attached</span>}
-                  {loadId && (
+                  {leftPanelView === 'rateCon' && !current.rateConPdf && (
+                    <span className="text-xs font-bold" style={{ color: '#dc2626' }}>Not attached</span>
+                  )}
+                  {leftPanelView === 'rateCon' && loadId && (
                     <button type="button"
                       onClick={() => rateConInputRef.current?.click()}
                       disabled={rateConUploading}
@@ -934,9 +983,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   )}
                 </div>
               </div>
-              {current.rateConPdf
-                ? <PdfCanvas dataUrl={rateConUrl ?? ''} onRetry={() => loadId && railway.getRateConUrl(loadId).then(({ url }) => setRateConUrl(url))} />
-                : <NoDocPanel label="No rate-con uploaded for this load." />}
+              {leftPanelView === 'rateCon'
+                ? (current.rateConPdf
+                    ? <PdfCanvas dataUrl={rateConUrl ?? ''} onRetry={() => loadId && railway.getRateConUrl(loadId).then(({ url }) => setRateConUrl(url))} />
+                    : <NoDocPanel label="No rate-con uploaded for this load." />)
+                : <StopsView stops={allStopsForView} />}
               {/* Hidden file input — fired by the Replace/Upload button. */}
               <input ref={rateConInputRef} type="file" accept=".pdf,application/pdf,image/*"
                 style={{ display: 'none' }}
@@ -1451,6 +1502,146 @@ function CopyLoadNum({ value }: { value: string }) {
         : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
     </button>
   );
+}
+
+/**
+ * StopsView — left-panel alternate that lists every stop on the load
+ * (pickup leg + delivery leg for relays). Helps the dispatcher verify
+ * delivery against the planned route when the rate-con doesn't carry
+ * the appointment / facility detail clearly.
+ */
+function StopsView({ stops }: { stops: Stop[] }) {
+  if (stops.length === 0) {
+    return <NoDocPanel label="No stops on this load." />;
+  }
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-2.5" style={{ background: 'var(--gc-bg)' }}>
+      {stops.map((s, i) => (
+        <StopRow key={`${s.id}-${i}`} stop={s} index={i} isLast={i === stops.length - 1} />
+      ))}
+    </div>
+  );
+}
+
+function StopRow({ stop, index, isLast }: { stop: Stop; index: number; isLast: boolean }) {
+  const isPickup   = stop.type === 'pickup';
+  const isDelivery = stop.type === 'delivery' || stop.type === 'drop';
+  const isRelay    = stop.type === 'relay';
+  const tint = isPickup     ? { bg: '#188038', fg: '#fff', label: 'Pickup'   }
+             : isDelivery   ? { bg: '#1a73e8', fg: '#fff', label: stop.type === 'drop' ? 'Drop' : 'Delivery' }
+             : isRelay      ? { bg: '#7b1fa2', fg: '#fff', label: 'Relay'    }
+             : stop.type === 'drop_hook' ? { bg: '#e37400', fg: '#fff', label: 'Drop & hook' }
+                                         : { bg: '#5f6368', fg: '#fff', label: 'Stop' };
+  const arrived = !!stop.arrivedAt;
+  const apptText = fmtApptWindow(stop.apptStart, stop.apptEnd, stop.timezone);
+  const arrivedText = stop.arrivedAt ? fmtArrived(stop.arrivedAt) : null;
+  return (
+    <div className="relative">
+      {/* Connector line between stops */}
+      {!isLast && (
+        <div style={{
+          position: 'absolute',
+          left:     19,
+          top:      40,
+          bottom:   -10,
+          width:    2,
+          background: 'var(--gc-border)',
+        }} />
+      )}
+      <div className="flex items-start gap-3 rounded-xl p-3"
+        style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
+        {/* Type chip + sequence */}
+        <div className="flex items-center justify-center font-black text-xs tabular-nums"
+          style={{
+            width: 40, height: 40, borderRadius: '50%',
+            background: tint.bg, color: tint.fg,
+            textShadow: '0 1px 1px rgba(0,0,0,0.25)',
+            boxShadow:  '0 1px 3px rgba(0,0,0,0.15)',
+            flexShrink: 0,
+          }}>
+          {index + 1}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
+              style={{ background: tint.bg, color: tint.fg }}>
+              {tint.label}
+            </span>
+            {arrived && (
+              <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                style={{ background: '#dcfce7', color: '#15803d' }}>
+                <CheckCircle2 size={9} style={{ display: 'inline', marginRight: 3 }} />
+                Arrived
+              </span>
+            )}
+          </div>
+          {stop.facilityName && (
+            <div className="text-[13px] font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
+              {stop.facilityName}
+            </div>
+          )}
+          {(stop.address || stop.city || stop.state) && (
+            <div className="text-[12px] font-medium flex items-start gap-1" style={{ color: 'var(--gc-text-2)' }}>
+              <MapPin size={11} style={{ flexShrink: 0, marginTop: 2 }} />
+              <span className="truncate">
+                {[stop.address, stop.city, stop.state].filter(Boolean).join(', ')}
+              </span>
+            </div>
+          )}
+          {apptText && (
+            <div className="text-[12px] font-semibold mt-1" style={{ color: 'var(--gc-text-1)' }}>
+              {apptText}
+            </div>
+          )}
+          {arrivedText && (
+            <div className="text-[11px] font-semibold" style={{ color: '#15803d' }}>
+              {arrivedText}
+            </div>
+          )}
+          {stop.instructions && (
+            <div className="text-[11px] mt-1 px-2 py-1 rounded font-medium"
+              style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)' }}>
+              {stop.instructions}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function fmtApptWindow(start: string | undefined, end: string | undefined, tz: string | undefined): string {
+  if (!start && !end) return '';
+  const formatter = (iso: string) => {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    try {
+      return d.toLocaleString('en-US', {
+        month:  'short', day: 'numeric',
+        hour:   'numeric', minute: '2-digit',
+        ...(tz ? { timeZone: tz } : {}),
+      });
+    } catch {
+      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+  };
+  if (start && end && start !== end) {
+    const s = formatter(start);
+    const e = formatter(end);
+    // Drop the date prefix on the end if it's the same day as the start.
+    if (s.split(',')[0] === e.split(',')[0]) {
+      const endTime = e.split(',').slice(1).join(',').trim();
+      return `${s} – ${endTime}`;
+    }
+    return `${s} – ${e}`;
+  }
+  return formatter(start ?? end!);
+}
+
+function fmtArrived(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `Arrived ${d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
 }
 
 function NoDocPanel({ label }: { label: string }) {
