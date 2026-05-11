@@ -326,7 +326,7 @@ export default function MapDrawer({ ev, asset, truckLoc, onClose, onOpenLoad, on
                   <button key={key} type="button"
                     onClick={() => onStatusChange(ev.id, ev.status === key ? undefined : key)}
                     style={{
-                      fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 20, cursor: 'pointer',
+                      fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 8, cursor: 'pointer',
                       background: active ? assetColor : 'var(--gc-bg)',
                       color: active ? '#fff' : 'var(--gc-text-2)',
                       border: active ? `1px solid ${assetColor}` : '1px solid var(--gc-border)',
@@ -338,7 +338,7 @@ export default function MapDrawer({ ev, asset, truckLoc, onClose, onOpenLoad, on
               })}
               {ev.status && ev.status !== 'scheduled' && (
                 <button type="button" onClick={() => onStatusChange(ev.id, undefined)}
-                  style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 20, cursor: 'pointer', background: 'transparent', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}>
+                  style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 8, cursor: 'pointer', background: 'transparent', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}>
                   ✕ Clear
                 </button>
               )}

@@ -177,7 +177,7 @@ function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onCha
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           {value.map((ref, i) => (
             confirmIdx === i ? (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 20, background: '#fee2e2', border: '1px solid #fca5a5', fontSize: 12 }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 8, background: '#fee2e2', border: '1px solid #fca5a5', fontSize: 12 }}>
                 <span style={{ color: '#991b1b', fontWeight: 600, whiteSpace: 'nowrap' }}>Remove?</span>
                 <button type="button" onClick={() => remove(i)}
                   style={{ background: '#d93025', border: 'none', borderRadius: 4, cursor: 'pointer', padding: '1px 7px', fontSize: 11, fontWeight: 700, color: '#fff' }}>
@@ -189,7 +189,7 @@ function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onCha
                 </button>
               </div>
             ) : (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px 3px 6px', borderRadius: 20, background: LOAD_ACCENT_BG, border: `1px solid ${LOAD_ACCENT_BORDER}`, fontSize: 12 }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px 3px 6px', borderRadius: 8, background: LOAD_ACCENT_BG, border: `1px solid ${LOAD_ACCENT_BORDER}`, fontSize: 12 }}>
                 <button type="button" onClick={() => setConfirmIdx(i)} title="Remove"
                   style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: 'var(--gc-text-3)', transition: 'color 120ms' }}
                   onMouseEnter={e => (e.currentTarget.style.color = '#d93025')}
@@ -250,7 +250,7 @@ function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onCha
         {PRESET_REF_LABELS.map(label => (
           <button key={label} type="button"
             onClick={() => { setDraftLabel(label); valueRef.current?.focus(); }}
-            style={{ fontSize: 10, padding: '2px 8px', borderRadius: 20, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)', cursor: 'pointer', transition: 'border-color 150ms, color 150ms' }}
+            style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)', cursor: 'pointer', transition: 'border-color 150ms, color 150ms' }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = headerColor; e.currentTarget.style.color = headerColor; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--gc-border)'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}
           >{label}</button>
@@ -3089,7 +3089,7 @@ export default function EventModal() {
                         className="flex items-center gap-1 transition-colors"
                         style={{
                           fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
-                          padding: '2px 8px', borderRadius: 20,
+                          padding: '2px 8px', borderRadius: 8,
                           background: loadIdCopied ? '#dcfce7' : `${headerColor}20`,
                           color: loadIdCopied ? '#15803d' : headerColor,
                           border: `1px solid ${loadIdCopied ? '#86efac' : `${headerColor}40`}`,
@@ -3137,7 +3137,7 @@ export default function EventModal() {
                 onClick={() => { markDirty(); setPriority(p => !p); }}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px',
-                  borderRadius: 20, border: priority ? '1px solid #f59e0b' : `1px solid ${headerColor}40`,
+                  borderRadius: 8, border: priority ? '1px solid #f59e0b' : `1px solid ${headerColor}40`,
                   background: priority ? '#fef3c7' : `${headerColor}10`,
                   cursor: 'pointer', transition: 'all 150ms',
                 }}
@@ -3152,7 +3152,7 @@ export default function EventModal() {
               <StyledSelect value={status} onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
                 style={{
                   border: `1px solid ${STATUSES.find(s => s.value === status)?.color ?? headerColor}50`,
-                  borderRadius: 20, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
+                  borderRadius: 8, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
                   color: STATUSES.find(s => s.value === status)?.color ?? headerColor,
                   background: STATUSES.find(s => s.value === status)?.bg ?? `${headerColor}12`,
                   outline: 'none', cursor: 'pointer', width: 'auto', transition: 'border-color 150ms',

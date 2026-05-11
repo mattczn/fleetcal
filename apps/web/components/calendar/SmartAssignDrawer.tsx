@@ -222,7 +222,7 @@ function Chip({ label, value, color, tooltip }: { label: string; value: string; 
         onMouseLeave={() => setPos(null)}
         style={{
           display: 'flex', alignItems: 'center', gap: 4,
-          padding: '3px 8px', borderRadius: 20,
+          padding: '3px 8px', borderRadius: 8,
           background: 'var(--gc-hover)', fontSize: 11,
           cursor: 'help',
         }}

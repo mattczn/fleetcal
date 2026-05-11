@@ -342,7 +342,7 @@ function LoadCard({
             onClick={() => setStatusOpen(o => !o)}
             style={{
               display: 'flex', alignItems: 'center', gap: 5,
-              fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 20, cursor: 'pointer',
+              fontSize: 12, fontWeight: 700, padding: '4px 10px', borderRadius: 8, cursor: 'pointer',
               background: ev.status ? chipActive : chipIdle,
               color: ev.status ? assetColor : whiteMuted,
               border: `1px solid ${ev.status ? 'transparent' : chipIdleBorder}`,

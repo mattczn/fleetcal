@@ -1416,20 +1416,20 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             {/* Action buttons */}
             <div className="shrink-0 px-4 py-4 space-y-2" style={{ background: 'var(--gc-bg)' }}>
               <button onClick={() => void handleRelease()} disabled={busy}
-                className="w-full flex items-center justify-center gap-2 rounded-full text-sm font-bold transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
                 style={{ background: '#15803d', color: '#fff', padding: '10px 14px' }}
                 title={requiredPass ? 'Release for invoicing' : 'Required docs missing — confirm before releasing'}>
                 <CheckCircle2 size={15} /> Release for invoicing
                 <span className="text-[10px] font-mono opacity-70 ml-1">R</span>
               </button>
               <button onClick={() => setShowFlag(true)} disabled={busy}
-                className="w-full flex items-center justify-center gap-2 rounded-full text-sm font-bold transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
                 style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '10px 14px' }}>
                 <Flag size={15} /> Flag for follow-up
                 <span className="text-[10px] font-mono opacity-70 ml-1">F</span>
               </button>
               <button onClick={next} disabled={busy || safeIdx >= loads.length - 1}
-                className="w-full flex items-center justify-center gap-2 rounded-full text-sm font-medium transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                 style={{ background: 'transparent', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', padding: '10px 14px' }}>
                 <FastForward size={14} /> Skip
                 <span className="text-[10px] font-mono opacity-70 ml-1">→</span>
