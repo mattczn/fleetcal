@@ -502,9 +502,12 @@ export interface InvoiceLineItem {
   amount:  number;
 }
 
-/** A stop as it renders on the invoice document. */
+/** A stop as it renders on the invoice document.
+ *
+ *  Relay handoffs are excluded by the generator — they're internal-only
+ *  dispatch markers and never appear on the broker-facing document. */
 export interface InvoiceSnapshotStop {
-  kind:      'Pickup' | 'Delivery' | 'Stop' | 'Drop' | 'Relay';
+  kind:      'Pickup' | 'Delivery' | 'Stop' | 'Drop';
   seq:       number;
   facility:  string;
   /** "CITY ST ZIP" uppercase, ready for direct render. */

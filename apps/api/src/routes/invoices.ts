@@ -154,12 +154,13 @@ interface CustomerRowForInvoice {
   invoice_email: string | null;
 }
 
-/** Map a stop row's `type` to the display label rendered on the invoice. */
+/** Map a stop row's `type` to the display label rendered on the invoice.
+ *  Relay-type stops are internal-only handoff markers and are filtered
+ *  out before this is called — they should never reach the broker. */
 function stopKindLabel(t: string): InvoiceSnapshotStop["kind"] {
   switch (t) {
     case "pickup":     return "Pickup";
     case "delivery":   return "Delivery";
-    case "relay":      return "Relay";
     case "drop_hook":  return "Drop";
     default:           return "Stop";
   }
@@ -219,10 +220,18 @@ async function buildSnapshot(
   }
   const load = loadRow as unknown as LoadRowForInvoice;
 
-  // 3. Events (sorted by start) + stops in one shot.
+  // 3. Events (sorted by start) + stops.
+  //
+  // For relay loads, the split-relay flow duplicates the FULL merged stop
+  // list onto BOTH legs (so each leg can render the complete route with
+  // the other side's stops greyed out). Naively pulling stops for all
+  // events would put every stop on the invoice twice. To avoid that we
+  // only read stops from ONE event — the pickup leg, falling back to the
+  // first event by start. Non-relay loads have just one event, so this
+  // is a no-op for them.
   const { data: evRowsRaw, error: evErr } = await supabase
     .from("events")
-    .select("id,start,end")
+    .select("id,start,end,relay_role")
     .eq("load_id", loadId)
     .eq("org_id", orgId)
     .is("deleted_at", null)
@@ -230,14 +239,19 @@ async function buildSnapshot(
   if (evErr) {
     return { error: { status: 500, body: { error: "fetch_failed", detail: evErr.message } } };
   }
-  const eventRows = (evRowsRaw ?? []) as unknown as EventRowForInvoice[];
+  const eventRows = (evRowsRaw ?? []) as unknown as Array<EventRowForInvoice & { relay_role: string | null }>;
+
+  const stopsSourceEventId =
+       eventRows.find((e) => e.relay_role === "pickup")?.id
+    ?? eventRows[0]?.id
+    ?? null;
 
   let stopRows: StopRowForInvoice[] = [];
-  if (eventRows.length) {
+  if (stopsSourceEventId) {
     const { data: stRows } = await supabase
       .from("stops")
       .select("event_id,sequence,type,facility_name,city,state")
-      .in("event_id", eventRows.map((e) => e.id))
+      .eq("event_id", stopsSourceEventId)
       .order("sequence", { ascending: true });
     stopRows = ((stRows ?? []) as unknown as StopRowForInvoice[]);
   }
@@ -256,9 +270,15 @@ async function buildSnapshot(
 
   // 5. Stops → display rows. Number pickups and deliveries separately so
   // each kind is seq 1, 2, 3 in its own series (matches Alvys style).
+  //
+  // Relay-type stops are excluded — they're internal handoff markers
+  // and have no meaning to the broker. The pickup→delivery view that
+  // ends up on the invoice should look the same whether or not the load
+  // was dispatched as a relay internally.
   const stopsForSnapshot: InvoiceSnapshotStop[] = [];
   const seqByKind = new Map<string, number>();
   for (const s of stopRows) {
+    if (s.type === "relay") continue;
     const kind = stopKindLabel(s.type);
     const seq  = (seqByKind.get(kind) ?? 0) + 1;
     seqByKind.set(kind, seq);
