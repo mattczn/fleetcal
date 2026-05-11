@@ -35,6 +35,8 @@ import {
   type SendInvoiceResponse,
   type BatchSendInvoicesRequest,
   type BatchSendInvoicesResponse,
+  type BatchGenerateInvoicesRequest,
+  type BatchGenerateInvoicesResponse,
   type MarkInvoicePaidRequest,
   type MarkInvoicePaidResponse,
   type VoidInvoiceRequest,
@@ -901,6 +903,259 @@ invoices.post("/:id/send", async (c) => {
   }
 
   const res: SendInvoiceResponse = { invoice: sentInvoice };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/invoices/batch-generate — generate invoices for many loads
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Source-of-truth bulk action for the Released bucket on /accounting.
+// For each loadId, builds the snapshot + inserts an invoice row +
+// persists the merged packet PDF. With thenSend=true, follows up by
+// firing the standard batch-send flow against the just-created
+// invoices (grouped per-broker, one email each).
+//
+// Per-load isolation: a 23505 (active invoice already exists) or
+// any other failure on one load doesn't poison the batch — the
+// response carries per-load results so the UI can show exactly
+// what landed.
+
+invoices.post("/batch-generate", async (c) => {
+  const orgId  = c.get("orgId");
+  const body   = await c.req.json<BatchGenerateInvoicesRequest>();
+
+  if (!Array.isArray(body?.loadIds) || body.loadIds.length === 0) {
+    return badRequest(c, ["loadIds (non-empty array) required"]);
+  }
+  if (body.loadIds.length > 50) {
+    return badRequest(c, ["batch limited to 50 loads per call"]);
+  }
+
+  const created: BatchGenerateInvoicesResponse["created"] = [];
+  const failed:  BatchGenerateInvoicesResponse["failed"]  = [];
+
+  // Sequential — invoice number generation reads from a counter and
+  // we want predictable ordering. Volumes are small (≤50/req) so the
+  // wall-clock difference vs Promise.all is negligible.
+  for (const loadId of body.loadIds) {
+    try {
+      const result = await buildSnapshot(orgId, loadId, {} as Partial<CreateInvoiceRequest>);
+      if ("error" in result) {
+        failed.push({
+          loadId,
+          error: result.error.body.detail ?? result.error.body.error,
+        });
+        continue;
+      }
+      const { snapshot, total, load, invoiceSettings, dueAt } = result;
+
+      const prefix = invoiceSettings.invoiceNumberPrefix ?? "";
+      const invoiceNumber = `${prefix}${load.internal_load_id}`;
+
+      const insertRow = {
+        org_id:          orgId,
+        load_id:         load.id,
+        customer_id:     load.customer_id,
+        invoice_number:  invoiceNumber,
+        status:          "draft" as InvoiceStatus,
+        total,
+        issued_at:       new Date().toISOString(),
+        due_at:          dueAt,
+        snapshot,
+      };
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error: insertErr } = await supabase
+        .from("invoices")
+        .insert(insertRow as any)
+        .select(INVOICE_COLS)
+        .single();
+      if (insertErr || !data) {
+        if ((insertErr as { code?: string } | null)?.code === "23505") {
+          failed.push({ loadId, error: "An active invoice already exists for this load." });
+        } else {
+          failed.push({ loadId, error: insertErr?.message ?? "insert_failed" });
+        }
+        continue;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await supabase.from("loads").update({ billing_status: "invoiced" } as any)
+        .eq("id", load.id).eq("org_id", orgId);
+
+      const newInvoice = rowToInvoice(data as unknown as InvoiceRow);
+
+      // Persist packet — best-effort, same as single-create path.
+      try {
+        const { persistInvoicePacket } = await import("../lib/invoicePacket.js");
+        await persistInvoicePacket({ invoice: newInvoice, orgId });
+      } catch (err) {
+        console.warn("[POST /v1/invoices/batch-generate] packet persistence failed:", err);
+      }
+
+      created.push({ loadId, invoice: newInvoice });
+    } catch (err) {
+      console.error("[POST /v1/invoices/batch-generate] loop error:", err);
+      failed.push({ loadId, error: (err as Error)?.message ?? "unknown_error" });
+    }
+  }
+
+  const res: BatchGenerateInvoicesResponse = { created, failed };
+
+  // Second stage: optional batch-send of the just-created invoices.
+  // We call the existing batch-send logic inline rather than re-
+  // implementing it. Failures here populate res.sent but don't roll
+  // back the generation — the user can retry sends later.
+  if (body.thenSend && created.length > 0) {
+    const invoiceIds = created.map(c => c.invoice.id);
+    try {
+      // Build a synthetic Hono request body and re-use the batch-send
+      // handler? Simpler: replicate the core grouping/sending logic
+      // here. To avoid duplication we share via the email lib.
+      const { sendInvoiceEmail } =
+        await import("../lib/invoiceEmail.js");
+      const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad, persistInvoicePacket } =
+        await import("../lib/invoicePacket.js");
+
+      // Re-read invoices to ensure we have the latest snapshot + customer.
+      const { data: rows } = await supabase
+        .from("invoices")
+        .select(INVOICE_COLS)
+        .eq("org_id", orgId)
+        .in("id", invoiceIds);
+      const invs = ((rows ?? []) as unknown as InvoiceRow[]).map(rowToInvoice);
+
+      // Group by broker.
+      const byBroker = new Map<string, typeof invs>();
+      for (const inv of invs) {
+        if (!inv.customerId) continue; // brokerless invoices can't be auto-sent
+        const list = byBroker.get(inv.customerId) ?? [];
+        list.push(inv);
+        byBroker.set(inv.customerId, list);
+      }
+      const { data: customerRows } = await supabase
+        .from("customers")
+        .select("id,name,invoice_email")
+        .eq("org_id", orgId)
+        .in("id", Array.from(byBroker.keys()));
+      const customerById = new Map<string, { name: string; invoice_email: string | null }>();
+      for (const row of (customerRows ?? []) as Array<{ id: string; name: string; invoice_email: string | null }>) {
+        customerById.set(row.id, { name: row.name, invoice_email: row.invoice_email });
+      }
+
+      let bccSender: string | undefined;
+      if (body.bccSelf) {
+        try {
+          const { clerk } = await import("../lib/clerk.js");
+          const user = await clerk().users.getUser(c.get("userId"));
+          const primary = user.emailAddresses.find(e => e.id === user.primaryEmailAddressId);
+          bccSender = primary?.emailAddress;
+        } catch { /* ignore — bcc-self is best-effort */ }
+      }
+
+      const fmt = (iso?: string) => iso
+        ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+        : undefined;
+      const attachLoadDocs = body.attachLoadDocs ?? true;
+
+      const groups: BatchSendInvoicesResponse["groups"] = [];
+      for (const [customerId, brokerInvs] of byBroker) {
+        const customer = customerById.get(customerId);
+        const brokerName = customer?.name ?? brokerInvs[0]?.snapshot.brokerName ?? "Unknown broker";
+        const recipient  = customer?.invoice_email?.trim() || undefined;
+        if (!recipient) {
+          groups.push({
+            customerId, brokerName, to: null,
+            status: "skipped_no_email", invoiceIds: brokerInvs.map(i => i.id),
+          });
+          continue;
+        }
+
+        const built: Array<{ invoice: typeof brokerInvs[number]; packet: Buffer }> = [];
+        try {
+          for (const inv of brokerInvs) {
+            const [extraDocPaths, rateConPath] = await Promise.all([
+              attachLoadDocs ? resolvePacketDocsForLoad(inv.loadId, orgId) : Promise.resolve<string[]>([]),
+              resolveRateConPathForLoad(inv.loadId, orgId),
+            ]);
+            const packet = await buildInvoicePacket({
+              invoice: inv, rateConPath, extraDocPaths,
+              issuedDate: fmt(inv.issuedAt), dueDate: fmt(inv.dueAt),
+            });
+            built.push({ invoice: inv, packet: packet.buffer });
+          }
+        } catch (err) {
+          groups.push({
+            customerId, brokerName, to: recipient, status: "failed",
+            invoiceIds: brokerInvs.map(i => i.id),
+            error: `packet build failed: ${(err as Error)?.message}`,
+          });
+          continue;
+        }
+
+        let messageId: string | undefined;
+        try {
+          const sendRes = await sendInvoiceEmail({
+            invoice:     built[0].invoice,
+            to:          recipient,
+            cc:          body.cc,
+            bccSender,
+            bodyText:    body.bodyText,
+            attachments: built.map(b => ({
+              filename: `invoice-packet-${b.invoice.invoiceNumber}.pdf`,
+              content:  b.packet,
+            })),
+          });
+          messageId = sendRes.messageId;
+        } catch (err) {
+          groups.push({
+            customerId, brokerName, to: recipient, status: "failed",
+            invoiceIds: brokerInvs.map(i => i.id),
+            error: (err as Error)?.message ?? "email send failed",
+          });
+          continue;
+        }
+
+        const sentInvoiceIds: string[] = [];
+        for (const { invoice: inv, packet } of built) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: upd } = await supabase
+            .from("invoices")
+            .update({
+              status:      "sent",
+              sent_at:     new Date().toISOString(),
+              sent_to:     recipient,
+              sent_method: "email",
+            } as any)
+            .eq("id", inv.id)
+            .eq("org_id", orgId)
+            .eq("status", "draft")
+            .select(INVOICE_COLS)
+            .single();
+          if (!upd) continue;
+          const sentInv = rowToInvoice(upd as unknown as InvoiceRow);
+          sentInvoiceIds.push(sentInv.id);
+          try {
+            await persistInvoicePacket({ invoice: sentInv, orgId, prebuilt: packet });
+          } catch { /* best-effort */ }
+        }
+
+        groups.push({
+          customerId, brokerName, to: recipient, status: "sent",
+          invoiceIds: sentInvoiceIds, messageId,
+        });
+      }
+
+      res.sent = groups;
+    } catch (err) {
+      console.error("[POST /v1/invoices/batch-generate] thenSend stage failed:", err);
+      // Don't fail the request — generation succeeded, just report
+      // empty groups so the UI knows send didn't run.
+      res.sent = [];
+    }
+  }
+
   return c.json(res);
 });
 

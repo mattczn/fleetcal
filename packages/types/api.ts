@@ -719,6 +719,40 @@ export interface SendInvoiceRequest {
 export interface SendInvoiceResponse { invoice: Invoice; }
 
 /**
+ * POST /v1/invoices/batch-generate — generate an invoice for each
+ * supplied loadId. Optionally fires the batch-send flow against the
+ * just-created drafts (Alvys's "Create & Send" button).
+ *
+ * Per-load failure isolation: a single load that 409's (active
+ * invoice already exists) or otherwise errors does NOT abort the
+ * batch. The response reports per-load results so the UI can surface
+ * exactly which loads landed and which need follow-up.
+ *
+ * When thenSend is true, the second-stage call mirrors the standalone
+ * batch-send shape (groups[] by broker). Loads whose generation
+ * failed are excluded from the send phase.
+ */
+export interface BatchGenerateInvoicesRequest {
+  loadIds:    string[];
+  /** Render + email each just-created invoice to its broker, grouped
+   *  per-broker into a single email with N packet attachments. */
+  thenSend?:  boolean;
+  /** Forwarded to the second-stage batch-send when thenSend=true. */
+  cc?:             string[];
+  bccSelf?:        boolean;
+  bodyText?:       string;
+  attachLoadDocs?: boolean;
+}
+
+export interface BatchGenerateInvoicesResponse {
+  created: Array<{ loadId: string; invoice: Invoice }>;
+  failed:  Array<{ loadId: string; error: string }>;
+  /** Populated only when thenSend was requested. Same shape as
+   *  BatchSendInvoicesResponse.groups. */
+  sent?:   BatchSendInvoicesResponse['groups'];
+}
+
+/**
  * POST /v1/invoices/batch-send — send a set of draft invoices grouped
  * by broker (one email per unique broker, all of that broker's
  * selected drafts as separate packet attachments).
