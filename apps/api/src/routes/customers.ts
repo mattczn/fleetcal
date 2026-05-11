@@ -92,7 +92,11 @@ customers.post("/", async (c) => {
     contact_phone: body.contactPhone ?? null,
     notes:                body.notes               ?? null,
     parse_hints:          body.parseHints          ?? null,
-    invoice_method:       body.invoiceMethod       ?? null,
+    // Default invoice_method to 'email' when the caller didn't pick
+    // one. Most brokers are emailed; portal brokers are the
+    // exception and the user can flip them in the broker profile.
+    // Caller can still pass null explicitly to opt out.
+    invoice_method:       body.invoiceMethod === undefined ? 'email' : body.invoiceMethod,
     invoice_email:        body.invoiceEmail        ?? null,
     invoice_portal:       body.invoicePortal       ?? null,
     invoice_instructions: body.invoiceInstructions ?? null,

@@ -32,6 +32,7 @@ import ReviewQueue from './ReviewQueue';
 import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
+import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 
 type Tab = 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid';
 
@@ -465,6 +466,11 @@ export default function CloseoutView() {
     }
   }
 
+  // Closeout View-invoice opens an InvoiceDetailModal in-place so the
+  // user keeps their position in the queue. The full-page route still
+  // exists for direct links / the Generate-and-send flow.
+  const [invoiceModalId, setInvoiceModalId] = useState<string | null>(null);
+
   async function handleViewInvoice(load: Load) {
     const loadId = load.loadId ?? load.id;
     if (generatingId) return;
@@ -476,7 +482,7 @@ export default function CloseoutView() {
       const active = existing.find(i => i.status !== 'void');
       const target = active ?? existing[0];
       if (target) {
-        router.push(`/accounting/invoices/${target.id}`);
+        setInvoiceModalId(target.id);
       } else {
         window.alert('No invoice found for this load.');
       }
@@ -1064,6 +1070,16 @@ export default function CloseoutView() {
       {/* Customer profile modal */}
       {brokerProfileId && (
         <BrokerProfileModal initialBrokerId={brokerProfileId} onClose={() => setBrokerProfileId(null)} />
+      )}
+
+      {/* Invoice popup — opened by the View-invoice button on the
+          invoiced/paid tabs. Stays mounted so the user keeps their
+          place in the queue. */}
+      {invoiceModalId && (
+        <InvoiceDetailModal
+          invoiceId={invoiceModalId}
+          onClose={() => { setInvoiceModalId(null); void refresh(); }}
+        />
       )}
 
       {/* Focused review queue overlay */}

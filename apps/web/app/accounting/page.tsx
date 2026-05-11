@@ -15,12 +15,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Receipt, Loader2, AlertTriangle, Search, X, Send, Check, AlertCircle } from 'lucide-react';
+import { Receipt, Loader2, AlertTriangle, Search, X, Send, Check, AlertCircle, ExternalLink as ExternalLinkIcon } from 'lucide-react';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import DataLoader from '@/components/DataLoader';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
+import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import type { Invoice, InvoiceStatus, Customer, BatchSendInvoicesResponse } from '@fleetcal/types';
 
 type Tab = 'all' | 'draft' | 'sent' | 'paid' | 'void';
@@ -45,6 +46,9 @@ export default function AccountingPage() {
   // so a stale id can't get sent by accident.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
+  // Broker-profile popup — opened by clicking a broker name in any
+  // table row. Same modal closeout uses.
+  const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
 
   const customers = useCalendarStore(s => s.customers);
   const customerById = useMemo(() => {
@@ -254,6 +258,12 @@ export default function AccountingPage() {
                     const brokerLabel = displayBrokerName(brokerName, customers) || '—';
                     const isSelectable = isDraftTab && inv.status === 'draft';
                     const isChecked = selected.has(inv.id);
+                    // Missing-email warning: only relevant on Unsent
+                    // invoices where Email is the intended method. We
+                    // treat invoiceMethod undefined as 'email' (the
+                    // default), so absence-of-email matters there too.
+                    const method = customer?.invoiceMethod ?? 'email';
+                    const missingEmail = inv.status === 'draft' && method === 'email' && !customer?.invoiceEmail;
                     return (
                       <tr key={inv.id}
                         className="cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
@@ -276,11 +286,26 @@ export default function AccountingPage() {
                           </Link>
                         </Td>
                         <Td>
-                          <Link href={`/accounting/invoices/${inv.id}`}
-                            className="block w-full"
-                            style={{ color: 'var(--gc-text-1)' }}>
-                            {brokerLabel}
-                          </Link>
+                          <div className="flex items-center gap-1.5">
+                            {customer ? (
+                              <button onClick={() => setBrokerProfileId(customer.id)}
+                                className="font-medium text-left hover:underline"
+                                style={{ color: 'var(--gc-text-1)' }}
+                                title="Open broker profile">
+                                {brokerLabel}
+                              </button>
+                            ) : (
+                              <span style={{ color: 'var(--gc-text-3)' }}>{brokerLabel}</span>
+                            )}
+                            {missingEmail && (
+                              <button onClick={() => customer && setBrokerProfileId(customer.id)}
+                                className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                                style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+                                title="No invoice email set for this broker — click to open profile and add one">
+                                <AlertCircle size={10} /> No email
+                              </button>
+                            )}
+                          </div>
                         </Td>
                         <Td>
                           <Link href={`/accounting/invoices/${inv.id}`}
@@ -322,11 +347,27 @@ export default function AccountingPage() {
         <BatchSendDialog
           invoices={selectedInvoices}
           customerById={customerById}
+          onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchOpen(false)}
           onComplete={() => {
             // Refetch so the table reflects the new status.
             setBatchOpen(false);
             setSelected(new Set());
+            void railway.listInvoices({
+              status:   tab === 'all' ? undefined : tab,
+              brokerId: brokerFilter ?? undefined,
+            }).then(res => setInvoices(res.invoices));
+          }}
+        />
+      )}
+      {brokerProfileId && (
+        <BrokerProfileModal
+          initialBrokerId={brokerProfileId}
+          onClose={() => {
+            setBrokerProfileId(null);
+            // Refetch so any customer edits (especially saving an
+            // invoice_email) reflect immediately in the missing-email
+            // warnings + send buttons.
             void railway.listInvoices({
               status:   tab === 'all' ? undefined : tab,
               brokerId: brokerFilter ?? undefined,
@@ -377,11 +418,12 @@ function StatusPill({ status }: { status: InvoiceStatus }) {
 interface BatchSendDialogProps {
   invoices:     Invoice[];
   customerById: Map<string, Customer>;
+  onOpenBroker?: (brokerId: string) => void;
   onClose:      () => void;
   onComplete:   () => void;
 }
 
-function BatchSendDialog({ invoices, customerById, onClose, onComplete }: BatchSendDialogProps) {
+function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComplete }: BatchSendDialogProps) {
   const [bccSelf, setBccSelf]       = useState(true);
   const [attachLoadDocs, setAttach] = useState(true);
   const [busy, setBusy]             = useState(false);
@@ -459,23 +501,49 @@ function BatchSendDialog({ invoices, customerById, onClose, onComplete }: BatchS
               )}
 
               <div className="space-y-2">
-                {groups.map((g, i) => (
-                  <div key={i} className="px-3 py-2 rounded-lg" style={{ border: '1px solid var(--gc-border-light)' }}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--gc-text-1)' }}>
-                          {g.broker?.name ?? <span style={{ color: '#dc2626' }}>(no broker set)</span>}
+                {groups.map((g, i) => {
+                  const noEmail = !!g.broker && !g.broker.invoiceEmail;
+                  return (
+                    <div key={i} className="px-3 py-2 rounded-lg" style={{ border: '1px solid var(--gc-border-light)' }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          {g.broker ? (
+                            onOpenBroker ? (
+                              <button onClick={() => onOpenBroker(g.broker!.id)}
+                                className="font-semibold text-[13px] truncate hover:underline flex items-center gap-1"
+                                style={{ color: '#1a73e8' }}
+                                title="Open broker profile">
+                                {g.broker.name} <ExternalLinkIcon size={11} />
+                              </button>
+                            ) : (
+                              <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--gc-text-1)' }}>
+                                {g.broker.name}
+                              </div>
+                            )
+                          ) : (
+                            <div className="font-semibold text-[13px] truncate" style={{ color: '#dc2626' }}>
+                              (no broker set)
+                            </div>
+                          )}
+                          <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                            {g.broker?.invoiceEmail ?? (
+                              <span style={{ color: '#9a3412' }}>
+                                (no AP email — {onOpenBroker && g.broker ? (
+                                  <button onClick={() => onOpenBroker(g.broker!.id)} className="underline font-semibold">
+                                    fix in profile
+                                  </button>
+                                ) : 'set one in profile'})
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                          {g.broker?.invoiceEmail ?? <span style={{ color: '#9a3412' }}>(no AP email)</span>}
+                        <div className="text-[12px] text-right shrink-0" style={{ color: noEmail ? '#9a3412' : 'var(--gc-text-2)' }}>
+                          {g.rows.length} invoice{g.rows.length === 1 ? '' : 's'}
                         </div>
-                      </div>
-                      <div className="text-[12px] text-right shrink-0" style={{ color: 'var(--gc-text-2)' }}>
-                        {g.rows.length} invoice{g.rows.length === 1 ? '' : 's'}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="space-y-2 pt-1">
