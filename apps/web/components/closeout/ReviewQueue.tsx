@@ -508,6 +508,48 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [uploadError, setUploadError]   = useState<string | null>(null);
   const [mergeStatus, setMergeStatus]   = useState<string | null>(null);
 
+  // Rate-con replace shortcut — separate ref so the user can swap or
+  // add a new rate con without going through the multi-step "Add
+  // paperwork" panel. The API mirrors the new file's storage path
+  // onto loads.rate_con_pdf so the rate-con viewer always shows the
+  // latest; older versions remain accessible in the docs strip
+  // (kind=rate_con).
+  const rateConInputRef = useRef<HTMLInputElement>(null);
+  const [rateConUploading, setRateConUploading] = useState(false);
+  const uploadRateCon = async (file: File) => {
+    if (!loadId || rateConUploading) return;
+    setRateConUploading(true);
+    try {
+      const { document } = await railway.uploadLoadDocument(loadId, file, 'rate_con');
+      // Invalidate the cache for this load and re-fetch so:
+      //   - the Rate Con viewer pulls the new signed URL
+      //   - the new rate_con doc shows up in the docs strip
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, true);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) {
+        setDocs(fresh.docs);
+        setRateConUrl(fresh.rateConUrl);
+      }
+      // Optimistic: also surface the new doc in the local list in case
+      // the prefetch was already in flight and missed our row.
+      setDocs(prev => prev.some(d => d.id === document.id) ? prev : [...prev, {
+        id:         document.id,
+        loadId:     document.loadId ?? loadId,
+        fileName:   document.fileName,
+        mimeType:   document.mimeType,
+        sizeBytes:  document.sizeBytes,
+        kind:       document.kind,
+        uploadedAt: document.uploadedAt,
+      } as LoadDocument]);
+    } catch (err) {
+      console.error('[review queue] rate-con upload failed:', err);
+      alert(`Upload failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setRateConUploading(false);
+    }
+  };
+
   function pickFile() {
     setUploadError(null);
     fileInputRef.current?.click();
@@ -799,14 +841,42 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             <div className="flex-1 flex flex-col min-w-0 border-r" style={{ borderColor: 'var(--gc-border-light)' }}>
               <div className="shrink-0 flex items-center justify-between px-3 py-2"
                 style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                <span className="text-[11px] font-extrabold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>
                   Rate Con
                 </span>
-                {!current.rateConPdf && <span className="text-xs" style={{ color: '#dc2626' }}>Not attached</span>}
+                <div className="flex items-center gap-2">
+                  {!current.rateConPdf && <span className="text-xs font-bold" style={{ color: '#dc2626' }}>Not attached</span>}
+                  {loadId && (
+                    <button type="button"
+                      onClick={() => rateConInputRef.current?.click()}
+                      disabled={rateConUploading}
+                      className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors disabled:opacity-50"
+                      style={{
+                        background: KIND_TINT.rate_con.bg,
+                        color:      KIND_TINT.rate_con.fg,
+                        textShadow: '0 1px 1px rgba(0,0,0,0.25)',
+                        boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
+                      }}
+                      title={current.rateConPdf ? 'Upload a new rate confirmation' : 'Upload rate confirmation'}>
+                      {rateConUploading
+                        ? <Loader2 size={10} className="animate-spin" />
+                        : <Plus size={10} />}
+                      {current.rateConPdf ? 'Replace' : 'Upload'}
+                    </button>
+                  )}
+                </div>
               </div>
               {current.rateConPdf
                 ? <PdfCanvas dataUrl={rateConUrl ?? ''} onRetry={() => loadId && railway.getRateConUrl(loadId).then(({ url }) => setRateConUrl(url))} />
                 : <NoDocPanel label="No rate-con uploaded for this load." />}
+              {/* Hidden file input — fired by the Replace/Upload button. */}
+              <input ref={rateConInputRef} type="file" accept=".pdf,application/pdf,image/*"
+                style={{ display: 'none' }}
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) void uploadRateCon(f);
+                  e.target.value = '';
+                }} />
             </div>
 
             {/* Uploaded docs */}

@@ -3203,13 +3203,46 @@ export default function EventModal() {
             {/* Hidden file inputs */}
             <input ref={fileInputRef} type="file" accept=".pdf,application/pdf" style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleParseFile(f); e.target.value = ''; }} />
-            <input ref={attachFileInputRef} type="file" accept=".pdf,application/pdf" style={{ display: 'none' }}
-              onChange={e => {
+            <input ref={attachFileInputRef} type="file" accept=".pdf,application/pdf,image/*" style={{ display: 'none' }}
+              onChange={async e => {
                 const f = e.target.files?.[0]; if (!f) return;
-                const reader = new FileReader();
-                reader.onload = () => { markDirty(); setRateConPdf(reader.result as string); };
-                reader.readAsDataURL(f);
                 e.target.value = '';
+                const ev = modalEventId ? events.find(x => x.id === modalEventId) : undefined;
+                // Create mode: stage as base64 — no load exists to
+                // upload to yet, so we hold the new rate-con in local
+                // state until the user clicks Create / Save.
+                if (!ev?.loadId) {
+                  const reader = new FileReader();
+                  reader.onload = () => { markDirty(); setRateConPdf(reader.result as string); };
+                  reader.readAsDataURL(f);
+                  return;
+                }
+                // Edit mode: route through POST /v1/loads/:id/documents
+                // with kind=rate_con. The API mirrors the new storage
+                // path onto loads.rate_con_pdf so this becomes the
+                // active rate-con; the previous one is preserved as a
+                // kind=rate_con row in load_documents (history).
+                try {
+                  const { railway } = await import('@/lib/railway');
+                  await railway.uploadLoadDocument(ev.loadId, f, 'rate_con');
+                  // Refresh: pull the updated load + events back into
+                  // the calendar store. The modal's existing effect
+                  // (deps [modalEventId, events]) will re-run and set
+                  // rateConPdf to the new storage path; the pdf-viewer
+                  // effect then asks the API for a fresh signed URL.
+                  const { loads: legs } = await railway.getLoad(ev.loadId);
+                  mergeEvents(legs as CalendarEvent[]);
+                  // Also refresh the Uploaded docs tab so the new
+                  // rate-con shows up there as a kind=rate_con entry.
+                  if (orgId) {
+                    const { fetchLoadDocuments } = await import('@/lib/db');
+                    const fresh = await fetchLoadDocuments(ev.loadId, orgId);
+                    setLoadDocuments(fresh);
+                  }
+                } catch (err) {
+                  console.error('[EventModal] rate-con upload failed:', err);
+                  alert(`Upload failed: ${(err as Error).message ?? 'Unknown error'}`);
+                }
               }} />
 
             {/* Event kind toggle + closeout billing badge + Review jump.
