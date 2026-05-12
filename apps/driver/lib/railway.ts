@@ -118,14 +118,44 @@ export const railway = {
     return req<{ url: string }>("GET", `/v1/driver/documents/${id}/url`);
   },
 
-  // Org settings + trailers
+  // Org settings + assets + trailers
   getOrgSettings() {
     return req<{ settings: { showDriverPay: boolean } }>("GET", "/v1/driver/org-settings");
+  },
+  listAssets() {
+    return req<{
+      assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string }[];
+    }>("GET", "/v1/driver/assets");
   },
   listTrailers() {
     return req<{ trailers: { id: number; name: string; trailerNumber?: string; category: string }[] }>(
       "GET",
       "/v1/driver/trailers",
+    );
+  },
+
+  // Fuel reports
+  submitFuelReport(body: {
+    assetId:        number;
+    state:          string;        // 2-letter US abbr
+    dieselGallons:  number;
+    defGallons?:    number;
+    odometer?:      number;
+    reportedAt?:    string;
+    latitude?:      number;
+    longitude?:     number;
+    notes?:         string;
+  }) {
+    return req<{ fuelReport: import("@fleetcal/types").FuelReport }>(
+      "POST",
+      "/v1/driver/fuel-reports",
+      body,
+    );
+  },
+  listFuelReports(limit = 20) {
+    return req<{ fuelReports: import("@fleetcal/types").FuelReport[] }>(
+      "GET",
+      `/v1/driver/fuel-reports?limit=${limit}`,
     );
   },
 };

@@ -650,3 +650,48 @@ export interface Invoice {
   createdAt:      string;
   updatedAt:      string;
 }
+
+// ── Fuel report ─────────────────────────────────────────────────────────
+//
+// Driver-submitted record of a fuel purchase. Authored from the driver
+// app, which already knows the driver (signed-in user) and the asset
+// (current assignment), and auto-detects state from GPS. Phase-2 layer
+// (`fuel_transactions`) reconciles dollar amounts to these reports.
+
+/** Reconciliation status against the future fuel_transactions table.
+ *  - `pending`         — no transaction matched yet (default).
+ *  - `matched`         — auto- or hand-linked to a transaction.
+ *  - `no_transaction`  — operator confirmed no card transaction exists
+ *                        (e.g. driver paid cash) so it stops appearing
+ *                        in the unmatched queue. */
+export type FuelReportMatchStatus = 'pending' | 'matched' | 'no_transaction';
+
+export const FUEL_REPORT_MATCH_STATUSES: readonly FuelReportMatchStatus[] = [
+  'pending',
+  'matched',
+  'no_transaction',
+];
+
+export interface FuelReport {
+  id:             string;
+  orgId:          string;
+
+  driverId:       number;
+  assetId:        number;
+
+  reportedAt:     string;       // ISO timestamp
+  state:          string;       // 2-letter US abbreviation
+  latitude?:      number;
+  longitude?:     number;
+
+  dieselGallons:  number;
+  defGallons?:    number;
+  odometer?:      number;
+
+  transactionId?: string;
+  matchStatus:    FuelReportMatchStatus;
+
+  submittedBy:    string;
+  notes?:         string;
+  createdAt:      string;
+}

@@ -431,6 +431,78 @@ export type Database = {
           },
         ]
       }
+      fuel_reports: {
+        Row: {
+          asset_id: number
+          created_at: string
+          def_gallons: number | null
+          diesel_gallons: number
+          driver_id: number
+          id: string
+          latitude: number | null
+          longitude: number | null
+          match_status: string
+          notes: string | null
+          odometer: number | null
+          org_id: string
+          reported_at: string
+          state: string
+          submitted_by: string
+          transaction_id: string | null
+        }
+        Insert: {
+          asset_id: number
+          created_at?: string
+          def_gallons?: number | null
+          diesel_gallons: number
+          driver_id: number
+          id?: string
+          latitude?: number | null
+          longitude?: number | null
+          match_status?: string
+          notes?: string | null
+          odometer?: number | null
+          org_id: string
+          reported_at?: string
+          state: string
+          submitted_by: string
+          transaction_id?: string | null
+        }
+        Update: {
+          asset_id?: number
+          created_at?: string
+          def_gallons?: number | null
+          diesel_gallons?: number
+          driver_id?: number
+          id?: string
+          latitude?: number | null
+          longitude?: number | null
+          match_status?: string
+          notes?: string | null
+          odometer?: number | null
+          org_id?: string
+          reported_at?: string
+          state?: string
+          submitted_by?: string
+          transaction_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fuel_reports_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fuel_reports_driver_id_fkey"
+            columns: ["driver_id"]
+            isOneToOne: false
+            referencedRelation: "drivers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invoices: {
         Row: {
           created_at: string

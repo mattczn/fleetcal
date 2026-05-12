@@ -10,7 +10,7 @@
  * each section.
  */
 
-import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
+import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, FuelReport, FuelReportMatchStatus, InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
@@ -808,6 +808,69 @@ export interface VoidInvoiceResponse { invoice: Invoice; }
 // Re-export the status enum from domain for callers that import from
 // this module exclusively.
 export type { InvoiceStatus };
+
+// ── /v1/driver/fuel-reports + /v1/fuel-reports ──────────────────────────
+//
+// Two surfaces share the same data shapes:
+//   - /v1/driver/fuel-reports — auth via Supabase JWT, driver app only.
+//     Scoped to the signed-in driver; the driverId on writes is forced
+//     to match the auth context.
+//   - /v1/fuel-reports        — auth via Clerk org session, dispatch /
+//     accounting surfaces. Sees every report in the org.
+
+/** POST /v1/driver/fuel-reports or /v1/fuel-reports — submit a fuel-up. */
+export interface CreateFuelReportRequest {
+  /** Required on the Clerk-auth path; ignored on /v1/driver where the
+   *  driver is taken from the auth context. */
+  driverId?:      number;
+  assetId:        number;
+  state:          string;        // 2-letter US abbreviation
+  dieselGallons:  number;
+  defGallons?:    number;
+  odometer?:      number;
+  /** ISO timestamp. Defaults to server-side `now()` when omitted. */
+  reportedAt?:    string;
+  latitude?:      number;
+  longitude?:     number;
+  notes?:         string;
+}
+export interface CreateFuelReportResponse { fuelReport: FuelReport; }
+
+/** GET /v1/fuel-reports + /v1/driver/fuel-reports — list with filters.
+ *  All filter params are optional; combining them ANDs them together. */
+export interface ListFuelReportsQuery {
+  /** Inclusive lower bound on reported_at (ISO). */
+  from?:          string;
+  /** Exclusive upper bound on reported_at (ISO). */
+  to?:            string;
+  driverId?:      number;
+  assetId?:       number;
+  matchStatus?:   FuelReportMatchStatus;
+  /** Pagination. Defaults applied server-side. */
+  limit?:         number;
+  offset?:        number;
+}
+export interface ListFuelReportsResponse {
+  fuelReports: FuelReport[];
+  total:       number;
+  limit:       number;
+  offset:      number;
+}
+
+/** PATCH /v1/fuel-reports/:id — edit a report (correct a typo, fix a
+ *  wrong asset selection, etc.). Driver edits go through the same
+ *  endpoint via /v1/driver/fuel-reports/:id which restricts ownership. */
+export interface UpdateFuelReportRequest {
+  assetId?:       number;
+  state?:         string;
+  dieselGallons?: number;
+  defGallons?:    number | null;
+  odometer?:      number | null;
+  reportedAt?:    string;
+  notes?:         string | null;
+  matchStatus?:   FuelReportMatchStatus;
+}
+export interface UpdateFuelReportResponse { fuelReport: FuelReport; }
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

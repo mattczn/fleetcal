@@ -304,6 +304,36 @@ driver.get("/org-settings", async (c) => {
 
 // GET /v1/driver/trailers — list of trailers in the driver's org for the
 // trailer picker. Sort order matches the dispatch app.
+// GET /v1/driver/assets — every non-hidden asset in the driver's org.
+// Used by the fuel-report form (driver picks which truck they're fueling).
+// Returns the lean shape the form needs — full asset detail lives in the
+// dispatch surface.
+driver.get("/assets", async (c) => {
+  const orgId = c.get("orgId");
+  const { data, error } = await supabase
+    .from("assets")
+    .select("id, name, unit, truck, color, type, sort_order")
+    .eq("org_id", orgId)
+    .eq("hidden", false)
+    .order("sort_order", { ascending: true });
+  if (error) {
+    console.error("[GET /v1/driver/assets] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+  const assets = (data ?? []).map((a) => {
+    const r = a as { id: number; name: string; unit: string | null; truck: string | null; color: string; type: string };
+    return {
+      id:    r.id,
+      name:  r.name,
+      unit:  r.unit  ?? undefined,
+      truck: r.truck ?? undefined,
+      color: r.color,
+      type:  r.type,
+    };
+  });
+  return c.json({ assets });
+});
+
 driver.get("/trailers", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
@@ -845,6 +875,148 @@ driver.get("/loads/:id/truck-location", async (c) => {
     locatedAt:   loc.locatedAt,
     description: loc.description,
     color:       assetRow?.color ?? null,
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Fuel reports — driver-side surface. Submit + list-mine.
+//
+// driver_id and submitted_by are forced from the auth context; the
+// driver can't post on behalf of another driver. Dispatch's surface
+// for cross-driver views lives at /v1/fuel-reports (Clerk auth).
+// ─────────────────────────────────────────────────────────────────────────
+
+interface FuelReportRowDriver {
+  id:             string;
+  org_id:         string;
+  driver_id:      number;
+  asset_id:       number;
+  reported_at:    string;
+  state:          string;
+  latitude:       number | null;
+  longitude:      number | null;
+  diesel_gallons: number;
+  def_gallons:    number | null;
+  odometer:       number | null;
+  transaction_id: string | null;
+  match_status:   string;
+  submitted_by:   string;
+  notes:          string | null;
+  created_at:     string;
+}
+
+const FUEL_REPORT_COLS =
+  "id,org_id,driver_id,asset_id,reported_at,state,latitude,longitude," +
+  "diesel_gallons,def_gallons,odometer,transaction_id,match_status," +
+  "submitted_by,notes,created_at";
+
+function rowToFuelReportDriver(r: FuelReportRowDriver) {
+  return {
+    id:            r.id,
+    orgId:         r.org_id,
+    driverId:      r.driver_id,
+    assetId:       r.asset_id,
+    reportedAt:    r.reported_at,
+    state:         r.state,
+    latitude:      r.latitude  ?? undefined,
+    longitude:     r.longitude ?? undefined,
+    dieselGallons: Number(r.diesel_gallons),
+    defGallons:    r.def_gallons != null ? Number(r.def_gallons) : undefined,
+    odometer:      r.odometer ?? undefined,
+    transactionId: r.transaction_id ?? undefined,
+    matchStatus:   r.match_status,
+    submittedBy:   r.submitted_by,
+    notes:         r.notes ?? undefined,
+    createdAt:     r.created_at,
+  };
+}
+
+// POST /v1/driver/fuel-reports — driver submits a fuel-up
+driver.post("/fuel-reports", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "validation_failed", errors: ["invalid JSON"] }, 400); }
+
+  const errors: string[] = [];
+  const assetId       = Number(body.assetId);
+  const dieselGallons = Number(body.dieselGallons);
+  if (!Number.isFinite(assetId)) errors.push("assetId required");
+  if (!Number.isFinite(dieselGallons) || dieselGallons <= 0) errors.push("dieselGallons must be > 0");
+  const stateRaw = typeof body.state === "string" ? body.state.trim().toUpperCase() : "";
+  if (!/^[A-Z]{2}$/.test(stateRaw)) errors.push("state must be 2-letter US abbreviation");
+  if (body.defGallons != null) {
+    const v = Number(body.defGallons);
+    if (!Number.isFinite(v) || v < 0) errors.push("defGallons must be >= 0");
+  }
+  if (body.odometer != null) {
+    const v = Number(body.odometer);
+    if (!Number.isInteger(v) || v < 0) errors.push("odometer must be a non-negative integer");
+  }
+  if (errors.length) return c.json({ error: "validation_failed", errors }, 400);
+
+  // Defensive: make sure the asset belongs to this org. The DB FK
+  // guarantees the asset row exists, but not that it's in our org.
+  const { data: assetRow } = await supabase
+    .from("assets")
+    .select("id")
+    .eq("id", assetId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!assetRow) return c.json({ error: "asset_not_found" }, 404);
+
+  const insertRow = {
+    org_id:         orgId,
+    driver_id:      driverId,
+    asset_id:       assetId,
+    reported_at:    typeof body.reportedAt === "string" ? body.reportedAt : new Date().toISOString(),
+    state:          stateRaw,
+    latitude:       typeof body.latitude  === "number" ? body.latitude  : null,
+    longitude:      typeof body.longitude === "number" ? body.longitude : null,
+    diesel_gallons: dieselGallons,
+    def_gallons:    body.defGallons != null ? Number(body.defGallons) : null,
+    odometer:       body.odometer    != null ? Number(body.odometer)   : null,
+    notes:          typeof body.notes === "string" && body.notes.trim() ? body.notes.trim() : null,
+    submitted_by:   `driver:${driverId}`,
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("fuel_reports")
+    .insert(insertRow as any)
+    .select(FUEL_REPORT_COLS)
+    .single();
+  if (error || !data) {
+    console.error("[POST /v1/driver/fuel-reports] insert failed:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  return c.json({ fuelReport: rowToFuelReportDriver(data as unknown as FuelReportRowDriver) });
+});
+
+// GET /v1/driver/fuel-reports — the driver's own submission history.
+// Useful for the "my recent submissions" rail on the form screen.
+driver.get("/fuel-reports", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const url      = new URL(c.req.url);
+  const limit    = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "20"), 1), 100);
+
+  const { data, error } = await supabase
+    .from("fuel_reports")
+    .select(FUEL_REPORT_COLS)
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .order("reported_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.error("[GET /v1/driver/fuel-reports] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+  return c.json({
+    fuelReports: (data ?? []).map(r => rowToFuelReportDriver(r as unknown as FuelReportRowDriver)),
   });
 });
 

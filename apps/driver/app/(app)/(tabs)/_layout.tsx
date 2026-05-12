@@ -1,6 +1,6 @@
 import React from "react";
 import { Tabs } from "expo-router";
-import { Truck, User, Calendar } from "lucide-react-native";
+import { Truck, User, Calendar, Fuel } from "lucide-react-native";
 import { useNotificationDeepLink } from "@/lib/useNotificationDeepLink";
 
 export default function TabsLayout() {
@@ -39,6 +39,15 @@ export default function TabsLayout() {
           title: "Loads",
           tabBarIcon: ({ color, focused }) => (
             <Truck size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="fuel"
+        options={{
+          title: "Fuel",
+          tabBarIcon: ({ color, focused }) => (
+            <Fuel size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
           ),
         }}
       />
