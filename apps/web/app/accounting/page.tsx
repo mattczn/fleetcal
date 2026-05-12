@@ -23,7 +23,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -65,8 +65,9 @@ const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ s
 type ColKey =
   | 'invoiceNum' | 'loadNum' | 'customer' | 'title'
   | 'rate' | 'accessorials' | 'total'
-  | 'docs' | 'notes'
-  | 'age' | 'released' | 'issued' | 'due' | 'method' | 'sendTo' | 'status' | 'view';
+  | 'docs'
+  | 'age' | 'released' | 'issued' | 'due' | 'method' | 'sendTo' | 'status'
+  | 'flags' | 'view';
 
 interface ColumnDef {
   key:        ColKey;
@@ -103,10 +104,13 @@ const COLUMNS: ColumnDef[] = [
   { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
   { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
   { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
-  { key: 'notes',        label: 'Notes',         align: 'left',  filterable: false, toggleable: true },
   { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
-  // View opens the combined PDF + actions modal. No sort / no
-  // filter. Hidden on Released — no invoice exists yet there.
+  // Inline icons (priority star + notes button). Not a real column —
+  // no header label, no sort, no filter, no toggle. Lives next to
+  // View for the same "row meta" feel /closeout has.
+  { key: 'flags',        label: '',              align: 'left',  filterable: false, toggleable: false },
+  // View opens the combined PDF + actions modal. Hidden on Released
+  // — no invoice exists yet there.
   { key: 'view',         label: '',              align: 'left',  filterable: false, toggleable: false },
 ];
 
@@ -374,7 +378,7 @@ export default function AccountingPage() {
       case 'accessorials': return { sortValue: (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0) };
       case 'total':        return { sortValue: r.invoice?.total ?? (r.load.loadPrice ?? 0) };
       case 'docs':         return { sortValue: 0 };
-      case 'notes':        return { sortValue: (r.load.internalNotes ?? []).length };
+      case 'flags':        return { sortValue: 0 };
       case 'age': {
         // Days since delivery. For relays we want the DELIVERY leg's
         // end (the actual hand-off date), not the pickup leg's end —
@@ -844,9 +848,19 @@ export default function AccountingPage() {
                                   {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
                                 </div>
                               </Td>;
-                            case 'notes':
-                              return <Td key={c.key}>
-                                <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
+                            case 'flags':
+                              // Inline icon group — priority toggle +
+                              // notes button. Same look closeout has
+                              // in its actions cell.
+                              return <Td key={c.key} onClick={e => e.stopPropagation()}>
+                                <div className="inline-flex items-center gap-1">
+                                  <PriorityToggle
+                                    load={load}
+                                    actorName={actorName}
+                                    onAfter={() => void refresh()}
+                                  />
+                                  <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
+                                </div>
                               </Td>;
                             case 'status':
                               return <Td key={c.key}>
@@ -925,6 +939,53 @@ export default function AccountingPage() {
           onSaved={async () => { setNotesTarget(null); await refresh(); }} />
       )}
     </div>
+  );
+}
+
+// ─── PriorityToggle ─────────────────────────────────────────────────────
+//
+// Same toggle behavior /closeout uses — clicking flips the load's
+// priority flag via the closeout PATCH endpoint. The row gets the
+// yellow band + left border via the page's <tr> styling on next
+// render after refresh().
+
+function PriorityToggle({
+  load, actorName, onAfter,
+}: {
+  load:     Load;
+  actorName?: string;
+  onAfter:  () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const on = !!load.priority;
+  async function handleClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const targetId = load.loadId ?? load.id;
+      await railway.updateLoadCloseout(targetId, {
+        action: on ? 'clear_priority' : 'set_priority',
+        actorName,
+      });
+      onAfter();
+    } catch (err) {
+      console.error('[accounting] priority toggle failed:', err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <button onClick={handleClick} disabled={busy}
+      className="rounded-full p-1 transition-colors"
+      title={on ? 'Clear priority' : 'Mark priority'}
+      style={{
+        background: on ? '#fef3c7' : 'transparent',
+        border:     `1px solid ${on ? '#eab308' : 'var(--gc-border)'}`,
+        color:      on ? '#854d0e' : 'var(--gc-text-3)',
+      }}>
+      <Star size={11} fill={on ? '#eab308' : 'none'} />
+    </button>
   );
 }
 

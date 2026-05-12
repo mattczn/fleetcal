@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search, Receipt } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -32,9 +32,8 @@ import ReviewQueue from './ReviewQueue';
 import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
-import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 
-type Tab = 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid';
+type Tab = 'pending' | 'flagged';
 
 const PAGE_SIZE = 50;
 
@@ -96,12 +95,9 @@ const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
 
 const COLS_STORAGE_KEY = 'closeout-cols-v1';
 
-const TABS: { value: Tab; label: string }[] = [
-  { value: 'pending',  label: 'Pending'   },
-  { value: 'flagged',  label: 'Flagged'   },
-  { value: 'verified', label: 'Released'  },
-  { value: 'invoiced', label: 'Invoiced'  },
-  { value: 'paid',     label: 'Paid'      },
+const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
+  { value: 'pending', label: 'Pending', subtitle: 'Awaiting POD',     tint: '#1a73e8' },
+  { value: 'flagged', label: 'Flagged', subtitle: 'Needs follow-up',  tint: '#b45309' },
 ];
 
 function ageDays(deliveredEnd: string): number {
@@ -131,10 +127,6 @@ export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const { user } = useUser();
-  // Per-load in-flight state for the Generate Invoice button so a slow
-  // request doesn't let the user double-fire it (which would 409 on the
-  // unique-active-invoice constraint).
-  const [generatingId, setGeneratingId] = useState<string | null>(null);
   // Clerk readiness gate — without this, a hard refresh on /closeout
   // fires the queue request before RailwayClientProvider has a chance
   // to wire the token (its useEffect runs after children's effects),
@@ -145,8 +137,12 @@ export default function CloseoutView() {
   const [tab, setTab] = useState<Tab>('pending');
   // Per-tab page state — switching tabs preserves where you were.
   const [pageByTab, setPageByTab] = useState<Record<Tab, number>>({
-    pending: 0, flagged: 0, verified: 0, invoiced: 0, paid: 0,
+    pending: 0, flagged: 0,
   });
+  // Live counts shown on both bucket tiles. Pre-fetched on mount and
+  // refreshed alongside the main queue fetch — keeps the inactive
+  // tile's number accurate without forcing a tab switch.
+  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0 });
   const page = pageByTab[tab];
   const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
 
@@ -238,6 +234,23 @@ export default function CloseoutView() {
     }
   };
 
+  // Pull live counts for BOTH buckets in parallel. Cheap (limit: 1
+  // per call, the totals come from the count metadata not the row
+  // payload). Called on mount + after every mutation so the inactive
+  // tile's count doesn't get stale.
+  async function refreshBucketTotals() {
+    try {
+      const [p, f] = await Promise.all([
+        railway.listCloseoutQueue('pending', { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('flagged', { limit: 1 }).catch(() => null),
+      ]);
+      setBucketTotals({
+        pending: p?.total ?? 0,
+        flagged: f?.total ?? 0,
+      });
+    } catch { /* best-effort */ }
+  }
+
   // Render cached data on tab/page/search change, then refresh in the
   // background.
   useEffect(() => {
@@ -247,9 +260,17 @@ export default function CloseoutView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey, authLoaded, isSignedIn]);
 
+  // Pre-fetch counts on first ready render so both bucket tiles
+  // display real numbers immediately.
+  useEffect(() => {
+    if (!authLoaded || !isSignedIn) return;
+    void refreshBucketTotals();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoaded, isSignedIn]);
+
   const refresh = async () => {
     invalidateTab(tab);
-    await fetchAndCache(false);
+    await Promise.all([fetchAndCache(false), refreshBucketTotals()]);
   };
 
   // Dedup relays — one row per load (the pickup leg wins).
@@ -407,7 +428,9 @@ export default function CloseoutView() {
   const clearAllFilters = () => setFilters({});
   const activeFilterCount = Object.values(filters).filter(v => v && v.length > 0).length;
 
-  const tabCount = (t: Tab) => t === tab ? dedup.length : null;
+  // tabCount removed — the bucket tiles use the pre-fetched
+  // bucketTotals instead, so the inactive tile shows a real number
+  // even before the user clicks into it.
 
   async function handleVerify(load: Load) {
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
@@ -432,33 +455,8 @@ export default function CloseoutView() {
     await refresh();
   }
 
-  // Closeout View-invoice opens an InvoiceDetailModal in-place so the
-  // user keeps their position in the queue. The full-page route still
-  // exists for direct links / the Generate-and-send flow.
-  const [invoiceModalId, setInvoiceModalId] = useState<string | null>(null);
-
-  async function handleViewInvoice(load: Load) {
-    const loadId = load.loadId ?? load.id;
-    if (generatingId) return;
-    setGeneratingId(loadId);
-    try {
-      const { invoices: existing } = await railway.listInvoices({ loadId });
-      // Prefer the non-void invoice (there can be at most one active).
-      // If we somehow only have voids, fall back to the newest.
-      const active = existing.find(i => i.status !== 'void');
-      const target = active ?? existing[0];
-      if (target) {
-        setInvoiceModalId(target.id);
-      } else {
-        window.alert('No invoice found for this load.');
-      }
-    } catch (err) {
-      console.error('[closeout] viewInvoice failed:', err);
-      window.alert('Failed to look up invoice.');
-    } finally {
-      setGeneratingId(null);
-    }
-  }
+  // Invoice viewing lives on /accounting now — closeout only handles
+  // pre-release work (POD verification + flagging).
 
   async function handleTogglePriority(load: Load) {
     const targetId = load.loadId ?? load.id;
@@ -643,30 +641,38 @@ export default function CloseoutView() {
             )}
           </div>
 
-          {/* Tab pills */}
-          <div className="flex items-center gap-1.5">
-            {TABS.map(({ value, label }) => {
-              const active = tab === value;
-              const count = tabCount(value);
+          {/* Bucket tiles — same visual rhythm as /accounting. Each
+              tile shows live count + subtitle and toggles which queue
+              the table below is showing. */}
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            {TABS.map(b => {
+              const active = tab === b.value;
+              const count = bucketTotals[b.value];
+              const Icon = b.value === 'pending' ? Clock : Flag;
               return (
-                <button key={value} onClick={() => setTab(value)}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[13px] font-semibold transition-colors"
+                <button key={b.value}
+                  onClick={() => setTab(b.value)}
+                  className="text-left px-4 py-3 rounded-xl transition-all"
                   style={{
-                    border: `1px solid ${active ? '#1a73e8' : 'var(--gc-border)'}`,
-                    background: active ? '#1a73e8' : 'var(--gc-surface)',
-                    color: active ? '#fff' : 'var(--gc-text-2)',
+                    background: 'var(--gc-surface)',
+                    border: active ? `2px solid ${b.tint}` : '1px solid var(--gc-border-light)',
+                    boxShadow: active ? '0 4px 12px rgba(26,115,232,0.12)' : 'var(--shadow-1)',
                   }}>
-                  {label}
-                  {count != null && (
-                    <span style={{
-                      background: active ? 'rgba(255,255,255,0.22)' : 'var(--gc-border-light)',
-                      color: active ? '#fff' : 'var(--gc-text-3)',
-                      padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700,
-                    }}>{count}</span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <Icon size={16} style={{ color: b.tint }} />
+                    <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
+                    <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
+                  </div>
+                  <div className="mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                    {b.subtitle}
+                  </div>
                 </button>
               );
             })}
+          </div>
+
+          {/* Toolbar — review queue, columns, refresh */}
+          <div className="flex items-center gap-1.5">
             <div className="flex-1" />
             {(tab === 'pending' || tab === 'flagged') && visible.length > 0 && (
               <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
@@ -676,15 +682,6 @@ export default function CloseoutView() {
                 onMouseLeave={e => (e.currentTarget.style.background = '#15803d')}>
                 <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
-            )}
-            {(tab === 'verified' || tab === 'invoiced' || tab === 'paid') && (
-              // Released and beyond is accounting's surface. Link
-              // there so the user has a clear next step.
-              <Link href="/accounting"
-                className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                style={{ background: '#1a73e8', color: '#fff' }}>
-                <Receipt size={12} /> Go to Accounting
-              </Link>
             )}
             {/* Columns visibility menu */}
             <div className="relative" ref={colsMenuRef}>
@@ -962,27 +959,6 @@ export default function CloseoutView() {
                                   </button>
                                 )}
                               </>
-                            ) : tab === 'verified' ? (
-                              // Released → handoff complete. Operations
-                              // is done; billing lives on /accounting.
-                              // No actions here intentionally — see the
-                              // "Go to Accounting" link in the toolbar.
-                              <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
-                            ) : tab === 'invoiced' || tab === 'paid' ? (
-                              // Already invoiced — jump to the saved
-                              // invoice. Resolves the invoice id at click
-                              // time so we don't have to denormalize it
-                              // onto the closeout queue.
-                              <button onClick={() => void handleViewInvoice(load)}
-                                disabled={generatingId === (load.loadId ?? load.id)}
-                                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-60"
-                                style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
-                                title="View saved invoice">
-                                {generatingId === (load.loadId ?? load.id)
-                                  ? <Loader2 size={11} className="animate-spin" style={{ display: 'inline', marginRight: 3 }} />
-                                  : <FileText size={11} style={{ display: 'inline', marginRight: 3 }} />}
-                                View invoice
-                              </button>
                             ) : null}
                           </div>
                         </Td>
@@ -1030,16 +1006,6 @@ export default function CloseoutView() {
       {/* Customer profile modal */}
       {brokerProfileId && (
         <BrokerProfileModal initialBrokerId={brokerProfileId} onClose={() => setBrokerProfileId(null)} />
-      )}
-
-      {/* Invoice popup — opened by the View-invoice button on the
-          invoiced/paid tabs. Stays mounted so the user keeps their
-          place in the queue. */}
-      {invoiceModalId && (
-        <InvoiceDetailModal
-          invoiceId={invoiceModalId}
-          onClose={() => { setInvoiceModalId(null); void refresh(); }}
-        />
       )}
 
       {/* Focused review queue overlay */}
@@ -1281,11 +1247,8 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
     );
   }
   const messages: Record<Tab, { icon: React.ReactNode; title: string; sub: string }> = {
-    pending:  { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been released or flagged.' },
-    flagged:  { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads', sub: 'Anything that needs follow-up will show here.' },
-    verified: { icon: <Clock        size={28} style={{ color: '#1a73e8' }} />, title: 'Nothing waiting on accounting', sub: 'Released loads ready to invoice will land here.' },
-    invoiced: { icon: <FileText     size={28} style={{ color: 'var(--gc-text-3)' }} />, title: 'No invoiced loads', sub: 'Loads sent to brokers but unpaid will show here.' },
-    paid:     { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'No paid loads in view', sub: 'Closed-out loads will show here.' },
+    pending: { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been released or flagged.' },
+    flagged: { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads', sub: 'Anything that needs follow-up will show here.' },
   };
   const m = messages[tab];
   return (
