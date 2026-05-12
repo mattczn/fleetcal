@@ -710,11 +710,18 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({ drivers: state.drivers.map((d) => (d.id === id ? { ...d, ...updates } : d)) }));
     if (get().isDemo) return;
     const body = {
-      ...(updates.name      !== undefined ? { name: updates.name } : {}),
-      ...(updates.firstName !== undefined ? { firstName: updates.firstName ?? null } : {}),
-      ...(updates.lastName  !== undefined ? { lastName: updates.lastName ?? null } : {}),
-      ...(updates.phone     !== undefined ? { phone: normalizePhone(updates.phone) } : {}),
-      ...(updates.notes     !== undefined ? { notes: updates.notes ?? null } : {}),
+      ...(updates.name           !== undefined ? { name: updates.name } : {}),
+      ...(updates.firstName      !== undefined ? { firstName: updates.firstName ?? null } : {}),
+      ...(updates.lastName       !== undefined ? { lastName: updates.lastName ?? null } : {}),
+      ...(updates.phone          !== undefined ? { phone: normalizePhone(updates.phone) } : {}),
+      ...(updates.notes          !== undefined ? { notes: updates.notes ?? null } : {}),
+      ...(updates.email          !== undefined ? { email: updates.email ?? null } : {}),
+      ...(updates.address        !== undefined ? { address: updates.address ?? null } : {}),
+      ...(updates.licenseNumber  !== undefined ? { licenseNumber: updates.licenseNumber ?? null } : {}),
+      ...(updates.licenseState   !== undefined ? { licenseState: updates.licenseState ?? null } : {}),
+      ...(updates.licenseExp     !== undefined ? { licenseExp: updates.licenseExp ?? null } : {}),
+      ...(updates.medicalCardExp !== undefined ? { medicalCardExp: updates.medicalCardExp ?? null } : {}),
+      ...(updates.dob            !== undefined ? { dob: updates.dob ?? null } : {}),
     };
     if (Object.keys(body).length === 0) return;
     railway.updateDriver(id, body).catch((err) => console.error('updateDriver:', err));

@@ -132,6 +132,37 @@ export interface Driver {
   lastName?: string;
   phone?: string;
   notes?: string;
+
+  // HR / compliance fields. All optional; filled in by the driver
+  // via the driver app or by ops via the DriversModal.
+  email?: string;
+  address?: string;            // single text field — entered structured client-side
+  licenseNumber?: string;
+  licenseState?: string;       // 2-letter US abbreviation
+  licenseExp?: string;         // YYYY-MM-DD
+  medicalCardExp?: string;     // YYYY-MM-DD
+  dob?: string;                // YYYY-MM-DD
+}
+
+export type DriverDocumentKind = 'license' | 'medical_card' | 'mvr' | 'other';
+export const DRIVER_DOCUMENT_KINDS: readonly DriverDocumentKind[] = [
+  'license', 'medical_card', 'mvr', 'other',
+];
+
+export interface DriverDocument {
+  id:          string;
+  orgId:       string;
+  driverId:    number;
+  kind:        DriverDocumentKind;
+  fileName:    string;
+  mimeType?:   string;
+  sizeBytes?:  number;
+  expiresOn?:  string;          // YYYY-MM-DD
+  notes?:      string;
+  uploadedAt:  string;
+  uploadedBy:  string;
+  /** 1-hour signed URL minted by list/get endpoints. */
+  signedUrl?:  string;
 }
 
 // ── Asset (the assets table — trucks/vehicles) ──────────────────────────

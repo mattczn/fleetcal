@@ -87,13 +87,20 @@ export class RailwayError extends Error {
 class RailwayClient {
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = _getToken ? await _getToken() : null;
+    // FormData bodies: let the browser set Content-Type (with boundary)
+    // and pass through unchanged. JSON bodies get the explicit header
+    // and are stringified.
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+    const headers: Record<string, string> = {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    };
     const res = await fetch(`${BASE_URL}${path}`, {
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      headers,
+      ...(body !== undefined
+        ? { body: isFormData ? (body as FormData) : JSON.stringify(body) }
+        : {}),
     });
     if (!res.ok) {
       // Read the body once — calling .json() consumes the stream even on
@@ -272,6 +279,24 @@ class RailwayClient {
     return this.req<UpdateDriverResponse>('PATCH', `/v1/drivers/${id}`, body);
   }
   deleteDriver(id: number)                   { return this.req<void>('DELETE', `/v1/drivers/${id}`); }
+
+  // Driver documents (ops surface)
+  listDriverDocuments(driverId: number) {
+    return this.req<{ documents: import('@fleetcal/types').DriverDocument[] }>(
+      'GET', `/v1/drivers/${driverId}/documents`,
+    );
+  }
+  uploadDriverDocument(driverId: number, form: FormData) {
+    return this.req<{ document: import('@fleetcal/types').DriverDocument }>(
+      'POST', `/v1/drivers/${driverId}/documents`, form,
+    );
+  }
+  deleteDriverDocument(documentId: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/driver-documents/${documentId}`);
+  }
+  getDriverDocumentUrl(documentId: string) {
+    return this.req<{ url: string }>('GET', `/v1/driver-documents/${documentId}/url`);
+  }
 
   listCustomers()                            { return this.req<ListCustomersResponse>('GET', '/v1/customers'); }
   createCustomer(body: CreateCustomerRequest) { return this.req<CreateCustomerResponse>('POST', '/v1/customers', body); }

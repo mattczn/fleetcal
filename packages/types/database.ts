@@ -260,36 +260,110 @@ export type Database = {
       }
       drivers: {
         Row: {
+          address: string | null
           created_at: string
+          dob: string | null
+          email: string | null
           first_name: string | null
           id: number
           last_name: string | null
+          license_exp: string | null
+          license_number: string | null
+          license_state: string | null
+          medical_card_exp: string | null
           name: string
           notes: string | null
           org_id: string
           phone: string | null
         }
         Insert: {
+          address?: string | null
           created_at?: string
+          dob?: string | null
+          email?: string | null
           first_name?: string | null
           id?: number
           last_name?: string | null
+          license_exp?: string | null
+          license_number?: string | null
+          license_state?: string | null
+          medical_card_exp?: string | null
           name: string
           notes?: string | null
           org_id: string
           phone?: string | null
         }
         Update: {
+          address?: string | null
           created_at?: string
+          dob?: string | null
+          email?: string | null
           first_name?: string | null
           id?: number
           last_name?: string | null
+          license_exp?: string | null
+          license_number?: string | null
+          license_state?: string | null
+          medical_card_exp?: string | null
           name?: string
           notes?: string | null
           org_id?: string
           phone?: string | null
         }
         Relationships: []
+      }
+      driver_documents: {
+        Row: {
+          driver_id: number
+          expires_on: string | null
+          file_name: string
+          id: string
+          kind: string
+          mime_type: string | null
+          notes: string | null
+          org_id: string
+          size_bytes: number | null
+          storage_path: string
+          uploaded_at: string
+          uploaded_by: string
+        }
+        Insert: {
+          driver_id: number
+          expires_on?: string | null
+          file_name: string
+          id?: string
+          kind: string
+          mime_type?: string | null
+          notes?: string | null
+          org_id: string
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_at?: string
+          uploaded_by: string
+        }
+        Update: {
+          driver_id?: number
+          expires_on?: string | null
+          file_name?: string
+          id?: string
+          kind?: string
+          mime_type?: string | null
+          notes?: string | null
+          org_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_at?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "driver_documents_driver_id_fkey"
+            columns: ["driver_id"]
+            isOneToOne: false
+            referencedRelation: "drivers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       events: {
         Row: {

@@ -36,6 +36,42 @@ const STATUS_META: Record<string, { label: string; color: string; bg: string }> 
   cancelled:  { label: 'Cancelled',  color: '#d93025', bg: '#fce8e6' },
 };
 
+// ── Address ↔ structured parts ──────────────────────────────────────────
+// Mirrors the driver-app parse/join. Single text field on disk, four
+// structured inputs in the UI.
+function parseAddress(s: string | undefined): { street: string; city: string; state: string; zip: string } {
+  const empty = { street: '', city: '', state: '', zip: '' };
+  if (!s) return empty;
+  const m = s.match(/^(.*?),\s*(.*?),\s*([A-Z]{2})(?:\s+(\d{5}(?:-\d{4})?))?$/);
+  if (m) return { street: m[1].trim(), city: m[2].trim(), state: m[3], zip: m[4] ?? '' };
+  return { street: s, city: '', state: '', zip: '' };
+}
+
+function joinAddress(p: { street: string; city: string; state: string; zip: string }): string | undefined {
+  const parts: string[] = [];
+  if (p.street.trim()) parts.push(p.street.trim());
+  if (p.city.trim())   parts.push(p.city.trim());
+  const tail = [p.state.trim().toUpperCase(), p.zip.trim()].filter(Boolean).join(' ');
+  if (tail) parts.push(tail);
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
+// MM/DD/YYYY ⇄ YYYY-MM-DD
+function isoToDisplay(iso?: string | null): string {
+  if (!iso) return '';
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return iso;
+  return `${m[2]}/${m[3]}/${m[1]}`;
+}
+function displayToIso(display: string): string | null {
+  const t = display.trim();
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const us = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
+  return null;
+}
+
 function driverDisplayName(d: Driver): string {
   const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
   return full || d.name;
@@ -297,6 +333,20 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
   const [lastName,  setLastName]  = useState(driver.lastName  ?? '');
   const [phone,     setPhone]     = useState(driver.phone     ?? '');
   const [notes,     setNotes]     = useState(driver.notes     ?? '');
+  const [email,         setEmail]         = useState(driver.email         ?? '');
+  const initialAddr = parseAddress(driver.address);
+  const [addrStreet,    setAddrStreet]    = useState(initialAddr.street);
+  const [addrCity,      setAddrCity]      = useState(initialAddr.city);
+  const [addrState,     setAddrState]     = useState(initialAddr.state);
+  const [addrZip,       setAddrZip]       = useState(initialAddr.zip);
+  const [licenseNumber, setLicenseNumber] = useState(driver.licenseNumber ?? '');
+  const [licenseState,  setLicenseState]  = useState(driver.licenseState  ?? '');
+  const [licenseExp,    setLicenseExp]    = useState(driver.licenseExp    ?? '');
+  const [medCardExp,    setMedCardExp]    = useState(driver.medicalCardExp ?? '');
+  const [dob,           setDob]           = useState(driver.dob           ?? '');
+  const [documents,     setDocuments]     = useState<import('@fleetcal/types').DriverDocument[]>([]);
+  const [docsLoading,   setDocsLoading]   = useState(false);
+  const [uploadingKind, setUploadingKind] = useState<import('@fleetcal/types').DriverDocumentKind | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [payHistory,    setPayHistory]    = useState<PayrollRecord[]>([]);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -349,6 +399,70 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
     .filter(ev => ev.driverName === driver.name)
     .sort((a, b) => b.start.localeCompare(a.start))
     .slice(0, 10);
+
+  // ── Documents ──
+  // Load once per driver (the component remounts via `key` on driver
+  // switch, so we don't need to watch driver.id here).
+  useEffect(() => {
+    let alive = true;
+    setDocsLoading(true);
+    void (async () => {
+      try {
+        const { railway } = await import('@/lib/railway');
+        const res = await railway.listDriverDocuments(driver.id);
+        if (alive) setDocuments(res.documents);
+      } catch (err) {
+        console.warn('[DriversModal] load documents:', err);
+      } finally {
+        if (alive) setDocsLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function uploadDoc(kind: import('@fleetcal/types').DriverDocumentKind, file: File) {
+    setUploadingKind(kind);
+    try {
+      const { railway } = await import('@/lib/railway');
+      const form = new FormData();
+      form.append('file', file);
+      form.append('kind', kind);
+      await railway.uploadDriverDocument(driver.id, form);
+      const res = await railway.listDriverDocuments(driver.id);
+      setDocuments(res.documents);
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setUploadingKind(null);
+    }
+  }
+
+  async function deleteDoc(docId: string) {
+    if (!confirm('Delete this document?')) return;
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.deleteDriverDocument(docId);
+      setDocuments(prev => prev.filter(d => d.id !== docId));
+    } catch (err) {
+      alert(`Delete failed: ${(err as Error).message}`);
+    }
+  }
+
+  const DOC_KINDS: { key: import('@fleetcal/types').DriverDocumentKind; label: string }[] = [
+    { key: 'license',      label: 'License' },
+    { key: 'medical_card', label: 'Medical Card' },
+    { key: 'mvr',          label: 'MVR' },
+    { key: 'other',        label: 'Other' },
+  ];
+
+  function saveAddress(next: { street: string; city: string; state: string; zip: string }) {
+    updateDriver(driver.id, { address: joinAddress(next) ?? undefined });
+  }
+  // value from <input type="date"> is already ISO YYYY-MM-DD or "".
+  function saveDateIso(field: 'licenseExp' | 'medicalCardExp' | 'dob', iso: string) {
+    updateDriver(driver.id, { [field]: iso.trim() || undefined });
+  }
 
   return (
     <div className="px-8 py-7">
@@ -406,17 +520,30 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
           </PField>
         </div>
 
-        <PField label="Phone">
-          <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
-            placeholder="(555) 555-5555" style={P_INPUT}
-            onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
-            onBlur={e => {
-              const v = e.target.value.trim();
-              setPhone(v);
-              updateDriver(driver.id, { phone: v || undefined });
-              e.currentTarget.style.borderColor = 'var(--gc-border)';
-            }} />
-        </PField>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <PField label="Phone">
+            <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
+              placeholder="(555) 555-5555" style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                setPhone(v);
+                updateDriver(driver.id, { phone: v || undefined });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+          <PField label="Email">
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="name@example.com" style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                setEmail(v);
+                updateDriver(driver.id, { email: v || undefined });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+        </div>
 
         <div className="mt-4">
           <PField label="Notes">
@@ -439,6 +566,188 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
               }} />
           </PField>
         </div>
+      </div>
+
+      {/* Address */}
+      <div className="mb-8">
+        <div className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--gc-text-3)' }}>
+          Address
+        </div>
+        <PField label="Street">
+          <input type="text" value={addrStreet} onChange={e => setAddrStreet(e.target.value)}
+            placeholder="123 Main St" style={P_INPUT}
+            onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+            onBlur={e => {
+              const v = e.target.value;
+              setAddrStreet(v);
+              saveAddress({ street: v, city: addrCity, state: addrState, zip: addrZip });
+              e.currentTarget.style.borderColor = 'var(--gc-border)';
+            }} />
+        </PField>
+        <div className="grid gap-4 mt-4" style={{ gridTemplateColumns: '1fr 100px 120px' }}>
+          <PField label="City">
+            <input type="text" value={addrCity} onChange={e => setAddrCity(e.target.value)}
+              placeholder="Salt Lake City" style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value;
+                setAddrCity(v);
+                saveAddress({ street: addrStreet, city: v, state: addrState, zip: addrZip });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+          <PField label="State">
+            <input type="text" value={addrState} onChange={e => setAddrState(e.target.value.toUpperCase().slice(0, 2))}
+              placeholder="UT" maxLength={2} style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value.toUpperCase().slice(0, 2);
+                setAddrState(v);
+                saveAddress({ street: addrStreet, city: addrCity, state: v, zip: addrZip });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+          <PField label="Zip">
+            <input type="text" value={addrZip} onChange={e => setAddrZip(e.target.value.replace(/[^\d-]/g, '').slice(0, 10))}
+              placeholder="84101" style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value;
+                setAddrZip(v);
+                saveAddress({ street: addrStreet, city: addrCity, state: addrState, zip: v });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+        </div>
+      </div>
+
+      {/* License */}
+      <div className="mb-8">
+        <div className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--gc-text-3)' }}>
+          License
+        </div>
+        <div className="grid gap-4" style={{ gridTemplateColumns: '2fr 100px' }}>
+          <PField label="License #">
+            <input type="text" value={licenseNumber} onChange={e => setLicenseNumber(e.target.value.toUpperCase())}
+              placeholder="D1234567" style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                setLicenseNumber(v);
+                updateDriver(driver.id, { licenseNumber: v || undefined });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+          <PField label="State">
+            <input type="text" value={licenseState} onChange={e => setLicenseState(e.target.value.toUpperCase().slice(0, 2))}
+              placeholder="UT" maxLength={2} style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                const v = e.target.value.toUpperCase().slice(0, 2);
+                setLicenseState(v);
+                updateDriver(driver.id, { licenseState: v || undefined });
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+        </div>
+        <div className="mt-4">
+          <PField label="Expiration">
+            <input type="date" value={licenseExp} onChange={e => setLicenseExp(e.target.value)}
+              style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                saveDateIso('licenseExp', e.target.value);
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+        </div>
+      </div>
+
+      {/* Compliance */}
+      <div className="mb-8">
+        <div className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--gc-text-3)' }}>
+          Compliance
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <PField label="Medical Card Exp.">
+            <input type="date" value={medCardExp} onChange={e => setMedCardExp(e.target.value)}
+              style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                saveDateIso('medicalCardExp', e.target.value);
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+          <PField label="Date of Birth">
+            <input type="date" value={dob} onChange={e => setDob(e.target.value)}
+              style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => {
+                saveDateIso('dob', e.target.value);
+                e.currentTarget.style.borderColor = 'var(--gc-border)';
+              }} />
+          </PField>
+        </div>
+      </div>
+
+      {/* Documents */}
+      <div className="mb-8">
+        <div className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--gc-text-3)' }}>
+          Documents
+        </div>
+        {docsLoading ? (
+          <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+            <Loader2 size={14} className="animate-spin" /> Loading…
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {DOC_KINDS.map((k, idx) => {
+              const forKind = documents.filter(d => d.kind === k.key);
+              return (
+                <div key={k.key}
+                  style={{ paddingTop: idx === 0 ? 0 : 12, borderTop: idx === 0 ? 'none' : '1px solid var(--gc-border-light)' }}>
+                  <div className="flex items-center mb-2">
+                    <span className="text-sm font-semibold flex-1" style={{ color: 'var(--gc-text-1)' }}>{k.label}</span>
+                    <label
+                      className="text-xs font-semibold px-2.5 py-1 rounded-lg cursor-pointer flex items-center gap-1"
+                      style={{ background: '#e8f0fe', color: ACCENT, opacity: uploadingKind === k.key ? 0.6 : 1 }}>
+                      {uploadingKind === k.key ? <Loader2 size={11} className="animate-spin" /> : '+'} Upload
+                      <input type="file" hidden
+                        accept="image/*,application/pdf"
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0];
+                          if (f) await uploadDoc(k.key, f);
+                          (e.currentTarget as HTMLInputElement).value = '';
+                        }} />
+                    </label>
+                  </div>
+                  {forKind.length === 0 ? (
+                    <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>None uploaded.</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {forKind.map(d => (
+                        <div key={d.id}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                          style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+                          <span className="text-xs truncate flex-1" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</span>
+                          <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                            {new Date(d.uploadedAt).toLocaleDateString()}
+                          </span>
+                          {d.signedUrl && (
+                            <a href={d.signedUrl} target="_blank" rel="noopener noreferrer"
+                              className="text-xs font-medium" style={{ color: ACCENT }}>View</a>
+                          )}
+                          <button onClick={() => deleteDoc(d.id)}
+                            className="text-xs font-medium" style={{ color: '#b91c1c' }}>Delete</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Recent loads */}

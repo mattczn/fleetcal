@@ -134,13 +134,98 @@ function buildLoads(
 // Routes
 // ─────────────────────────────────────────────────────────────────────────
 
-driver.get("/me", (c) => {
+driver.get("/me", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const { data } = await supabase
+    .from("drivers")
+    .select("id,name,first_name,last_name,phone,notes,email,address," +
+            "license_number,license_state,license_exp,medical_card_exp,dob")
+    .eq("id", driverId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const row = data as {
+    id: number; name: string; first_name: string | null; last_name: string | null;
+    phone: string | null; notes: string | null; email: string | null;
+    address: string | null; license_number: string | null; license_state: string | null;
+    license_exp: string | null; medical_card_exp: string | null; dob: string | null;
+  } | null;
   return c.json({
-    driverId:   c.get("driverId"),
-    orgId:      c.get("orgId"),
-    name:       c.get("driverName"),
-    phone:      c.get("phone"),
+    driverId,
+    orgId,
+    name:           row?.name ?? c.get("driverName"),
+    firstName:      row?.first_name      ?? undefined,
+    lastName:       row?.last_name       ?? undefined,
+    phone:          row?.phone           ?? c.get("phone"),
+    email:          row?.email           ?? undefined,
+    address:        row?.address         ?? undefined,
+    licenseNumber:  row?.license_number  ?? undefined,
+    licenseState:   row?.license_state   ?? undefined,
+    licenseExp:     row?.license_exp     ?? undefined,
+    medicalCardExp: row?.medical_card_exp?? undefined,
+    dob:            row?.dob             ?? undefined,
+    notes:          row?.notes           ?? undefined,
   });
+});
+
+// PATCH /v1/driver/me — driver edits their own HR / compliance fields.
+// The driver can NOT change their own `name`, `notes`, or org binding
+// (those are ops decisions); everything else is fair game.
+driver.patch("/me", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "validation_failed", errors: ["invalid JSON"] }, 400); }
+
+  const update: Record<string, unknown> = {};
+  if ("firstName"      in body) update.first_name       = body.firstName      ?? null;
+  if ("lastName"       in body) update.last_name        = body.lastName       ?? null;
+  if ("phone"          in body) update.phone            = body.phone          ?? null;
+  if ("email"          in body) update.email            = body.email          ?? null;
+  if ("address"        in body) update.address          = body.address        ?? null;
+  if ("licenseNumber"  in body) update.license_number   = body.licenseNumber  ?? null;
+  if ("licenseState"   in body) {
+    update.license_state = typeof body.licenseState === "string" && body.licenseState.trim()
+      ? body.licenseState.toUpperCase() : null;
+  }
+  if ("licenseExp"     in body) update.license_exp      = body.licenseExp     ?? null;
+  if ("medicalCardExp" in body) update.medical_card_exp = body.medicalCardExp ?? null;
+  if ("dob"            in body) update.dob              = body.dob            ?? null;
+
+  if (Object.keys(update).length === 0) {
+    return c.json({ error: "validation_failed", errors: ["no fields"] }, 400);
+  }
+
+  // Keep `name` in sync if first/last changed. Drivers don't edit name
+  // directly, but we want the display name updated when they fill in
+  // first/last name for the first time.
+  if (("first_name" in update || "last_name" in update)) {
+    const { data: cur } = await supabase
+      .from("drivers")
+      .select("first_name,last_name,name")
+      .eq("id", driverId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const curRow = cur as { first_name: string | null; last_name: string | null; name: string } | null;
+    const nextFirst = ("first_name" in update ? update.first_name : curRow?.first_name) as string | null;
+    const nextLast  = ("last_name"  in update ? update.last_name  : curRow?.last_name)  as string | null;
+    const joined = [nextFirst, nextLast].filter(Boolean).join(" ").trim();
+    if (joined && joined !== curRow?.name) update.name = joined;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await supabase
+    .from("drivers")
+    .update(update as any)
+    .eq("id", driverId)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[PATCH /v1/driver/me] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
 });
 
 // GET /v1/driver/loads — every (non-deleted) load assigned to the auth'd
@@ -1285,6 +1370,165 @@ driver.get("/maintenance-reports/history", async (c) => {
   return c.json({
     reports: (data ?? []).map((r: unknown) => rowToMaintReportDriver(r as MaintReportRowDriver)),
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Driver documents — driver self-service.
+//   POST /v1/driver/documents       — upload (multipart: file + kind)
+//   GET  /v1/driver/documents       — list mine
+//   DELETE /v1/driver/documents/:id — remove mine
+// The ops surface (/v1/drivers/:id/documents) writes to the same table.
+// ─────────────────────────────────────────────────────────────────────────
+
+const DRIVER_DOC_BUCKET_SELF = "driver-documents";
+const DRIVER_DOC_KINDS_SELF = ['license','medical_card','mvr','other'] as const;
+type DriverDocKindSelf = typeof DRIVER_DOC_KINDS_SELF[number];
+
+interface DriverDocRowSelf {
+  id:           string;
+  org_id:       string;
+  driver_id:    number;
+  kind:         string;
+  storage_path: string;
+  file_name:    string;
+  mime_type:    string | null;
+  size_bytes:   number | null;
+  expires_on:   string | null;
+  notes:        string | null;
+  uploaded_at:  string;
+  uploaded_by:  string;
+}
+
+const DRIVER_DOC_COLS_SELF =
+  "id,org_id,driver_id,kind,storage_path,file_name,mime_type,size_bytes," +
+  "expires_on,notes,uploaded_at,uploaded_by";
+
+function rowToDriverDocSelf(r: DriverDocRowSelf, signedUrl?: string) {
+  return {
+    id:         r.id,
+    orgId:      r.org_id,
+    driverId:   r.driver_id,
+    kind:       r.kind as DriverDocKindSelf,
+    fileName:   r.file_name,
+    mimeType:   r.mime_type ?? undefined,
+    sizeBytes:  r.size_bytes ?? undefined,
+    expiresOn:  r.expires_on ?? undefined,
+    notes:      r.notes ?? undefined,
+    uploadedAt: r.uploaded_at,
+    uploadedBy: r.uploaded_by,
+    signedUrl,
+  };
+}
+
+driver.post("/documents", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  let body: { file?: File; kind?: string; expiresOn?: string; notes?: string };
+  try { body = await c.req.parseBody() as typeof body; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400); }
+
+  const file = body.file;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
+  }
+  const kind = (body.kind ?? "other").toString() as DriverDocKindSelf;
+  if (!(DRIVER_DOC_KINDS_SELF as readonly string[]).includes(kind)) {
+    return c.json({ error: "validation_failed", errors: [`kind must be one of ${DRIVER_DOC_KINDS_SELF.join("|")}`] }, 400);
+  }
+
+  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${driverId}/${kind}_${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: upErr } = await supabase.storage
+    .from(DRIVER_DOC_BUCKET_SELF)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (upErr) {
+    console.error("[POST /v1/driver/documents] storage:", upErr);
+    return c.json({ error: "upload_failed", detail: upErr.message }, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("driver_documents")
+    .insert({
+      org_id:       orgId,
+      driver_id:    driverId,
+      kind,
+      storage_path: storagePath,
+      file_name:    file.name,
+      mime_type:    file.type || null,
+      size_bytes:   bytes.length,
+      expires_on:   body.expiresOn?.trim() || null,
+      notes:        body.notes?.trim() || null,
+      uploaded_by:  `driver:${driverId}`,
+    } as any)
+    .select(DRIVER_DOC_COLS_SELF)
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(DRIVER_DOC_BUCKET_SELF).remove([storagePath]);
+    console.error("[POST /v1/driver/documents] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  const { data: signed } = await supabase.storage.from(DRIVER_DOC_BUCKET_SELF).createSignedUrl(storagePath, 3600);
+  return c.json({ document: rowToDriverDocSelf(data as unknown as DriverDocRowSelf, signed?.signedUrl) });
+});
+
+driver.get("/documents", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  const { data, error } = await supabase
+    .from("driver_documents")
+    .select(DRIVER_DOC_COLS_SELF)
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .order("uploaded_at", { ascending: false });
+  if (error) return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  const rows = (data ?? []) as unknown as DriverDocRowSelf[];
+  if (rows.length === 0) return c.json({ documents: [] });
+
+  const paths = rows.map(r => r.storage_path);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: signed } = await supabase.storage.from(DRIVER_DOC_BUCKET_SELF).createSignedUrls(paths, 3600);
+  const urlByPath = new Map<string, string>();
+  for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+    urlByPath.set(s.path, s.signedUrl);
+  }
+  return c.json({
+    documents: rows.map(r => rowToDriverDocSelf(r, urlByPath.get(r.storage_path))),
+  });
+});
+
+driver.delete("/documents/:id", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id       = c.req.param("id");
+
+  // Ownership check + path lookup in one round trip.
+  const { data } = await supabase
+    .from("driver_documents")
+    .select("storage_path, driver_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const row = data as { storage_path: string; driver_id: number } | null;
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.driver_id !== driverId) return c.json({ error: "not_authorized" }, 403);
+
+  const { error } = await supabase
+    .from("driver_documents")
+    .delete()
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (error) return c.json({ error: "delete_failed", detail: error.message }, 500);
+  void supabase.storage.from(DRIVER_DOC_BUCKET_SELF).remove([row.storage_path]);
+  return c.json({ ok: true });
 });
 
 // POST /v1/driver/fuel-reports/:id/photos — upload a receipt photo.

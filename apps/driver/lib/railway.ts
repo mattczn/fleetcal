@@ -66,15 +66,56 @@ async function req<T>(
 // ── Driver identity ────────────────────────────────────────────────────
 
 export interface DriverMeResponse {
-  driverId: number;
-  orgId:    string;
-  name:     string;
-  phone:    string;
+  driverId:        number;
+  orgId:           string;
+  name:            string;
+  firstName?:      string;
+  lastName?:       string;
+  phone:           string;
+  email?:          string;
+  address?:        string;
+  licenseNumber?:  string;
+  licenseState?:   string;
+  licenseExp?:     string;
+  medicalCardExp?: string;
+  dob?:            string;
+  notes?:          string;
+}
+
+export interface DriverProfileUpdate {
+  firstName?:      string | null;
+  lastName?:       string | null;
+  phone?:          string | null;
+  email?:          string | null;
+  address?:        string | null;
+  licenseNumber?:  string | null;
+  licenseState?:   string | null;
+  licenseExp?:     string | null;
+  medicalCardExp?: string | null;
+  dob?:            string | null;
 }
 
 export const railway = {
   // Identity
   me() { return req<DriverMeResponse>("GET", "/v1/driver/me"); },
+  updateMe(body: DriverProfileUpdate) {
+    return req<{ ok: true }>("PATCH", "/v1/driver/me", body);
+  },
+
+  // Driver documents (self)
+  listMyDocuments() {
+    return req<{ documents: import("@fleetcal/types").DriverDocument[] }>(
+      "GET", "/v1/driver/documents",
+    );
+  },
+  uploadMyDocument(form: FormData) {
+    return req<{ document: import("@fleetcal/types").DriverDocument }>(
+      "POST", "/v1/driver/documents", form, { isFormData: true },
+    );
+  },
+  deleteMyDocument(id: string) {
+    return req<{ ok: true }>("DELETE", `/v1/driver/documents/${id}`);
+  },
 
   // Loads
   listLoads(query?: { from?: string; to?: string }) {

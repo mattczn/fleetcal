@@ -458,13 +458,32 @@ export interface CreateDriverRequest {
 }
 export interface CreateDriverResponse { driver: Driver; }
 export interface UpdateDriverRequest {
-  name?:      string;
-  firstName?: string | null;
-  lastName?:  string | null;
-  phone?:     string | null;
-  notes?:     string | null;
+  name?:           string;
+  firstName?:      string | null;
+  lastName?:       string | null;
+  phone?:          string | null;
+  notes?:          string | null;
+  email?:          string | null;
+  address?:        string | null;
+  licenseNumber?:  string | null;
+  licenseState?:   string | null;
+  licenseExp?:     string | null;
+  medicalCardExp?: string | null;
+  dob?:            string | null;
 }
 export interface UpdateDriverResponse { driver: Driver; }
+
+// ── /v1/drivers/:id/documents + /v1/driver/documents ─────────────────────
+
+export interface ListDriverDocumentsResponse {
+  documents: import("./domain").DriverDocument[];
+}
+export interface CreateDriverDocumentResponse {
+  document: import("./domain").DriverDocument;
+}
+export interface GetDriverDocumentUrlResponse {
+  url: string;
+}
 
 // ── /v1/customers ────────────────────────────────────────────────────────
 
