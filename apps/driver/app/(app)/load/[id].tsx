@@ -31,6 +31,7 @@ import {
   MapPin,
   CircleDot,
   Camera,
+  FileText,
 } from "lucide-react-native";
 import * as Location from "expo-location";
 import * as Clipboard from "expo-clipboard";
@@ -491,7 +492,7 @@ function TimeAnchor({
 
 function StopCard({
   stop, index, onAddressCopied, orgId, onCheckedIn, eventId, driverName,
-  loadId, onPhotoUploaded,
+  loadId, onPhotoUploaded, relayRole, onViewDocuments,
 }: {
   stop: Stop;
   index: number;
@@ -501,11 +502,18 @@ function StopCard({
   eventId?: string;
   driverName?: string;
   // For relay stops, when these are provided the card renders a
-  // "Upload Pictures" button right under Navigate / Check In. The
-  // identifier is actually the EVENT id — the driver API path is
-  // /v1/driver/loads/:id/documents but treats :id as event id.
+  // "Upload Pictures" / "View Handoff Photos" button under
+  // Navigate / Check In. The identifier is actually the EVENT id —
+  // the driver API path is /v1/driver/loads/:id/documents but
+  // treats :id as event id.
   loadId?: string;
   onPhotoUploaded?: () => void;
+  // Pickup driver leaves handoff photos for the delivery driver, so
+  // the button flips based on which leg this is:
+  //   pickup    → "Upload Pictures" (file picker)
+  //   delivery  → "View Handoff Photos" (jumps to Documents tab)
+  relayRole?: "pickup" | "delivery";
+  onViewDocuments?: () => void;
 }) {
   const accent = STOP_ACCENT[stop.type];
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
@@ -617,26 +625,45 @@ function StopCard({
           : <CheckInButton stop={stop} orgId={orgId} onCheckedIn={onCheckedIn} eventId={eventId} driverName={driverName} />}
       </View>
 
-      {/* Relay handoff: dedicated upload-pictures button so drivers see
-          it without scrolling to the gallery. Drops a photo onto the
-          load (kind='relay_handoff') for the partner driver. */}
+      {/* Relay handoff: pickup leg uploads photos for the partner;
+          delivery leg jumps to the documents viewer to see what the
+          partner left behind (trailer location, paperwork, etc.). */}
       {stop.type === "relay" && loadId ? (
-        <TouchableOpacity
-          onPress={() => promptRelayHandoffUpload(loadId, onPhotoUploaded)}
-          activeOpacity={0.85}
-          style={{
-            flexDirection: "row", alignItems: "center", justifyContent: "center",
-            gap: 8,
-            paddingVertical: 12,
-            backgroundColor: "#faf5ff",
-            borderTopWidth: 1, borderTopColor: "#f1f3f4",
-          }}
-        >
-          <Camera size={14} color="#6b21a8" strokeWidth={2.4} />
-          <Text style={[txt(700), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
-            Upload Pictures
-          </Text>
-        </TouchableOpacity>
+        relayRole === "delivery" && onViewDocuments ? (
+          <TouchableOpacity
+            onPress={onViewDocuments}
+            activeOpacity={0.85}
+            style={{
+              flexDirection: "row", alignItems: "center", justifyContent: "center",
+              gap: 8,
+              paddingVertical: 12,
+              backgroundColor: "#faf5ff",
+              borderTopWidth: 1, borderTopColor: "#f1f3f4",
+            }}
+          >
+            <FileText size={14} color="#6b21a8" strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+              View Handoff Photos
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={() => promptRelayHandoffUpload(loadId, onPhotoUploaded)}
+            activeOpacity={0.85}
+            style={{
+              flexDirection: "row", alignItems: "center", justifyContent: "center",
+              gap: 8,
+              paddingVertical: 12,
+              backgroundColor: "#faf5ff",
+              borderTopWidth: 1, borderTopColor: "#f1f3f4",
+            }}
+          >
+            <Camera size={14} color="#6b21a8" strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+              Upload Pictures
+            </Text>
+          </TouchableOpacity>
+        )
       ) : null}
 
       {stop.instructions ? (
@@ -1004,6 +1031,7 @@ export default function LoadDetailScreen() {
                 eventId={load.id}
                 driverName={driver?.name}
                 loadId={load.id}
+                relayRole="pickup"
                 onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />)}
                 <RelayHandoffBanner mode="pickup" partnerDriverName={load.partnerDriverName} />
                 {partner.length > 0 ? (
@@ -1093,6 +1121,8 @@ export default function LoadDetailScreen() {
                   eventId={load.id}
                   driverName={driver?.name}
                   loadId={load.id}
+                  relayRole="delivery"
+                  onViewDocuments={() => selectTab(2)}
                   onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }}
                 />
               ))}
