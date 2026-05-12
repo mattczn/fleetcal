@@ -14,7 +14,11 @@
 
 CREATE TABLE IF NOT EXISTS fuel_reports (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id          uuid NOT NULL,
+  -- Clerk org ids are formatted "org_2abc...", not UUIDs — every other
+  -- table in this DB uses text for org_id and the API uses the
+  -- service-role client with .eq("org_id", c.get("orgId")). Don't
+  -- change this type.
+  org_id          text NOT NULL,
 
   -- Who fueled (required — driver app always knows both). FK targets
   -- are bigint to match the existing drivers/assets PKs.
