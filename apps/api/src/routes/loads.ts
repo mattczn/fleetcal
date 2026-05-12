@@ -725,28 +725,65 @@ loads.get("/:id/rate-con-url", async (c) => {
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
   const val = (data as { rate_con_pdf: string | null }).rate_con_pdf;
-  if (!val) {
-    const res: GetRateConUrlResponse = { url: null };
-    return c.json(res);
-  }
+
   // Legacy: base64 data URLs stored before the storage migration — pass through.
-  if (val.startsWith("data:")) {
+  if (val && val.startsWith("data:")) {
     const res: GetRateConUrlResponse = { url: val };
     return c.json(res);
   }
 
-  // Storage path → 1-hour signed URL. If signing fails (file missing,
-  // permissions issue, etc.), return null so the modal can show "no
-  // rate-con on file" rather than flashing a 500. Log so we can debug.
-  const { data: signed, error: signErr } = await supabase.storage
-    .from("rate-cons")
-    .createSignedUrl(val, 3600);
-  if (signErr || !signed) {
-    console.warn("[GET /v1/loads/:id/rate-con-url] sign failed for path", val, "—", signErr);
-    const res: GetRateConUrlResponse = { url: null };
-    return c.json(res);
+  // Storage path → 1-hour signed URL. Rate-cons live in one of two
+  // buckets: `load-documents` (current — uploads via the docs route
+  // since 2025 doc rework) or `rate-cons` (legacy parser-flow uploads
+  // via apps/web/lib/storage.ts). The column doesn't distinguish, so
+  // try the new bucket first and fall back to legacy.
+  if (val) {
+    const tryBuckets = ["load-documents", "rate-cons"] as const;
+    for (const bucket of tryBuckets) {
+      const { data: signed } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(val, 3600);
+      if (signed) {
+        const res: GetRateConUrlResponse = { url: signed.signedUrl };
+        return c.json(res);
+      }
+    }
+    console.warn("[GET /v1/loads/:id/rate-con-url] sign failed in both buckets for path", val);
   }
-  const res: GetRateConUrlResponse = { url: signed.signedUrl };
+
+  // Fallback: `loads.rate_con_pdf` is null or its path no longer signs
+  // (mirror didn't run, file was moved, etc.). Look for the most recent
+  // `kind=rate_con` row in `load_documents` and use that. This keeps the
+  // Rate Con panel working even when the mirror got out of sync.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: docs } = await supabase
+    .from("load_documents")
+    .select("storage_path, uploaded_at")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId)
+    .eq("kind", "rate_con")
+    .order("uploaded_at", { ascending: false })
+    .limit(1);
+  const docRow = (docs ?? [])[0] as { storage_path: string } | undefined;
+  if (docRow?.storage_path) {
+    const { data: signed } = await supabase.storage
+      .from("load-documents")
+      .createSignedUrl(docRow.storage_path, 3600);
+    if (signed) {
+      // Best-effort: refresh the mirror so future requests skip the
+      // fallback. Don't block on this.
+      void supabase
+        .from("loads")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .update({ rate_con_pdf: docRow.storage_path } as any)
+        .eq("id", loadId)
+        .eq("org_id", orgId);
+      const res: GetRateConUrlResponse = { url: signed.signedUrl };
+      return c.json(res);
+    }
+  }
+
+  const res: GetRateConUrlResponse = { url: null };
   return c.json(res);
 });
 

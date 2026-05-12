@@ -3294,12 +3294,22 @@ export default function EventModal() {
                   const { railway } = await import('@/lib/railway');
                   await railway.uploadLoadDocument(ev.loadId, f, 'rate_con');
                   // Refresh: pull the updated load + events back into
-                  // the calendar store. The modal's existing effect
-                  // (deps [modalEventId, events]) will re-run and set
-                  // rateConPdf to the new storage path; the pdf-viewer
-                  // effect then asks the API for a fresh signed URL.
+                  // the calendar store, then sync the new path into
+                  // local state directly. The state-reset effect's
+                  // deps are [modalOpen, modalEventId, batchIndex] —
+                  // it does NOT re-fire on events change — so we must
+                  // setRateConPdf here ourselves.
                   const { loads: legs } = await railway.getLoad(ev.loadId);
                   mergeEvents(legs as CalendarEvent[]);
+                  const updatedLeg =
+                    (legs as CalendarEvent[]).find(l => l.id === modalEventId)
+                    ?? (legs as CalendarEvent[])[0];
+                  if (updatedLeg?.rateConPdf) {
+                    setRateConPdf(updatedLeg.rateConPdf);
+                    setShowPdfViewer(true);
+                    setDocsTab('rateCon');
+                    setPdfRetryKey(k => k + 1);
+                  }
                   // Also refresh the Uploaded docs tab so the new
                   // rate-con shows up there as a kind=rate_con entry.
                   if (orgId) {

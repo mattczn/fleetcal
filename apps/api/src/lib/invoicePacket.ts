@@ -159,14 +159,22 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
   const invoicePages = await packet.copyPages(invoiceDoc, invoiceDoc.getPageIndices());
   for (const p of invoicePages) packet.addPage(p);
 
-  // Rate con next (if present + not a legacy data URL).
+  // Rate con next (if present + not a legacy data URL). The path can
+  // live in either `load-documents` (current — doc-upload route) or
+  // `rate-cons` (legacy parser-flow). Try the current bucket first
+  // and fall back to legacy.
   if (args.rateConPath && !args.rateConPath.startsWith("data:")) {
-    const r = await appendSource(packet, {
-      bucket: "rate-cons",
-      path:   args.rateConPath,
-      label:  "rate-con",
-    });
-    if (!r.ok) skipped.push(`rate-con:${args.rateConPath}`);
+    const tryBuckets: SourceDoc["bucket"][] = ["load-documents", "rate-cons"];
+    let appended = false;
+    for (const bucket of tryBuckets) {
+      const r = await appendSource(packet, {
+        bucket,
+        path:   args.rateConPath,
+        label:  "rate-con",
+      });
+      if (r.ok) { appended = true; break; }
+    }
+    if (!appended) skipped.push(`rate-con:${args.rateConPath}`);
   }
 
   // Selected supporting docs.
