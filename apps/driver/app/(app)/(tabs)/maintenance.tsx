@@ -152,6 +152,22 @@ export default function MaintenanceScreen() {
     setHistory([]);
   }
 
+  // Single "Upload Photo" entry point — prompts the driver to choose
+  // camera or library. Mirrors the fuel form's chooseReceiptSource.
+  async function choosePhotoSource() {
+    if (photos.length >= 8) return;
+    Alert.alert(
+      "Add Photo",
+      undefined,
+      [
+        { text: "Take Photo",          onPress: takePhoto },
+        { text: "Choose from Library", onPress: pickPhotos },
+        { text: "Cancel", style: "cancel" },
+      ],
+      { cancelable: true },
+    );
+  }
+
   async function pickPhotos() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -375,26 +391,17 @@ export default function MaintenanceScreen() {
                 </View>
               ))}
               {photos.length < 8 && (
-                <>
-                  <TouchableOpacity onPress={takePhoto}
-                    style={{
-                      width: 72, height: 72, borderRadius: 8,
-                      borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
-                      alignItems: 'center', justifyContent: 'center',
-                    }}>
-                    <Camera size={20} color="#5f6368" />
-                    <Text style={[txt(600), { fontSize: 9, color: '#5f6368', marginTop: 2 }]}>Camera</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={pickPhotos}
-                    style={{
-                      width: 72, height: 72, borderRadius: 8,
-                      borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
-                      alignItems: 'center', justifyContent: 'center',
-                    }}>
-                    <Text style={[txt(800), { fontSize: 16, color: '#5f6368' }]}>+</Text>
-                    <Text style={[txt(600), { fontSize: 9, color: '#5f6368' }]}>Library</Text>
-                  </TouchableOpacity>
-                </>
+                <TouchableOpacity onPress={choosePhotoSource}
+                  style={{
+                    width: 72, height: 72, borderRadius: 8,
+                    borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                  <Camera size={20} color="#5f6368" />
+                  <Text style={[txt(600), { fontSize: 9, color: '#5f6368', marginTop: 2, textAlign: 'center' }]}>
+                    Upload{'\n'}Photo
+                  </Text>
+                </TouchableOpacity>
               )}
             </View>
 

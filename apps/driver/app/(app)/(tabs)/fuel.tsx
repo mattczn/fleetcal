@@ -186,6 +186,24 @@ export default function FuelScreen() {
     (odometerNum === null || (Number.isInteger(odometerNum) && odometerNum >= 0)) &&
     !submitting;
 
+  // Receipt source — single entry point. Driver taps "Upload Photo",
+  // sees a system alert with Camera / Library / Cancel, and the
+  // appropriate picker opens. One button keeps the form clean and
+  // matches the iOS pattern drivers already see in other apps.
+  async function chooseReceiptSource() {
+    if (receipts.length >= 4) return;
+    Alert.alert(
+      "Add Receipt",
+      undefined,
+      [
+        { text: "Take Photo",          onPress: takeReceipt },
+        { text: "Choose from Library", onPress: pickReceipts },
+        { text: "Cancel", style: "cancel" },
+      ],
+      { cancelable: true },
+    );
+  }
+
   async function pickReceipts() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -383,26 +401,17 @@ export default function FuelScreen() {
                 </View>
               ))}
               {receipts.length < 4 && (
-                <>
-                  <TouchableOpacity onPress={takeReceipt}
-                    style={{
-                      width: 72, height: 72, borderRadius: 8,
-                      borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
-                      alignItems: 'center', justifyContent: 'center',
-                    }}>
-                    <Camera size={20} color="#5f6368" />
-                    <Text style={[txt(600), { fontSize: 9, color: '#5f6368', marginTop: 2 }]}>Camera</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={pickReceipts}
-                    style={{
-                      width: 72, height: 72, borderRadius: 8,
-                      borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
-                      alignItems: 'center', justifyContent: 'center',
-                    }}>
-                    <Text style={[txt(800), { fontSize: 16, color: '#5f6368' }]}>+</Text>
-                    <Text style={[txt(600), { fontSize: 9, color: '#5f6368' }]}>Library</Text>
-                  </TouchableOpacity>
-                </>
+                <TouchableOpacity onPress={chooseReceiptSource}
+                  style={{
+                    width: 72, height: 72, borderRadius: 8,
+                    borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                  <Camera size={20} color="#5f6368" />
+                  <Text style={[txt(600), { fontSize: 9, color: '#5f6368', marginTop: 2, textAlign: 'center' }]}>
+                    Upload{'\n'}Photo
+                  </Text>
+                </TouchableOpacity>
               )}
             </View>
 
