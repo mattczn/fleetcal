@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
-  BadgeCheck, LogOut, User, FileText, Camera, Trash2, ExternalLink, Plus, Calendar as CalendarIcon, ChevronDown,
+  LogOut, User, FileText, Trash2, ExternalLink, Plus, Calendar as CalendarIcon,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
@@ -301,8 +301,6 @@ export default function ProfileScreen() {
               {/* Account */}
               <SectionHeader label="Account" />
               <Card>
-                <ReadOnlyRow Icon={BadgeCheck} label="Driver ID" value={me ? `#${me.driverId}` : "—"} />
-                <FieldDivider />
                 <FormGrid>
                   <FormCol>
                     <FieldLabel label="First Name" />
@@ -474,10 +472,6 @@ function Card({ children }: { children: React.ReactNode }) {
   );
 }
 
-function FieldDivider() {
-  return <View style={{ height: 1, backgroundColor: "#f1f3f4", marginVertical: 6 }} />;
-}
-
 function FieldLabel({ label }: { label: string }) {
   return (
     <Text style={[txt(700), {
@@ -609,27 +603,6 @@ function FormGrid({ children }: { children: React.ReactNode }) {
 
 function FormCol({ children, style }: { children: React.ReactNode; style?: object }) {
   return <View style={[{ flex: 1 }, style]}>{children}</View>;
-}
-
-function ReadOnlyRow({
-  Icon, label, value,
-}: { Icon: typeof BadgeCheck; label: string; value: string }) {
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 12 }}>
-      <View style={{
-        width: 28, height: 28, borderRadius: 8,
-        backgroundColor: "#e8f0fe",
-        alignItems: "center", justifyContent: "center",
-        marginRight: 10,
-      }}>
-        <Icon size={14} color="#1a73e8" strokeWidth={2.2} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[txt(600), { fontSize: 11, color: "#5f6368", letterSpacing: 0.4 }]}>{label.toUpperCase()}</Text>
-        <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 1 }]}>{value}</Text>
-      </View>
-    </View>
-  );
 }
 
 function DocRow({

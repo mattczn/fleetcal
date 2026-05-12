@@ -53,7 +53,8 @@
           "locationWhenInUsePermission": "Allow Curzon Driver to record your location when you check in at a stop."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true
