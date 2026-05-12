@@ -56,6 +56,8 @@ import type {
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
   GetEventResponse,
   ListRecentStopsResponse,
+  ListFuelReportsResponse, ListFuelReportsQuery,
+  UpdateFuelReportRequest, UpdateFuelReportResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -414,6 +416,26 @@ class RailwayClient {
   }
   deleteCheckCall(id: string) {
     return this.req<void>('DELETE', `/v1/check-calls/${id}`);
+  }
+
+  // ── Fuel reports ──────────────────────────────────────────────────────
+  listFuelReports(query: ListFuelReportsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.from)        qs.set('from',        query.from);
+    if (query.to)          qs.set('to',          query.to);
+    if (query.driverId)    qs.set('driverId',    String(query.driverId));
+    if (query.assetId)     qs.set('assetId',     String(query.assetId));
+    if (query.matchStatus) qs.set('matchStatus', query.matchStatus);
+    if (query.limit)       qs.set('limit',       String(query.limit));
+    if (query.offset)      qs.set('offset',      String(query.offset));
+    const s = qs.toString();
+    return this.req<ListFuelReportsResponse>('GET', `/v1/fuel-reports${s ? `?${s}` : ''}`);
+  }
+  updateFuelReport(id: string, body: UpdateFuelReportRequest) {
+    return this.req<UpdateFuelReportResponse>('PATCH', `/v1/fuel-reports/${id}`, body);
+  }
+  deleteFuelReport(id: string) {
+    return this.req<void>('DELETE', `/v1/fuel-reports/${id}`);
   }
 }
 
