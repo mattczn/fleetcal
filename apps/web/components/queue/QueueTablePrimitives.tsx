@@ -58,7 +58,7 @@ export function ageColor(days: number): { bg: string; fg: string } {
 
 export function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 'left' | 'right' }) {
   return (
-    <th className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider"
+    <th className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
       style={{ color: 'var(--gc-text-2)', textAlign: align }}>
       {children}
     </th>
@@ -74,7 +74,7 @@ export function Td({
   onClick?:   (e: React.MouseEvent) => void;
 }) {
   return (
-    <td className={`px-3 py-2.5 font-medium ${className ?? ''}`}
+    <td className={`px-2.5 py-2 font-medium ${className ?? ''}`}
       style={{ textAlign: align, color: 'var(--gc-text-1)' }}
       onClick={onClick}>
       {children}
@@ -250,7 +250,7 @@ export type QueueFilterState = Record<string, string[]>;
 // ─── MenuTh — sortable + filter-aware column header ─────────────────────
 
 export function MenuTh({
-  col, label, align, sort, selectedCount, setHeaderRef, onClick,
+  col, label, align, sort, selectedCount, setHeaderRef, onClick, dragProps, isDragging,
 }: {
   col:           string;
   label:         string;
@@ -260,6 +260,11 @@ export function MenuTh({
   selectedCount: number;
   setHeaderRef:  (el: HTMLTableCellElement | null) => void;
   onClick:       () => void;
+  /** Spread onto the <th> to enable drag-to-reorder via
+   *  useColumnOrder.getHeaderProps. Optional — pages that don't want
+   *  reordering can omit it. */
+  dragProps?: React.HTMLAttributes<HTMLTableCellElement> & { draggable?: boolean; 'data-dragcol'?: string };
+  isDragging?: boolean;
 }) {
   const sortActive   = sort.key === col;
   const filterActive = selectedCount > 0;
@@ -268,13 +273,15 @@ export function MenuTh({
     <th
       ref={setHeaderRef}
       onClick={onClick}
-      className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors"
+      {...(dragProps ?? {})}
+      className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors whitespace-nowrap"
       style={{
         color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
-        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
+        background: anyActive ? 'rgba(26,115,232,0.06)' : isDragging ? 'rgba(26,115,232,0.18)' : undefined,
+        opacity:    isDragging ? 0.6 : 1,
       }}
-      title="Click for sort + filter">
+      title={dragProps ? 'Click for sort + filter — drag to reorder' : 'Click for sort + filter'}>
       <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
         {label}
         {sortActive ? (
