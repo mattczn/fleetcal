@@ -693,14 +693,17 @@ export default function AccountingPage() {
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
                 // width:100% + maxWidth:100% pin the wrapper to its
-                // parent's width (without this, min-content from the
-                // table inside would inflate the wrapper and the page
-                // would scroll sideways). overflow-x:auto handles the
-                // wide-table case internally. overflow-y:hidden — sort/
-                // filter popovers use position:fixed so they escape
-                // clipping regardless.
+                // parent's width. minWidth:0 overrides the default
+                // min-width:auto (which would otherwise inherit the
+                // table's min-content width and inflate the wrapper —
+                // width:100% is a LOWER bound and the element will
+                // grow past it without this). overflow-x:auto puts
+                // the scrollbar inside this box. overflow-y:hidden —
+                // sort/filter popovers use position:fixed so they
+                // escape clipping regardless.
                 width: '100%',
                 maxWidth: '100%',
+                minWidth: 0,
                 overflowX: 'auto',
                 overflowY: 'hidden',
               }}>

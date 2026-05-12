@@ -768,16 +768,19 @@ export default function CloseoutView() {
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
-                // Constrain to parent width (otherwise the wrapper grows
-                // to fit the table's intrinsic min-width and the whole
-                // page ends up scrolling sideways). With width:100% +
-                // maxWidth:100% + overflow-x:auto, the wrapper stays in
-                // its lane and only the table inside scrolls horizontally.
+                // The key trio for "scroll inside, never on the page":
+                //   width:100% + maxWidth:100% pins to parent's width
+                //   minWidth:0   overrides the default min-width:auto
+                //     (which would otherwise inherit the table's
+                //     min-content width and inflate the wrapper)
+                //   overflowX:auto puts the scrollbar inside this box.
+                // Without minWidth:0, width:100% is silently treated as
+                // a LOWER bound — the element can still grow beyond
+                // 100% to fit content's intrinsic min-width.
                 width: '100%',
                 maxWidth: '100%',
+                minWidth: 0,
                 overflowX: 'auto',
-                // Popover menus (sort/filter) use position:fixed so
-                // they're not clipped — safe to hide vertical overflow.
                 overflowY: 'hidden',
               }}>
               <table className="text-[12.5px]"
