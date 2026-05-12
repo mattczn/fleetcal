@@ -22,7 +22,7 @@ import RouteMapPanel from './RouteMapPanel';
 import { uploadRateCon } from '@/lib/storage';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import CheckCallsSection from '@/components/calendar/CheckCallsSection';
-import { RelayHandoffPhotos } from '@/components/calendar/RelayHandoffPhotos';
+import { HandoffPhotosButton } from '@/components/calendar/RelayHandoffPhotos';
 
 const RELAY_COLOR = '#7c3aed';
 
@@ -3721,10 +3721,37 @@ export default function EventModal() {
                             </div>
                             <div style={{ background: '#ede9fe', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 8 }}>
                               <ArrowLeftRight size={14} style={{ flexShrink: 0 }} />
-                              {relayStop?.address
-                                ? <span>Relay point: <strong>{relayStop.address}</strong>{relayStop.apptStart ? ` · Drop ${fmtRelayTime(relayStop.apptStart)}` : ''}{relayStop.apptEnd ? ` → Pickup ${fmtRelayTime(relayStop.apptEnd)}` : ''}</span>
-                                : <span>No relay point set on the pickup leg.</span>
-                              }
+                              <span style={{ flex: 1 }}>
+                                {relayStop?.address
+                                  ? <>Relay point: <strong>{relayStop.address}</strong>{relayStop.apptStart ? ` · Drop ${fmtRelayTime(relayStop.apptStart)}` : ''}{relayStop.apptEnd ? ` → Pickup ${fmtRelayTime(relayStop.apptEnd)}` : ''}</>
+                                  : 'No relay point set on the pickup leg.'
+                                }
+                              </span>
+                              {(() => {
+                                const currentEv = events.find(e => e.id === modalEventId);
+                                if (!currentEv?.loadId) return null;
+                                const handoffPhotos = loadDocuments
+                                  .filter(d => d.kind === 'relay_handoff')
+                                  .map(d => ({ id: d.id, uploadedAt: d.uploadedAt }));
+                                return (
+                                  <HandoffPhotosButton
+                                    loadId={currentEv.loadId}
+                                    photos={handoffPhotos}
+                                    onSelectInPanel={(docId) => {
+                                      setShowPdfViewer(true);
+                                      setShowMapPanel(false);
+                                      setDocsTab('uploaded');
+                                      setSelectedDocId(docId);
+                                    }}
+                                    onUploaded={async () => {
+                                      if (!currentEv.loadId || !orgId) return;
+                                      const { fetchLoadDocuments } = await import('@/lib/db');
+                                      const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
+                                      setLoadDocuments(fresh);
+                                    }}
+                                  />
+                                );
+                              })()}
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                               <div>
@@ -3736,31 +3763,6 @@ export default function EventModal() {
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#5b21b6', background: '#ede9fe', borderRadius: 6, padding: '6px 10px' }}>{delivAssetName}</div>
                               </div>
                             </div>
-                            {(() => {
-                              const currentEv = events.find(e => e.id === modalEventId);
-                              if (!currentEv?.loadId) return null;
-                              const handoffPhotos = loadDocuments
-                                .filter(d => d.kind === 'relay_handoff')
-                                .map(d => ({ id: d.id, fileName: d.fileName, uploadedAt: d.uploadedAt, signedUrl: d.signedUrl }));
-                              return (
-                                <RelayHandoffPhotos
-                                  loadId={currentEv.loadId}
-                                  photos={handoffPhotos}
-                                  onSelectInPanel={(docId) => {
-                                    setShowPdfViewer(true);
-                                    setShowMapPanel(false);
-                                    setDocsTab('uploaded');
-                                    setSelectedDocId(docId);
-                                  }}
-                                  onUploaded={async () => {
-                                    if (!currentEv.loadId || !orgId) return;
-                                    const { fetchLoadDocuments } = await import('@/lib/db');
-                                    const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
-                                    setLoadDocuments(fresh);
-                                  }}
-                                />
-                              );
-                            })()}
                           </div>
                         );
                       })()}
@@ -3812,39 +3814,40 @@ export default function EventModal() {
                           </div>
                           {(() => {
                             const relayStop = stops.find(s => s.type === 'relay');
+                            const currentEv = events.find(e => e.id === modalEventId);
+                            const handoffPhotos = currentEv?.loadId
+                              ? loadDocuments
+                                  .filter(d => d.kind === 'relay_handoff')
+                                  .map(d => ({ id: d.id, uploadedAt: d.uploadedAt }))
+                              : [];
                             return (
                               <div style={{ background: '#ede9fe', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#5b21b6', display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <ArrowLeftRight size={14} style={{ flexShrink: 0 }} />
-                                {relayStop?.address
-                                  ? <span>Relay point: <strong>{relayStop.address}</strong>{relayStop.apptStart ? ` · Drop ${fmtRelayTime(relayStop.apptStart)}` : ''}{relayStop.apptEnd ? ` → Pickup ${fmtRelayTime(relayStop.apptEnd)}` : ''}</span>
-                                  : <span>Set the relay point and drop/pickup times in the <strong>Locations</strong> section below.</span>
-                                }
+                                <span style={{ flex: 1 }}>
+                                  {relayStop?.address
+                                    ? <>Relay point: <strong>{relayStop.address}</strong>{relayStop.apptStart ? ` · Drop ${fmtRelayTime(relayStop.apptStart)}` : ''}{relayStop.apptEnd ? ` → Pickup ${fmtRelayTime(relayStop.apptEnd)}` : ''}</>
+                                    : <>Set the relay point and drop/pickup times in the <strong>Locations</strong> section below.</>
+                                  }
+                                </span>
+                                {currentEv?.loadId && (
+                                  <HandoffPhotosButton
+                                    loadId={currentEv.loadId}
+                                    photos={handoffPhotos}
+                                    onSelectInPanel={(docId) => {
+                                      setShowPdfViewer(true);
+                                      setShowMapPanel(false);
+                                      setDocsTab('uploaded');
+                                      setSelectedDocId(docId);
+                                    }}
+                                    onUploaded={async () => {
+                                      if (!currentEv.loadId || !orgId) return;
+                                      const { fetchLoadDocuments } = await import('@/lib/db');
+                                      const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
+                                      setLoadDocuments(fresh);
+                                    }}
+                                  />
+                                )}
                               </div>
-                            );
-                          })()}
-                          {(() => {
-                            const currentEv = events.find(e => e.id === modalEventId);
-                            if (!currentEv?.loadId) return null;
-                            const handoffPhotos = loadDocuments
-                              .filter(d => d.kind === 'relay_handoff')
-                              .map(d => ({ id: d.id, fileName: d.fileName, uploadedAt: d.uploadedAt, signedUrl: d.signedUrl }));
-                            return (
-                              <RelayHandoffPhotos
-                                loadId={currentEv.loadId}
-                                photos={handoffPhotos}
-                                onSelectInPanel={(docId) => {
-                                  setShowPdfViewer(true);
-                                  setShowMapPanel(false);
-                                  setDocsTab('uploaded');
-                                  setSelectedDocId(docId);
-                                }}
-                                onUploaded={async () => {
-                                  if (!currentEv.loadId || !orgId) return;
-                                  const { fetchLoadDocuments } = await import('@/lib/db');
-                                  const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
-                                  setLoadDocuments(fresh);
-                                }}
-                              />
                             );
                           })()}
                         </div>
