@@ -503,6 +503,47 @@ export type Database = {
           },
         ]
       }
+      fuel_report_photos: {
+        Row: {
+          file_name: string
+          id: string
+          mime_type: string | null
+          org_id: string
+          report_id: string
+          size_bytes: number | null
+          storage_path: string
+          uploaded_at: string
+        }
+        Insert: {
+          file_name: string
+          id?: string
+          mime_type?: string | null
+          org_id: string
+          report_id: string
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_at?: string
+        }
+        Update: {
+          file_name?: string
+          id?: string
+          mime_type?: string | null
+          org_id?: string
+          report_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fuel_report_photos_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "fuel_reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invoices: {
         Row: {
           created_at: string

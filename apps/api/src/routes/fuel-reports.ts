@@ -11,6 +11,7 @@ import { Hono } from "hono";
 import {
   type FuelReport,
   type FuelReportMatchStatus,
+  type FuelReportPhoto,
   type CreateFuelReportRequest,
   type CreateFuelReportResponse,
   type ListFuelReportsResponse,
@@ -24,6 +25,57 @@ import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 
 const fuelReports = new Hono<{ Variables: AuthVariables }>();
+
+const RECEIPT_BUCKET = "fuel-receipts";
+
+interface FuelReportPhotoRow {
+  id:           string;
+  report_id:    string;
+  org_id:       string;
+  storage_path: string;
+  file_name:    string;
+  mime_type:    string | null;
+  size_bytes:   number | null;
+  uploaded_at:  string;
+}
+
+function rowToFuelPhoto(r: FuelReportPhotoRow, signedUrl?: string): FuelReportPhoto {
+  return {
+    id:         r.id,
+    reportId:   r.report_id,
+    fileName:   r.file_name,
+    mimeType:   r.mime_type ?? undefined,
+    sizeBytes:  r.size_bytes ?? undefined,
+    uploadedAt: r.uploaded_at,
+    signedUrl,
+  };
+}
+
+const FUEL_PHOTO_COLS =
+  "id,report_id,org_id,storage_path,file_name,mime_type,size_bytes,uploaded_at";
+
+async function fetchPhotosForFuelReports(reportIds: string[]): Promise<Map<string, FuelReportPhoto[]>> {
+  const out = new Map<string, FuelReportPhoto[]>();
+  if (reportIds.length === 0) return out;
+  const { data } = await supabase
+    .from("fuel_report_photos")
+    .select(FUEL_PHOTO_COLS)
+    .in("report_id", reportIds);
+  const rows = (data ?? []) as unknown as FuelReportPhotoRow[];
+  if (rows.length === 0) return out;
+  const paths = rows.map(r => r.storage_path);
+  const { data: signed } = await supabase.storage.from(RECEIPT_BUCKET).createSignedUrls(paths, 3600);
+  const urlByPath = new Map<string, string>();
+  for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+    urlByPath.set(s.path, s.signedUrl);
+  }
+  for (const r of rows) {
+    const arr = out.get(r.report_id) ?? [];
+    arr.push(rowToFuelPhoto(r, urlByPath.get(r.storage_path)));
+    out.set(r.report_id, arr);
+  }
+  return out;
+}
 
 // ── Row converter ───────────────────────────────────────────────────────
 
@@ -46,7 +98,7 @@ interface FuelReportRow {
   created_at:     string;
 }
 
-function rowToFuelReport(r: FuelReportRow): FuelReport {
+function rowToFuelReport(r: FuelReportRow, photos?: FuelReportPhoto[]): FuelReport {
   return {
     id:            r.id,
     orgId:         r.org_id,
@@ -64,6 +116,7 @@ function rowToFuelReport(r: FuelReportRow): FuelReport {
     submittedBy:   r.submitted_by,
     notes:         r.notes ?? undefined,
     createdAt:     r.created_at,
+    photos,
   };
 }
 
@@ -181,8 +234,9 @@ fuelReports.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   const rows = (data ?? []) as FuelReportRow[];
+  const photoMap = await fetchPhotosForFuelReports(rows.map(r => r.id));
   const res: ListFuelReportsResponse = {
-    fuelReports: rows.map(rowToFuelReport),
+    fuelReports: rows.map(r => rowToFuelReport(r, photoMap.get(r.id))),
     total:       count ?? rows.length,
     limit,
     offset,
@@ -250,6 +304,15 @@ fuelReports.delete("/:id", async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
 
+  // Pull photo paths first — the row delete cascades the photo
+  // table, but storage files are NOT auto-deleted by Supabase.
+  const { data: photos } = await supabase
+    .from("fuel_report_photos")
+    .select("storage_path")
+    .eq("report_id", id)
+    .eq("org_id", orgId);
+  const paths = ((photos ?? []) as Array<{ storage_path: string }>).map(p => p.storage_path);
+
   const { error } = await supabase
     .from("fuel_reports")
     .delete()
@@ -259,7 +322,32 @@ fuelReports.delete("/:id", async (c) => {
     console.error("[DELETE /v1/fuel-reports/:id] failed:", error);
     return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
+  if (paths.length > 0) {
+    void supabase.storage.from(RECEIPT_BUCKET).remove(paths);
+  }
   return c.json({ ok: true });
+});
+
+// ── GET /v1/fuel-reports/photos/:id/url ─────────────────────────────────
+//
+// Mints a fresh 1-hour signed URL. List responses include signed URLs
+// inline; this is for long-lived UI sessions where the original URL
+// expired.
+fuelReports.get("/photos/:id/url", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const { data, error } = await supabase
+    .from("fuel_report_photos")
+    .select("storage_path")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const path = (data as { storage_path: string }).storage_path;
+  const { data: signed } = await supabase.storage.from(RECEIPT_BUCKET).createSignedUrl(path, 3600);
+  if (!signed) return c.json({ error: "sign_failed" } satisfies ApiErrorResponse, 500);
+  return c.json({ url: signed.signedUrl });
 });
 
 export default fuelReports;

@@ -125,7 +125,6 @@ export default function FuelPage() {
         driverName,
         assetLabel,
         r.state,
-        r.notes ?? '',
         String(r.dieselGallons),
         r.odometer != null ? String(r.odometer) : '',
       ].join(' ').toLowerCase();
@@ -180,7 +179,7 @@ export default function FuelPage() {
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ color: search ? 'var(--gc-blue)' : 'var(--gc-text-3)' }} />
               <input type="text"
-                placeholder="Search driver, asset, state, notes…"
+                placeholder="Search driver, asset, state…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
@@ -244,7 +243,7 @@ export default function FuelPage() {
                     <Th align="right">DEF</Th>
                     <Th align="right">Odometer</Th>
                     <Th>Match</Th>
-                    <Th>Notes</Th>
+                    <Th>Receipt</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -274,9 +273,26 @@ export default function FuelPage() {
                         </Td>
                         <Td><MatchStatusChip status={r.matchStatus} /></Td>
                         <Td>
-                          <span className="truncate inline-block" style={{ maxWidth: 200, color: 'var(--gc-text-2)' }}>
-                            {r.notes ?? <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                          </span>
+                          {r.photos && r.photos.length > 0 ? (
+                            <div className="flex items-center gap-1.5">
+                              {r.photos[0].signedUrl ? (
+                                /* eslint-disable-next-line @next/next/no-img-element */
+                                <a href={r.photos[0].signedUrl} target="_blank" rel="noopener noreferrer">
+                                  <img src={r.photos[0].signedUrl} alt={r.photos[0].fileName}
+                                    style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--gc-border-light)' }} />
+                                </a>
+                              ) : (
+                                <span style={{ width: 32, height: 32, borderRadius: 6, background: '#f1f3f4' }} />
+                              )}
+                              {r.photos.length > 1 && (
+                                <span className="text-[11px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                                  +{r.photos.length - 1}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                          )}
                         </Td>
                       </tr>
                     );

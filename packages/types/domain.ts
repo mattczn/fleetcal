@@ -672,6 +672,19 @@ export const FUEL_REPORT_MATCH_STATUSES: readonly FuelReportMatchStatus[] = [
   'no_transaction',
 ];
 
+export interface FuelReportPhoto {
+  id:           string;
+  reportId:     string;
+  fileName:     string;
+  mimeType?:    string;
+  sizeBytes?:   number;
+  uploadedAt:   string;
+  /** Pre-minted 1-hour signed URL when the parent list endpoint
+   *  joined photos. Callers can re-fetch via the photo-URL endpoint
+   *  if the link has expired. */
+  signedUrl?:   string;
+}
+
 export interface FuelReport {
   id:             string;
   orgId:          string;
@@ -692,8 +705,12 @@ export interface FuelReport {
   matchStatus:    FuelReportMatchStatus;
 
   submittedBy:    string;
+  /** Internal notes — surfaced on the ops dashboard, not the driver app. */
   notes?:         string;
   createdAt:      string;
+
+  /** Receipt photos, populated by list/detail endpoints. */
+  photos?:        FuelReportPhoto[];
 }
 
 // ── Maintenance ─────────────────────────────────────────────────────────

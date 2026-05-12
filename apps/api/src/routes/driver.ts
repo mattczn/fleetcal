@@ -1287,6 +1287,72 @@ driver.get("/maintenance-reports/history", async (c) => {
   });
 });
 
+// POST /v1/driver/fuel-reports/:id/photos — upload a receipt photo.
+// One file per request (keeps RN FormData simple). Driver can only
+// attach to their own reports.
+const FUEL_RECEIPT_BUCKET = "fuel-receipts";
+driver.post("/fuel-reports/:id/photos", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id       = c.req.param("id");
+
+  const { data: rep, error: repErr } = await supabase
+    .from("fuel_reports")
+    .select("id, driver_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (repErr) return c.json({ error: "fetch_failed", detail: repErr.message }, 500);
+  if (!rep) return c.json({ error: "not_found" }, 404);
+  if ((rep as { driver_id: number }).driver_id !== driverId) {
+    return c.json({ error: "not_authorized" }, 403);
+  }
+
+  let body: { file?: File };
+  try { body = await c.req.parseBody() as { file?: File }; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400); }
+  const file = body.file;
+  if (!file || typeof file === "string") {
+    return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
+  }
+
+  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: uploadErr } = await supabase.storage
+    .from(FUEL_RECEIPT_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[POST fuel/photos] storage:", uploadErr);
+    return c.json({ error: "upload_failed", detail: uploadErr.message }, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("fuel_report_photos")
+    .insert({
+      report_id:    id,
+      org_id:       orgId,
+      storage_path: storagePath,
+      file_name:    file.name,
+      mime_type:    file.type || null,
+      size_bytes:   bytes.length,
+    } as any)
+    .select("id, file_name, mime_type, size_bytes, uploaded_at")
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(FUEL_RECEIPT_BUCKET).remove([storagePath]);
+    console.error("[POST fuel/photos] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  return c.json({ photo: data });
+});
+
 // GET /v1/driver/fuel-reports — the driver's own submission history.
 // Useful for the "my recent submissions" rail on the form screen.
 driver.get("/fuel-reports", async (c) => {

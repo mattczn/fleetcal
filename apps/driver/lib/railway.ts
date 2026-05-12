@@ -150,12 +150,19 @@ export const railway = {
     reportedAt?:    string;
     latitude?:      number;
     longitude?:     number;
-    notes?:         string;
   }) {
     return req<{ fuelReport: import("@fleetcal/types").FuelReport }>(
       "POST",
       "/v1/driver/fuel-reports",
       body,
+    );
+  },
+  uploadFuelReceipt(reportId: string, form: FormData) {
+    return req<{ photo: { id: string; file_name: string; mime_type: string | null; size_bytes: number | null; uploaded_at: string } }>(
+      "POST",
+      `/v1/driver/fuel-reports/${reportId}/photos`,
+      form,
+      { isFormData: true },
     );
   },
   listFuelReports(limit = 20) {

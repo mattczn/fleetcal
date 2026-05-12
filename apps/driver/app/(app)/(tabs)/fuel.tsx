@@ -12,11 +12,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator,
-  KeyboardAvoidingView, Platform, RefreshControl,
+  KeyboardAvoidingView, Platform, RefreshControl, Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Fuel, Truck, MapPin, Hash, Gauge, Check, ChevronDown } from "lucide-react-native";
+import { Fuel, Truck, MapPin, Gauge, Check, ChevronDown, Camera, X, Receipt } from "lucide-react-native";
 import * as Location from "expo-location";
+import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
 import type { FuelReport } from "@fleetcal/types";
 
@@ -89,7 +90,8 @@ export default function FuelScreen() {
   const [diesel,         setDiesel]         = useState("");
   const [def,            setDef]            = useState("");
   const [odometer,       setOdometer]       = useState("");
-  const [notes,          setNotes]          = useState("");
+  // Receipt photos — local URIs queued for upload on submit.
+  const [receipts,       setReceipts]       = useState<Array<{ uri: string; mimeType?: string; fileName?: string }>>([]);
 
   const [submitting,     setSubmitting]     = useState(false);
   const [recent,         setRecent]         = useState<FuelReport[]>([]);
@@ -184,33 +186,95 @@ export default function FuelScreen() {
     (odometerNum === null || (Number.isInteger(odometerNum) && odometerNum >= 0)) &&
     !submitting;
 
+  async function pickReceipts() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Photos", "Enable photo access in Settings to attach receipts.");
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      quality: 0.85,
+      selectionLimit: 4 - receipts.length,
+    });
+    if (res.canceled) return;
+    setReceipts(prev => [
+      ...prev,
+      ...res.assets.map(a => ({
+        uri: a.uri, mimeType: a.mimeType, fileName: a.fileName ?? a.uri.split("/").pop() ?? "receipt.jpg",
+      })),
+    ].slice(0, 4));
+  }
+
+  async function takeReceipt() {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Camera", "Enable camera access in Settings to take receipt photos.");
+      return;
+    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.85 });
+    if (res.canceled) return;
+    const a = res.assets[0];
+    if (!a) return;
+    setReceipts(prev => [...prev, {
+      uri: a.uri, mimeType: a.mimeType, fileName: a.fileName ?? `receipt-${Date.now()}.jpg`,
+    }].slice(0, 4));
+  }
+
   async function handleSubmit() {
     if (!canSubmit || assetId == null) return;
     setSubmitting(true);
     try {
-      await railway.submitFuelReport({
+      const { fuelReport } = await railway.submitFuelReport({
         assetId,
         state,
         dieselGallons: dieselNum,
         defGallons:    defNum ?? undefined,
         odometer:      odometerNum ?? undefined,
-        notes:         notes.trim() || undefined,
         latitude:      gpsRef.current?.latitude,
         longitude:     gpsRef.current?.longitude,
       });
+
+      // Upload receipts sequentially. Failures don't roll back the
+      // report — driver gets a notice and can re-attach later via
+      // the recent submissions list (Phase 2: edit photos on a
+      // submitted report). For now the report is still useful
+      // without the photo.
+      const uploadFailures: string[] = [];
+      for (const r of receipts) {
+        try {
+          const form = new FormData();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          form.append("file", { uri: r.uri, name: r.fileName ?? "receipt.jpg", type: r.mimeType ?? "image/jpeg" } as any);
+          await railway.uploadFuelReceipt(fuelReport.id, form);
+        } catch (err) {
+          console.warn("[fuel] receipt upload failed:", err);
+          uploadFailures.push(r.fileName ?? "receipt");
+        }
+      }
+
       // Reset the entry fields, keep the asset selection (drivers often
       // submit consecutive fills on the same truck during long days).
       setDiesel("");
       setDef("");
       setOdometer("");
-      setNotes("");
+      setReceipts([]);
       await refreshRecent();
-      Alert.alert("Submitted", "Fuel report recorded.");
+      if (uploadFailures.length > 0) {
+        Alert.alert("Submitted", `Report saved, but ${uploadFailures.length} receipt${uploadFailures.length === 1 ? '' : 's'} failed to upload.`);
+      } else {
+        Alert.alert("Submitted", "Fuel report recorded.");
+      }
     } catch (err) {
       Alert.alert("Submission failed", (err as Error).message);
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function removeReceipt(idx: number) {
+    setReceipts(prev => prev.filter((_, i) => i !== idx));
   }
 
   return (
@@ -283,29 +347,47 @@ export default function FuelScreen() {
             <FieldLabel Icon={Gauge} label="Odometer" />
             <NumberInput value={odometer} onChangeText={setOdometer} placeholder="Miles" integer />
 
-            {/* Notes */}
-            <FieldLabel Icon={Hash} label="Notes" />
-            <TextInput
-              value={notes}
-              onChangeText={setNotes}
-              placeholder="Optional"
-              placeholderTextColor="#9aa0a6"
-              multiline
-              style={[
-                txt(600),
-                {
-                  backgroundColor: "#f8f9fa",
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical:   10,
-                  fontSize: 15,
-                  color: "#202124",
-                  marginBottom: 6,
-                  minHeight: 56,
-                  textAlignVertical: "top",
-                },
-              ]}
-            />
+            {/* Receipt photos */}
+            <FieldLabel Icon={Receipt} label={`Receipt (${receipts.length}/4)`} />
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {receipts.map((r, i) => (
+                <View key={`${r.uri}-${i}`} style={{ width: 72, height: 72, borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
+                  <Image source={{ uri: r.uri }} style={{ width: '100%', height: '100%' }} />
+                  <TouchableOpacity
+                    onPress={() => removeReceipt(i)}
+                    style={{
+                      position: 'absolute', top: 2, right: 2,
+                      width: 22, height: 22, borderRadius: 11,
+                      backgroundColor: 'rgba(0,0,0,0.55)',
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                    <X size={12} color="#fff" strokeWidth={2.8} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {receipts.length < 4 && (
+                <>
+                  <TouchableOpacity onPress={takeReceipt}
+                    style={{
+                      width: 72, height: 72, borderRadius: 8,
+                      borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                    <Camera size={20} color="#5f6368" />
+                    <Text style={[txt(600), { fontSize: 9, color: '#5f6368', marginTop: 2 }]}>Camera</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={pickReceipts}
+                    style={{
+                      width: 72, height: 72, borderRadius: 8,
+                      borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                    <Text style={[txt(800), { fontSize: 16, color: '#5f6368' }]}>+</Text>
+                    <Text style={[txt(600), { fontSize: 9, color: '#5f6368' }]}>Library</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
 
             {/* Submit */}
             <TouchableOpacity
