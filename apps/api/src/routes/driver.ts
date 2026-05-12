@@ -284,7 +284,38 @@ driver.get("/loads", async (c) => {
   const trailersById = new Map<number, TrailerMini>();
   for (const t of (trailersRes.data ?? []) as unknown as TrailerMini[]) trailersById.set(t.id, t);
 
+  // Doc-kind counts per load — drives the driver app's "delivered
+  // without POD" warning chip on each load card. One query for the
+  // visible page; relay loads share a load_id so both legs see the
+  // same counts.
+  const loadIds = Array.from(new Set(
+    rows.map(r => (r.load_id as string | null)).filter((id): id is string => !!id),
+  ));
+  const countsByLoad = new Map<string, Record<string, number>>();
+  if (loadIds.length > 0) {
+    const { data: docs, error: docErr } = await supabase
+      .from("load_documents")
+      .select("load_id, kind")
+      .eq("org_id", orgId)
+      .in("load_id", loadIds);
+    if (docErr) {
+      console.error("[GET /v1/driver/loads] doc counts:", docErr);
+    } else {
+      for (const d of (docs ?? []) as Array<{ load_id: string | null; kind: string }>) {
+        if (!d.load_id) continue;
+        const m = countsByLoad.get(d.load_id) ?? {};
+        m[d.kind] = (m[d.kind] ?? 0) + 1;
+        countsByLoad.set(d.load_id, m);
+      }
+    }
+  }
+
   const loads = buildLoads(rows, stopsByEvent, assetsById, trailersById);
+  for (const l of loads) {
+    if (!l.loadId) continue;
+    const counts = countsByLoad.get(l.loadId);
+    if (counts) l.documentCounts = counts;
+  }
   return c.json({ loads });
 });
 
@@ -363,6 +394,26 @@ driver.get("/loads/:id", async (c) => {
       load.partnerStops      = ((partnerStops ?? []) as unknown as StopRow[])
         .map(rowToStop)
         .sort((a, b) => a.sequence - b.sequence);
+    }
+  }
+
+  // Doc-kind counts — same shape as the list endpoint so the load
+  // detail screen can derive "delivered without POD" too. Cheap
+  // single query keyed by load_id (shared across relay legs).
+  if (load.loadId) {
+    const { data: docs, error: docErr } = await supabase
+      .from("load_documents")
+      .select("kind")
+      .eq("org_id", orgId)
+      .eq("load_id", load.loadId);
+    if (docErr) {
+      console.error("[GET /v1/driver/loads/:id] doc counts:", docErr);
+    } else {
+      const counts: Record<string, number> = {};
+      for (const d of (docs ?? []) as Array<{ kind: string }>) {
+        counts[d.kind] = (counts[d.kind] ?? 0) + 1;
+      }
+      load.documentCounts = counts;
     }
   }
 

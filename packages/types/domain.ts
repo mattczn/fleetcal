@@ -564,6 +564,18 @@ export interface Load {
    * Exempts the load from the closeout "missing POD" auto-flag.
    */
   isTonu?: boolean;
+
+  /**
+   * Per-kind doc counts for this load (load_documents keyed by `kind`).
+   * Optional + populated by the list endpoints that opt into it
+   * (driver loads list, closeout queue) — most queries leave it
+   * undefined to keep the response cheap. Used client-side to flag
+   * "delivered without POD" without an extra per-card fetch.
+   *
+   * Keyed by DocumentKind (from api.ts) at runtime — we declare as
+   * a string-keyed record here to avoid a domain→api circular import.
+   */
+  documentCounts?: Record<string, number>;
 }
 
 // ── Invoice ─────────────────────────────────────────────────────────────

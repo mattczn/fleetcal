@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
-import { MapPin, Truck, ChevronRight, Box } from "lucide-react-native";
+import { MapPin, Truck, ChevronRight, Box, AlertTriangle } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { Load, Stop } from "@/lib/types";
 import { needsConfirmation } from "@/lib/loadStatus";
@@ -69,6 +69,19 @@ export function LoadCard({ load }: Props) {
   const isRelayDelivery = load.relayRole === "delivery";
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
+  // "Delivered without paperwork" warning. POD is the canonical
+  // billing doc; we surface a chip on the card so the driver sees it
+  // before opening the load. Skip:
+  //  - TONU loads (no POD expected by design)
+  //  - non-revenue events
+  //  - the pickup leg of a relay (delivery leg is responsible for POD)
+  const podCount = load.documentCounts?.pod ?? 0;
+  const missingPaperwork =
+    load.status === "delivered" &&
+    !load.isTonu &&
+    !isNonRev &&
+    !isRelayPickup &&
+    podCount === 0;
   const { data: orgSettings } = useQuery({
     queryKey: ["org-settings", driver?.orgId],
     queryFn:  () => fetchOrgSettings(driver!.orgId),
@@ -95,7 +108,7 @@ export function LoadCard({ load }: Props) {
       }}
     >
       <View style={{ flexDirection: "row" }}>
-        <View style={{ width: 4, backgroundColor: needsAction ? "#dc2626" : "#1a73e8" }} />
+        <View style={{ width: 4, backgroundColor: missingPaperwork ? "#d97706" : needsAction ? "#dc2626" : "#1a73e8" }} />
 
         <View style={{ flex: 1, padding: 14 }}>
           {isNonRev ? <DiagonalStripes /> : null}
@@ -108,6 +121,32 @@ export function LoadCard({ load }: Props) {
             {isNonRev ? <NonRevChip size="small" /> : null}
             {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
           </View>
+
+          {/* Paperwork warning — load is delivered but no POD on file.
+              Strip across the top of the card so it's visible without
+              opening the load. Sits below the title row so it doesn't
+              compete with the relay / non-rev chips. */}
+          {missingPaperwork ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                marginTop: 8,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                borderRadius: 8,
+                backgroundColor: "#fff7ed",
+                borderWidth: 1,
+                borderColor: "#fdba74",
+              }}
+            >
+              <AlertTriangle size={12} color="#9a3412" strokeWidth={2.4} />
+              <Text style={[txt(700), { fontSize: 12, color: "#9a3412", flex: 1 }]} numberOfLines={1}>
+                Upload paperwork — no POD on file
+              </Text>
+            </View>
+          ) : null}
 
           {/* Equipment row — asset · trailer */}
           {(load.assetName || load.trailerType) ? (
