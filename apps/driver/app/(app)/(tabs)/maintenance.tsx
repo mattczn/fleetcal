@@ -313,10 +313,10 @@ export default function MaintenanceScreen() {
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                backgroundColor: '#f8f9fa',
+                backgroundColor: '#fff',
                 borderRadius: 10,
                 borderWidth: 1,
-                borderColor: '#a8c7fa',
+                borderColor: '#e8eaed',
                 paddingHorizontal: 12,
                 paddingVertical: 12,
               }}>
@@ -363,10 +363,10 @@ export default function MaintenanceScreen() {
               style={[
                 txt(600),
                 {
-                  backgroundColor: '#f8f9fa',
+                  backgroundColor: '#fff',
                   borderRadius: 10,
                   borderWidth: 1,
-                  borderColor: '#a8c7fa',
+                  borderColor: '#e8eaed',
                   paddingHorizontal: 12,
                   paddingVertical: 10,
                   fontSize: 15,
@@ -486,9 +486,9 @@ function ToggleChip({
         gap: 6,
         paddingVertical: 12,
         borderRadius: 10,
-        backgroundColor: active ? '#1a73e8' : '#f8f9fa',
+        backgroundColor: active ? '#1a73e8' : '#fff',
         borderWidth: 1,
-        borderColor: active ? '#1a73e8' : '#a8c7fa',
+        borderColor: active ? '#1a73e8' : '#e8eaed',
       }}>
       <Icon size={16} color={active ? '#fff' : '#5f6368'} strokeWidth={2.2} />
       <Text style={[txt(700), { fontSize: 14, color: active ? '#fff' : '#5f6368' }]}>{label}</Text>

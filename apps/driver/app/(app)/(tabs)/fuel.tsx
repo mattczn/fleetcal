@@ -514,10 +514,10 @@ function PickerRow({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        backgroundColor: "#f8f9fa",
+        backgroundColor: "#fff",
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: "#a8c7fa",
+        borderColor: "#e8eaed",
         paddingHorizontal: 12,
         paddingVertical: 12,
       }}>
@@ -580,10 +580,10 @@ function NumberInput({
       style={[
         txt(700),
         {
-          backgroundColor: "#f8f9fa",
+          backgroundColor: "#fff",
           borderRadius: 10,
           borderWidth: 1,
-          borderColor: "#a8c7fa",
+          borderColor: "#e8eaed",
           paddingHorizontal: 12,
           paddingVertical: 12,
           fontSize: 16,
