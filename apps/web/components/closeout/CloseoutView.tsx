@@ -146,6 +146,10 @@ export default function CloseoutView() {
   // refreshed alongside the main queue fetch — keeps the inactive
   // tile's number accurate without forcing a tab switch.
   const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0 });
+  // Sum of load values per bucket (mirrors /accounting's bucket tiles).
+  // Server returns this in the queue response (deduped by loadId for
+  // relays). Refreshed alongside the count totals.
+  const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0 });
   const page = pageByTab[tab];
   const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
 
@@ -252,6 +256,11 @@ export default function CloseoutView() {
         pending: p?.total ?? 0,
         flagged: f?.total ?? 0,
         all:     a?.total ?? 0,
+      });
+      setBucketLoadValue({
+        pending: p?.totalLoadValue ?? 0,
+        flagged: f?.totalLoadValue ?? 0,
+        all:     a?.totalLoadValue ?? 0,
       });
     } catch { /* best-effort */ }
   }
@@ -622,6 +631,7 @@ export default function CloseoutView() {
             {TABS.map(b => {
               const active = tab === b.value;
               const count = bucketTotals[b.value];
+              const value = bucketLoadValue[b.value];
               const Icon = b.value === 'pending' ? Clock : b.value === 'flagged' ? Flag : FileCheck2;
               return (
                 <button key={b.value}
@@ -636,6 +646,9 @@ export default function CloseoutView() {
                     <Icon size={16} style={{ color: b.tint }} />
                     <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
                     <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
+                  </div>
+                  <div className="mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                    {moneyFmt.format(value)}
                   </div>
                   <div className="mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
                     {b.subtitle}

@@ -185,6 +185,27 @@ closeout.get("/queue", async (c) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let rawRows: any[] = [];
   let totalCount = 0;
+  // Total $ across the FULL filtered set (not just the page on screen),
+  // deduped by loadId so a relay load counts once. Used by the bucket
+  // tiles in /closeout to surface "Pending $X / Flagged $Y" the same
+  // way /accounting does. We compute this in the wide-candidate and
+  // search paths where we already have every matching row in hand;
+  // the DB-paginated path (verified/invoiced/paid) leaves it at 0
+  // since computing it there would require a separate aggregate.
+  let totalLoadValue = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sumLoadValuesDeduped = (rows: any[]): number => {
+    const byLoadId = new Map<string, number>();
+    for (const r of rows) {
+      const lid = r.load?.id as string | undefined;
+      const price = Number(r.load?.load_price ?? 0) || 0;
+      if (!lid) continue;
+      if (!byLoadId.has(lid)) byLoadId.set(lid, price);
+    }
+    let sum = 0;
+    for (const v of byLoadId.values()) sum += v;
+    return sum;
+  };
   // Reuse-flag — when the wide-candidate path runs, we've already
   // built loadIds + we'll need POD counts; track them here so the
   // returned docCounts payload further down doesn't re-fetch.
@@ -251,6 +272,7 @@ closeout.get("/queue", async (c) => {
     });
 
     totalCount = filtered.length;
+    totalLoadValue = sumLoadValuesDeduped(filtered);
     rawRows    = filtered.slice(offset, offset + limit);
   } else {
     // ── Search path: two parallel queries, merged + paginated in JS.
@@ -350,6 +372,7 @@ closeout.get("/queue", async (c) => {
       });
     }
     totalCount = finalRows.length;
+    totalLoadValue = sumLoadValuesDeduped(finalRows);
     rawRows    = finalRows.slice(offset, offset + limit);
   }
 
@@ -387,6 +410,7 @@ closeout.get("/queue", async (c) => {
     loads,
     docCounts,
     total: totalCount,
+    totalLoadValue,
     limit,
     offset,
   });

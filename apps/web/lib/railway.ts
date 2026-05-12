@@ -132,6 +132,10 @@ class RailwayClient {
       docCounts: Record<string, Record<string, number>>;
       /** Total matching rows across all pages (for pagination footer). */
       total: number;
+      /** Sum of load prices across the full filtered set, deduped by
+       *  loadId so relay loads count once. 0 on tabs where the API
+       *  doesn't compute it (verified/invoiced/paid use DB pagination). */
+      totalLoadValue?: number;
       limit: number;
       offset: number;
     }>('GET', `/v1/closeout/queue?${params.toString()}`);
