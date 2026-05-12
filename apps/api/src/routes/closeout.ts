@@ -33,9 +33,14 @@ const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
-  "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by,follow_ups," +
+  "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by,follow_ups,is_tonu," +
   "verified_at,verified_by,invoice_doc_ids," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
+
+// Grace window before missing-POD fires. Driver / office gets a full
+// day to upload paperwork after delivery before we surface it as an
+// impediment. Anything less generates noise during the normal flow.
+const POD_GRACE_MS = 24 * 60 * 60 * 1000;
 
 // ─── Auto-flag derivation ───────────────────────────────────────────────
 //
@@ -70,18 +75,59 @@ function isPodMissing(loadId: string | undefined | null, podCountByLoad: Map<str
   return (podCountByLoad.get(loadId) ?? 0) === 0;
 }
 
+/** Has the delivery end passed by at least the grace window? Returns
+ *  false if `deliveryEnd` is null/invalid — can't expect POD without
+ *  a delivery date. */
+function podDueByNow(deliveryEnd: string | null | undefined, nowMs: number): boolean {
+  if (!deliveryEnd) return false;
+  const t = new Date(deliveryEnd).getTime();
+  if (isNaN(t)) return false;
+  return t <= nowMs - POD_GRACE_MS;
+}
+
 /** True if a load has ANY closeout impediment. Used to split the
- *  pending vs flagged buckets without storing the state on the row. */
+ *  pending vs flagged buckets without storing the state on the row.
+ *
+ *  `deliveryEnd` should be the DELIVERY-leg's end for relays (not
+ *  the pickup leg's), and the load's own end for single-event loads.
+ *  Caller builds this lookup once across all candidate rows. */
 function loadIsFlagged(
-  load:           { billing_status?: string; accessorials?: unknown },
+  load:           { billing_status?: string; accessorials?: unknown; is_tonu?: boolean },
   loadId:         string | undefined | null,
   podCountByLoad: Map<string, number>,
-  isDelivered:    boolean,
+  deliveryEnd:    string | null | undefined,
+  nowMs:          number,
 ): boolean {
-  if (load.billing_status === 'on_hold')                return true;
-  if (hasPendingAccessorial(load))                      return true;
-  if (isDelivered && isPodMissing(loadId, podCountByLoad)) return true;
+  if (load.billing_status === 'on_hold') return true;
+  if (hasPendingAccessorial(load))       return true;
+  // POD check skipped entirely for TONU — no delivery happened, no
+  // paperwork expected.
+  if (load.is_tonu) return false;
+  if (podDueByNow(deliveryEnd, nowMs) && isPodMissing(loadId, podCountByLoad)) return true;
   return false;
+}
+
+/** Build a loadId → deliveryEnd map from candidate rows. The
+ *  closeout queue returns each leg of a relay as a separate row,
+ *  so we resolve to the delivery leg explicitly. Non-relay loads
+ *  just map to their own end. */
+function buildDeliveryEndMap(rows: Array<{ end?: string | null; load?: { id?: string | null } | null; relay_role?: string | null }>): Map<string, string> {
+  const m = new Map<string, string>();
+  // First pass — any end as a fallback (for orphan pickup legs whose
+  // delivery counterpart isn't in our candidate set).
+  for (const r of rows) {
+    const id = r.load?.id;
+    if (!id) continue;
+    if (!m.has(id) && r.end) m.set(id, r.end);
+  }
+  // Second pass — delivery leg overrides.
+  for (const r of rows) {
+    if (r.relay_role !== 'delivery') continue;
+    const id = r.load?.id;
+    if (!id || !r.end) continue;
+    m.set(id, r.end);
+  }
+  return m;
 }
 
 type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all";
@@ -187,11 +233,18 @@ closeout.get("/queue", async (c) => {
       }
     }
 
+    // Build delivery-end-per-load now that we have the full candidate
+    // set — needed for relay loads where the pickup leg's end isn't
+    // the right reference for the POD-due check.
+    const deliveryEndByLoadId = buildDeliveryEndMap(candidates);
+    const nowMs = Date.now();
+
     // Apply the impediment filter. Pending = NOT flagged.
     const filtered = candidates.filter(r => {
-      const loadRow = r.load as { billing_status?: string; accessorials?: unknown; id?: string };
-      const isDelivered = !!r.end && r.end <= nowIso;
-      const flagged = loadIsFlagged(loadRow, loadRow?.id, podCount, isDelivered);
+      const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
+      const loadId = loadRow?.id;
+      const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
+      const flagged = loadIsFlagged(loadRow, loadId, podCount, deliveryEnd, nowMs);
       return tab === "flagged" ? flagged : !flagged;
     });
 
@@ -284,10 +337,13 @@ closeout.get("/queue", async (c) => {
           if (p.load_id) podCount.set(p.load_id, (podCount.get(p.load_id) ?? 0) + 1);
         }
       }
+      const deliveryEndByLoadId = buildDeliveryEndMap(merged);
+      const nowMs = Date.now();
       finalRows = merged.filter(r => {
-        const loadRow = r.load as { billing_status?: string; accessorials?: unknown; id?: string };
-        const isDelivered = !!r.end && r.end <= nowIso;
-        const flagged = loadIsFlagged(loadRow, loadRow?.id, podCount, isDelivered);
+        const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
+        const loadId = loadRow?.id;
+        const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
+        const flagged = loadIsFlagged(loadRow, loadId, podCount, deliveryEnd, nowMs);
         return tab === "flagged" ? flagged : !flagged;
       });
     }
@@ -370,11 +426,13 @@ interface UpdateBillingBody {
   followUpCategory?: 'pod' | 'rate_con' | 'rate_dispute' | 'accessorial' | 'other';
   /** Optional resolution applied atomically with the follow-up entry. */
   followUpResolution?: {
-    type:           'accessorial_status' | 'flag_cleared';
+    type:           'accessorial_status' | 'flag_cleared' | 'mark_tonu';
     /** Required when type='accessorial_status'. */
     accessorialId?: string;
     /** Required when type='accessorial_status'. */
     newStatus?:     'approved' | 'denied';
+    /** Required when type='mark_tonu'. true = mark TONU, false = un-mark. */
+    isTonu?:        boolean;
   };
 }
 
@@ -456,7 +514,7 @@ closeout.patch("/loads/:id", async (c) => {
     }
     const { data: existing, error: fetchErr } = await supabase
       .from("loads")
-      .select("follow_ups,accessorials,billing_status,flagged_reason,flagged_note,flagged_at,flagged_by")
+      .select("follow_ups,accessorials,billing_status,flagged_reason,flagged_note,flagged_at,flagged_by,is_tonu")
       .eq("id", loadId)
       .eq("org_id", orgId)
       .single();
@@ -523,6 +581,19 @@ closeout.patch("/loads/:id", async (c) => {
           writeBack.billing_status = "pending";
         }
         newEntry.resolution = { type: "flag_cleared" };
+        writeBack.follow_ups = [...priorFollowUps, newEntry];
+      } else if (r.type === "mark_tonu") {
+        // TONU toggle — exempts the load from the missing-POD check.
+        // The user can also un-mark (isTonu=false) if it was set in
+        // error. Logged with a resolution chip in the timeline.
+        if (typeof r.isTonu !== "boolean") {
+          return c.json(
+            { error: "validation_failed", errors: ["resolution isTonu (boolean) required"] } satisfies ApiErrorResponse,
+            400,
+          );
+        }
+        writeBack.is_tonu = r.isTonu;
+        newEntry.resolution = { type: "mark_tonu" };
         writeBack.follow_ups = [...priorFollowUps, newEntry];
       }
     }

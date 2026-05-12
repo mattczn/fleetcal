@@ -923,10 +923,18 @@ export default function CloseoutView() {
                                 to show only captured the manual reason. */}
                             {(() => {
                               const reasons = computeFlagReasons(load, counts);
-                              if (reasons.length === 0) return null;
+                              const showTonu = load.isTonu;
+                              if (reasons.length === 0 && !showTonu) return null;
                               return (
                                 <div className="mt-1 flex flex-wrap gap-1">
                                   {reasons.map((r, i) => <FlagChip key={i} reason={r} />)}
+                                  {showTonu && (
+                                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
+                                      style={{ background: '#eff6ff', color: '#1d4ed8' }}
+                                      title="Truck Order Not Used — POD not required">
+                                      TONU
+                                    </span>
+                                  )}
                                 </div>
                               );
                             })()}
@@ -1284,7 +1292,7 @@ const moneyShort = (n: number) =>
  *  Mirrors the server's loadIsFlagged() — keeps the row chips in sync
  *  with what the server uses to slot rows into the Flagged bucket. */
 export function computeFlagReasons(
-  load:   { flaggedReason?: string; accessorials?: Array<{ id: string; category: string; amount: number; status?: 'requested' | 'approved' | 'denied' }> },
+  load:   { flaggedReason?: string; isTonu?: boolean; accessorials?: Array<{ id: string; category: string; amount: number; status?: 'requested' | 'approved' | 'denied' }> },
   counts: Record<string, number>,
 ): ImpedimentReason[] {
   const out: ImpedimentReason[] = [];
@@ -1293,7 +1301,11 @@ export function computeFlagReasons(
     out.push({ kind: 'manual', label: MANUAL_FLAG_LABELS[load.flaggedReason] ?? load.flaggedReason });
   }
   // Missing POD — count comes from the closeout queue's docCounts.
-  if ((counts.pod ?? 0) === 0) {
+  // TONU loads don't need POD, so we skip this check entirely. The
+  // server applies the 24h grace-period before flagging; the row
+  // wouldn't be in the Flagged bucket if it weren't already past
+  // that threshold, so the chip just mirrors the server's decision.
+  if (!load.isTonu && (counts.pod ?? 0) === 0) {
     out.push({ kind: 'missing_pod' });
   }
   // Pending accessorials — one chip per item still in flux.

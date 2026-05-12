@@ -76,11 +76,13 @@ export type LoadFollowUpCategory =
   | 'other';
 
 export interface LoadFollowUpResolution {
-  type:           'accessorial_status' | 'flag_cleared';
+  type:           'accessorial_status' | 'flag_cleared' | 'mark_tonu';
   /** Required when type='accessorial_status'. */
   accessorialId?: string;
   /** Required when type='accessorial_status'. */
   newStatus?:     'approved' | 'denied';
+  /** Required when type='mark_tonu'. true = mark TONU, false = un-mark. */
+  isTonu?:        boolean;
 }
 
 export interface LoadFollowUp {
@@ -524,6 +526,13 @@ export interface Load {
    * the Flagged-bucket follow-up modal. See LoadFollowUp.
    */
   followUps?: LoadFollowUp[];
+
+  /**
+   * Truck Order Not Used. Carrier got dispatched + showed up but the
+   * broker cancelled the move, so we bill a TONU fee with no POD.
+   * Exempts the load from the closeout "missing POD" auto-flag.
+   */
+  isTonu?: boolean;
 }
 
 // ── Invoice ─────────────────────────────────────────────────────────────

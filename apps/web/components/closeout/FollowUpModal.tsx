@@ -65,10 +65,12 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
   const [category, setCategory]   = useState<LoadFollowUpCategory | ''>('');
   // Optional structured resolution attached to this follow-up.
   // type='accessorial_status' pairs with accessorialId + newStatus;
-  // type='flag_cleared' clears the manual flag.
-  const [resolutionType, setResolutionType] = useState<'none' | 'accessorial_status' | 'flag_cleared'>('none');
+  // type='flag_cleared' clears the manual flag;
+  // type='mark_tonu' toggles the TONU flag (exempts POD check).
+  const [resolutionType, setResolutionType] = useState<'none' | 'accessorial_status' | 'flag_cleared' | 'mark_tonu'>('none');
   const [resAccId,        setResAccId]       = useState<string>('');
   const [resNewStatus,    setResNewStatus]   = useState<'approved' | 'denied'>('approved');
+  const [resIsTonu,       setResIsTonu]      = useState<boolean>(true);
   const [busy, setBusy]           = useState(false);
   const [showHistory, setShowHistory] = useState(true);
 
@@ -81,7 +83,11 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
   const pendingAccessorials = (load.accessorials ?? []).filter(
     a => a.status !== 'approved' && a.status !== 'denied',
   );
-  const podMissing = (docCounts?.pod ?? 0) === 0;
+  // POD only matters when not a TONU and the load actually delivered.
+  // We approximate "delivered" with the load.end timestamp (same logic
+  // the server uses for the auto-flag — keeps the UI in sync).
+  const isTonu = !!load.isTonu;
+  const podMissing = !isTonu && (docCounts?.pod ?? 0) === 0;
   const manualFlag = load.flaggedReason
     ? { reason: load.flaggedReason, note: load.flaggedNote, by: load.flaggedBy, at: load.flaggedAt }
     : null;
@@ -89,9 +95,15 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
   // Default the category from the resolution type if the user hasn't
   // explicitly set one.
   useEffect(() => {
-    if (category) return;
-    if (resolutionType === 'accessorial_status') setCategory('accessorial');
-    else if (resolutionType === 'flag_cleared') setCategory(manualFlag?.reason === 'missing_pod' ? 'pod' : 'other');
+    if (!category) {
+      if (resolutionType === 'accessorial_status') setCategory('accessorial');
+      else if (resolutionType === 'flag_cleared') setCategory(manualFlag?.reason === 'missing_pod' ? 'pod' : 'other');
+      else if (resolutionType === 'mark_tonu')    setCategory('pod');
+    }
+    // Snap resIsTonu to the opposite of current — "mark TONU" if not
+    // TONU, "un-mark" if it is. User can flip after if they really
+    // want the same direction.
+    if (resolutionType === 'mark_tonu') setResIsTonu(!isTonu);
   }, [resolutionType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSave() {
@@ -117,6 +129,8 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
         };
       } else if (resolutionType === 'flag_cleared') {
         body.followUpResolution = { type: 'flag_cleared' };
+      } else if (resolutionType === 'mark_tonu') {
+        body.followUpResolution = { type: 'mark_tonu', isTonu: resIsTonu };
       }
       const targetId = load.loadId ?? load.id;
       await railway.updateLoadCloseout(targetId, body);
@@ -193,9 +207,19 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
                 tone={{ bg: '#dcfce7', fg: '#166534', border: '#86efac' }}
                 title={`${ACCESSORIAL_LABELS[a.category] ?? 'Accessorial'} ${moneyFmt(a.amount)}`}
                 detail={a.description ?? undefined}
-                meta={`Status: ${a.status ?? 'requested'} &mdash; waiting on broker decision`}
+                meta={`Status: ${a.status ?? 'requested'} — waiting on broker decision`}
               />
             ))}
+            {isTonu && (
+              // Not an impediment — informational. Surfaces that this
+              // load is exempt from POD so the user knows why no
+              // "missing POD" chip appears even on a delivered load.
+              <ImpedimentRow
+                tone={{ bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe' }}
+                title="TONU — no POD required"
+                detail="Marked as Truck Order Not Used. Bill the TONU fee and skip POD verification."
+              />
+            )}
           </div>
 
           {/* Add follow-up form */}
@@ -235,7 +259,7 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
               <label className="flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
                 <span>Resolution</span>
                 <select value={resolutionType}
-                  onChange={e => setResolutionType(e.target.value as 'none' | 'accessorial_status' | 'flag_cleared')}
+                  onChange={e => setResolutionType(e.target.value as 'none' | 'accessorial_status' | 'flag_cleared' | 'mark_tonu')}
                   disabled={busy}
                   className="text-[12px] px-2 py-1 rounded-md outline-none"
                   style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
@@ -246,9 +270,25 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
                   {manualFlag && (
                     <option value="flag_cleared">Clear manual flag</option>
                   )}
+                  {/* TONU toggle — surface "mark" when not currently
+                      TONU, "un-mark" when it is. Either way the
+                      sub-form below confirms the intent. */}
+                  <option value="mark_tonu">
+                    {isTonu ? 'Un-mark TONU (POD required again)' : 'Mark as TONU (no POD needed)'}
+                  </option>
                 </select>
               </label>
             </div>
+
+            {/* Sub-form when resolution=mark_tonu */}
+            {resolutionType === 'mark_tonu' && (
+              <div className="px-3 py-2 rounded-lg text-[12px]"
+                style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
+                {resIsTonu
+                  ? 'This load will be marked TONU. The missing-POD impediment goes away; other impediments (accessorials, manual flag) still apply.'
+                  : 'This load will go back to regular POD requirements.'}
+              </div>
+            )}
 
             {/* Sub-form when resolution=accessorial_status */}
             {resolutionType === 'accessorial_status' && (
@@ -340,7 +380,9 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
                           <Check size={10} />
                           {f.resolution.type === 'accessorial_status'
                             ? `Set accessorial ${f.resolution.newStatus}`
-                            : 'Cleared manual flag'}
+                            : f.resolution.type === 'flag_cleared'
+                              ? 'Cleared manual flag'
+                              : 'TONU toggled'}
                         </div>
                       )}
                     </li>

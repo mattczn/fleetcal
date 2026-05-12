@@ -157,9 +157,10 @@ class RailwayClient {
     followUpNote?: string;
     followUpCategory?: 'pod' | 'rate_con' | 'rate_dispute' | 'accessorial' | 'other';
     followUpResolution?: {
-      type:           'accessorial_status' | 'flag_cleared';
+      type:           'accessorial_status' | 'flag_cleared' | 'mark_tonu';
       accessorialId?: string;
       newStatus?:     'approved' | 'denied';
+      isTonu?:        boolean;
     };
   }) {
     return this.req<{ ok: true }>('PATCH', `/v1/closeout/loads/${id}`, body);

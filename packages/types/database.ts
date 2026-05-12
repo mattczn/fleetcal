@@ -603,6 +603,7 @@ export type Database = {
           flagged_reason: string | null
           follow_ups: Json
           id: string
+          is_tonu: boolean
           internal_load_id: number
           internal_notes: Json
           invoice_doc_ids: string[]
@@ -634,6 +635,7 @@ export type Database = {
           flagged_reason?: string | null
           follow_ups?: Json
           id?: string
+          is_tonu?: boolean
           internal_load_id: number
           internal_notes?: Json
           invoice_doc_ids?: string[]
@@ -665,6 +667,7 @@ export type Database = {
           flagged_reason?: string | null
           follow_ups?: Json
           id?: string
+          is_tonu?: boolean
           internal_load_id?: number
           internal_notes?: Json
           invoice_doc_ids?: string[]
