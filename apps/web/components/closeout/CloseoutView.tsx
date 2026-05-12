@@ -610,14 +610,11 @@ export default function CloseoutView() {
   return (
     <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
       <ManagementHeader title="Closeout" icon={FileCheck2} />
-      {/* overflow-x: hidden on the outer scroll container prevents the
-          page from scrolling horizontally when the table is wider than
-          the viewport. The table wrapper inside has its own overflow-x:
-          auto, so the SCROLL stays inside the table — the toolbar and
-          bucket tiles never get pushed off-screen. minW:0 lets the
-          inner container shrink below its content's intrinsic width. */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-6" style={{ minWidth: 0 }}>
-        <div className="max-w-[1600px] mx-auto space-y-4" style={{ minWidth: 0 }}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden py-6">
+        {/* 95vw inner container, centered. Bucket cards, toolbar, and
+            the table area all share this width. Beyond 95vw, the table
+            scrolls horizontally inside its own wrapper. */}
+        <div className="mx-auto space-y-4" style={{ width: '95vw' }}>
 
           {/* Purpose hint — keeps the split between Closeout and
               Accounting visible while users are still building muscle
@@ -764,7 +761,9 @@ export default function CloseoutView() {
           ) : visible.length === 0 ? (
             <EmptyState tab={tab} hasFilters={activeFilterCount > 0} onClearFilters={clearAllFilters} />
           ) : (
-            <div className="rounded-2xl w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden"
+            // Table container: pinned to parent (95vw), horizontally
+            // scrollable, table inside fills it.
+            <div className="rounded-2xl overflow-x-auto"
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
@@ -772,22 +771,7 @@ export default function CloseoutView() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // The "stretch to at least the wrapper, otherwise be
-                  // content-sized" pattern. The previous combo of
-                  // `width:100% + min-width:max-content` was unreliable
-                  // for <table> elements — browsers treat the two
-                  // properties differently than for block elements and
-                  // would lock the table at max-content even when the
-                  // wrapper was wider, leaving an empty band on the right.
-                  //
-                  // Flipping it:
-                  //   width: max-content     → preferred = content width
-                  //   min-width: 100%        → at least fill the wrapper
-                  // Result:
-                  //   wrapper > content  → min-width:100% wins, table fills
-                  //   wrapper < content  → width:max-content wins, table
-                  //                        overflows wrapper, wrapper scrolls
-                  width:    'max-content',
+                  width: '100%',
                   minWidth: '100%',
                 }}>
                 <thead>

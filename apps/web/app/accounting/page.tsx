@@ -567,12 +567,11 @@ export default function AccountingPage() {
       <DataLoader />
       <ManagementHeader title="Accounting" icon={Receipt} />
 
-      {/* overflow-x: hidden on the scroll container keeps the page
-          from ever scrolling sideways. The table wrapper inside has
-          its own overflow-x:auto, so wide tables scroll INTERNALLY
-          and the toolbar / bucket tiles never get pushed off-screen. */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-6" style={{ minWidth: 0 }}>
-        <div className="max-w-[1600px] mx-auto space-y-4" style={{ minWidth: 0 }}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden py-6">
+        {/* 95vw inner container, centered. Bucket cards, toolbar, and
+            table all share this width. Beyond 95vw the table scrolls
+            horizontally inside its own wrapper. */}
+        <div className="mx-auto space-y-4" style={{ width: '95vw' }}>
 
           {/* Purpose hint */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -688,7 +687,9 @@ export default function AccountingPage() {
           ) : total === 0 ? (
             <BucketEmpty bucket={bucket} hasFilters={search.trim() !== '' || Object.values(filters).some(v => v && v.length > 0)} />
           ) : (
-            <div className="rounded-2xl w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden"
+            // Table container: pinned to parent (95vw), horizontally
+            // scrollable, table inside fills it.
+            <div className="rounded-2xl overflow-x-auto"
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
@@ -696,19 +697,7 @@ export default function AccountingPage() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // "Stretch to at least wrapper, otherwise content-sized":
-                  //   width: max-content  → preferred = content
-                  //   min-width: 100%     → at least the wrapper's width
-                  //
-                  // wrapper > content → min-width:100% wins, table fills
-                  // wrapper < content → width:max-content wins, table
-                  //                     overflows, wrapper scrolls
-                  //
-                  // The opposite pairing (width:100% + min-width:max-content)
-                  // is unreliable for <table> — browsers can lock the table
-                  // at max-content even when 100% would be larger, leaving
-                  // an empty band on the right.
-                  width:    'max-content',
+                  width: '100%',
                   minWidth: '100%',
                 }}>
                 <thead>
