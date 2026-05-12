@@ -501,7 +501,9 @@ function StopCard({
   eventId?: string;
   driverName?: string;
   // For relay stops, when these are provided the card renders a
-  // "Upload Pictures" button right under Navigate / Check In.
+  // "Upload Pictures" button right under Navigate / Check In. The
+  // identifier is actually the EVENT id — the driver API path is
+  // /v1/driver/loads/:id/documents but treats :id as event id.
   loadId?: string;
   onPhotoUploaded?: () => void;
 }) {
@@ -981,7 +983,7 @@ export default function LoadDetailScreen() {
                 }}
                 eventId={load.id}
                 driverName={driver?.name}
-                loadId={load.loadId}
+                loadId={load.id}
                 onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />);
           }
 
@@ -1001,7 +1003,7 @@ export default function LoadDetailScreen() {
                 }}
                 eventId={load.id}
                 driverName={driver?.name}
-                loadId={load.loadId}
+                loadId={load.id}
                 onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />)}
                 <RelayHandoffBanner mode="pickup" partnerDriverName={load.partnerDriverName} />
                 {partner.length > 0 ? (
@@ -1068,7 +1070,7 @@ export default function LoadDetailScreen() {
                 }}
                 eventId={load.id}
                 driverName={driver?.name}
-                loadId={load.loadId}
+                loadId={load.id}
                 onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />
                       ))}
                     </View>
@@ -1090,7 +1092,7 @@ export default function LoadDetailScreen() {
                   }}
                   eventId={load.id}
                   driverName={driver?.name}
-                  loadId={load.loadId}
+                  loadId={load.id}
                   onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }}
                 />
               ))}
@@ -1132,7 +1134,7 @@ export default function LoadDetailScreen() {
                 </Text>
               </View>
             </View>
-            <RelayHandoffPhotos loadId={load.loadId} reloadKey={relayPhotosReloadKey} />
+            <RelayHandoffPhotos loadId={load.id} reloadKey={relayPhotosReloadKey} />
           </View>
         ) : null}
 

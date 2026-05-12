@@ -751,6 +751,12 @@ function rowToDoc(r: DocRow) {
 
 // GET /v1/driver/loads/:id/documents — list documents for a load assigned
 // to the auth'd driver, newest first.
+//
+// `:id` is an event id. For relay loads the two legs share a single
+// loads.id but each leg has its own event, so we resolve the event's
+// load_id and query by that — both pickup and delivery drivers then
+// see the same handoff photos. Non-revenue events have no load_id;
+// we fall back to event_id-scoped listing in that case.
 driver.get("/loads/:id/documents", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
@@ -759,17 +765,47 @@ driver.get("/loads/:id/documents", async (c) => {
   const found = await loadDriverEvent(id, driverId, orgId);
   if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
 
-  const { data, error } = await supabase
+  const { data: ev } = await supabase
+    .from("events")
+    .select("load_id")
+    .eq("id", id)
+    .maybeSingle();
+  const loadId = (ev as { load_id: string | null } | null)?.load_id ?? null;
+
+  const baseQuery = supabase
     .from("load_documents")
     .select("*")
-    .eq("event_id", id)
     .eq("org_id", orgId)
     .order("uploaded_at", { ascending: false });
+  const { data, error } = await (loadId
+    ? baseQuery.eq("load_id", loadId)
+    : baseQuery.eq("event_id", id));
+
   if (error) {
     console.error("[GET /v1/driver/loads/:id/documents] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message }, 500);
   }
-  const documents = (data ?? []).map((r) => rowToDoc(r as DocRow));
+  const rows = (data ?? []) as DocRow[];
+
+  // Batch-mint signed URLs so thumbnails render without a per-doc round-trip.
+  const urlByPath = new Map<string, string>();
+  if (rows.length > 0) {
+    const { data: signed, error: signErr } = await supabase.storage
+      .from(DOC_BUCKET)
+      .createSignedUrls(rows.map((r) => r.storage_path), 3600);
+    if (signErr) {
+      console.error("[GET /v1/driver/loads/:id/documents] sign failed:", signErr);
+    } else {
+      for (const u of signed ?? []) {
+        if (u.path && u.signedUrl) urlByPath.set(u.path, u.signedUrl);
+      }
+    }
+  }
+
+  const documents = rows.map((r) => ({
+    ...rowToDoc(r),
+    signedUrl: urlByPath.get(r.storage_path),
+  }));
   return c.json({ documents });
 });
 
