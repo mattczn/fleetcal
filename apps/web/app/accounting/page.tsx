@@ -23,7 +23,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, Users,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -213,12 +213,14 @@ export default function AccountingPage() {
   const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
   const [markPaidBusy,    setMarkPaidBusy]    = useState(false);
 
-  // Reset filters/sort/pagination/selection on bucket change so a
-  // stale id can't get acted on against the wrong list.
+  // Reset selection / sort / pagination on bucket change so a stale
+  // id can't get acted on against the wrong list. Filters are
+  // preserved — a customer or method filter applies consistently
+  // across buckets (you want to follow one broker through the whole
+  // pipeline without re-applying).
   useEffect(() => {
     setSelected(new Set());
     setSort({ key: null, dir: 'asc' });
-    setFilters({});
     setPage(0);
   }, [bucket]);
 
@@ -628,6 +630,10 @@ export default function AccountingPage() {
                 Mark {selected.size} paid
               </button>
             )}
+            <CustomerFilterDropdown
+              options={customers.map(c => c.name).sort()}
+              selected={filters.customer ?? []}
+              onChange={(next) => setFilters(p => ({ ...p, customer: next }))} />
             <ColumnsMenu
               columns={COLUMNS.filter(c => c.toggleable && !COLS_HIDDEN_PER_BUCKET[bucket].has(c.key))}
               visible={visibleCols as Record<string, boolean>}
@@ -937,6 +943,134 @@ export default function AccountingPage() {
         <InternalNotesModal load={notesTarget} actorName={actorName}
           onClose={() => setNotesTarget(null)}
           onSaved={async () => { setNotesTarget(null); await refresh(); }} />
+      )}
+    </div>
+  );
+}
+
+// ─── CustomerFilterDropdown ─────────────────────────────────────────────
+//
+// Toolbar-level multi-select for filtering by customer. Hits the same
+// filters.customer state the Customer column header drives, so the
+// two surfaces stay in sync — pick whichever is closer to the cursor.
+// Sourcing the option list from the full customers state (not just
+// rows visible in this bucket) lets the user pre-set a filter that
+// kicks in when they switch buckets — useful for following one
+// broker through Released → Queued → Invoiced → Paid.
+
+function CustomerFilterDropdown({
+  options, selected, onChange,
+}: {
+  options:  string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen]     = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = search.trim() === ''
+    ? options
+    : options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+  const selectedSet = new Set(selected);
+  const allSelected = options.length > 0 && options.every(o => selectedSet.has(o));
+
+  function toggle(val: string) {
+    const next = new Set(selected);
+    if (next.has(val)) next.delete(val); else next.add(val);
+    onChange(Array.from(next));
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+        style={{
+          border:     `1px solid ${selected.length > 0 ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+          color:      selected.length > 0 ? 'var(--gc-blue)' : 'var(--gc-text-2)',
+          background: selected.length > 0 ? 'rgba(26,115,232,0.06)' : 'var(--gc-surface)',
+        }}>
+        <Users size={12} /> Customer
+        {selected.length > 0 && (
+          <span className="text-[10px] font-bold tabular-nums px-1.5 rounded-full"
+            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 16, textAlign: 'center', lineHeight: '14px' }}>
+            {selected.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 rounded-xl py-1.5"
+          style={{
+            top: '100%', left: 0,
+            background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+            boxShadow: '0 12px 32px rgba(0,0,0,0.15)',
+            minWidth: 280, maxWidth: 340,
+          }}>
+          <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
+            style={{ color: 'var(--gc-text-3)' }}>
+            <span>
+              Customer
+              {selected.length > 0 && (
+                <span className="ml-1 normal-case tracking-normal text-[10px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                  ({selected.length})
+                </span>
+              )}
+            </span>
+            <span className="flex items-center gap-2">
+              <button onClick={() => onChange(allSelected ? [] : [...options])}
+                className="text-[10px] font-semibold normal-case tracking-normal"
+                style={{ color: 'var(--gc-blue)' }}>
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+              {selected.length > 0 && !allSelected && (
+                <button onClick={() => onChange([])}
+                  className="text-[10px] font-semibold normal-case tracking-normal"
+                  style={{ color: 'var(--gc-text-2)' }}>
+                  Clear
+                </button>
+              )}
+            </span>
+          </div>
+          <div className="px-2 pb-1.5">
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search customers…"
+              className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+              style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }} />
+          </div>
+          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] italic" style={{ color: 'var(--gc-text-3)' }}>
+                No matches
+              </div>
+            ) : (
+              filtered.map(o => (
+                <label key={o}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--gc-hover)]"
+                  style={{ color: 'var(--gc-text-1)' }}>
+                  <input type="checkbox" checked={selectedSet.has(o)} onChange={() => toggle(o)}
+                    style={{ accentColor: '#1a73e8' }} />
+                  <span className="truncate flex-1">{o}</span>
+                </label>
+              ))
+            )}
+          </div>
+          <div className="px-2 pt-1.5 pb-1" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+            <button onClick={() => setOpen(false)}
+              className="w-full text-[12px] font-semibold py-1.5 rounded-lg transition-colors"
+              style={{ background: '#1a73e8', color: '#fff' }}>
+              Done
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
