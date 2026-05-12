@@ -226,14 +226,31 @@ export default function FuelScreen() {
     if (!canSubmit || assetId == null) return;
     setSubmitting(true);
     try {
+      // Refresh GPS at submit. The driver may have moved between
+      // form open and submit (opened in the cab, walked to the pump,
+      // walked back). Falls back silently to mount-time coords if
+      // the fresh read fails (permission revoked, indoor, etc.).
+      let lat: number | undefined = gpsRef.current?.latitude;
+      let lng: number | undefined = gpsRef.current?.longitude;
+      try {
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        lat = pos.coords.latitude;
+        lng = pos.coords.longitude;
+        gpsRef.current = { latitude: lat, longitude: lng };
+      } catch {
+        // keep the mount-time values
+      }
+
       const { fuelReport } = await railway.submitFuelReport({
         assetId,
         state,
         dieselGallons: dieselNum,
         defGallons:    defNum ?? undefined,
         odometer:      odometerNum ?? undefined,
-        latitude:      gpsRef.current?.latitude,
-        longitude:     gpsRef.current?.longitude,
+        latitude:      lat,
+        longitude:     lng,
       });
 
       // Upload receipts sequentially. Failures don't roll back the

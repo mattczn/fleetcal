@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
-import { Fuel, Loader2, X, Search } from 'lucide-react';
+import { Fuel, Loader2, X, Search, MapPin as MapPinIcon } from 'lucide-react';
 import DataLoader from '@/components/DataLoader';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import { railway } from '@/lib/railway';
@@ -239,6 +239,7 @@ export default function FuelPage() {
                     <Th>Driver</Th>
                     <Th>Asset</Th>
                     <Th>State</Th>
+                    <Th>Location</Th>
                     <Th align="right">Diesel</Th>
                     <Th align="right">DEF</Th>
                     <Th align="right">Odometer</Th>
@@ -261,6 +262,21 @@ export default function FuelPage() {
                           <span style={{ background: '#e8f0fe', color: '#1a73e8', padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
                             {r.state}
                           </span>
+                        </Td>
+                        <Td>
+                          {r.latitude != null && r.longitude != null ? (
+                            <a
+                              href={`https://www.google.com/maps?q=${r.latitude},${r.longitude}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[12px] hover:underline"
+                              style={{ color: 'var(--gc-blue)' }}
+                              title={`${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}`}>
+                              <MapPinIcon size={12} /> Map
+                            </a>
+                          ) : (
+                            <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                          )}
                         </Td>
                         <Td align="right" className="tabular-nums font-semibold">{gallonFmt.format(Number(r.dieselGallons))}</Td>
                         <Td align="right" className="tabular-nums">
