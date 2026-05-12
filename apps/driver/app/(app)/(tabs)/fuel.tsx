@@ -184,6 +184,7 @@ export default function FuelScreen() {
     Number.isFinite(dieselNum) && dieselNum > 0 &&
     (defNum === null || (Number.isFinite(defNum) && defNum >= 0)) &&
     (odometerNum === null || (Number.isInteger(odometerNum) && odometerNum >= 0)) &&
+    receipts.length > 0 &&
     !submitting;
 
   // Receipt source — single entry point. Driver taps "Upload Photo",
@@ -385,7 +386,7 @@ export default function FuelScreen() {
             <NumberInput value={odometer} onChangeText={setOdometer} placeholder="Miles" integer />
 
             {/* Receipt photos */}
-            <FieldLabel Icon={Receipt} label={`Receipt (${receipts.length}/4)`} />
+            <FieldLabel Icon={Receipt} label={`Receipt (${receipts.length}/4)`} required />
             {/* Thumbnails row — only renders when there's at least
                 one attached. Each tile gets a close-X overlay. */}
             {receipts.length > 0 && (
