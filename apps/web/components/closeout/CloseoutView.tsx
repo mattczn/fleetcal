@@ -786,10 +786,14 @@ export default function CloseoutView() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // min-width: max-content keeps columns at their
-                  // natural widths; combined with the wrapper's
-                  // overflow-x:auto, the table scrolls inside the
-                  // wrapper when it exceeds the available width.
+                  // The width:100% / min-width:max-content combo:
+                  //   - Narrow viewport (wrapper < max-content):
+                  //     min-width wins → table is max-content,
+                  //     wrapper's overflow-x scrolls.
+                  //   - Wide viewport (wrapper > max-content):
+                  //     width:100% wins → table fills wrapper, no
+                  //     empty space on the right.
+                  width: '100%',
                   minWidth: 'max-content',
                 }}>
                 <thead>

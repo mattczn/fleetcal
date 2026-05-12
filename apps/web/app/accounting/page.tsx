@@ -710,8 +710,11 @@ export default function AccountingPage() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // Keep columns at their natural widths; wrapper's
-                  // overflow-x:auto scrolls when needed.
+                  // width:100% / min-width:max-content combo:
+                  //   - Narrow viewport: min-width wins, wrapper scrolls.
+                  //   - Wide viewport: width:100% fills the wrapper so
+                  //     columns stretch and don't leave empty space.
+                  width: '100%',
                   minWidth: 'max-content',
                 }}>
                 <thead>
