@@ -610,8 +610,14 @@ export default function CloseoutView() {
   return (
     <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
       <ManagementHeader title="Closeout" icon={FileCheck2} />
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-[1600px] mx-auto space-y-4">
+      {/* overflow-x: hidden on the outer scroll container prevents the
+          page from scrolling horizontally when the table is wider than
+          the viewport. The table wrapper inside has its own overflow-x:
+          auto, so the SCROLL stays inside the table — the toolbar and
+          bucket tiles never get pushed off-screen. minW:0 lets the
+          inner container shrink below its content's intrinsic width. */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-6" style={{ minWidth: 0 }}>
+        <div className="max-w-[1600px] mx-auto space-y-4" style={{ minWidth: 0 }}>
 
           {/* Purpose hint — keeps the split between Closeout and
               Accounting visible while users are still building muscle
@@ -762,23 +768,25 @@ export default function CloseoutView() {
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
-                // overflow-x: auto on the wrapper lets the table escape
-                // the viewport when more columns are visible than fit on
-                // a laptop screen. overflow-y: visible so popovers
-                // (filter menus, copy chips) aren't clipped vertically.
+                // Constrain to parent width (otherwise the wrapper grows
+                // to fit the table's intrinsic min-width and the whole
+                // page ends up scrolling sideways). With width:100% +
+                // maxWidth:100% + overflow-x:auto, the wrapper stays in
+                // its lane and only the table inside scrolls horizontally.
+                width: '100%',
+                maxWidth: '100%',
                 overflowX: 'auto',
-                overflowY: 'visible',
+                // Popover menus (sort/filter) use position:fixed so
+                // they're not clipped — safe to hide vertical overflow.
+                overflowY: 'hidden',
               }}>
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // Each column's natural width drives layout. min-width
-                  // keeps the table from collapsing to fit when fewer
-                  // columns are shown — the goal is for the default
-                  // visible-column set to fit a 1366px laptop without
-                  // scrolling, and overflow to scroll when the user
-                  // adds more.
-                  width: '100%',
+                  // min-width: max-content keeps columns at their
+                  // natural widths; combined with the wrapper's
+                  // overflow-x:auto, the table scrolls inside the
+                  // wrapper when it exceeds the available width.
                   minWidth: 'max-content',
                 }}>
                 <thead>

@@ -567,8 +567,12 @@ export default function AccountingPage() {
       <DataLoader />
       <ManagementHeader title="Accounting" icon={Receipt} />
 
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-[1600px] mx-auto space-y-4">
+      {/* overflow-x: hidden on the scroll container keeps the page
+          from ever scrolling sideways. The table wrapper inside has
+          its own overflow-x:auto, so wide tables scroll INTERNALLY
+          and the toolbar / bucket tiles never get pushed off-screen. */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-6" style={{ minWidth: 0 }}>
+        <div className="max-w-[1600px] mx-auto space-y-4" style={{ minWidth: 0 }}>
 
           {/* Purpose hint */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -688,18 +692,23 @@ export default function AccountingPage() {
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
-                // Horizontal scroll when columns exceed the viewport;
-                // vertical stays visible so popovers (filter menus, copy
-                // tooltips) aren't clipped.
+                // width:100% + maxWidth:100% pin the wrapper to its
+                // parent's width (without this, min-content from the
+                // table inside would inflate the wrapper and the page
+                // would scroll sideways). overflow-x:auto handles the
+                // wide-table case internally. overflow-y:hidden — sort/
+                // filter popovers use position:fixed so they escape
+                // clipping regardless.
+                width: '100%',
+                maxWidth: '100%',
                 overflowX: 'auto',
-                overflowY: 'visible',
+                overflowY: 'hidden',
               }}>
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  width: '100%',
-                  // min-width: max-content keeps natural column widths;
-                  // the wrapper scrolls when total exceeds the viewport.
+                  // Keep columns at their natural widths; wrapper's
+                  // overflow-x:auto scrolls when needed.
                   minWidth: 'max-content',
                 }}>
                 <thead>
