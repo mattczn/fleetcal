@@ -226,16 +226,32 @@ export default function AccountingPage() {
   }, [bucket]);
 
   // ── Data fetch ──────────────────────────────────────────────────────
+  //
+  // Cap: 2000 events per bucket. Each event is one relay leg, so 2000
+  // ≈ 1000-2000 unique loads after the client-side dedup below. Matches
+  // the closeout candidate cap. Past this, we log a warning so the
+  // operator catches it before users see drifted totals; a real fix
+  // would be server-side aggregation for these tabs (same shape the
+  // wide-candidate path already returns).
+  const BUCKET_LIMIT = 2000;
   async function refresh() {
     setLoading(true);
     setError(null);
     try {
       const [verifiedRes, invoicedRes, paidRes, invoicesRes] = await Promise.all([
-        railway.listCloseoutQueue('verified', { limit: 500 }),
-        railway.listCloseoutQueue('invoiced', { limit: 500 }),
-        railway.listCloseoutQueue('paid',     { limit: 500 }),
+        railway.listCloseoutQueue('verified', { limit: BUCKET_LIMIT }),
+        railway.listCloseoutQueue('invoiced', { limit: BUCKET_LIMIT }),
+        railway.listCloseoutQueue('paid',     { limit: BUCKET_LIMIT }),
         railway.listInvoices({}),
       ]);
+      // Compare each response's row count to the requested limit so
+      // we surface silent truncation. The server's `total` field (when
+      // it's the DB-paginated path) gives us the true count.
+      for (const [name, res] of [['verified', verifiedRes], ['invoiced', invoicedRes], ['paid', paidRes]] as const) {
+        if (res.loads.length >= BUCKET_LIMIT || (res.total != null && res.total > BUCKET_LIMIT)) {
+          console.warn(`[accounting] ${name} bucket fetch may be truncated (returned ${res.loads.length}, server total ${res.total ?? '?'}, cap ${BUCKET_LIMIT}) — totals may be undercounting`);
+        }
+      }
       setVerifiedLoads(verifiedRes.loads as CalendarEvent[]);
       setInvoicedLoads(invoicedRes.loads as CalendarEvent[]);
       setPaidLoads(paidRes.loads as CalendarEvent[]);
