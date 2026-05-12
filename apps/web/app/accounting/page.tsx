@@ -117,6 +117,30 @@ const COLUMNS: ColumnDef[] = [
 
 const COL_BY_KEY: Record<ColKey, ColumnDef> = COLUMNS.reduce((m, c) => { m[c.key] = c; return m; }, {} as Record<ColKey, ColumnDef>);
 
+// Default column widths in px — used when the user hasn't resized
+// the column yet. table-layout: fixed honors these strictly, so
+// resize can shrink columns below their content (truncates).
+const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
+  age:           80,
+  released:     100,
+  issued:       100,
+  due:          100,
+  invoiceNum:   110,
+  loadNum:      110,
+  title:        260,
+  customer:     150,
+  method:        90,
+  sendTo:       200,
+  rate:         100,
+  accessorials: 120,
+  total:        110,
+  docs:         220,
+  status:       110,
+  flags:         80,
+  view:          70,
+};
+const SELECT_COL_WIDTH = 40;
+
 // Per-bucket column visibility. Hides what doesn't make sense.
 const COLS_HIDDEN_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
   released: new Set(['invoiceNum', 'issued', 'due', 'view']),
@@ -706,16 +730,22 @@ export default function AccountingPage() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  width: '100%',
+                  // table-layout: fixed lets the user drag columns
+                  // narrower than their content (cells truncate via
+                  // overflow:hidden on Td). With auto layout, the
+                  // browser refuses to shrink below content min-content.
+                  tableLayout: 'fixed',
+                  width: 'max-content',
                   minWidth: '100%',
                 }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
                     {canSelect && (
-                      <Th>
+                      <th className="px-2.5 py-2 whitespace-nowrap"
+                        style={{ textAlign: 'left', width: SELECT_COL_WIDTH }}>
                         <input type="checkbox" checked={allSelected} onChange={toggleAll}
                           style={{ accentColor: '#1a73e8' }} />
-                      </Th>
+                      </th>
                     )}
                     {orderedVisibleColumns.map(c => (
                       <MenuTh key={c.key}
@@ -726,7 +756,7 @@ export default function AccountingPage() {
                         selectedCount={(filters[c.key] ?? []).length}
                         setHeaderRef={el => { headerRefs.current[c.key] = el; }}
                         onClick={() => setOpenHeaderCol(p => p === c.key ? null : c.key)}
-                        width={colWidths[c.key]}
+                        width={colWidths[c.key] ?? DEFAULT_COL_WIDTHS[c.key]}
                         onResizeStart={getColResizeProps(c.key)} />
                     ))}
                   </tr>

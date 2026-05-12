@@ -75,7 +75,13 @@ export function Td({
 }) {
   return (
     <td className={`px-2.5 py-2 font-medium ${className ?? ''}`}
-      style={{ textAlign: align, color: 'var(--gc-text-1)' }}
+      style={{
+        textAlign: align,
+        color: 'var(--gc-text-1)',
+        // table-layout: fixed lets columns be narrower than content;
+        // clip cleanly so cells don't bleed into each other.
+        overflow: 'hidden',
+      }}
       onClick={onClick}>
       {children}
     </td>
@@ -260,13 +266,11 @@ export function MenuTh({
   selectedCount: number;
   setHeaderRef:  (el: HTMLTableCellElement | null) => void;
   onClick:       () => void;
-  /** User-set column width in px (from useColumnWidths). Applied via
-   *  inline width style. Browser still respects content min-content
-   *  in table-layout:auto, so cells with whitespace-nowrap won't get
-   *  clipped below their natural width. */
+  /** Column width in px. With table-layout:fixed on the parent table
+   *  this is enforced strictly — columns can be made narrower than
+   *  their content, which is the whole point of letting users resize. */
   width?:        number;
-  /** Resize-handle mousedown handler from useColumnWidths.getResizeProps.
-   *  When provided, renders the handle on the right edge. */
+  /** Resize-handle mousedown handler from useColumnWidths.getResizeProps. */
   onResizeStart?: (e: React.MouseEvent) => void;
 }) {
   const sortActive   = sort.key === col;
@@ -275,32 +279,47 @@ export function MenuTh({
   return (
     <th
       ref={setHeaderRef}
-      onClick={onClick}
-      className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors whitespace-nowrap"
+      className="px-2.5 py-2 select-none whitespace-nowrap"
       style={{
         color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
         background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
         position:   'relative',
         width:      width != null ? `${width}px` : undefined,
-        minWidth:   width != null ? `${width}px` : undefined,
-      }}
-      title="Click for sort + filter — drag the right edge to resize">
-      <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
-        {label}
+      }}>
+      {/* Sort/filter trigger is a small inline button inside the th
+          (not the whole th) so it doesn't fight with the resize handle.
+          The rest of the header — including the gap to the right edge —
+          is non-clickable, leaving the resize handle a clean target. */}
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
+        style={{
+          color:  'inherit',
+          cursor: 'pointer',
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          flexDirection: align === 'right' ? 'row-reverse' : 'row',
+        }}
+        title="Click for sort + filter">
+        <span className="truncate" style={{ maxWidth: width != null ? `${Math.max(width - 40, 30)}px` : undefined }}>
+          {label}
+        </span>
         {sortActive ? (
           sort.dir === 'asc'
-            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)' }} />
-            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)' }} />
+            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)', flexShrink: 0 }} />
+            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)', flexShrink: 0 }} />
         ) : null}
         {filterActive && (
           <span title={`${selectedCount} selected`}
             className="text-[9px] font-bold tabular-nums px-1 rounded-lg"
-            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px' }}>
+            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px', flexShrink: 0 }}>
             {selectedCount}
           </span>
         )}
-      </span>
+      </button>
       {onResizeStart && (
         <ColumnResizeHandle onMouseDown={onResizeStart} />
       )}
@@ -819,9 +838,9 @@ export function useColumnWidths<K extends string>(
       liveW = Math.max(MIN_WIDTH, startW + (ev.clientX - startX));
       // Update DOM directly during the drag — calling setState on every
       // mousemove would queue dozens of re-renders. We commit to state
-      // once on mouseup.
-      th.style.width    = `${liveW}px`;
-      th.style.minWidth = `${liveW}px`;
+      // once on mouseup. With table-layout: fixed on the parent table,
+      // setting th.style.width is enough to resize the column live.
+      th.style.width = `${liveW}px`;
     };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
@@ -855,11 +874,11 @@ export function ColumnResizeHandle({ onMouseDown }: { onMouseDown: (e: React.Mou
       style={{
         position:  'absolute',
         top:       0,
-        right:     -3,
+        right:     -5,
         bottom:    0,
-        width:     6,
+        width:     10,
         cursor:    'col-resize',
-        zIndex:    1,
+        zIndex:    2,
         userSelect: 'none',
       }}>
       <span
@@ -867,7 +886,7 @@ export function ColumnResizeHandle({ onMouseDown }: { onMouseDown: (e: React.Mou
         style={{
           position:  'absolute',
           top:       4,
-          right:     2,
+          left:      4,
           bottom:    4,
           width:     2,
           background: 'var(--gc-blue)',

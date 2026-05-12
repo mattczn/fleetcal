@@ -95,6 +95,23 @@ const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
   { key: 'docs',         label: 'Docs'         },
 ];
 
+// Default column widths in px. Used as the initial / fallback width
+// when the user hasn't resized a column yet. table-layout: fixed makes
+// these strict, so the user can resize freely in either direction.
+const DEFAULT_COL_WIDTHS: Record<ToggleableCol, number> = {
+  age:          80,
+  delivered:    100,
+  internalId:   100,
+  loadNum:      110,
+  title:        260,
+  customer:     150,
+  driver:       130,
+  rate:         100,
+  accessorials: 120,
+  docs:         220,
+};
+const ACTIONS_COL_WIDTH = 240;
+
 const COLS_STORAGE_KEY = 'closeout-cols-v1';
 
 const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
@@ -748,13 +765,23 @@ export default function CloseoutView() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  width: '100%',
+                  // table-layout: fixed honors explicit column widths
+                  // strictly, so the user can drag a column narrower
+                  // than its content (content clips with ellipsis).
+                  // Without fixed, the browser would treat th widths
+                  // as a "preferred" hint and refuse to shrink below
+                  // content min-content.
+                  tableLayout: 'fixed',
+                  width: 'max-content',
                   minWidth: '100%',
                 }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
                     {orderedVisibleCols.map(col => {
-                      const width = colWidths[col];
+                      // With table-layout: fixed, every column needs a
+                      // width — fall back to the static default when
+                      // the user hasn't resized this column yet.
+                      const width = colWidths[col] ?? DEFAULT_COL_WIDTHS[col];
                       const onResizeStart = getColResizeProps(col);
                       // Sortable columns render as MenuTh; 'docs' is a
                       // chip column with no sort/filter so it renders
@@ -810,7 +837,10 @@ export default function CloseoutView() {
                         />
                       );
                     })}
-                    <Th align="right">Actions</Th>
+                    <th className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
+                      style={{ color: 'var(--gc-text-2)', textAlign: 'right', width: ACTIONS_COL_WIDTH }}>
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1158,7 +1188,17 @@ function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 
 
 function Td({ children, align = 'left', className, onClick }: { children: React.ReactNode; align?: 'left' | 'right'; className?: string; onClick?: (e: React.MouseEvent) => void }) {
   return (
-    <td className={`px-2.5 py-2 font-medium ${className ?? ''}`} style={{ textAlign: align, color: 'var(--gc-text-1)' }} onClick={onClick}>
+    <td className={`px-2.5 py-2 font-medium ${className ?? ''}`}
+      style={{
+        textAlign: align,
+        color: 'var(--gc-text-1)',
+        // With table-layout: fixed, cells overflow visibly when the
+        // column is narrower than the content. Clip cleanly so a
+        // resized-narrow column shows a truncation rather than
+        // bleeding into the next cell.
+        overflow: 'hidden',
+      }}
+      onClick={onClick}>
       {children}
     </td>
   );
