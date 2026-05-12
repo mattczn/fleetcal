@@ -18,9 +18,17 @@ type Props = {
   currentId?: number;
   onClose:    () => void;
   onSelect:   (trailerId: number | null) => void;
+  /** Optional header text. Defaults to "Select trailer". Used by the
+   *  Start Trip prompt to ask "What trailer are you pulling?" */
+  title?:     string;
+  /** When defined, replaces the standalone "Clear trailer" footer
+   *  with a neutral "Continue without trailer" button that fires
+   *  this callback instead of clearing. Lets the Start Trip prompt
+   *  proceed even when the driver doesn't want to set a trailer. */
+  onSkip?:    () => void;
 };
 
-export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelect }: Props) {
+export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelect, title, onSkip }: Props) {
   const { data: trailers, isLoading } = useQuery({
     queryKey: ["trailers", orgId],
     queryFn:  () => fetchTrailers(orgId),
@@ -78,7 +86,7 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
             }}
           >
             <Text style={[txt(800), { fontSize: 16, color: "#202124", flex: 1 }]}>
-              Select trailer
+              {title ?? "Select trailer"}
             </Text>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
               <X size={20} color="#5f6368" strokeWidth={2.2} />
@@ -173,7 +181,24 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
             />
           )}
 
-          {currentId != null ? (
+          {onSkip ? (
+            <TouchableOpacity
+              onPress={onSkip}
+              style={{
+                marginTop: 8,
+                marginHorizontal: 18,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "#f1f3f4",
+                borderRadius: 10,
+                borderWidth: 1, borderColor: "#dadce0",
+              }}
+            >
+              <Text style={[txt(700), { fontSize: 13, color: "#3c4043" }]}>
+                Continue without trailer
+              </Text>
+            </TouchableOpacity>
+          ) : currentId != null ? (
             <TouchableOpacity
               onPress={() => onSelect(null)}
               style={{

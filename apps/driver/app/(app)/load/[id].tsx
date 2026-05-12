@@ -691,6 +691,10 @@ export default function LoadDetailScreen() {
   const [uploadVisible,         setUploadVisible]        = useState(false);
   const [statusPickerVisible,   setStatusPickerVisible]  = useState(false);
   const [trailerPickerVisible,  setTrailerPickerVisible] = useState(false);
+  // True while the trailer picker is open because the user just tapped
+  // Start Trip — picking a trailer (or "Continue without trailer")
+  // then fires the en_route status transition.
+  const [startTripPending,      setStartTripPending]     = useState(false);
   const [toastMessage,          setToastMessage]         = useState<string | null>(null);
   const [tab,                   setTab]                  = useState<0 | 1 | 2>(0);
   // Bumped whenever a relay handoff photo is uploaded from anywhere on
@@ -828,9 +832,17 @@ export default function LoadDetailScreen() {
       handleMarkDelivered();
       return;
     }
-    // One-tap for every other transition (dispatched, en_route,
-    // picked_up). The toast on success and the status badge in the
-    // header give enough feedback — no confirm dialogs.
+    if (nextStatus === "en_route") {
+      // Starting a trip — prompt for the trailer first so we capture
+      // what the driver is actually pulling. The picker's onSelect /
+      // onSkip handlers fire the status transition afterwards.
+      setStartTripPending(true);
+      setTrailerPickerVisible(true);
+      return;
+    }
+    // One-tap for every other transition (dispatched, picked_up).
+    // The toast on success and the status badge in the header give
+    // enough feedback — no confirm dialogs.
     changeStatus(nextStatus);
   }
 
@@ -1301,11 +1313,26 @@ export default function LoadDetailScreen() {
           visible={trailerPickerVisible}
           orgId={driver.orgId}
           currentId={load.trailerId}
-          onClose={() => setTrailerPickerVisible(false)}
+          title={startTripPending ? "What trailer are you pulling?" : undefined}
+          onClose={() => {
+            setTrailerPickerVisible(false);
+            // Dismissing without picking = cancel Start Trip. Driver
+            // can tap Start Trip again whenever they're ready.
+            setStartTripPending(false);
+          }}
           onSelect={(trailerId) => {
             setTrailerPickerVisible(false);
             if (trailerId !== load.trailerId) changeTrailer(trailerId);
+            if (startTripPending) {
+              changeStatus("en_route");
+              setStartTripPending(false);
+            }
           }}
+          onSkip={startTripPending ? () => {
+            setTrailerPickerVisible(false);
+            changeStatus("en_route");
+            setStartTripPending(false);
+          } : undefined}
         />
       ) : null}
 
