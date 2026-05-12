@@ -31,6 +31,7 @@ import { displayBrokerName } from '@/lib/customerMatch';
 import ReviewQueue from './ReviewQueue';
 import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
+import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 
 type Tab = 'pending' | 'flagged';
@@ -510,6 +511,9 @@ export default function CloseoutView() {
 
   // Internal notes panel
   const [notesTarget, setNotesTarget] = useState<Load | null>(null);
+  // Follow-up modal target — opened from a row's Follow-up button on
+  // the Flagged bucket.
+  const [followUpTarget, setFollowUpTarget] = useState<Load | null>(null);
 
   // Column show/hide menu — persisted to localStorage so the user's
   // layout sticks across sessions.
@@ -912,11 +916,20 @@ export default function CloseoutView() {
                                 <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
                               )}
                             </div>
-                            {load.flaggedReason && (
-                              <div className="mt-1">
-                                <FlagChip reason={load.flaggedReason} />
-                              </div>
-                            )}
+                            {/* Multi-reason chips — derived from data. A
+                                load can have several impediments at once
+                                (manual flag + missing POD + pending
+                                accessorials). The single FlagChip we used
+                                to show only captured the manual reason. */}
+                            {(() => {
+                              const reasons = computeFlagReasons(load, counts);
+                              if (reasons.length === 0) return null;
+                              return (
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {reasons.map((r, i) => <FlagChip key={i} reason={r} />)}
+                                </div>
+                              );
+                            })()}
                           </Td>
                         )}
                         {/* Actions */}
@@ -956,6 +969,14 @@ export default function CloseoutView() {
                                     className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
                                     style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
                                     <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+                                  </button>
+                                )}
+                                {tab === 'flagged' && (
+                                  <button onClick={() => setFollowUpTarget(load)}
+                                    className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                                    style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}
+                                    title="Log a follow-up + optionally update accessorial status / clear flag">
+                                    <MessageSquare size={11} style={{ display: 'inline', marginRight: 3 }} /> Follow up
                                   </button>
                                 )}
                               </>
@@ -1035,6 +1056,22 @@ export default function CloseoutView() {
       )}
 
       {/* Internal notes thread */}
+      {followUpTarget && (
+        <FollowUpModal
+          load={followUpTarget}
+          docCounts={docCounts[followUpTarget.loadId ?? followUpTarget.id]}
+          actorName={user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined}
+          onClose={() => setFollowUpTarget(null)}
+          onSaved={async () => {
+            await refresh();
+            // Re-pull the load from the refreshed rows so the modal
+            // reflects the new follow-up + any status changes.
+            const next = rows.find(r => (r.loadId ?? r.id) === (followUpTarget.loadId ?? followUpTarget.id));
+            if (next) setFollowUpTarget(next as Load);
+            else setFollowUpTarget(null);
+          }}
+        />
+      )}
       {notesTarget && (
         <InternalNotesModal
           load={notesTarget}
@@ -1213,18 +1250,77 @@ function PaginationFooter({
   );
 }
 
-function FlagChip({ reason }: { reason: string }) {
-  const label = ({
-    missing_pod:        'Missing POD',
-    awaiting_rate_con:  'Rate-con pending',
-    detention_pending:  'Detention pending',
-    lumper_pending:     'Lumper pending',
-    rate_mismatch:      'Rate mismatch',
-    other:              'Other',
-  } as Record<string, string>)[reason] ?? reason;
+// ImpedimentReason — one chip on a flagged row. Several can show on
+// the same row when multiple things are blocking closeout. Named
+// distinctly from the manual-flag `FlagReason` enum (which is the
+// dropdown values in FlagModal) so the two don't shadow each other.
+export type ImpedimentReason =
+  | { kind: 'manual';      label: string }
+  | { kind: 'missing_pod' }
+  | { kind: 'accessorial'; accessorialId: string; category: string; amount: number };
+
+const MANUAL_FLAG_LABELS: Record<string, string> = {
+  missing_pod:        'Missing POD',
+  awaiting_rate_con:  'Rate-con pending',
+  detention_pending:  'Detention pending',
+  lumper_pending:     'Lumper pending',
+  rate_mismatch:      'Rate mismatch',
+  other:              'Flagged',
+};
+
+const ACCESSORIAL_LABELS: Record<string, string> = {
+  detention:    'Detention',
+  lumper:       'Lumper',
+  layover:      'Layover',
+  scale_ticket: 'Scale',
+  extra_stop:   'Extra stop',
+  other:        'Accessorial',
+};
+
+const moneyShort = (n: number) =>
+  n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+/** Derive the impediment chips for a row from load data + doc counts.
+ *  Mirrors the server's loadIsFlagged() — keeps the row chips in sync
+ *  with what the server uses to slot rows into the Flagged bucket. */
+export function computeFlagReasons(
+  load:   { flaggedReason?: string; accessorials?: Array<{ id: string; category: string; amount: number; status?: 'requested' | 'approved' | 'denied' }> },
+  counts: Record<string, number>,
+): ImpedimentReason[] {
+  const out: ImpedimentReason[] = [];
+  // Manual flag wins the first slot for visibility.
+  if (load.flaggedReason) {
+    out.push({ kind: 'manual', label: MANUAL_FLAG_LABELS[load.flaggedReason] ?? load.flaggedReason });
+  }
+  // Missing POD — count comes from the closeout queue's docCounts.
+  if ((counts.pod ?? 0) === 0) {
+    out.push({ kind: 'missing_pod' });
+  }
+  // Pending accessorials — one chip per item still in flux.
+  for (const a of load.accessorials ?? []) {
+    if (a.status !== 'approved' && a.status !== 'denied') {
+      out.push({ kind: 'accessorial', accessorialId: a.id, category: a.category, amount: a.amount });
+    }
+  }
+  return out;
+}
+
+function FlagChip({ reason }: { reason: ImpedimentReason }) {
+  // Tone per chip type — keeps the row readable when several are
+  // stacked. Manual flag in amber (existing convention), missing POD
+  // in red (POD blocks billing entirely), pending accessorial in
+  // green-ish (it's money, kind of) with the amount inline.
+  const tone =
+    reason.kind === 'manual'      ? { bg: '#fef3c7', fg: '#92400e' }
+    : reason.kind === 'missing_pod' ? { bg: '#fee2e2', fg: '#991b1b' }
+                                    : { bg: '#dcfce7', fg: '#166534' };
+  const label =
+    reason.kind === 'manual'      ? reason.label
+    : reason.kind === 'missing_pod' ? 'Missing POD'
+                                    : `${ACCESSORIAL_LABELS[reason.category] ?? 'Accessorial'} ${moneyShort(reason.amount)}`;
   return (
     <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
-      style={{ background: '#fef3c7', color: '#92400e' }}>
+      style={{ background: tone.bg, color: tone.fg }}>
       <Flag size={9} /> {label}
     </span>
   );

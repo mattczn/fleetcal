@@ -33,9 +33,56 @@ const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
-  "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
+  "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by,follow_ups," +
   "verified_at,verified_by,invoice_doc_ids," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
+
+// ─── Auto-flag derivation ───────────────────────────────────────────────
+//
+// A load belongs in the Flagged bucket when it has any "impediment" —
+// something blocking it from being closed out and released for billing.
+// The reasons live on different pieces of data:
+//
+//   • Manual flag      → load.billing_status === 'on_hold'
+//   • Pending accessorial → any accessorial with status not in
+//                            {approved, denied}
+//   • Missing POD       → no load_documents row with kind='pod' for the
+//                          load, AND the load is past its delivery end
+//
+// The closeout queue computes this server-side so the Flagged tab
+// count is correct without the client having to re-derive.
+
+interface AccessorialRow {
+  id?: string;
+  status?: 'requested' | 'approved' | 'denied' | string;
+  category?: string;
+  amount?: number;
+}
+
+function hasPendingAccessorial(load: { accessorials?: unknown }): boolean {
+  const arr = load.accessorials;
+  if (!Array.isArray(arr)) return false;
+  return (arr as AccessorialRow[]).some(a => a.status !== 'approved' && a.status !== 'denied');
+}
+
+function isPodMissing(loadId: string | undefined | null, podCountByLoad: Map<string, number>): boolean {
+  if (!loadId) return false;
+  return (podCountByLoad.get(loadId) ?? 0) === 0;
+}
+
+/** True if a load has ANY closeout impediment. Used to split the
+ *  pending vs flagged buckets without storing the state on the row. */
+function loadIsFlagged(
+  load:           { billing_status?: string; accessorials?: unknown },
+  loadId:         string | undefined | null,
+  podCountByLoad: Map<string, number>,
+  isDelivered:    boolean,
+): boolean {
+  if (load.billing_status === 'on_hold')                return true;
+  if (hasPendingAccessorial(load))                      return true;
+  if (isDelivered && isPodMissing(loadId, podCountByLoad)) return true;
+  return false;
+}
 
 type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all";
 
@@ -69,22 +116,35 @@ closeout.get("/queue", async (c) => {
       .eq("event_kind", "revenue")
       .is("deleted_at", null)
       .neq("status", "cancelled");
-    if (tab === "pending") {
-      if (!searching) q = q.lte("end", nowIso);
-      q = q.eq("load.billing_status", "pending");
-    } else if (tab === "flagged")  q = q.eq("load.billing_status", "on_hold");
-    else if   (tab === "verified") q = q.eq("load.billing_status", "verified");
+    // Pending + Flagged are derived: we fetch every candidate that
+    // COULD be in either bucket, compute impediments below, then
+    // split. Candidates = loads with billing_status in
+    // {pending, on_hold}. The non-search path also applies the
+    // delivered-by-now date filter so we don't surface upcoming
+    // loads in the working set.
+    if (tab === "pending" || tab === "flagged") {
+      if (!searching && tab === "pending") q = q.lte("end", nowIso);
+      q = q.in("load.billing_status", ["pending", "on_hold"]);
+    } else if (tab === "verified") q = q.eq("load.billing_status", "verified");
     else if   (tab === "invoiced") q = q.eq("load.billing_status", "invoiced");
     else if   (tab === "paid")     q = q.eq("load.billing_status", "paid");
     return q;
   };
 
-  // ── Non-search path: single query with pagination ─────────────────
+  // ── Non-search path ──────────────────────────────────────────────
+  // For pending/flagged: pull a wide candidate set and filter in JS
+  // (we need to evaluate impediments against accessorials + POD
+  // presence, which doesn't compose cleanly with PostgREST filters).
+  // For other tabs: DB-paginated as before.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let rawRows: any[] = [];
   let totalCount = 0;
+  // Reuse-flag — when the wide-candidate path runs, we've already
+  // built loadIds + we'll need POD counts; track them here so the
+  // returned docCounts payload further down doesn't re-fetch.
+  const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged");
 
-  if (!searching) {
+  if (!searching && !wideCandidatePath) {
     const { data, error, count } = await buildBaseQuery(true)
       .order("priority", { ascending: false })
       .order("end",      { ascending: true })
@@ -95,6 +155,48 @@ closeout.get("/queue", async (c) => {
     }
     rawRows    = (data ?? []) as unknown[] as typeof rawRows;
     totalCount = count ?? rawRows.length;
+  } else if (wideCandidatePath) {
+    // Fetch up to 500 candidates that COULD belong to pending or
+    // flagged. We'll filter to one bucket below.
+    const { data, error } = await buildBaseQuery(false)
+      .order("priority", { ascending: false })
+      .order("end",      { ascending: true })
+      .range(0, 499);
+    if (error) {
+      console.error("[GET /v1/closeout/queue] failed:", error);
+      return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const candidates = (data ?? []) as any[];
+
+    // Pull POD presence for these candidates — needed for the
+    // missing-POD impediment check.
+    const candidateLoadIds = Array.from(new Set(
+      candidates.map(r => r.load?.id as string | undefined).filter((id): id is string => !!id),
+    ));
+    const podCount = new Map<string, number>();
+    if (candidateLoadIds.length > 0) {
+      const { data: pods } = await supabase
+        .from("load_documents")
+        .select("load_id")
+        .eq("org_id", orgId)
+        .eq("kind", "pod")
+        .in("load_id", candidateLoadIds);
+      for (const p of (pods ?? []) as Array<{ load_id: string | null }>) {
+        if (p.load_id) podCount.set(p.load_id, (podCount.get(p.load_id) ?? 0) + 1);
+      }
+    }
+
+    // Apply the impediment filter. Pending = NOT flagged.
+    const filtered = candidates.filter(r => {
+      const loadRow = r.load as { billing_status?: string; accessorials?: unknown; id?: string };
+      const isDelivered = !!r.end && r.end <= nowIso;
+      const flagged = loadIsFlagged(loadRow, loadRow?.id, podCount, isDelivered);
+      return tab === "flagged" ? flagged : !flagged;
+    });
+
+    totalCount = filtered.length;
+    rawRows    = filtered.slice(offset, offset + limit);
   } else {
     // ── Search path: two parallel queries, merged + paginated in JS.
     // Mirrors the pattern used by /v1/loads/search since PostgREST's
@@ -161,8 +263,36 @@ closeout.get("/queue", async (c) => {
       const ae = String(a.end ?? ''), be = String(b.end ?? '');
       return ae < be ? -1 : ae > be ? 1 : 0; // end asc
     });
-    totalCount = merged.length;
-    rawRows    = merged.slice(offset, offset + limit);
+    // Search-path impediment filter for pending/flagged tabs. Same
+    // logic as the non-search wide-candidate path — we just feed it
+    // the already-merged result set instead of a fresh fetch.
+    let finalRows = merged;
+    if (tab === "pending" || tab === "flagged") {
+      const candidateLoadIds = Array.from(new Set(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        merged.map((r: any) => r.load?.id as string | undefined).filter((id): id is string => !!id),
+      ));
+      const podCount = new Map<string, number>();
+      if (candidateLoadIds.length > 0) {
+        const { data: pods } = await supabase
+          .from("load_documents")
+          .select("load_id")
+          .eq("org_id", orgId)
+          .eq("kind", "pod")
+          .in("load_id", candidateLoadIds);
+        for (const p of (pods ?? []) as Array<{ load_id: string | null }>) {
+          if (p.load_id) podCount.set(p.load_id, (podCount.get(p.load_id) ?? 0) + 1);
+        }
+      }
+      finalRows = merged.filter(r => {
+        const loadRow = r.load as { billing_status?: string; accessorials?: unknown; id?: string };
+        const isDelivered = !!r.end && r.end <= nowIso;
+        const flagged = loadIsFlagged(loadRow, loadRow?.id, podCount, isDelivered);
+        return tab === "flagged" ? flagged : !flagged;
+      });
+    }
+    totalCount = finalRows.length;
+    rawRows    = finalRows.slice(offset, offset + limit);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -216,7 +346,8 @@ interface UpdateBillingBody {
     | "reopen"
     | "set_priority"
     | "clear_priority"
-    | "append_note";
+    | "append_note"
+    | "add_follow_up";
   /** Display name to record on verified_by / flagged_by / note author. */
   actorName?: string;
   /** Required for action='flag'. */
@@ -232,6 +363,32 @@ interface UpdateBillingBody {
   invoiceDocIds?: string[];
   /** Required for action='append_note'. The text body of the new note. */
   noteText?: string;
+  /** Required for action='add_follow_up'. The free-form note text. */
+  followUpNote?: string;
+  /** Optional category tag for the follow-up timeline (pod / rate_con /
+   *  rate_dispute / accessorial / other). */
+  followUpCategory?: 'pod' | 'rate_con' | 'rate_dispute' | 'accessorial' | 'other';
+  /** Optional resolution applied atomically with the follow-up entry. */
+  followUpResolution?: {
+    type:           'accessorial_status' | 'flag_cleared';
+    /** Required when type='accessorial_status'. */
+    accessorialId?: string;
+    /** Required when type='accessorial_status'. */
+    newStatus?:     'approved' | 'denied';
+  };
+}
+
+interface FollowUpRow {
+  id:        string;
+  at:        string;
+  by:        string | null;
+  note:      string;
+  category?: string;
+  resolution?: {
+    type:           string;
+    accessorialId?: string;
+    newStatus?:     string;
+  };
 }
 
 interface InternalNoteRow {
@@ -286,6 +443,101 @@ closeout.patch("/loads/:id", async (c) => {
       return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
     }
     return c.json({ ok: true, note: newNote });
+  }
+
+  // add_follow_up — append a single LoadFollowUp entry to
+  // loads.follow_ups, optionally applying a resolution (flip an
+  // accessorial's status, or clear the manual flag) in the same
+  // server-side read-modify-write so multi-tab edits can't lose
+  // data.
+  if (body.action === "add_follow_up") {
+    if (!body.followUpNote || !body.followUpNote.trim()) {
+      return c.json({ error: "validation_failed", errors: ["followUpNote required"] } satisfies ApiErrorResponse, 400);
+    }
+    const { data: existing, error: fetchErr } = await supabase
+      .from("loads")
+      .select("follow_ups,accessorials,billing_status,flagged_reason,flagged_note,flagged_at,flagged_by")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .single();
+    if (fetchErr) {
+      console.error("[PATCH /v1/closeout/loads/:id add_follow_up] fetch failed:", fetchErr);
+      return c.json({ error: "update_failed", detail: fetchErr.message } satisfies ApiErrorResponse, 500);
+    }
+
+    const priorFollowUps: FollowUpRow[] = Array.isArray(existing?.follow_ups)
+      ? (existing!.follow_ups as unknown as FollowUpRow[])
+      : [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const accessorialsArr: any[] = Array.isArray(existing?.accessorials) ? (existing!.accessorials as any[]) : [];
+
+    const newEntry: FollowUpRow = {
+      id:       globalThis.crypto.randomUUID(),
+      at:       new Date().toISOString(),
+      by:       body.actorName ?? null,
+      note:     body.followUpNote.trim(),
+      category: body.followUpCategory,
+    };
+
+    // Apply the optional resolution. We mutate `accessorialsArr`
+    // and/or the flag fields in-place, then write everything back
+    // in a single update.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const writeBack: Record<string, unknown> = {
+      follow_ups: [...priorFollowUps, newEntry],
+    };
+
+    if (body.followUpResolution) {
+      const r = body.followUpResolution;
+      if (r.type === "accessorial_status") {
+        if (!r.accessorialId || !r.newStatus) {
+          return c.json(
+            { error: "validation_failed", errors: ["resolution accessorialId + newStatus required"] } satisfies ApiErrorResponse,
+            400,
+          );
+        }
+        const target = accessorialsArr.find(a => a?.id === r.accessorialId);
+        if (!target) {
+          return c.json({ error: "not_found", detail: "accessorial not found on this load" } satisfies ApiErrorResponse, 404);
+        }
+        target.status = r.newStatus;
+        newEntry.resolution = {
+          type:           "accessorial_status",
+          accessorialId:  r.accessorialId,
+          newStatus:      r.newStatus,
+        };
+        writeBack.accessorials = accessorialsArr;
+        writeBack.follow_ups   = [...priorFollowUps, newEntry];
+      } else if (r.type === "flag_cleared") {
+        // Clear the manual flag — the auto-flag still applies if
+        // an impediment remains, so the load may stay in the
+        // Flagged bucket. The user's explicit flag is what we're
+        // unsetting here.
+        writeBack.flagged_reason = null;
+        writeBack.flagged_note   = null;
+        writeBack.flagged_at     = null;
+        writeBack.flagged_by     = null;
+        if (existing?.billing_status === "on_hold") {
+          // Drop billing_status back to 'pending' so the auto-flag
+          // logic re-evaluates from scratch.
+          writeBack.billing_status = "pending";
+        }
+        newEntry.resolution = { type: "flag_cleared" };
+        writeBack.follow_ups = [...priorFollowUps, newEntry];
+      }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: updErr } = await supabase
+      .from("loads")
+      .update(writeBack as any)
+      .eq("id", loadId)
+      .eq("org_id", orgId);
+    if (updErr) {
+      console.error("[PATCH /v1/closeout/loads/:id add_follow_up] write failed:", updErr);
+      return c.json({ error: "update_failed", detail: updErr.message } satisfies ApiErrorResponse, 500);
+    }
+    return c.json({ ok: true, followUp: newEntry });
   }
 
   // Priority lives on the events table, not loads — handle separately

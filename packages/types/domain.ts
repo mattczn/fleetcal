@@ -34,17 +34,62 @@ export type AccessorialCategory =
   | "extra_stop"
   | "other";
 
+export type AccessorialStatus = 'requested' | 'approved' | 'denied';
+
+/** An accessorial counts as "pending" (impediment-to-closeout) when
+ *  it's still 'requested' or has no status set yet. 'approved' and
+ *  'denied' are both terminal — the broker has made a call. */
+export function isAccessorialPending(a: Accessorial): boolean {
+  return a.status !== 'approved' && a.status !== 'denied';
+}
+
 export interface Accessorial {
   id: string;
   category: AccessorialCategory;
   description?: string;
   amount: number;
   billable: boolean;
-  status?: "requested" | "approved" | "denied";
+  status?: AccessorialStatus;
   /** When true, this accessorial flows into the driver's payroll as an adjustment. */
   payToDriver?: boolean;
   /** Optional: override which driver gets paid (defaults to the load's assigned driverName). Used for split/relay loads. */
   payDriverName?: string;
+}
+
+// ── LoadFollowUp ────────────────────────────────────────────────────────
+//
+// Threaded follow-up history for a load, stored as loads.follow_ups
+// (jsonb). Each entry records who chased what and when, and can carry
+// an optional `resolution` that mutated state at the same time —
+// flipping an accessorial's status or clearing a manual flag.
+//
+// Combined with loads.flagged_* (manual flag), loads.accessorials
+// (per-item status), and load_documents (POD presence), this drives
+// the auto-flag logic in /closeout: a load shows up in Flagged when
+// it has any unresolved impediment, drops out when they're all clear.
+
+export type LoadFollowUpCategory =
+  | 'pod'              // missing POD; waiting on the driver / facility
+  | 'rate_con'         // need an updated rate con (accessorial added, etc.)
+  | 'rate_dispute'     // broker disputing the linehaul rate
+  | 'accessorial'      // detention / lumper / scale follow-up
+  | 'other';
+
+export interface LoadFollowUpResolution {
+  type:           'accessorial_status' | 'flag_cleared';
+  /** Required when type='accessorial_status'. */
+  accessorialId?: string;
+  /** Required when type='accessorial_status'. */
+  newStatus?:     'approved' | 'denied';
+}
+
+export interface LoadFollowUp {
+  id:        string;                       // client-generated uuid for stable list keys
+  at:        string;                       // ISO timestamp the entry was posted
+  by:        string | null;                // display name of the author
+  note:      string;                       // free-form follow-up note
+  category?: LoadFollowUpCategory;         // helps the UI badge + filter the timeline
+  resolution?: LoadFollowUpResolution;     // state change applied alongside this entry
 }
 
 // ── Stop ────────────────────────────────────────────────────────────────
@@ -472,6 +517,13 @@ export interface Load {
    * dispatcher trim/expand the set.
    */
   invoiceDocIds?: string[];
+
+  /**
+   * Threaded follow-up history. Each entry is one chase or status
+   * change with author + timestamp. Drives the timeline shown in
+   * the Flagged-bucket follow-up modal. See LoadFollowUp.
+   */
+  followUps?: LoadFollowUp[];
 }
 
 // ── Invoice ─────────────────────────────────────────────────────────────

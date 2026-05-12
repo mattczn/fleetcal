@@ -601,6 +601,7 @@ export type Database = {
           flagged_by: string | null
           flagged_note: string | null
           flagged_reason: string | null
+          follow_ups: Json
           id: string
           internal_load_id: number
           internal_notes: Json
@@ -631,6 +632,7 @@ export type Database = {
           flagged_by?: string | null
           flagged_note?: string | null
           flagged_reason?: string | null
+          follow_ups?: Json
           id?: string
           internal_load_id: number
           internal_notes?: Json
@@ -661,6 +663,7 @@ export type Database = {
           flagged_by?: string | null
           flagged_note?: string | null
           flagged_reason?: string | null
+          follow_ups?: Json
           id?: string
           internal_load_id?: number
           internal_notes?: Json

@@ -147,12 +147,20 @@ class RailwayClient {
       | 'reopen'
       | 'set_priority'
       | 'clear_priority'
-      | 'append_note';
+      | 'append_note'
+      | 'add_follow_up';
     actorName?: string;
     flagReason?: 'missing_pod' | 'awaiting_rate_con' | 'detention_pending' | 'lumper_pending' | 'rate_mismatch' | 'other';
     flagNote?: string;
     invoiceDocIds?: string[];
     noteText?: string;
+    followUpNote?: string;
+    followUpCategory?: 'pod' | 'rate_con' | 'rate_dispute' | 'accessorial' | 'other';
+    followUpResolution?: {
+      type:           'accessorial_status' | 'flag_cleared';
+      accessorialId?: string;
+      newStatus?:     'approved' | 'denied';
+    };
   }) {
     return this.req<{ ok: true }>('PATCH', `/v1/closeout/loads/${id}`, body);
   }

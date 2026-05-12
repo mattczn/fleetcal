@@ -13,6 +13,7 @@ import type {
   Accessorial,
   InternalNote,
   LoadAuditEntry,
+  LoadFollowUp,
   RefNum,
 } from "./domain";
 import type { LoadStatus, RelayRole, EventKind } from "./enums";
@@ -118,6 +119,9 @@ export function joinEventLoadToApp(
     verifiedBy:     (l?.verified_by    as string | null | undefined) ?? undefined,
     invoiceDocIds:  Array.isArray(l?.invoice_doc_ids)
                       ? (l!.invoice_doc_ids as string[])
+                      : [],
+    followUps:      Array.isArray(l?.follow_ups)
+                      ? (l!.follow_ups as LoadFollowUp[])
                       : [],
     // relayGroupId aliases loadId for relay legs. Two events with the same
     // load_id and relay_role set ARE the relay; the alias keeps existing
