@@ -1014,10 +1014,21 @@ export default function LoadDetailScreen() {
                     >
                       Continued by partner
                     </Text>
-                    <View style={{ opacity: 0.35 }} pointerEvents="none">
-                      {partner.map((s, i) => (
-                        <StopCard key={s.id} stop={s} index={mine.length + i} />
-                      ))}
+                    {/* relative wrapper + opaque rail mask. The faded card
+                        wrapper below is 35% opacity, so the timeline rail
+                        bleeds through both the gap between cards and the
+                        cards themselves. This mask sits between the rail
+                        and the dimmed content at the rail's x-column. */}
+                    <View style={{ position: "relative" }}>
+                      <View
+                        pointerEvents="none"
+                        style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: "#f8f9fa" }}
+                      />
+                      <View style={{ opacity: 0.35 }} pointerEvents="none">
+                        {partner.map((s, i) => (
+                          <StopCard key={s.id} stop={s} index={mine.length + i} />
+                        ))}
+                      </View>
                     </View>
                   </>
                 ) : null}
@@ -1039,9 +1050,16 @@ export default function LoadDetailScreen() {
                   >
                     Completed by partner
                   </Text>
-                  <View style={{ opacity: 0.35 }} pointerEvents="none">
-                    {partner.map((s, i) => (
-                      <StopCard key={s.id} stop={s} index={i} onAddressCopied={() => showToast("Address copied")}
+                  {/* Mask the timeline rail behind the dimmed partner
+                      section — see matching block in the pickup-leg path. */}
+                  <View style={{ position: "relative" }}>
+                    <View
+                      pointerEvents="none"
+                      style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: "#f8f9fa" }}
+                    />
+                    <View style={{ opacity: 0.35 }} pointerEvents="none">
+                      {partner.map((s, i) => (
+                        <StopCard key={s.id} stop={s} index={i} onAddressCopied={() => showToast("Address copied")}
                 orgId={driver?.orgId}
                 onCheckedIn={(action) => {
                   queryClient.invalidateQueries({ queryKey: ["load", id] });
@@ -1052,7 +1070,8 @@ export default function LoadDetailScreen() {
                 driverName={driver?.name}
                 loadId={load.loadId}
                 onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />
-                    ))}
+                      ))}
+                    </View>
                   </View>
                 </>
               ) : null}
