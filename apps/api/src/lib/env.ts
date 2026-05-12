@@ -55,6 +55,9 @@ export const env = {
   /** Fallback display name used only when the org hasn't set a
    *  company name in its invoice settings. */
   invoiceFromNameFallback: process.env.INVOICE_FROM_NAME  || "FleetCal Invoicing",
+  /** Shared secret for internal cron endpoints. When unset, the
+   *  endpoint returns 503 so a misconfigured deploy fails loudly. */
+  internalCronToken:       process.env.INTERNAL_CRON_TOKEN || undefined,
 } as const;
 
 export const isProd = env.nodeEnv === "production";

@@ -40,6 +40,8 @@ import fuelReportsRoute from "./routes/fuel-reports.js";
 import maintenanceReportsRoute from "./routes/maintenance-reports.js";
 import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
 import driverDocumentsRoute from "./routes/driver-documents.js";
+import internalRoute from "./routes/internal.js";
+import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -130,6 +132,11 @@ app.route("/v1/bot", bot);
 // verifies it and resolves to the drivers row.
 app.route("/v1/driver", driverRoute);
 
+// ── Internal cron endpoints (shared-secret auth) ────────────────────────
+// Same precedence trick — mounted before /v1 so the Clerk middleware
+// doesn't intercept. INTERNAL_CRON_TOKEN gates access.
+app.route("/v1/internal", internalRoute);
+
 app.route("/v1", authed);
 
 // ── Error handler ───────────────────────────────────────────────────────
@@ -150,3 +157,27 @@ serve(
     console.log(`[api] fleetcal-api v${pkg.version} listening on :${info.port}`);
   },
 );
+
+// ── In-process auto-deliver sweep ───────────────────────────────────────
+//
+// Runs once shortly after startup, then every hour. This makes the
+// auto-deliver behavior work out of the box on a Railway-style single
+// container deploy without requiring an external cron service. If we
+// ever scale horizontally we'd need to gate this on a "primary
+// instance" flag (or move it fully to external cron — the endpoint
+// in routes/internal.ts already exists for that).
+//
+// The sweep itself is idempotent: if multiple workers ran it at once
+// the second would simply find nothing to flip.
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const SWEEP_STARTUP_DELAY_MS = 30_000;    // wait for app to settle
+setTimeout(() => {
+  void sweepAutoDeliver().catch((err) => {
+    console.error("[auto-deliver-sweep] startup run failed:", err);
+  });
+}, SWEEP_STARTUP_DELAY_MS).unref();
+setInterval(() => {
+  void sweepAutoDeliver().catch((err) => {
+    console.error("[auto-deliver-sweep] hourly run failed:", err);
+  });
+}, SWEEP_INTERVAL_MS).unref();
