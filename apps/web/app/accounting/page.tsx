@@ -23,7 +23,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Star,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Star, Eye,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -34,6 +34,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
+import { InvoicePacketViewerModal } from '@/components/invoicing/InvoicePacketViewerModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
   Th, Td, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
@@ -66,7 +67,7 @@ type ColKey =
   | 'invoiceNum' | 'loadNum' | 'customer' | 'title'
   | 'rate' | 'accessorials' | 'total'
   | 'docs' | 'priority' | 'notes'
-  | 'age' | 'released' | 'issued' | 'due' | 'method' | 'status';
+  | 'age' | 'released' | 'issued' | 'due' | 'method' | 'sendTo' | 'status' | 'view';
 
 interface ColumnDef {
   key:        ColKey;
@@ -91,23 +92,33 @@ const COLUMNS: ColumnDef[] = [
   { key: 'title',        label: 'Title',         align: 'left',  filterable: false, toggleable: true },
   { key: 'customer',     label: 'Customer',      align: 'left',  filterable: true,  toggleable: true },
   { key: 'method',       label: 'Method',        align: 'left',  filterable: true,  toggleable: true },
+  // Send-to surfaces the actual email + missing-email state so the
+  // user can verify before clicking Send. Hidden on Invoiced / Paid
+  // (the send already happened) and on All (mixed bag).
+  { key: 'sendTo',       label: 'Send to',       align: 'left',  filterable: false, toggleable: true },
   { key: 'rate',         label: 'Rate',          align: 'right', filterable: false, toggleable: true },
   { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
   { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
   { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
   { key: 'notes',        label: 'Notes',         align: 'left',  filterable: false, toggleable: true },
   { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
+  // View opens a PDF-only popup of the packet. No sort / no filter.
+  // Hidden on Released — no invoice exists yet there.
+  { key: 'view',         label: '',              align: 'left',  filterable: false, toggleable: false },
 ];
 
 const COL_BY_KEY: Record<ColKey, ColumnDef> = COLUMNS.reduce((m, c) => { m[c.key] = c; return m; }, {} as Record<ColKey, ColumnDef>);
 
 // Per-bucket column visibility. Hides what doesn't make sense.
 const COLS_HIDDEN_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
-  released: new Set(['invoiceNum', 'issued', 'due']),
+  released: new Set(['invoiceNum', 'issued', 'due', 'view']),
   queued:   new Set(['status']),
-  invoiced: new Set(['status']),
-  paid:     new Set(['status']),
-  all:      new Set([]),
+  // Send-to is only useful before the invoice ships. Once it's
+  // Invoiced or Paid, the email has been verified at send time —
+  // hide by default to keep the row uncluttered.
+  invoiced: new Set(['status', 'sendTo']),
+  paid:     new Set(['status', 'sendTo']),
+  all:      new Set(['sendTo']),
 };
 
 // Default column visibility (user can override and we persist).
@@ -188,6 +199,7 @@ export default function AccountingPage() {
   // Sibling modals
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const [invoiceModalId,  setInvoiceModalId]  = useState<string | null>(null);
+  const [viewerTarget,    setViewerTarget]    = useState<{ id: string; number: string } | null>(null);
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
   const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
@@ -332,7 +344,9 @@ export default function AccountingPage() {
         const m = r.customer?.invoiceMethod ?? 'email';
         return { sortValue: m, filterValue: m === 'portal' ? 'Portal' : 'Email' };
       }
+      case 'sendTo':       return { sortValue: r.customer?.invoiceEmail ?? '' };
       case 'status':       return { sortValue: r.invoice?.status ?? '', filterValue: r.invoice?.status ?? '—' };
+      case 'view':         return { sortValue: 0 };
     }
   }
 
@@ -715,6 +729,47 @@ export default function AccountingPage() {
                                   {method === 'portal' ? 'Portal' : 'Email'}
                                 </span>
                               </Td>;
+                            case 'sendTo': {
+                              // Portal brokers: no email, surface that.
+                              // Email brokers with no saved address get a
+                              // clickable warning chip; otherwise show
+                              // the email itself.
+                              if (method === 'portal') {
+                                return <Td key={c.key}>
+                                  <span className="text-[11.5px] italic" style={{ color: 'var(--gc-text-3)' }}>
+                                    Portal — manual
+                                  </span>
+                                </Td>;
+                              }
+                              if (!customer?.invoiceEmail) {
+                                return <Td key={c.key} onClick={e => e.stopPropagation()}>
+                                  <button onClick={() => customer && setBrokerProfileId(customer.id)}
+                                    className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                                    style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+                                    title="No invoice email — click to fix">
+                                    <AlertCircle size={10} /> No email
+                                  </button>
+                                </Td>;
+                              }
+                              return <Td key={c.key}>
+                                <span className="text-[12px] tabular-nums truncate inline-block max-w-[220px]"
+                                  style={{ color: 'var(--gc-text-1)' }}
+                                  title={customer.invoiceEmail}>
+                                  {customer.invoiceEmail}
+                                </span>
+                              </Td>;
+                            }
+                            case 'view':
+                              return <Td key={c.key} onClick={e => e.stopPropagation()}>
+                                {inv ? (
+                                  <button onClick={() => setViewerTarget({ id: inv.id, number: inv.invoiceNumber })}
+                                    className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
+                                    style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+                                    title="Quick-preview the invoice packet PDF">
+                                    <Eye size={11} /> View
+                                  </button>
+                                ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                              </Td>;
                             case 'rate':
                               return <Td key={c.key} align="right" className="font-semibold tabular-nums">
                                 {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
@@ -801,6 +856,12 @@ export default function AccountingPage() {
       {invoiceModalId && (
         <InvoiceDetailModal invoiceId={invoiceModalId}
           onClose={() => { setInvoiceModalId(null); void refresh(); }} />
+      )}
+      {viewerTarget && (
+        <InvoicePacketViewerModal
+          invoiceId={viewerTarget.id}
+          invoiceNumber={viewerTarget.number}
+          onClose={() => setViewerTarget(null)} />
       )}
       {summaryAction && (
         <InvoiceSummaryModal
