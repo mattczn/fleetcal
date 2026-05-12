@@ -81,8 +81,11 @@ interface ColumnDef {
   toggleable: boolean;
 }
 
+// Column order = render order in the table. The columns menu shows
+// the same order so the user's mental model matches what's on screen.
+// Priority sits next to Notes — they're both row-level metadata you
+// scan for, not part of the bill itself.
 const COLUMNS: ColumnDef[] = [
-  { key: 'priority',     label: 'P',             align: 'left',  filterable: true,  toggleable: true },
   { key: 'age',          label: 'Age',           align: 'left',  filterable: false, toggleable: true },
   { key: 'released',     label: 'Released',      align: 'left',  filterable: false, toggleable: true },
   { key: 'issued',       label: 'Issued',        align: 'left',  filterable: false, toggleable: true },
@@ -100,6 +103,7 @@ const COLUMNS: ColumnDef[] = [
   { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
   { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
   { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
+  { key: 'priority',     label: 'P',             align: 'left',  filterable: true,  toggleable: true },
   { key: 'notes',        label: 'Notes',         align: 'left',  filterable: false, toggleable: true },
   { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
   // View opens a PDF-only popup of the packet. No sort / no filter.
@@ -270,34 +274,70 @@ export default function AccountingPage() {
     return m;
   }, [allInvoices]);
 
-  const releasedRows: Row[] = useMemo(() => verifiedLoads.map(l => ({
+  // Closeout queue returns both legs of a relay as separate events.
+  // Dedupe by loadId so a relay shows up as ONE accounting row (we
+  // keep the pickup leg; deliveryEnd lookup below pulls in the
+  // delivery-leg end for the Age calculation).
+  const dedupedVerifiedLoads  = useMemo(() => dedupedLoads(verifiedLoads),  [verifiedLoads]);
+  const dedupedInvoicedLoads  = useMemo(() => dedupedLoads(invoicedLoads),  [invoicedLoads]);
+  const dedupedPaidLoads      = useMemo(() => dedupedLoads(paidLoads),      [paidLoads]);
+
+  // Map of loadId → delivery-leg end. For non-relay loads this is
+  // just the load's own end; for relays the leg flagged
+  // relayRole='delivery' wins.
+  const deliveryEndByLoadId = useMemo(() => {
+    const m = new Map<string, string>();
+    const all = [...verifiedLoads, ...invoicedLoads, ...paidLoads];
+    for (const l of all) {
+      const key = l.loadId ?? l.id;
+      if (!m.has(key)) m.set(key, l.end);
+    }
+    for (const l of all) {
+      if (l.relayRole === 'delivery') {
+        const key = l.loadId ?? l.id;
+        m.set(key, l.end);
+      }
+    }
+    return m;
+  }, [verifiedLoads, invoicedLoads, paidLoads]);
+
+  // Resolve customer for a load. Prefer the explicit customerId; if
+  // not set (legacy loads), fall back to a fuzzy name+aliases match.
+  // Same lookup CloseoutView uses.
+  function findCustomerForLoad(l: Load): Customer | undefined {
+    if (l.customerId) return customerById.get(l.customerId);
+    if (!l.broker)    return undefined;
+    return customers.find(c => c.name === l.broker || (c.aliases ?? []).includes(l.broker ?? ''));
+  }
+
+  const releasedRows: Row[] = useMemo(() => dedupedVerifiedLoads.map(l => ({
     load: l,
-    customer: l.customerId ? customerById.get(l.customerId) : undefined,
-  })), [verifiedLoads, customerById]);
+    customer: findCustomerForLoad(l),
+  })), [dedupedVerifiedLoads, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const queuedRows: Row[] = useMemo(() => {
-    return invoicedLoads
+    return dedupedInvoicedLoads
       .map(l => {
         const inv = l.loadId ? invoiceByLoadId.get(l.loadId) : undefined;
-        return { load: l, invoice: inv, customer: l.customerId ? customerById.get(l.customerId) : undefined };
+        return { load: l, invoice: inv, customer: findCustomerForLoad(l) };
       })
       .filter(r => r.invoice && r.invoice.status === 'draft');
-  }, [invoicedLoads, invoiceByLoadId, customerById]);
+  }, [dedupedInvoicedLoads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const invoicedRows: Row[] = useMemo(() => {
-    return invoicedLoads
+    return dedupedInvoicedLoads
       .map(l => {
         const inv = l.loadId ? invoiceByLoadId.get(l.loadId) : undefined;
-        return { load: l, invoice: inv, customer: l.customerId ? customerById.get(l.customerId) : undefined };
+        return { load: l, invoice: inv, customer: findCustomerForLoad(l) };
       })
       .filter(r => r.invoice && r.invoice.status === 'sent');
-  }, [invoicedLoads, invoiceByLoadId, customerById]);
+  }, [dedupedInvoicedLoads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const paidRows: Row[] = useMemo(() => paidLoads.map(l => ({
+  const paidRows: Row[] = useMemo(() => dedupedPaidLoads.map(l => ({
     load: l,
     invoice: l.loadId ? invoiceByLoadId.get(l.loadId) : undefined,
-    customer: l.customerId ? customerById.get(l.customerId) : undefined,
-  })), [paidLoads, invoiceByLoadId, customerById]);
+    customer: findCustomerForLoad(l),
+  })), [dedupedPaidLoads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allRows: Row[] = useMemo(() => [...queuedRows, ...invoicedRows, ...paidRows], [queuedRows, invoicedRows, paidRows]);
 
@@ -336,7 +376,14 @@ export default function AccountingPage() {
       case 'docs':         return { sortValue: 0 };
       case 'priority':     return { sortValue: r.load.priority ? 1 : 0, filterValue: r.load.priority ? 'Priority' : 'Normal' };
       case 'notes':        return { sortValue: (r.load.internalNotes ?? []).length };
-      case 'age':          return { sortValue: daysSince(r.load.verifiedAt ?? r.load.end) };
+      case 'age': {
+        // Days since delivery. For relays we want the DELIVERY leg's
+        // end (the actual hand-off date), not the pickup leg's end —
+        // resolved via deliveryEndByLoadId.
+        const key = r.load.loadId ?? r.load.id;
+        const deliveryEnd = deliveryEndByLoadId.get(key) ?? r.load.end;
+        return { sortValue: daysSince(deliveryEnd) };
+      }
       case 'released':     return { sortValue: r.load.verifiedAt ?? '' };
       case 'issued':       return { sortValue: r.invoice?.issuedAt ?? '' };
       case 'due':          return { sortValue: r.invoice?.dueAt ?? '' };
@@ -637,7 +684,9 @@ export default function AccountingPage() {
                     const accSum = (load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
                     const accCount = (load.accessorials ?? []).length;
                     const notesCount = (load.internalNotes ?? []).length;
-                    const age = daysSince(load.verifiedAt ?? load.end);
+                    // Age = days since delivery (delivery-leg end for relays).
+                    const deliveryEnd = deliveryEndByLoadId.get(load.loadId ?? load.id) ?? load.end;
+                    const age = daysSince(deliveryEnd);
                     return (
                       <tr key={id}
                         style={{
@@ -655,10 +704,13 @@ export default function AccountingPage() {
                         {orderedVisibleColumns.map(c => {
                           switch (c.key) {
                             case 'priority':
+                              // Outline star at all times (column stays visually consistent),
+                              // filled yellow when the load is flagged priority.
                               return <Td key={c.key}>
-                                {load.priority
-                                  ? <Star size={12} fill="#eab308" style={{ color: '#eab308' }} />
-                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                                <Star size={14}
+                                  fill={load.priority ? '#eab308' : 'none'}
+                                  stroke={load.priority ? '#eab308' : 'var(--gc-text-3)'}
+                                  style={{ color: load.priority ? '#eab308' : 'var(--gc-text-3)' }} />
                               </Td>;
                             case 'age':
                               return <Td key={c.key}>
@@ -887,6 +939,27 @@ export default function AccountingPage() {
       )}
     </div>
   );
+}
+
+// ─── Relay dedupe ───────────────────────────────────────────────────────
+//
+// Closeout queue returns both legs of a relay as separate events.
+// Accounting treats a relay as ONE billable thing, so we collapse the
+// pair into a single row (pickup leg wins).
+function dedupedLoads(loads: Load[]): Load[] {
+  const groups = new Map<string, Load[]>();
+  for (const l of loads) {
+    const key = l.loadId ?? l.id;
+    const arr = groups.get(key) ?? [];
+    arr.push(l);
+    groups.set(key, arr);
+  }
+  const out: Load[] = [];
+  for (const arr of groups.values()) {
+    const pickup = arr.find(l => l.relayRole === 'pickup');
+    out.push(pickup ?? arr[0]);
+  }
+  return out;
 }
 
 // ─── Age color helpers (mirror closeout) ────────────────────────────────

@@ -93,8 +93,10 @@ export function InvoicePacketViewerModal({ invoiceId, invoiceNumber, onClose }: 
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="rounded-2xl overflow-hidden flex flex-col"
         style={{
-          width:  'min(1000px, 96vw)',
-          height: 'min(900px, 92vh)',
+          // ~40% bigger than the previous 1000x900 default so the
+          // page renders comfortably in the iframe without zooming.
+          width:  'min(1400px, 96vw)',
+          height: 'min(1260px, 95vh)',
           background: 'var(--gc-bg)',
           boxShadow:  '0 24px 64px rgba(0,0,0,0.32)',
         }}
