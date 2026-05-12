@@ -39,7 +39,7 @@ const EVENT_COLS =
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
-  "dispatcher,notes,internal_note,accessorials,rate_con_pdf,ref_nums," +
+  "dispatcher,notes,internal_notes,accessorials,rate_con_pdf,ref_nums," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 interface StopRow {
