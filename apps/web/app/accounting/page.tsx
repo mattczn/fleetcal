@@ -34,7 +34,6 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
-import { InvoicePacketViewerModal } from '@/components/invoicing/InvoicePacketViewerModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
   Th, Td, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
@@ -202,8 +201,9 @@ export default function AccountingPage() {
 
   // Sibling modals
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
+  // Single modal for inspecting an invoice — shows the PDF + actions
+  // side-by-side. Opened from the View button on each row.
   const [invoiceModalId,  setInvoiceModalId]  = useState<string | null>(null);
-  const [viewerTarget,    setViewerTarget]    = useState<{ id: string; number: string } | null>(null);
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
   const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
@@ -725,14 +725,13 @@ export default function AccountingPage() {
                             case 'due':
                               return <Td key={c.key}>{inv?.dueAt ? fmtShortDate(inv.dueAt) : '—'}</Td>;
                             case 'invoiceNum':
+                              // Click-to-copy, same pattern as Load #.
+                              // To inspect the invoice (PDF + actions),
+                              // use the View button on this row.
                               return <Td key={c.key}>
-                                {inv ? (
-                                  <button onClick={e => { e.stopPropagation(); setInvoiceModalId(inv.id); }}
-                                    className="font-bold tabular-nums hover:underline"
-                                    style={{ color: '#1a73e8' }}>
-                                    #{inv.invoiceNumber}
-                                  </button>
-                                ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                                {inv
+                                  ? <CopyableCell value={inv.invoiceNumber} displayValue={`#${inv.invoiceNumber}`} title="Copy invoice #" />
+                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
                               </Td>;
                             case 'loadNum':
                               return <Td key={c.key}>
@@ -812,12 +811,16 @@ export default function AccountingPage() {
                               </Td>;
                             }
                             case 'view':
+                              // Opens the combined modal — PDF packet
+                              // on one side, Actions sidebar on the
+                              // other. Single canonical "look at this
+                              // invoice" surface.
                               return <Td key={c.key} onClick={e => e.stopPropagation()}>
                                 {inv ? (
-                                  <button onClick={() => setViewerTarget({ id: inv.id, number: inv.invoiceNumber })}
+                                  <button onClick={() => setInvoiceModalId(inv.id)}
                                     className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
                                     style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-                                    title="Quick-preview the invoice packet PDF">
+                                    title="View invoice — PDF + actions">
                                     <Eye size={11} /> View
                                   </button>
                                 ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
@@ -908,12 +911,6 @@ export default function AccountingPage() {
       {invoiceModalId && (
         <InvoiceDetailModal invoiceId={invoiceModalId}
           onClose={() => { setInvoiceModalId(null); void refresh(); }} />
-      )}
-      {viewerTarget && (
-        <InvoicePacketViewerModal
-          invoiceId={viewerTarget.id}
-          invoiceNumber={viewerTarget.number}
-          onClose={() => setViewerTarget(null)} />
       )}
       {summaryAction && (
         <InvoiceSummaryModal

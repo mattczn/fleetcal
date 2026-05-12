@@ -38,8 +38,12 @@ export function InvoiceDetailModal({ invoiceId, onClose }: Props) {
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="rounded-2xl overflow-hidden"
         style={{
-          width: 'min(1280px, 96vw)',
-          height: 'min(900px, 92vh)',
+          // PDF canvas + actions sidebar live side-by-side here, so
+          // the modal needs to be both wide and tall. Sized to fit
+          // a US-letter render at ~100% next to the 340px sidebar
+          // without horizontal scrolling.
+          width:  'min(1600px, 96vw)',
+          height: 'min(1260px, 95vh)',
           background: 'var(--gc-bg)',
           boxShadow: '0 24px 64px rgba(0,0,0,0.32)',
           display: 'flex',
