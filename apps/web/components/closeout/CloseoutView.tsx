@@ -764,36 +764,20 @@ export default function CloseoutView() {
           ) : visible.length === 0 ? (
             <EmptyState tab={tab} hasFilters={activeFilterCount > 0} onClearFilters={clearAllFilters} />
           ) : (
-            <div className="rounded-2xl"
+            <div className="rounded-2xl w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden"
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
-                // The key trio for "scroll inside, never on the page":
-                //   width:100% + maxWidth:100% pins to parent's width
-                //   minWidth:0   overrides the default min-width:auto
-                //     (which would otherwise inherit the table's
-                //     min-content width and inflate the wrapper)
-                //   overflowX:auto puts the scrollbar inside this box.
-                // Without minWidth:0, width:100% is silently treated as
-                // a LOWER bound — the element can still grow beyond
-                // 100% to fit content's intrinsic min-width.
-                width: '100%',
-                maxWidth: '100%',
-                minWidth: 0,
-                overflowX: 'auto',
-                overflowY: 'hidden',
               }}>
-              <table className="text-[12.5px]"
+              <table className="text-[12.5px] w-full"
                 style={{
                   borderCollapse: 'collapse',
-                  // The width:100% / min-width:max-content combo:
-                  //   - Narrow viewport (wrapper < max-content):
-                  //     min-width wins → table is max-content,
-                  //     wrapper's overflow-x scrolls.
-                  //   - Wide viewport (wrapper > max-content):
-                  //     width:100% wins → table fills wrapper, no
-                  //     empty space on the right.
-                  width: '100%',
+                  // min-width:max-content forces columns to their natural
+                  // widths — if total exceeds the wrapper, the wrapper's
+                  // overflow-x:auto scrolls. width:100% from the class
+                  // (above) takes over when wrapper > max-content so the
+                  // table fills the wrapper without empty bands on either
+                  // side.
                   minWidth: 'max-content',
                 }}>
                 <thead>

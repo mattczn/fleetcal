@@ -688,33 +688,18 @@ export default function AccountingPage() {
           ) : total === 0 ? (
             <BucketEmpty bucket={bucket} hasFilters={search.trim() !== '' || Object.values(filters).some(v => v && v.length > 0)} />
           ) : (
-            <div className="rounded-2xl"
+            <div className="rounded-2xl w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden"
               style={{
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
-                // width:100% + maxWidth:100% pin the wrapper to its
-                // parent's width. minWidth:0 overrides the default
-                // min-width:auto (which would otherwise inherit the
-                // table's min-content width and inflate the wrapper —
-                // width:100% is a LOWER bound and the element will
-                // grow past it without this). overflow-x:auto puts
-                // the scrollbar inside this box. overflow-y:hidden —
-                // sort/filter popovers use position:fixed so they
-                // escape clipping regardless.
-                width: '100%',
-                maxWidth: '100%',
-                minWidth: 0,
-                overflowX: 'auto',
-                overflowY: 'hidden',
               }}>
-              <table className="text-[12.5px]"
+              <table className="text-[12.5px] w-full"
                 style={{
                   borderCollapse: 'collapse',
-                  // width:100% / min-width:max-content combo:
-                  //   - Narrow viewport: min-width wins, wrapper scrolls.
-                  //   - Wide viewport: width:100% fills the wrapper so
-                  //     columns stretch and don't leave empty space.
-                  width: '100%',
+                  // min-width:max-content forces columns to natural widths
+                  // — if total > wrapper, wrapper's overflow-x:auto scrolls;
+                  // else width:100% from the class takes over and the
+                  // table fills the wrapper.
                   minWidth: 'max-content',
                 }}>
                 <thead>
