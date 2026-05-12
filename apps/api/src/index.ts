@@ -37,6 +37,8 @@ import checkCallsRoute from "./routes/check-calls.js";
 import stopsRoute from "./routes/stops.js";
 import driverRoute from "./routes/driver.js";
 import fuelReportsRoute from "./routes/fuel-reports.js";
+import maintenanceReportsRoute from "./routes/maintenance-reports.js";
+import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -108,6 +110,8 @@ authed.route("/stops", stopsRoute);
 // mounted from inside loadsRoute as /loads/:loadId/check-calls.
 authed.route("/check-calls", checkCallsRoute);
 authed.route("/fuel-reports", fuelReportsRoute);
+authed.route("/maintenance-reports", maintenanceReportsRoute);
+authed.route("/maintenance-action-items", maintenanceActionItemsRoute);
 
 // ── Bot routes (API key auth, read-only load access) ────────────────────
 // Must be mounted before /v1 so Hono doesn't match /v1/bot/* against the

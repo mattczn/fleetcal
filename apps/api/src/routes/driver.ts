@@ -996,6 +996,237 @@ driver.post("/fuel-reports", async (c) => {
   return c.json({ fuelReport: rowToFuelReportDriver(data as unknown as FuelReportRowDriver) });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// Maintenance reports — driver-side surface.
+//
+//   POST /v1/driver/maintenance-reports         — submit
+//   POST /v1/driver/maintenance-reports/:id/photos — upload photo
+//   GET  /v1/driver/maintenance-reports/mine    — driver's own history
+//   GET  /v1/driver/maintenance-reports/history — recent reports on a
+//                                                  specific asset/trailer,
+//                                                  any driver in the org
+// ─────────────────────────────────────────────────────────────────────────
+
+interface MaintReportRowDriver {
+  id:             string;
+  org_id:         string;
+  driver_id:      number;
+  asset_id:       number | null;
+  trailer_id:     number | null;
+  description:    string;
+  reported_at:    string;
+  latitude:       number | null;
+  longitude:      number | null;
+  state:          string | null;
+  status:         string;
+  action_item_id: string | null;
+  submitted_by:   string;
+  created_at:     string;
+}
+
+const MAINT_REPORT_COLS_DRIVER =
+  "id,org_id,driver_id,asset_id,trailer_id,description,reported_at," +
+  "latitude,longitude,state,status,action_item_id,submitted_by,created_at";
+
+const MAINT_PHOTO_BUCKET_DRIVER = "maintenance-photos";
+
+function rowToMaintReportDriver(r: MaintReportRowDriver) {
+  return {
+    id:           r.id,
+    orgId:        r.org_id,
+    driverId:     r.driver_id,
+    assetId:      r.asset_id   ?? undefined,
+    trailerId:    r.trailer_id ?? undefined,
+    description:  r.description,
+    reportedAt:   r.reported_at,
+    latitude:     r.latitude   ?? undefined,
+    longitude:    r.longitude  ?? undefined,
+    state:        r.state      ?? undefined,
+    status:       r.status,
+    actionItemId: r.action_item_id ?? undefined,
+    submittedBy:  r.submitted_by,
+    createdAt:    r.created_at,
+  };
+}
+
+driver.post("/maintenance-reports", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "validation_failed", errors: ["invalid JSON"] }, 400); }
+
+  const errors: string[] = [];
+  const description = typeof body.description === 'string' ? body.description.trim() : "";
+  if (!description) errors.push("description required");
+
+  const assetId   = body.assetId   != null ? Number(body.assetId)   : null;
+  const trailerId = body.trailerId != null ? Number(body.trailerId) : null;
+  const hasAsset   = assetId   != null && Number.isFinite(assetId);
+  const hasTrailer = trailerId != null && Number.isFinite(trailerId);
+  if (hasAsset && hasTrailer)   errors.push("exactly one of assetId / trailerId");
+  if (!hasAsset && !hasTrailer) errors.push("one of assetId / trailerId required");
+  if (errors.length) return c.json({ error: "validation_failed", errors }, 400);
+
+  // Defensive: confirm the asset/trailer is in this org so the driver
+  // can't reach into another org's records via a guessed id.
+  if (hasAsset) {
+    const { data: row } = await supabase
+      .from("assets").select("id").eq("id", assetId!).eq("org_id", orgId).maybeSingle();
+    if (!row) return c.json({ error: "asset_not_found" }, 404);
+  } else {
+    const { data: row } = await supabase
+      .from("trailers").select("id").eq("id", trailerId!).eq("org_id", orgId).maybeSingle();
+    if (!row) return c.json({ error: "trailer_not_found" }, 404);
+  }
+
+  const insertRow = {
+    org_id:       orgId,
+    driver_id:    driverId,
+    asset_id:     hasAsset   ? assetId   : null,
+    trailer_id:   hasTrailer ? trailerId : null,
+    description,
+    reported_at:  typeof body.reportedAt === 'string' ? body.reportedAt : new Date().toISOString(),
+    latitude:     typeof body.latitude  === 'number' ? body.latitude  : null,
+    longitude:    typeof body.longitude === 'number' ? body.longitude : null,
+    state:        typeof body.state     === 'string' && body.state.trim()
+                    ? body.state.trim().toUpperCase() : null,
+    submitted_by: `driver:${driverId}`,
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("maintenance_reports")
+    .insert(insertRow as any)
+    .select(MAINT_REPORT_COLS_DRIVER)
+    .single();
+  if (error || !data) {
+    console.error("[POST /v1/driver/maintenance-reports] failed:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  return c.json({ report: rowToMaintReportDriver(data as unknown as MaintReportRowDriver) });
+});
+
+// Photo upload — multipart. One file per request to keep the wire
+// shape simple from React Native; the driver app loops over selected
+// photos and posts each.
+driver.post("/maintenance-reports/:id/photos", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id       = c.req.param("id");
+
+  // Confirm the report exists in this org AND belongs to this driver
+  // (drivers can only attach photos to their own reports).
+  const { data: rep, error: repErr } = await supabase
+    .from("maintenance_reports")
+    .select("id, driver_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (repErr) return c.json({ error: "fetch_failed", detail: repErr.message }, 500);
+  if (!rep) return c.json({ error: "not_found" }, 404);
+  if ((rep as { driver_id: number }).driver_id !== driverId) {
+    return c.json({ error: "not_authorized" }, 403);
+  }
+
+  let body: { file?: File };
+  try { body = await c.req.parseBody() as { file?: File }; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400); }
+  const file = body.file;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
+  }
+
+  const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: uploadErr } = await supabase.storage
+    .from(MAINT_PHOTO_BUCKET_DRIVER)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[POST .../photos] storage:", uploadErr);
+    return c.json({ error: "upload_failed", detail: uploadErr.message }, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("maintenance_report_photos")
+    .insert({
+      report_id:    id,
+      org_id:       orgId,
+      storage_path: storagePath,
+      file_name:    file.name,
+      mime_type:    file.type || null,
+      size_bytes:   bytes.length,
+    } as any)
+    .select("id, file_name, mime_type, size_bytes, uploaded_at")
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(MAINT_PHOTO_BUCKET_DRIVER).remove([storagePath]);
+    console.error("[POST .../photos] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  return c.json({ photo: data });
+});
+
+driver.get("/maintenance-reports/mine", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const url      = new URL(c.req.url);
+  const limit    = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "20"), 1), 100);
+  const { data, error } = await supabase
+    .from("maintenance_reports")
+    .select(MAINT_REPORT_COLS_DRIVER)
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .order("reported_at", { ascending: false })
+    .limit(limit);
+  if (error) return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  return c.json({
+    reports: (data ?? []).map(r => rowToMaintReportDriver(r as unknown as MaintReportRowDriver)),
+  });
+});
+
+// History on a SPECIFIC asset/trailer, regardless of which driver
+// filed it. Used by the driver app's "what's already been reported on
+// this truck" rail — so the next driver doesn't duplicate.
+driver.get("/maintenance-reports/history", async (c) => {
+  const orgId = c.get("orgId");
+  const url   = new URL(c.req.url);
+  const assetRaw   = url.searchParams.get("assetId");
+  const trailerRaw = url.searchParams.get("trailerId");
+  const limit      = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "10"), 1), 50);
+
+  const hasAsset   = assetRaw && Number.isFinite(Number(assetRaw));
+  const hasTrailer = trailerRaw && Number.isFinite(Number(trailerRaw));
+  if (hasAsset === hasTrailer) {
+    return c.json({ error: "validation_failed", errors: ["exactly one of assetId / trailerId"] }, 400);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let q: any = supabase
+    .from("maintenance_reports")
+    .select(MAINT_REPORT_COLS_DRIVER)
+    .eq("org_id", orgId)
+    .order("reported_at", { ascending: false })
+    .limit(limit);
+  if (hasAsset)   q = q.eq("asset_id",   Number(assetRaw));
+  if (hasTrailer) q = q.eq("trailer_id", Number(trailerRaw));
+
+  const { data, error } = await q;
+  if (error) return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  return c.json({
+    reports: (data ?? []).map((r: unknown) => rowToMaintReportDriver(r as MaintReportRowDriver)),
+  });
+});
+
 // GET /v1/driver/fuel-reports — the driver's own submission history.
 // Useful for the "my recent submissions" rail on the form screen.
 driver.get("/fuel-reports", async (c) => {

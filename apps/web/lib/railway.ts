@@ -58,6 +58,14 @@ import type {
   ListRecentStopsResponse,
   ListFuelReportsResponse, ListFuelReportsQuery,
   UpdateFuelReportRequest, UpdateFuelReportResponse,
+  ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
+  GetMaintenanceReportResponse,
+  UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
+  ConvertMaintenanceReportRequest, ConvertMaintenanceReportResponse,
+  ListMaintenanceActionItemsQuery, ListMaintenanceActionItemsResponse,
+  GetMaintenanceActionItemResponse,
+  CreateMaintenanceActionItemRequest, CreateMaintenanceActionItemResponse,
+  UpdateMaintenanceActionItemRequest, UpdateMaintenanceActionItemResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -436,6 +444,62 @@ class RailwayClient {
   }
   deleteFuelReport(id: string) {
     return this.req<void>('DELETE', `/v1/fuel-reports/${id}`);
+  }
+
+  // ── Maintenance reports ───────────────────────────────────────────────
+  listMaintenanceReports(query: ListMaintenanceReportsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)    qs.set('status',    query.status);
+    if (query.assetId)   qs.set('assetId',   String(query.assetId));
+    if (query.trailerId) qs.set('trailerId', String(query.trailerId));
+    if (query.driverId)  qs.set('driverId',  String(query.driverId));
+    if (query.from)      qs.set('from',      query.from);
+    if (query.to)        qs.set('to',        query.to);
+    if (query.limit)     qs.set('limit',     String(query.limit));
+    if (query.offset)    qs.set('offset',    String(query.offset));
+    const s = qs.toString();
+    return this.req<ListMaintenanceReportsResponse>('GET', `/v1/maintenance-reports${s ? `?${s}` : ''}`);
+  }
+  getMaintenanceReport(id: string) {
+    return this.req<GetMaintenanceReportResponse>('GET', `/v1/maintenance-reports/${id}`);
+  }
+  updateMaintenanceReport(id: string, body: UpdateMaintenanceReportRequest) {
+    return this.req<UpdateMaintenanceReportResponse>('PATCH', `/v1/maintenance-reports/${id}`, body);
+  }
+  convertMaintenanceReport(id: string, body: ConvertMaintenanceReportRequest = {}) {
+    return this.req<ConvertMaintenanceReportResponse>('POST', `/v1/maintenance-reports/${id}/convert`, body);
+  }
+  deleteMaintenanceReport(id: string) {
+    return this.req<void>('DELETE', `/v1/maintenance-reports/${id}`);
+  }
+
+  // ── Maintenance action items ─────────────────────────────────────────
+  listMaintenanceActionItems(query: ListMaintenanceActionItemsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)       qs.set('status',       query.status);
+    if (query.priority)     qs.set('priority',     query.priority);
+    if (query.category)     qs.set('category',     query.category);
+    if (query.outOfService != null) qs.set('outOfService', String(query.outOfService));
+    if (query.assetId)      qs.set('assetId',      String(query.assetId));
+    if (query.trailerId)    qs.set('trailerId',    String(query.trailerId));
+    if (query.scheduledFrom) qs.set('scheduledFrom', query.scheduledFrom);
+    if (query.scheduledTo)   qs.set('scheduledTo',   query.scheduledTo);
+    if (query.limit)        qs.set('limit',        String(query.limit));
+    if (query.offset)       qs.set('offset',       String(query.offset));
+    const s = qs.toString();
+    return this.req<ListMaintenanceActionItemsResponse>('GET', `/v1/maintenance-action-items${s ? `?${s}` : ''}`);
+  }
+  getMaintenanceActionItem(id: string) {
+    return this.req<GetMaintenanceActionItemResponse>('GET', `/v1/maintenance-action-items/${id}`);
+  }
+  createMaintenanceActionItem(body: CreateMaintenanceActionItemRequest) {
+    return this.req<CreateMaintenanceActionItemResponse>('POST', '/v1/maintenance-action-items', body);
+  }
+  updateMaintenanceActionItem(id: string, body: UpdateMaintenanceActionItemRequest) {
+    return this.req<UpdateMaintenanceActionItemResponse>('PATCH', `/v1/maintenance-action-items/${id}`, body);
+  }
+  deleteMaintenanceActionItem(id: string) {
+    return this.req<void>('DELETE', `/v1/maintenance-action-items/${id}`);
   }
 }
 

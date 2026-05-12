@@ -158,4 +158,45 @@ export const railway = {
       `/v1/driver/fuel-reports?limit=${limit}`,
     );
   },
+
+  // Maintenance reports
+  submitMaintenanceReport(body: {
+    assetId?:    number;
+    trailerId?:  number;
+    description: string;
+    reportedAt?: string;
+    latitude?:   number;
+    longitude?:  number;
+    state?:      string;
+  }) {
+    return req<{ report: import("@fleetcal/types").MaintenanceReport }>(
+      "POST",
+      "/v1/driver/maintenance-reports",
+      body,
+    );
+  },
+  uploadMaintenancePhoto(reportId: string, form: FormData) {
+    return req<{ photo: { id: string; file_name: string; mime_type: string | null; size_bytes: number | null; uploaded_at: string } }>(
+      "POST",
+      `/v1/driver/maintenance-reports/${reportId}/photos`,
+      form,
+      { isFormData: true },
+    );
+  },
+  listMyMaintenanceReports(limit = 20) {
+    return req<{ reports: import("@fleetcal/types").MaintenanceReport[] }>(
+      "GET",
+      `/v1/driver/maintenance-reports/mine?limit=${limit}`,
+    );
+  },
+  listMaintenanceHistory(target: { assetId?: number; trailerId?: number }, limit = 10) {
+    const qs = new URLSearchParams();
+    if (target.assetId   != null) qs.set("assetId",   String(target.assetId));
+    if (target.trailerId != null) qs.set("trailerId", String(target.trailerId));
+    qs.set("limit", String(limit));
+    return req<{ reports: import("@fleetcal/types").MaintenanceReport[] }>(
+      "GET",
+      `/v1/driver/maintenance-reports/history?${qs.toString()}`,
+    );
+  },
 };

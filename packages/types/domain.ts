@@ -695,3 +695,105 @@ export interface FuelReport {
   notes?:         string;
   createdAt:      string;
 }
+
+// ── Maintenance ─────────────────────────────────────────────────────────
+//
+// Two-layer model:
+//   - MaintenanceReport      — driver-submitted raw input. Immutable
+//                              once filed (only `status` changes via ops
+//                              triage).
+//   - MaintenanceActionItem  — ops's tracked work. Created from a report
+//                              (reportId set) or ad-hoc.
+
+export type MaintenanceReportStatus = 'open' | 'reviewed' | 'dismissed' | 'converted';
+export const MAINTENANCE_REPORT_STATUSES: readonly MaintenanceReportStatus[] = [
+  'open', 'reviewed', 'dismissed', 'converted',
+];
+
+export interface MaintenanceReportPhoto {
+  id:           string;
+  reportId:     string;
+  fileName:     string;
+  mimeType?:    string;
+  sizeBytes?:   number;
+  uploadedAt:   string;
+  /** Signed read URL when the list endpoint mints one inline; otherwise
+   *  callers fetch via GET /v1/maintenance-reports/photos/:id/url. */
+  signedUrl?:   string;
+}
+
+export interface MaintenanceReport {
+  id:             string;
+  orgId:          string;
+
+  driverId:       number;
+
+  /** Exactly one of assetId / trailerId is non-null (DB-enforced). */
+  assetId?:       number;
+  trailerId?:     number;
+
+  description:    string;
+
+  reportedAt:     string;
+  latitude?:      number;
+  longitude?:     number;
+  state?:         string;
+
+  status:         MaintenanceReportStatus;
+  /** Set when ops converts the report into an action item. */
+  actionItemId?:  string;
+
+  submittedBy:    string;
+  createdAt:      string;
+
+  /** Populated by list/detail endpoints that pre-fetch related photos. */
+  photos?:        MaintenanceReportPhoto[];
+}
+
+export type MaintenanceCategory = 'repair' | 'pm' | 'inspection' | 'other';
+export const MAINTENANCE_CATEGORIES: readonly MaintenanceCategory[] = [
+  'repair', 'pm', 'inspection', 'other',
+];
+
+export type MaintenancePriority = 'urgent' | 'high' | 'normal' | 'low';
+export const MAINTENANCE_PRIORITIES: readonly MaintenancePriority[] = [
+  'urgent', 'high', 'normal', 'low',
+];
+
+export type MaintenanceActionStatus = 'open' | 'in_progress' | 'done';
+export const MAINTENANCE_ACTION_STATUSES: readonly MaintenanceActionStatus[] = [
+  'open', 'in_progress', 'done',
+];
+
+export interface MaintenanceActionItem {
+  id:             string;
+  orgId:          string;
+
+  assetId?:       number;
+  trailerId?:     number;
+
+  title:          string;
+  description?:   string;
+  category:       MaintenanceCategory;
+  priority:       MaintenancePriority;
+  status:         MaintenanceActionStatus;
+  outOfService:   boolean;
+
+  scheduledDate?: string;       // YYYY-MM-DD
+  dueDate?:       string;       // YYYY-MM-DD
+
+  /** Source report, when this item was created from a driver submission. */
+  reportId?:     string;
+
+  completedAt?:   string;
+  completedBy?:   string;
+
+  // Phase-2 slots, exposed but typically empty in Phase 1.
+  vendor?:        string;
+  estimatedCost?: number;
+  actualCost?:    number;
+
+  createdBy:      string;
+  createdAt:      string;
+  updatedAt:      string;
+}

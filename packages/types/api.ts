@@ -10,7 +10,14 @@
  * each section.
  */
 
-import type { Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver, FuelReport, FuelReportMatchStatus, InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry, OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer } from "./domain";
+import type {
+  Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver,
+  FuelReport, FuelReportMatchStatus,
+  InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry,
+  MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
+  MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+  OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer,
+} from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
 // ── /v1/health ──────────────────────────────────────────────────────────
@@ -871,6 +878,143 @@ export interface UpdateFuelReportRequest {
   matchStatus?:   FuelReportMatchStatus;
 }
 export interface UpdateFuelReportResponse { fuelReport: FuelReport; }
+
+// ── /v1/driver/maintenance-reports + /v1/maintenance-reports ────────────
+
+/** POST /v1/driver/maintenance-reports — driver submits a report.
+ *  Exactly one of assetId / trailerId is required. */
+export interface CreateMaintenanceReportRequest {
+  assetId?:    number;
+  trailerId?:  number;
+  description: string;
+  reportedAt?: string;
+  latitude?:   number;
+  longitude?:  number;
+  state?:      string;
+}
+export interface CreateMaintenanceReportResponse { report: MaintenanceReport; }
+
+/** GET /v1/driver/maintenance-reports/history — recent reports on
+ *  an asset/trailer, regardless of which driver filed them. Used by
+ *  the driver app's "what's been reported on this truck" rail. */
+export interface ListMaintenanceReportHistoryResponse {
+  reports: MaintenanceReport[];
+}
+
+/** GET /v1/maintenance-reports — ops list with filters. */
+export interface ListMaintenanceReportsQuery {
+  status?:    MaintenanceReportStatus;
+  assetId?:   number;
+  trailerId?: number;
+  driverId?:  number;
+  from?:      string;
+  to?:        string;
+  limit?:     number;
+  offset?:    number;
+}
+export interface ListMaintenanceReportsResponse {
+  reports: MaintenanceReport[];
+  total:   number;
+  limit:   number;
+  offset:  number;
+}
+
+export interface GetMaintenanceReportResponse { report: MaintenanceReport; }
+
+/** PATCH /v1/maintenance-reports/:id — ops triage. */
+export interface UpdateMaintenanceReportRequest {
+  status?: MaintenanceReportStatus;
+}
+export interface UpdateMaintenanceReportResponse { report: MaintenanceReport; }
+
+/** POST /v1/maintenance-reports/:id/convert — promote a report to
+ *  an action item. The action item inherits asset/trailer + report_id;
+ *  the operator supplies the triage fields (title, priority, etc.).
+ *  Server transactionally flips report.status -> 'converted' and sets
+ *  report.action_item_id. */
+export interface ConvertMaintenanceReportRequest {
+  title?:          string;
+  description?:    string;
+  category?:       MaintenanceCategory;
+  priority?:       MaintenancePriority;
+  outOfService?:   boolean;
+  scheduledDate?:  string;
+  dueDate?:        string;
+}
+export interface ConvertMaintenanceReportResponse {
+  report:      MaintenanceReport;
+  actionItem:  MaintenanceActionItem;
+}
+
+/** GET /v1/maintenance-reports/photos/:id/url — signed read URL. */
+export interface GetMaintenanceReportPhotoUrlResponse {
+  url: string;
+}
+
+// ── /v1/maintenance-action-items ────────────────────────────────────────
+
+/** POST /v1/maintenance-action-items — ad-hoc create.
+ *  Exactly one of assetId / trailerId required. */
+export interface CreateMaintenanceActionItemRequest {
+  assetId?:        number;
+  trailerId?:      number;
+  title:           string;
+  description?:    string;
+  category?:       MaintenanceCategory;
+  priority?:       MaintenancePriority;
+  outOfService?:   boolean;
+  scheduledDate?:  string;
+  dueDate?:        string;
+  vendor?:         string;
+  estimatedCost?:  number;
+}
+export interface CreateMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
+
+/** GET /v1/maintenance-action-items — list with filters. */
+export interface ListMaintenanceActionItemsQuery {
+  status?:        MaintenanceActionStatus;
+  priority?:      MaintenancePriority;
+  category?:      MaintenanceCategory;
+  outOfService?:  boolean;
+  assetId?:       number;
+  trailerId?:     number;
+  /** Inclusive `scheduledDate >= from`. */
+  scheduledFrom?: string;
+  scheduledTo?:   string;
+  limit?:         number;
+  offset?:        number;
+}
+export interface ListMaintenanceActionItemsResponse {
+  actionItems: MaintenanceActionItem[];
+  total:       number;
+  limit:       number;
+  offset:      number;
+}
+
+export interface GetMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
+
+export interface UpdateMaintenanceActionItemRequest {
+  title?:          string;
+  description?:    string | null;
+  category?:       MaintenanceCategory;
+  priority?:       MaintenancePriority;
+  status?:         MaintenanceActionStatus;
+  outOfService?:   boolean;
+  scheduledDate?:  string | null;
+  dueDate?:        string | null;
+  vendor?:         string | null;
+  estimatedCost?:  number | null;
+  actualCost?:     number | null;
+  completedBy?:    string | null;
+}
+export interface UpdateMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
+
+/** Re-export so callers that import from this module exclusively get
+ *  the maintenance shapes too. */
+export type {
+  MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
+  MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+};
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

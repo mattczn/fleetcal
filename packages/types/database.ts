@@ -779,6 +779,214 @@ export type Database = {
         }
         Relationships: []
       }
+      maintenance_action_items: {
+        Row: {
+          actual_cost: number | null
+          asset_id: number | null
+          category: string
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string
+          created_by: string
+          description: string | null
+          due_date: string | null
+          estimated_cost: number | null
+          id: string
+          org_id: string
+          out_of_service: boolean
+          priority: string
+          report_id: string | null
+          scheduled_date: string | null
+          status: string
+          title: string
+          trailer_id: number | null
+          updated_at: string
+          vendor: string | null
+        }
+        Insert: {
+          actual_cost?: number | null
+          asset_id?: number | null
+          category?: string
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by: string
+          description?: string | null
+          due_date?: string | null
+          estimated_cost?: number | null
+          id?: string
+          org_id: string
+          out_of_service?: boolean
+          priority?: string
+          report_id?: string | null
+          scheduled_date?: string | null
+          status?: string
+          title: string
+          trailer_id?: number | null
+          updated_at?: string
+          vendor?: string | null
+        }
+        Update: {
+          actual_cost?: number | null
+          asset_id?: number | null
+          category?: string
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          due_date?: string | null
+          estimated_cost?: number | null
+          id?: string
+          org_id?: string
+          out_of_service?: boolean
+          priority?: string
+          report_id?: string | null
+          scheduled_date?: string | null
+          status?: string
+          title?: string
+          trailer_id?: number | null
+          updated_at?: string
+          vendor?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "maintenance_action_items_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "maintenance_action_items_trailer_id_fkey"
+            columns: ["trailer_id"]
+            isOneToOne: false
+            referencedRelation: "trailers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "maintenance_action_items_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "maintenance_reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      maintenance_report_photos: {
+        Row: {
+          file_name: string
+          id: string
+          mime_type: string | null
+          org_id: string
+          report_id: string
+          size_bytes: number | null
+          storage_path: string
+          uploaded_at: string
+        }
+        Insert: {
+          file_name: string
+          id?: string
+          mime_type?: string | null
+          org_id: string
+          report_id: string
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_at?: string
+        }
+        Update: {
+          file_name?: string
+          id?: string
+          mime_type?: string | null
+          org_id?: string
+          report_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "maintenance_report_photos_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: false
+            referencedRelation: "maintenance_reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      maintenance_reports: {
+        Row: {
+          action_item_id: string | null
+          asset_id: number | null
+          created_at: string
+          description: string
+          driver_id: number
+          id: string
+          latitude: number | null
+          longitude: number | null
+          org_id: string
+          reported_at: string
+          state: string | null
+          status: string
+          submitted_by: string
+          trailer_id: number | null
+        }
+        Insert: {
+          action_item_id?: string | null
+          asset_id?: number | null
+          created_at?: string
+          description: string
+          driver_id: number
+          id?: string
+          latitude?: number | null
+          longitude?: number | null
+          org_id: string
+          reported_at?: string
+          state?: string | null
+          status?: string
+          submitted_by: string
+          trailer_id?: number | null
+        }
+        Update: {
+          action_item_id?: string | null
+          asset_id?: number | null
+          created_at?: string
+          description?: string
+          driver_id?: number
+          id?: string
+          latitude?: number | null
+          longitude?: number | null
+          org_id?: string
+          reported_at?: string
+          state?: string | null
+          status?: string
+          submitted_by?: string
+          trailer_id?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "maintenance_reports_driver_id_fkey"
+            columns: ["driver_id"]
+            isOneToOne: false
+            referencedRelation: "drivers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "maintenance_reports_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "maintenance_reports_trailer_id_fkey"
+            columns: ["trailer_id"]
+            isOneToOne: false
+            referencedRelation: "trailers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       org_load_id_counters: {
         Row: {
           last_id: number
