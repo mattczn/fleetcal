@@ -765,15 +765,22 @@ export default function CloseoutView() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // table-layout: fixed honors explicit column widths
-                  // strictly, so the user can drag a column narrower
-                  // than its content (content clips with ellipsis).
-                  // Without fixed, the browser would treat th widths
-                  // as a "preferred" hint and refuse to shrink below
-                  // content min-content.
+                  // Spreadsheet behavior: each column has an exact
+                  // pixel width, the table is sum-of-column-widths
+                  // wide. If sum < wrapper, leftover space sits to
+                  // the right (like Excel's gray area). If sum >
+                  // wrapper, the wrapper scrolls horizontally.
+                  //
+                  // The critical thing here is NO `minWidth: 100%` on
+                  // the table — that was forcing the table to fill
+                  // the wrapper, which under table-layout: fixed makes
+                  // the browser PROPORTIONALLY SCALE all columns up to
+                  // fit. Setting a column to 50px would visually render
+                  // at ~100px because the table needed extra width to
+                  // hit 100%. With width: max-content + no minWidth,
+                  // the columns are their exact px widths.
                   tableLayout: 'fixed',
-                  width: 'max-content',
-                  minWidth: '100%',
+                  width:       'max-content',
                 }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>

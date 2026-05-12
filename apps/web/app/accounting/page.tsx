@@ -730,13 +730,13 @@ export default function AccountingPage() {
               <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // table-layout: fixed lets the user drag columns
-                  // narrower than their content (cells truncate via
-                  // overflow:hidden on Td). With auto layout, the
-                  // browser refuses to shrink below content min-content.
+                  // Each column is its exact pixel width (table-layout:
+                  // fixed). Table is sum-of-columns. NO `minWidth: 100%`
+                  // here — that forces the table to fill the wrapper,
+                  // which makes the browser scale columns up proportionally
+                  // to fit, defeating user-resize.
                   tableLayout: 'fixed',
-                  width: 'max-content',
-                  minWidth: '100%',
+                  width:       'max-content',
                 }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
