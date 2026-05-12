@@ -263,8 +263,17 @@ export default function MaintenanceScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#f1f3f4" }} edges={["top"]}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
+      {/* Blue top bar — matches Schedule / Loads / Profile. */}
+      <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 22, paddingTop: 8, paddingBottom: 20 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <Wrench size={22} color="#fff" strokeWidth={2.4} />
+          <Text style={[txt(800), { fontSize: 22, color: "#fff", letterSpacing: -0.3 }]}>
+            Report Issue
+          </Text>
+        </View>
+      </View>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: '#f1f3f4' }}>
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
           keyboardShouldPersistTaps="handled"
@@ -272,14 +281,6 @@ export default function MaintenanceScreen() {
             <RefreshControl refreshing={refreshing}
               onRefresh={async () => { setRefreshing(true); await loadHistory(); setRefreshing(false); }} />
           }>
-
-          {/* Header */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 18 }}>
-            <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#1a73e8', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
-              <Wrench size={18} color="#fff" strokeWidth={2.4} />
-            </View>
-            <Text style={[txt(800), { fontSize: 22, color: '#202124' }]}>Report Issue</Text>
-          </View>
 
           {/* Form card */}
           <View style={{ backgroundColor: '#fff', borderRadius: 14, padding: 16 }}>
