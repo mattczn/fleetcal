@@ -168,7 +168,7 @@ closeout.get("/queue", async (c) => {
     // {pending, on_hold}. The non-search path also applies the
     // delivered-by-now date filter so we don't surface upcoming
     // loads in the working set.
-    if (tab === "pending" || tab === "flagged") {
+    if (tab === "pending" || tab === "flagged" || tab === "all") {
       if (!searching && tab === "pending") q = q.lte("end", nowIso);
       q = q.in("load.billing_status", ["pending", "on_hold"]);
     } else if (tab === "verified") q = q.eq("load.billing_status", "verified");
@@ -188,7 +188,7 @@ closeout.get("/queue", async (c) => {
   // Reuse-flag — when the wide-candidate path runs, we've already
   // built loadIds + we'll need POD counts; track them here so the
   // returned docCounts payload further down doesn't re-fetch.
-  const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged");
+  const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged" || tab === "all");
 
   if (!searching && !wideCandidatePath) {
     const { data, error, count } = await buildBaseQuery(true)
@@ -240,7 +240,9 @@ closeout.get("/queue", async (c) => {
     const nowMs = Date.now();
 
     // Apply the impediment filter. Pending = NOT flagged.
-    const filtered = candidates.filter(r => {
+    // `all` short-circuits the split — every candidate in the
+    // pending/on_hold candidate set is returned.
+    const filtered = tab === "all" ? candidates : candidates.filter(r => {
       const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
       const loadId = loadRow?.id;
       const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
@@ -320,7 +322,7 @@ closeout.get("/queue", async (c) => {
     // logic as the non-search wide-candidate path — we just feed it
     // the already-merged result set instead of a fresh fetch.
     let finalRows = merged;
-    if (tab === "pending" || tab === "flagged") {
+    if (tab === "pending" || tab === "flagged" || tab === "all") {
       const candidateLoadIds = Array.from(new Set(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         merged.map((r: any) => r.load?.id as string | undefined).filter((id): id is string => !!id),
@@ -339,7 +341,7 @@ closeout.get("/queue", async (c) => {
       }
       const deliveryEndByLoadId = buildDeliveryEndMap(merged);
       const nowMs = Date.now();
-      finalRows = merged.filter(r => {
+      finalRows = tab === "all" ? merged : merged.filter(r => {
         const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
         const loadId = loadRow?.id;
         const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;

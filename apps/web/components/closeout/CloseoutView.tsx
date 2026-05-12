@@ -34,7 +34,7 @@ import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 
-type Tab = 'pending' | 'flagged';
+type Tab = 'pending' | 'flagged' | 'all';
 
 const PAGE_SIZE = 50;
 
@@ -99,6 +99,7 @@ const COLS_STORAGE_KEY = 'closeout-cols-v1';
 const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
   { value: 'pending', label: 'Pending', subtitle: 'Awaiting POD',     tint: '#1a73e8' },
   { value: 'flagged', label: 'Flagged', subtitle: 'Needs follow-up',  tint: '#b45309' },
+  { value: 'all',     label: 'All',     subtitle: 'Everything',       tint: '#5f6368' },
 ];
 
 function ageDays(deliveredEnd: string): number {
@@ -138,12 +139,12 @@ export default function CloseoutView() {
   const [tab, setTab] = useState<Tab>('pending');
   // Per-tab page state — switching tabs preserves where you were.
   const [pageByTab, setPageByTab] = useState<Record<Tab, number>>({
-    pending: 0, flagged: 0,
+    pending: 0, flagged: 0, all: 0,
   });
   // Live counts shown on both bucket tiles. Pre-fetched on mount and
   // refreshed alongside the main queue fetch — keeps the inactive
   // tile's number accurate without forcing a tab switch.
-  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0 });
+  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0 });
   const page = pageByTab[tab];
   const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
 
@@ -241,13 +242,15 @@ export default function CloseoutView() {
   // tile's count doesn't get stale.
   async function refreshBucketTotals() {
     try {
-      const [p, f] = await Promise.all([
+      const [p, f, a] = await Promise.all([
         railway.listCloseoutQueue('pending', { limit: 1 }).catch(() => null),
         railway.listCloseoutQueue('flagged', { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('all',     { limit: 1 }).catch(() => null),
       ]);
       setBucketTotals({
         pending: p?.total ?? 0,
         flagged: f?.total ?? 0,
+        all:     a?.total ?? 0,
       });
     } catch { /* best-effort */ }
   }
@@ -587,72 +590,17 @@ export default function CloseoutView() {
             Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Accounting</Link>.
           </div>
 
-          {/* Search bar — searches all loads in the active tab, not
-              just the page on screen. Hits /v1/closeout/queue?q=…
-              after a 250ms debounce. When the query is set, the
-              pending tab lifts its end<=now filter so upcoming loads
-              are reachable too. */}
-          <div>
-            <div className="relative">
-              <Search size={16}
-                style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: searchQuery ? 'var(--gc-blue)' : 'var(--gc-text-2)', pointerEvents: 'none' }} />
-              <input
-                type="text"
-                value={searchInput}
-                onChange={e => setSearchInput(e.target.value)}
-                placeholder={`Search ${tab} loads — broker, load #, ID / invoice #, title, driver, notes…`}
-                className="w-full text-[13px] rounded-full outline-none"
-                style={{
-                  background: 'var(--gc-surface)',
-                  border:     `1px solid ${searchQuery ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
-                  color:      'var(--gc-text-1)',
-                  height:     38,
-                  paddingLeft:  40,
-                  paddingRight: searchInput ? 36 : 14,
-                }}
-              />
-              {searchInput && (
-                <button onClick={() => setSearchInput('')}
-                  className="rounded-full"
-                  title="Clear search"
-                  style={{
-                    position:  'absolute',
-                    right:     8,
-                    top:       '50%',
-                    transform: 'translateY(-50%)',
-                    width:     22,
-                    height:    22,
-                    display:   'flex',
-                    alignItems:     'center',
-                    justifyContent: 'center',
-                    color:      'var(--gc-text-2)',
-                    background: 'var(--gc-hover)',
-                  }}>
-                  <X size={13} />
-                </button>
-              )}
-            </div>
-            {searchInput && !searchQuery && searchInput.trim().length < 2 && (
-              <div className="text-[11px] mt-1.5 ml-3" style={{ color: 'var(--gc-text-3)' }}>
-                Type at least 2 characters to search.
-              </div>
-            )}
-            {searchQuery && (
-              <div className="text-[11px] mt-1.5 ml-3 flex items-center gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
-                <Search size={10} style={{ color: 'var(--gc-blue)' }} /> Showing {tab} loads matching <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>&ldquo;{searchQuery}&rdquo;</span>
-                {tab === 'pending' && <span style={{ color: 'var(--gc-text-3)' }}>(including upcoming)</span>}
-              </div>
-            )}
-          </div>
-
           {/* Bucket tiles — same visual rhythm as /accounting. Each
               tile shows live count + subtitle and toggles which queue
-              the table below is showing. */}
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+              the table below is showing. Five-column grid is shared
+              with /accounting so cards stay the same width across
+              both pages (this view fills 3 of 5; right two slots are
+              spacers). */}
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
             {TABS.map(b => {
               const active = tab === b.value;
               const count = bucketTotals[b.value];
-              const Icon = b.value === 'pending' ? Clock : Flag;
+              const Icon = b.value === 'pending' ? Clock : b.value === 'flagged' ? Flag : FileCheck2;
               return (
                 <button key={b.value}
                   onClick={() => setTab(b.value)}
@@ -675,10 +623,35 @@ export default function CloseoutView() {
             })}
           </div>
 
-          {/* Toolbar — review queue, columns, refresh */}
-          <div className="flex items-center gap-1.5">
+          {/* Toolbar — search on the left, actions on the right.
+              Mirrors /accounting's layout so the two pages feel
+              consistent. Search hits /v1/closeout/queue?q=… after a
+              250ms debounce; when query is set the pending tab lifts
+              its end<=now filter so upcoming loads are reachable. */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                style={{ color: searchQuery ? 'var(--gc-blue)' : 'var(--gc-text-3)' }} />
+              <input type="text"
+                placeholder={`Search ${tab} loads — broker, load #, ID, title, driver, notes…`}
+                value={searchInput}
+                onChange={e => setSearchInput(e.target.value)}
+                className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
+                style={{
+                  width: 320,
+                  background: 'var(--gc-surface)',
+                  border: `1px solid ${searchQuery ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+                  color: 'var(--gc-text-1)',
+                }} />
+              {searchInput && (
+                <button onClick={() => setSearchInput('')}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-[var(--gc-hover)]">
+                  <X size={12} />
+                </button>
+              )}
+            </div>
             <div className="flex-1" />
-            {(tab === 'pending' || tab === 'flagged') && visible.length > 0 && (
+            {visible.length > 0 && (
               <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
                 className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-lg text-white transition-colors"
                 style={{ background: '#15803d' }}
@@ -717,6 +690,19 @@ export default function CloseoutView() {
               Refresh
             </button>
           </div>
+          {/* Search status row — kept thin so it doesn't push the
+              table down when idle. */}
+          {searchInput && !searchQuery && searchInput.trim().length < 2 && (
+            <div className="text-[11px] -mt-2 ml-1" style={{ color: 'var(--gc-text-3)' }}>
+              Type at least 2 characters to search.
+            </div>
+          )}
+          {searchQuery && (
+            <div className="text-[11px] -mt-2 ml-1 flex items-center gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
+              <Search size={10} style={{ color: 'var(--gc-blue)' }} /> Showing {tab} loads matching <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>&ldquo;{searchQuery}&rdquo;</span>
+              {tab === 'pending' && <span style={{ color: 'var(--gc-text-3)' }}>(including upcoming)</span>}
+            </div>
+          )}
 
           {/* Body */}
           {loading ? (
@@ -958,37 +944,47 @@ export default function CloseoutView() {
                             {/* Internal notes — opens a small thread modal.
                                 Filled icon when at least one note exists. */}
                             <NotesButton load={load} onOpen={() => setNotesTarget(load)} />
-                            {tab === 'pending' || tab === 'flagged' ? (
-                              <>
-                                <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
-                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                  style={{ background: '#15803d', color: '#fff' }}
-                                  title="Open in review queue">
-                                  <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
-                                </button>
-                                <button onClick={() => void handleVerify(load)}
-                                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                  style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
-                                  title="Release without opening review queue">
-                                  <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
-                                </button>
-                                {tab === 'pending' && (
-                                  <button onClick={() => handleFlag(load)}
+                            {(() => {
+                              // On the All tab we derive flag state per row
+                              // (the bucket doesn't tell us) so the Flag vs
+                              // Follow up affordance matches what the row
+                              // actually is. Pending and Flagged tabs use
+                              // the bucket directly — cheaper + matches the
+                              // mental model.
+                              const rowFlagged = tab === 'flagged'
+                                || (tab === 'all' && computeFlagReasons(load, counts).length > 0);
+                              return (
+                                <>
+                                  <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
                                     className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                    style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
-                                    <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+                                    style={{ background: '#15803d', color: '#fff' }}
+                                    title="Open in review queue">
+                                    <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
                                   </button>
-                                )}
-                                {tab === 'flagged' && (
-                                  <button onClick={() => setFollowUpTarget(load)}
+                                  <button onClick={() => void handleVerify(load)}
                                     className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                    style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}
-                                    title="Log a follow-up + optionally update accessorial status / clear flag">
-                                    <MessageSquare size={11} style={{ display: 'inline', marginRight: 3 }} /> Follow up
+                                    style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
+                                    title="Release without opening review queue">
+                                    <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
                                   </button>
-                                )}
-                              </>
-                            ) : null}
+                                  {!rowFlagged && (
+                                    <button onClick={() => handleFlag(load)}
+                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                                      style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
+                                      <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+                                    </button>
+                                  )}
+                                  {rowFlagged && (
+                                    <button onClick={() => setFollowUpTarget(load)}
+                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                                      style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}
+                                      title="Log a follow-up + optionally update accessorial status / clear flag">
+                                      <MessageSquare size={11} style={{ display: 'inline', marginRight: 3 }} /> Follow up
+                                    </button>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         </Td>
                       </tr>
@@ -1357,6 +1353,7 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
   const messages: Record<Tab, { icon: React.ReactNode; title: string; sub: string }> = {
     pending: { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been released or flagged.' },
     flagged: { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads', sub: 'Anything that needs follow-up will show here.' },
+    all:     { icon: <FileCheck2   size={28} style={{ color: '#5f6368' }} />, title: 'Nothing to close out', sub: 'No loads are awaiting release or follow-up.' },
   };
   const m = messages[tab];
   return (
