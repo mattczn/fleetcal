@@ -514,6 +514,8 @@ function PickerRow({
         justifyContent: "space-between",
         backgroundColor: "#f8f9fa",
         borderRadius: 10,
+        borderWidth: 1,
+        borderColor: "#a8c7fa",
         paddingHorizontal: 12,
         paddingVertical: 12,
       }}>
@@ -578,6 +580,8 @@ function NumberInput({
         {
           backgroundColor: "#f8f9fa",
           borderRadius: 10,
+          borderWidth: 1,
+          borderColor: "#a8c7fa",
           paddingHorizontal: 12,
           paddingVertical: 12,
           fontSize: 16,

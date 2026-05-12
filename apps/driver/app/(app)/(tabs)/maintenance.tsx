@@ -275,8 +275,8 @@ export default function MaintenanceScreen() {
 
           {/* Header */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 18 }}>
-            <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#fff7ed', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
-              <Wrench size={18} color="#c2410c" strokeWidth={2.4} />
+            <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#e8f0fe', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+              <Wrench size={18} color="#1a73e8" strokeWidth={2.4} />
             </View>
             <Text style={[txt(800), { fontSize: 22, color: '#202124' }]}>Report Issue</Text>
           </View>
@@ -314,6 +314,8 @@ export default function MaintenanceScreen() {
                 justifyContent: 'space-between',
                 backgroundColor: '#f8f9fa',
                 borderRadius: 10,
+                borderWidth: 1,
+                borderColor: '#a8c7fa',
                 paddingHorizontal: 12,
                 paddingVertical: 12,
               }}>
@@ -362,6 +364,8 @@ export default function MaintenanceScreen() {
                 {
                   backgroundColor: '#f8f9fa',
                   borderRadius: 10,
+                  borderWidth: 1,
+                  borderColor: '#a8c7fa',
                   paddingHorizontal: 12,
                   paddingVertical: 10,
                   fontSize: 15,
@@ -419,7 +423,7 @@ export default function MaintenanceScreen() {
               activeOpacity={0.85}
               style={{
                 marginTop: 18,
-                backgroundColor: canSubmit ? '#c2410c' : '#fed7aa',
+                backgroundColor: canSubmit ? '#1a73e8' : '#c5cae9',
                 borderRadius: 12,
                 paddingVertical: 14,
                 alignItems: 'center',
@@ -481,9 +485,9 @@ function ToggleChip({
         gap: 6,
         paddingVertical: 12,
         borderRadius: 10,
-        backgroundColor: active ? '#c2410c' : '#f8f9fa',
+        backgroundColor: active ? '#1a73e8' : '#f8f9fa',
         borderWidth: 1,
-        borderColor: active ? '#c2410c' : '#e8eaed',
+        borderColor: active ? '#1a73e8' : '#a8c7fa',
       }}>
       <Icon size={16} color={active ? '#fff' : '#5f6368'} strokeWidth={2.2} />
       <Text style={[txt(700), { fontSize: 14, color: active ? '#fff' : '#5f6368' }]}>{label}</Text>
