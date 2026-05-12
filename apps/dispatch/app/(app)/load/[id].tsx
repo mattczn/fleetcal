@@ -26,7 +26,7 @@ import { DateTimePickerSheet } from "@/components/DateTimePickerSheet";
 import { BrokerEditSheet } from "@/components/BrokerEditSheet";
 import { StopEditSheet } from "@/components/StopEditSheet";
 import { RelaySplitSheet } from "@/components/RelaySplitSheet";
-import { RelayHandoffPhotos } from "@/components/RelayHandoffPhotos";
+import { HandoffPhotosButton } from "@/components/RelayHandoffPhotos";
 import { EditableStopCard } from "@/components/EditableStopCard";
 import { AccessorialSheet } from "@/components/AccessorialSheet";
 import { Toast } from "@/components/Toast";
@@ -467,6 +467,9 @@ interface StopsTabProps {
   onRemoveRelay?: () => void;       // shown only when this is a relay leg
   removingRelay?: boolean;
   onOpenPartner?: () => void;
+  /** Switches the parent's tabbed view to Documents — used by the
+   *  inline "View Handoff Photos" button in the relay disclaimer. */
+  onViewDocuments?: () => void;
   onCancelEdit: () => void;
   onSaveEdit:   () => void;
 }
@@ -653,7 +656,7 @@ function StopCard({
   );
 }
 
-function RelayDisclaimer({ load, onOpenPartner }: { load: Load; onOpenPartner?: () => void }) {
+function RelayDisclaimer({ load, onOpenPartner, onViewDocuments }: { load: Load; onOpenPartner?: () => void; onViewDocuments?: () => void }) {
   if (!load.relayGroupId) return null;
   const isPickup = load.relayRole !== "delivery";
   const me      = load.driverName  ?? load.assetName ?? "This driver";
@@ -699,7 +702,9 @@ function RelayDisclaimer({ load, onOpenPartner }: { load: Load; onOpenPartner?: 
           <ChevronRight size={14} color="#6b21a8" strokeWidth={2.4} />
         </TouchableOpacity>
       ) : null}
-      {load.loadId ? <RelayHandoffPhotos loadId={load.loadId} /> : null}
+      {load.loadId ? (
+        <HandoffPhotosButton loadId={load.loadId} onViewDocuments={onViewDocuments} />
+      ) : null}
     </View>
   );
 }
@@ -733,7 +738,7 @@ function StopsTab({
   load, width, truckLoc, assetColor, onCopied,
   editMode, draftStops, dirty, isSaving,
   onMoveStop, onDeleteStop, onTapStop, onAddStop, onSplitRelay, canSplitRelay,
-  onRemoveRelay, removingRelay, onOpenPartner,
+  onRemoveRelay, removingRelay, onOpenPartner, onViewDocuments,
   onCancelEdit, onSaveEdit,
 }: StopsTabProps) {
   // In edit mode, render the draft list flat (no relay dimming) so the user
@@ -897,7 +902,7 @@ function StopsTab({
         />
       </View>
 
-      <RelayDisclaimer load={load} onOpenPartner={onOpenPartner} />
+      <RelayDisclaimer load={load} onOpenPartner={onOpenPartner} onViewDocuments={onViewDocuments} />
 
       <View style={{ position: "relative" }}>
         <View
@@ -938,10 +943,24 @@ function StopsTab({
             out.push(
               <View
                 key={stop.id}
-                style={mine ? undefined : { opacity: 0.4 }}
+                style={{ position: "relative" }}
                 pointerEvents={mine ? "auto" : "none"}
               >
-                <StopCard s={stop} index={i} truckLoc={mine ? truckLoc : null} onCopied={onCopied} />
+                {/* For partner stops the wrapper below is dimmed to 0.4,
+                    which lets the absolute timeline rail behind the
+                    column bleed through the now-translucent card. Mask
+                    the rail's x-column with an opaque strip BEFORE the
+                    dimming layer so the rail visually stops at the
+                    partner section. */}
+                {!mine ? (
+                  <View
+                    pointerEvents="none"
+                    style={{ position: "absolute", left: 28, width: 12, top: 0, bottom: 0, backgroundColor: "#f8f9fa" }}
+                  />
+                ) : null}
+                <View style={mine ? undefined : { opacity: 0.4 }}>
+                  <StopCard s={stop} index={i} truckLoc={mine ? truckLoc : null} onCopied={onCopied} />
+                </View>
               </View>
             );
 
@@ -2168,6 +2187,7 @@ export default function LoadDetail() {
           onOpenPartner={load.partnerEventId
             ? () => guardLeave(() => router.push(`/load/${load.partnerEventId}`))
             : undefined}
+          onViewDocuments={() => selectTab(2)}
           onCancelEdit={cancelStopsEditMode}
           onSaveEdit={commitStopsEditMode}
         />
