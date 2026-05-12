@@ -306,6 +306,64 @@ driver.get("/org-settings", async (c) => {
 
 // GET /v1/driver/trailers — list of trailers in the driver's org for the
 // trailer picker. Sort order matches the dispatch app.
+// GET /v1/driver/suggested-asset — best guess at the truck the driver is
+// currently in. Used by the fuel + maintenance forms to pre-select.
+//
+// Lookup order:
+//   1. Any non-deleted revenue OR non-revenue event assigned to this
+//      driver whose [start, end] overlaps the window [now-6h, now+6h].
+//      Take the event with the closest start to now.
+//   2. The driver_asset_prefs row for this driver, if any.
+//   3. null — caller shows the picker without a default.
+driver.get("/suggested-asset", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+
+  const now    = new Date();
+  const lookback = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+  const lookahead = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+
+  // 1) Active / near-active events for this driver. Overlap with
+  //    [lookback, lookahead] is: end >= lookback AND start <= lookahead.
+  const { data: events } = await supabase
+    .from("events")
+    .select("asset_id, start")
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .is("deleted_at", null)
+    .gte("end",   lookback.toISOString())
+    .lte("start", lookahead.toISOString())
+    .order("start", { ascending: true });
+
+  const eventRows = (events ?? []) as Array<{ asset_id: number | null; start: string }>;
+  if (eventRows.length > 0) {
+    const nowMs = now.getTime();
+    let best = eventRows[0];
+    let bestDist = Math.abs(new Date(best.start).getTime() - nowMs);
+    for (const e of eventRows.slice(1)) {
+      const d = Math.abs(new Date(e.start).getTime() - nowMs);
+      if (d < bestDist) { best = e; bestDist = d; }
+    }
+    if (best.asset_id != null) {
+      return c.json({ assetId: best.asset_id, source: "event" });
+    }
+  }
+
+  // 2) Stored preference.
+  const { data: pref } = await supabase
+    .from("driver_asset_prefs")
+    .select("asset_id")
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .maybeSingle();
+  const prefRow = pref as { asset_id: number } | null;
+  if (prefRow?.asset_id != null) {
+    return c.json({ assetId: prefRow.asset_id, source: "preference" });
+  }
+
+  return c.json({ assetId: null, source: null });
+});
+
 // GET /v1/driver/assets — every non-hidden asset in the driver's org.
 // Used by the fuel-report form (driver picks which truck they're fueling).
 // Returns the lean shape the form needs — full asset detail lives in the

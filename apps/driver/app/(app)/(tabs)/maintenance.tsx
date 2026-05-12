@@ -71,13 +71,20 @@ export default function MaintenanceScreen() {
     let alive = true;
     void (async () => {
       try {
-        const [a, t] = await Promise.all([
+        // Asset suggestion is only used for the truck path (we don't
+        // store trailer assignments the same way). Drivers can still
+        // override by tapping the picker.
+        const [a, t, suggested] = await Promise.all([
           railway.listAssets(),
           railway.listTrailers(),
+          railway.suggestedAsset().catch(() => ({ assetId: null, source: null as null })),
         ]);
         if (!alive) return;
         setAssets(a.assets);
         setTrailers(t.trailers);
+        if (suggested.assetId != null && a.assets.some(x => x.id === suggested.assetId)) {
+          setAssetId(suggested.assetId);
+        }
       } catch (err) {
         console.warn("[maint] load assets/trailers:", err);
       } finally {

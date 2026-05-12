@@ -127,6 +127,12 @@ export const railway = {
       assets: { id: number; name: string; unit?: string; truck?: string; color: string; type: string }[];
     }>("GET", "/v1/driver/assets");
   },
+  suggestedAsset() {
+    return req<{ assetId: number | null; source: "event" | "preference" | null }>(
+      "GET",
+      "/v1/driver/suggested-asset",
+    );
+  },
   listTrailers() {
     return req<{ trailers: { id: number; name: string; trailerNumber?: string; category: string }[] }>(
       "GET",

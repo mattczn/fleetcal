@@ -114,9 +114,19 @@ export default function FuelScreen() {
 
     void (async () => {
       try {
-        const { assets } = await railway.listAssets();
+        // Race the asset list + the server's suggestion. The
+        // suggestion comes from recent/upcoming dispatch events (±6h)
+        // or the driver's saved preference, so 90% of the time the
+        // driver opens the form and the right truck is already picked.
+        const [{ assets }, suggested] = await Promise.all([
+          railway.listAssets(),
+          railway.suggestedAsset().catch(() => ({ assetId: null, source: null as null })),
+        ]);
         if (!alive) return;
         setAssets(assets);
+        if (suggested.assetId != null && assets.some(a => a.id === suggested.assetId)) {
+          setAssetId(suggested.assetId);
+        }
       } catch (err) {
         console.warn("[fuel] list assets failed:", err);
       } finally {
