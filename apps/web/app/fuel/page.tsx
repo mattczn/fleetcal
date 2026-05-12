@@ -17,7 +17,7 @@ import ManagementHeader from '@/components/nav/ManagementHeader';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import {
-  Th, Td, PaginationFooter, CustomerFilterDropdown,
+  Th, Td, PaginationFooter, DriverFilterDropdown, AssetFilterDropdown,
 } from '@/components/queue/QueueTablePrimitives';
 import type { FuelReport } from '@fleetcal/types';
 
@@ -200,12 +200,12 @@ export default function FuelPage() {
 
             <div className="flex-1" />
 
-            <CustomerFilterDropdown
+            <DriverFilterDropdown
               options={driverOptions}
               selected={driverFilter}
               onChange={setDriverFilter}
             />
-            <CustomerFilterDropdown
+            <AssetFilterDropdown
               options={assetOptions}
               selected={assetFilter}
               onChange={setAssetFilter}

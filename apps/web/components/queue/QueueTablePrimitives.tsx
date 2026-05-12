@@ -15,6 +15,8 @@
 import { useEffect, useRef, useState, forwardRef } from 'react';
 import {
   Check, Copy, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
+  User as UserIcon, Truck as TruckIcon,
+  type LucideIcon,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -569,19 +571,24 @@ export function NotesButton({
   );
 }
 
-// ─── CustomerFilterDropdown ─────────────────────────────────────────────
+// ─── MultiSelectFilter ──────────────────────────────────────────────────
 //
-// Toolbar-level multi-select for filtering by customer. Drives whatever
-// `filters.customer` state the caller passes in. The accounting and
-// closeout pages both render this in their toolbar so the surface for
-// selecting brokers is consistent across queues.
+// Generic toolbar multi-select with a configurable label + icon. Used
+// by CustomerFilterDropdown, DriverFilterDropdown, AssetFilterDropdown
+// (presets below). The accounting + closeout pages render the customer
+// preset; /fuel renders driver + asset.
 
-export function CustomerFilterDropdown({
-  options, selected, onChange,
+export function MultiSelectFilter({
+  label, icon: Icon, searchPlaceholder, options, selected, onChange,
 }: {
-  options:  string[];
-  selected: string[];
-  onChange: (next: string[]) => void;
+  label:             string;
+  icon:              LucideIcon;
+  /** Placeholder for the in-popover search input. Defaults to
+   *  "Search {label.toLowerCase()}…". */
+  searchPlaceholder?: string;
+  options:           string[];
+  selected:          string[];
+  onChange:          (next: string[]) => void;
 }) {
   const [open, setOpen]     = useState(false);
   const [search, setSearch] = useState('');
@@ -617,7 +624,7 @@ export function CustomerFilterDropdown({
           color:      selected.length > 0 ? 'var(--gc-blue)' : 'var(--gc-text-2)',
           background: selected.length > 0 ? 'rgba(26,115,232,0.06)' : 'var(--gc-surface)',
         }}>
-        <Users size={12} /> Customer
+        <Icon size={12} /> {label}
         {selected.length > 0 && (
           <span className="text-[10px] font-bold tabular-nums px-1.5 rounded-full"
             style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 16, textAlign: 'center', lineHeight: '14px' }}>
@@ -636,7 +643,7 @@ export function CustomerFilterDropdown({
           <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
             style={{ color: 'var(--gc-text-3)' }}>
             <span>
-              Customer
+              {label}
               {selected.length > 0 && (
                 <span className="ml-1 normal-case tracking-normal text-[10px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
                   ({selected.length})
@@ -660,7 +667,7 @@ export function CustomerFilterDropdown({
           </div>
           <div className="px-2 pb-1.5">
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search customers…"
+              placeholder={searchPlaceholder ?? `Search ${label.toLowerCase()}…`}
               className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
               style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }} />
           </div>
@@ -692,6 +699,24 @@ export function CustomerFilterDropdown({
       )}
     </div>
   );
+}
+
+// Common presets — Customer / Driver / Asset. Each is a thin wrapper
+// around MultiSelectFilter with the right icon + label. The accounting
+// + closeout pages render <CustomerFilterDropdown>; /fuel renders
+// <DriverFilterDropdown> + <AssetFilterDropdown>. New filter kinds get
+// added by composing MultiSelectFilter directly.
+
+export function CustomerFilterDropdown(props: { options: string[]; selected: string[]; onChange: (next: string[]) => void }) {
+  return <MultiSelectFilter label="Customer" icon={Users} {...props} />;
+}
+
+export function DriverFilterDropdown(props: { options: string[]; selected: string[]; onChange: (next: string[]) => void }) {
+  return <MultiSelectFilter label="Driver" icon={UserIcon} {...props} />;
+}
+
+export function AssetFilterDropdown(props: { options: string[]; selected: string[]; onChange: (next: string[]) => void }) {
+  return <MultiSelectFilter label="Asset" icon={TruckIcon} {...props} />;
 }
 
 // ─── useColumnOrder ─────────────────────────────────────────────────────
