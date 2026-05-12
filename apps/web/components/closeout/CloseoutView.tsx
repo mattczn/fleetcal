@@ -795,7 +795,7 @@ export default function CloseoutView() {
                               textAlign: 'left',
                               position: 'relative',
                               width:    width != null ? `${width}px` : undefined,
-                              minWidth: width != null ? `${width}px` : undefined,
+                              overflow: 'hidden',
                             }}>
                             Docs
                             {activeFilterCount > 0 && (
@@ -1464,9 +1464,8 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
   );
 }
 
-/** Column header that opens a sort + filter popover when clicked.
- *  A resize handle on the right edge drags to set the column width.
- *  Reordering happens in the Columns dropdown, not on the header. */
+/** Column header. Inner button is the sort/filter trigger so it doesn't
+ *  fight with the resize handle on the right edge. */
 function MenuTh({
   col, label, align, sort, selectedCount, setHeaderRef, onClick, width, onResizeStart,
 }: {
@@ -1478,7 +1477,7 @@ function MenuTh({
   selectedCount: number;
   setHeaderRef: (el: HTMLTableCellElement | null) => void;
   onClick: () => void;
-  /** User-set column width in px (from useColumnWidths). */
+  /** Column width in px. Enforced by table-layout: fixed on the parent. */
   width?: number;
   /** Mousedown handler from useColumnWidths.getResizeProps. */
   onResizeStart?: (e: React.MouseEvent) => void;
@@ -1489,32 +1488,47 @@ function MenuTh({
   return (
     <th
       ref={setHeaderRef}
-      onClick={onClick}
-      className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors whitespace-nowrap"
+      className="px-2.5 py-2 select-none whitespace-nowrap"
       style={{
         color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
         background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
         position:   'relative',
         width:      width != null ? `${width}px` : undefined,
-        minWidth:   width != null ? `${width}px` : undefined,
-      }}
-      title="Click for sort + filter — drag the right edge to resize">
-      <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
-        {label}
+        // NO minWidth here — table-layout: fixed makes width strict.
+        // Setting minWidth would prevent the live drag from shrinking
+        // the column (the hook only mutates style.width).
+        overflow:   'hidden',
+      }}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
+        style={{
+          color:      'inherit',
+          cursor:     'pointer',
+          background: 'transparent',
+          border:     'none',
+          padding:    0,
+          flexDirection: align === 'right' ? 'row-reverse' : 'row',
+        }}
+        title="Click for sort + filter">
+        <span className="truncate" style={{ maxWidth: width != null ? `${Math.max(width - 40, 30)}px` : undefined }}>
+          {label}
+        </span>
         {sortActive ? (
           sort.dir === 'asc'
-            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)' }} />
-            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)' }} />
+            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)', flexShrink: 0 }} />
+            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)', flexShrink: 0 }} />
         ) : null}
         {filterActive && (
           <span title={`${selectedCount} selected`}
             className="text-[9px] font-bold tabular-nums px-1 rounded-lg"
-            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px' }}>
+            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px', flexShrink: 0 }}>
             {selectedCount}
           </span>
         )}
-      </span>
+      </button>
       {onResizeStart && <ColumnResizeHandle onMouseDown={onResizeStart} />}
     </th>
   );
