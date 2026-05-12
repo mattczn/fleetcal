@@ -33,6 +33,7 @@ import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
+import { CustomerFilterDropdown, useColumnOrder } from '@/components/queue/QueueTablePrimitives';
 
 type Tab = 'pending' | 'flagged' | 'all';
 
@@ -365,7 +366,11 @@ export default function CloseoutView() {
   // Age, Title, and Load# intentionally skipped — Age is better expressed
   // by the Delivered date filter, and Title/Load# values are essentially
   // unique per load so a dropdown doesn't help.
-  const filterableCols: ColKey[] = ['delivered', 'customer', 'driver'];
+  // Customer filter lives in the toolbar (CustomerFilterDropdown) — sourcing
+  // the option list from the full customers state, not just rows on screen.
+  // Keeping it out of the column header lets users follow one broker across
+  // pages / buckets without re-picking. Driver + delivered remain in-header.
+  const filterableCols: ColKey[] = ['delivered', 'driver'];
   const isFilterable = (c: ColKey) => filterableCols.includes(c);
   const filterOptions = useMemo(() => {
     const opts: Partial<Record<ColKey, string[]>> = {};
@@ -543,6 +548,23 @@ export default function CloseoutView() {
   }, [visibleCols]);
   const toggleCol = (key: ToggleableCol) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
 
+  // Reorderable column order — drag a header to a new position, the
+  // change persists per-user via localStorage. The default order
+  // matches the TOGGLEABLE_COLS list; newly-added columns append to
+  // the end so code changes don't blow away user preferences.
+  const DEFAULT_COL_ORDER = useMemo<ToggleableCol[]>(
+    () => TOGGLEABLE_COLS.map(c => c.key as ToggleableCol),
+    [],
+  );
+  const { order: colOrder, getHeaderProps: getColDndProps, draggingCol } =
+    useColumnOrder<ToggleableCol>('closeout-cols-order-v1', DEFAULT_COL_ORDER);
+  // Visible columns in the user's current order. Filter out hidden
+  // ones so the iteration in <thead>/<tbody> doesn't need to check.
+  const orderedVisibleCols = useMemo(
+    () => colOrder.filter(c => visibleCols[c]),
+    [colOrder, visibleCols],
+  );
+
   // Click-outside dismissal for the columns menu.
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
   const colsMenuRef = useRef<HTMLDivElement>(null);
@@ -660,6 +682,13 @@ export default function CloseoutView() {
                 <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
             )}
+            {/* Customer filter — sourced from the full customers state
+                (not just rows on screen) so users can pre-set a filter
+                that follows them across pages / buckets. */}
+            <CustomerFilterDropdown
+              options={customers.map(c => c.name).sort()}
+              selected={filters.customer ?? []}
+              onChange={(next) => setFilters(p => ({ ...p, customer: next }))} />
             {/* Columns visibility menu */}
             <div className="relative" ref={colsMenuRef}>
               <button onClick={() => setColsMenuOpen(o => !o)}
@@ -716,33 +745,86 @@ export default function CloseoutView() {
           ) : visible.length === 0 ? (
             <EmptyState tab={tab} hasFilters={activeFilterCount > 0} onClearFilters={clearAllFilters} />
           ) : (
-            <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+            <div className="rounded-2xl"
+              style={{
+                border: '1px solid var(--gc-border-light)',
+                background: 'var(--gc-surface)',
+                // overflow-x: auto on the wrapper lets the table escape
+                // the viewport when more columns are visible than fit on
+                // a laptop screen. overflow-y: visible so popovers
+                // (filter menus, copy chips) aren't clipped vertically.
+                overflowX: 'auto',
+                overflowY: 'visible',
+              }}>
+              <table className="text-[12.5px]"
+                style={{
+                  borderCollapse: 'collapse',
+                  // Each column's natural width drives layout. min-width
+                  // keeps the table from collapsing to fit when fewer
+                  // columns are shown — the goal is for the default
+                  // visible-column set to fit a 1366px laptop without
+                  // scrolling, and overflow to scroll when the user
+                  // adds more.
+                  width: '100%',
+                  minWidth: 'max-content',
+                }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {visibleCols.age          && <MenuTh col="age"          label="Age"          align="left"  sort={sort} selectedCount={(filters.age          ?? []).length} setHeaderRef={el => { headerRefs.current.age = el; }}          onClick={() => setOpenHeaderCol(p => p === 'age'          ? null : 'age')} />}
-                    {visibleCols.delivered    && <MenuTh col="delivered"    label="Delivered"    align="left"  sort={sort} selectedCount={(filters.delivered    ?? []).length} setHeaderRef={el => { headerRefs.current.delivered = el; }}    onClick={() => setOpenHeaderCol(p => p === 'delivered'    ? null : 'delivered')} />}
-                    {visibleCols.internalId   && <MenuTh col="internalId"   label="ID / Inv #"   align="left"  sort={sort} selectedCount={(filters.internalId   ?? []).length} setHeaderRef={el => { headerRefs.current.internalId = el; }}   onClick={() => setOpenHeaderCol(p => p === 'internalId'   ? null : 'internalId')} />}
-                    {visibleCols.loadNum      && <MenuTh col="loadNum"      label="Load #"       align="left"  sort={sort} selectedCount={(filters.loadNum      ?? []).length} setHeaderRef={el => { headerRefs.current.loadNum = el; }}      onClick={() => setOpenHeaderCol(p => p === 'loadNum'      ? null : 'loadNum')} />}
-                    {visibleCols.title        && <MenuTh col="title"        label="Title"        align="left"  sort={sort} selectedCount={(filters.title        ?? []).length} setHeaderRef={el => { headerRefs.current.title = el; }}        onClick={() => setOpenHeaderCol(p => p === 'title'        ? null : 'title')} />}
-                    {visibleCols.customer     && <MenuTh col="customer"     label="Customer"     align="left"  sort={sort} selectedCount={(filters.customer     ?? []).length} setHeaderRef={el => { headerRefs.current.customer = el; }}     onClick={() => setOpenHeaderCol(p => p === 'customer'     ? null : 'customer')} />}
-                    {visibleCols.driver       && <MenuTh col="driver"       label="Driver(s)"    align="left"  sort={sort} selectedCount={(filters.driver       ?? []).length} setHeaderRef={el => { headerRefs.current.driver = el; }}       onClick={() => setOpenHeaderCol(p => p === 'driver'       ? null : 'driver')} />}
-                    {visibleCols.rate         && <MenuTh col="rate"         label="Rate"         align="right" sort={sort} selectedCount={(filters.rate         ?? []).length} setHeaderRef={el => { headerRefs.current.rate = el; }}         onClick={() => setOpenHeaderCol(p => p === 'rate'         ? null : 'rate')} />}
-                    {visibleCols.accessorials && <MenuTh col="accessorials" label="Accessorials" align="right" sort={sort} selectedCount={(filters.accessorials ?? []).length} setHeaderRef={el => { headerRefs.current.accessorials = el; }} onClick={() => setOpenHeaderCol(p => p === 'accessorials' ? null : 'accessorials')} />}
-                    {visibleCols.docs && (
-                      <th className="px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider"
-                        style={{ color: 'var(--gc-text-3)', textAlign: 'left' }}>
-                        Docs
-                        {activeFilterCount > 0 && (
-                          <button onClick={clearAllFilters}
-                            className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg"
-                            style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
-                            title="Clear all filters">
-                            <X size={9} /> clear ({activeFilterCount})
-                          </button>
-                        )}
-                      </th>
-                    )}
+                    {orderedVisibleCols.map(col => {
+                      // Sortable columns render as MenuTh; 'docs' is a
+                      // chip column with no sort/filter so it renders
+                      // as a plain header (with the clear-filters affordance).
+                      if (col === 'docs') {
+                        return (
+                          <th key="docs"
+                            {...getColDndProps('docs')}
+                            className="px-2.5 py-2 font-semibold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
+                            style={{
+                              color: 'var(--gc-text-3)',
+                              textAlign: 'left',
+                              background: draggingCol === 'docs' ? 'rgba(26,115,232,0.18)' : undefined,
+                              opacity: draggingCol === 'docs' ? 0.6 : 1,
+                            }}
+                            title="Drag to reorder">
+                            Docs
+                            {activeFilterCount > 0 && (
+                              <button onClick={clearAllFilters}
+                                className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg"
+                                style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
+                                title="Clear all filters">
+                                <X size={9} /> clear ({activeFilterCount})
+                              </button>
+                            )}
+                          </th>
+                        );
+                      }
+                      const c = col as ColKey;
+                      const label =
+                        c === 'age'          ? 'Age'          :
+                        c === 'delivered'    ? 'Delivered'    :
+                        c === 'internalId'   ? 'ID / Inv #'   :
+                        c === 'loadNum'      ? 'Load #'       :
+                        c === 'title'        ? 'Title'        :
+                        c === 'customer'     ? 'Customer'     :
+                        c === 'driver'       ? 'Driver(s)'    :
+                        c === 'rate'         ? 'Rate'         :
+                                               'Accessorials';
+                      const align: 'left' | 'right' = (c === 'rate' || c === 'accessorials') ? 'right' : 'left';
+                      return (
+                        <MenuTh
+                          key={c}
+                          col={c}
+                          label={label}
+                          align={align}
+                          sort={sort}
+                          selectedCount={(filters[c] ?? []).length}
+                          setHeaderRef={el => { headerRefs.current[c] = el; }}
+                          onClick={() => setOpenHeaderCol(p => p === c ? null : c)}
+                          dragProps={getColDndProps(col)}
+                          isDragging={draggingCol === col}
+                        />
+                      );
+                    })}
                     <Th align="right">Actions</Th>
                   </tr>
                 </thead>
@@ -778,154 +860,146 @@ export default function CloseoutView() {
                           borderLeft: load.priority ? '3px solid #eab308' : '3px solid transparent',
                         }}
                         className="hover:bg-[var(--gc-hover)]">
-                        {visibleCols.age && (
-                          <Td>
-                            <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                              {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
-                            </span>
-                          </Td>
-                        )}
-                        {visibleCols.delivered && <Td>{fmtDate(dvDate)}</Td>}
-                        {/* Internal load ID — per-org sequence number,
-                            distinct from the broker-assigned load_num.
-                            Doubles as the invoice number, so it's
-                            copyable just like load #. */}
-                        {visibleCols.internalId && (
-                          <Td>
-                            {load.internalLoadId != null
-                              ? <CopyableCell
-                                  value={String(load.internalLoadId)}
-                                  displayValue={String(load.internalLoadId)}
-                                  title="Copy ID / invoice #"
-                                />
-                              : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                          </Td>
-                        )}
-                        {/* Load # — copyable with visual confirmation */}
-                        {visibleCols.loadNum && (
-                          <Td>
-                            {load.loadNum
-                              ? <CopyableLoadNum value={load.loadNum} />
-                              : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                          </Td>
-                        )}
-                        {/* Title — opens event modal with full load data */}
-                        {visibleCols.title && (
-                          <Td>
-                            <button type="button"
-                              onClick={e => { e.stopPropagation(); void openLoadInModal(load); }}
-                              className="text-left font-bold hover:underline truncate max-w-[320px]"
-                              style={{ color: 'var(--gc-blue)' }}
-                              title="Open load details">
-                              {load.title}
-                            </button>
-                          </Td>
-                        )}
-                        {/* Customer — opens broker profile. Truncate so long
-                            names like "TCI Global Logistics" don't wrap. */}
-                        {visibleCols.customer && (
-                          <Td>
-                            {matchedCustomer ? (
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
-                                className="text-left hover:underline truncate block max-w-[160px]"
-                                style={{ color: 'var(--gc-blue)' }}
-                                title={`Open customer profile — ${cust}`}>
-                                {cust}
-                              </button>
-                            ) : (
-                              <span className="truncate block max-w-[160px]"
-                                title={cust || undefined}
-                                style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-                                {cust || '—'}
-                              </span>
-                            )}
-                          </Td>
-                        )}
-                        {/* Driver(s) */}
-                        {visibleCols.driver && (
-                          <Td>
-                            {drivers.length === 0
-                              ? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>
-                              : drivers.length === 1
-                                ? <span>{drivers[0]}</span>
-                                : (
-                                  <div>
-                                    <div className="text-[13px]">{drivers[0]}</div>
-                                    <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
-                                  </div>
-                                )}
-                          </Td>
-                        )}
-                        {/* Total rate */}
-                        {visibleCols.rate && (
-                          <Td align="right" className="font-semibold tabular-nums">
-                            {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
-                          </Td>
-                        )}
-                        {/* Total accessorials */}
-                        {visibleCols.accessorials && (
-                          <Td align="right" className="tabular-nums">
-                            {accessorialsCount === 0
-                              ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-                              : (
-                                <div>
-                                  <div className="font-semibold">{moneyFmt.format(accessorialsSum)}</div>
-                                  <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accessorialsCount} item{accessorialsCount !== 1 ? 's' : ''}</div>
-                                </div>
-                              )}
-                          </Td>
-                        )}
-                        {/* Docs — only show kinds actually present. Empty when nothing uploaded. */}
-                        {visibleCols.docs && (
-                          <Td>
-                            <div className="flex flex-wrap items-center gap-1">
-                              {/* RC chip: shows count from load_documents
-                                  (rate_con kind) but always at least 1
-                                  if rate_con_pdf is set on the load. */}
-                              {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"     count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
-                              {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
-                              {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
-                              {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
-                              {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
-                              {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
-                              {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
-                              {/* Invoice badge: either a real load_documents
-                                  invoice (Phase 4 PDF), or — for now — a
-                                  generated invoice row inferred from the
-                                  load's billing_status. */}
-                              {((counts.invoice ?? 0) > 0 || load.billingStatus === 'invoiced' || load.billingStatus === 'paid') && (
-                                <DocBadge label="Invoice" count={Math.max(counts.invoice ?? 0, 1)} />
-                              )}
-                              {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
-                              {!hasRC && Object.keys(counts).length === 0 && (
-                                <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
-                              )}
-                            </div>
-                            {/* Multi-reason chips — derived from data. A
-                                load can have several impediments at once
-                                (manual flag + missing POD + pending
-                                accessorials). The single FlagChip we used
-                                to show only captured the manual reason. */}
-                            {(() => {
-                              const reasons = computeFlagReasons(load, counts);
-                              const showTonu = load.isTonu;
-                              if (reasons.length === 0 && !showTonu) return null;
+                        {orderedVisibleCols.map(col => {
+                          switch (col) {
+                            case 'age':
                               return (
-                                <div className="mt-1 flex flex-wrap gap-1">
-                                  {reasons.map((r, i) => <FlagChip key={i} reason={r} />)}
-                                  {showTonu && (
-                                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
-                                      style={{ background: '#eff6ff', color: '#1d4ed8' }}
-                                      title="Truck Order Not Used — POD not required">
-                                      TONU
+                                <Td key="age">
+                                  <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                                    {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
+                                  </span>
+                                </Td>
+                              );
+                            case 'delivered':
+                              return <Td key="delivered">{fmtDate(dvDate)}</Td>;
+                            case 'internalId':
+                              return (
+                                <Td key="internalId">
+                                  {load.internalLoadId != null
+                                    ? <CopyableCell
+                                        value={String(load.internalLoadId)}
+                                        displayValue={String(load.internalLoadId)}
+                                        title="Copy ID / invoice #"
+                                      />
+                                    : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                                </Td>
+                              );
+                            case 'loadNum':
+                              return (
+                                <Td key="loadNum">
+                                  {load.loadNum
+                                    ? <CopyableLoadNum value={load.loadNum} />
+                                    : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                                </Td>
+                              );
+                            case 'title':
+                              return (
+                                <Td key="title">
+                                  <button type="button"
+                                    onClick={e => { e.stopPropagation(); void openLoadInModal(load); }}
+                                    className="text-left font-bold hover:underline truncate max-w-[280px]"
+                                    style={{ color: 'var(--gc-blue)' }}
+                                    title="Open load details">
+                                    {load.title}
+                                  </button>
+                                </Td>
+                              );
+                            case 'customer':
+                              return (
+                                <Td key="customer">
+                                  {matchedCustomer ? (
+                                    <button type="button"
+                                      onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
+                                      className="text-left hover:underline truncate block max-w-[160px]"
+                                      style={{ color: 'var(--gc-blue)' }}
+                                      title={`Open customer profile — ${cust}`}>
+                                      {cust}
+                                    </button>
+                                  ) : (
+                                    <span className="truncate block max-w-[160px]"
+                                      title={cust || undefined}
+                                      style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                                      {cust || '—'}
                                     </span>
                                   )}
-                                </div>
+                                </Td>
                               );
-                            })()}
-                          </Td>
-                        )}
+                            case 'driver':
+                              return (
+                                <Td key="driver">
+                                  {drivers.length === 0
+                                    ? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>
+                                    : drivers.length === 1
+                                      ? <span>{drivers[0]}</span>
+                                      : (
+                                        <div>
+                                          <div className="text-[12.5px]">{drivers[0]}</div>
+                                          <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+                                        </div>
+                                      )}
+                                </Td>
+                              );
+                            case 'rate':
+                              return (
+                                <Td key="rate" align="right" className="font-semibold tabular-nums">
+                                  {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
+                                </Td>
+                              );
+                            case 'accessorials':
+                              return (
+                                <Td key="accessorials" align="right" className="tabular-nums">
+                                  {accessorialsCount === 0
+                                    ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                                    : (
+                                      <div>
+                                        <div className="font-semibold">{moneyFmt.format(accessorialsSum)}</div>
+                                        <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accessorialsCount} item{accessorialsCount !== 1 ? 's' : ''}</div>
+                                      </div>
+                                    )}
+                                </Td>
+                              );
+                            case 'docs':
+                              return (
+                                <Td key="docs">
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"     count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+                                    {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
+                                    {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
+                                    {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
+                                    {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
+                                    {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
+                                    {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
+                                    {((counts.invoice ?? 0) > 0 || load.billingStatus === 'invoiced' || load.billingStatus === 'paid') && (
+                                      <DocBadge label="Invoice" count={Math.max(counts.invoice ?? 0, 1)} />
+                                    )}
+                                    {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
+                                    {!hasRC && Object.keys(counts).length === 0 && (
+                                      <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
+                                    )}
+                                  </div>
+                                  {(() => {
+                                    const reasons = computeFlagReasons(load, counts);
+                                    const showTonu = load.isTonu;
+                                    if (reasons.length === 0 && !showTonu) return null;
+                                    return (
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {reasons.map((r, i) => <FlagChip key={i} reason={r} />)}
+                                        {showTonu && (
+                                          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
+                                            style={{ background: '#eff6ff', color: '#1d4ed8' }}
+                                            title="Truck Order Not Used — POD not required">
+                                            TONU
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </Td>
+                              );
+                            default:
+                              return null;
+                          }
+                        })}
                         {/* Actions */}
                         <Td align="right" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
@@ -1090,7 +1164,7 @@ export default function CloseoutView() {
 
 function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 'left' | 'right' }) {
   return (
-    <th className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider"
+    <th className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
       style={{ color: 'var(--gc-text-2)', textAlign: align }}>
       {children}
     </th>
@@ -1099,7 +1173,7 @@ function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 
 
 function Td({ children, align = 'left', className, onClick }: { children: React.ReactNode; align?: 'left' | 'right'; className?: string; onClick?: (e: React.MouseEvent) => void }) {
   return (
-    <td className={`px-3 py-2.5 font-medium ${className ?? ''}`} style={{ textAlign: align, color: 'var(--gc-text-1)' }} onClick={onClick}>
+    <td className={`px-2.5 py-2 font-medium ${className ?? ''}`} style={{ textAlign: align, color: 'var(--gc-text-1)' }} onClick={onClick}>
       {children}
     </td>
   );
@@ -1365,9 +1439,12 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
   );
 }
 
-/** Column header that opens a sort + filter popover when clicked. */
+/** Column header that opens a sort + filter popover when clicked.
+ *  When `dragProps` is passed, the header also accepts drag-to-reorder
+ *  gestures. The grip cursor only shows mid-drag — the rest of the time
+ *  the header just looks clickable. */
 function MenuTh({
-  col, label, align, sort, selectedCount, setHeaderRef, onClick,
+  col, label, align, sort, selectedCount, setHeaderRef, onClick, dragProps, isDragging,
 }: {
   col: ColKey;
   label: string;
@@ -1377,6 +1454,9 @@ function MenuTh({
   selectedCount: number;
   setHeaderRef: (el: HTMLTableCellElement | null) => void;
   onClick: () => void;
+  /** Spread onto the <th>: draggable + the four DnD handlers. */
+  dragProps?: React.HTMLAttributes<HTMLTableCellElement> & { draggable?: boolean; 'data-dragcol'?: string };
+  isDragging?: boolean;
 }) {
   const sortActive   = sort.key === col;
   const filterActive = selectedCount > 0;
@@ -1385,13 +1465,15 @@ function MenuTh({
     <th
       ref={setHeaderRef}
       onClick={onClick}
-      className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors"
+      {...(dragProps ?? {})}
+      className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors whitespace-nowrap"
       style={{
         color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
-        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
+        background: anyActive ? 'rgba(26,115,232,0.06)' : isDragging ? 'rgba(26,115,232,0.18)' : undefined,
+        opacity:    isDragging ? 0.6 : 1,
       }}
-      title="Click for sort + filter">
+      title="Click for sort + filter — drag to reorder">
       <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
         {label}
         {sortActive ? (

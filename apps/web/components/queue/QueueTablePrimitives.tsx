@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, forwardRef } from 'react';
 import {
-  Check, Copy, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3,
+  Check, Copy, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -522,5 +522,246 @@ export function NotesButton({
         </span>
       )}
     </button>
+  );
+}
+
+// ─── CustomerFilterDropdown ─────────────────────────────────────────────
+//
+// Toolbar-level multi-select for filtering by customer. Drives whatever
+// `filters.customer` state the caller passes in. The accounting and
+// closeout pages both render this in their toolbar so the surface for
+// selecting brokers is consistent across queues.
+
+export function CustomerFilterDropdown({
+  options, selected, onChange,
+}: {
+  options:  string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen]     = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const filtered = search.trim() === ''
+    ? options
+    : options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+  const selectedSet = new Set(selected);
+  const allSelected = options.length > 0 && options.every(o => selectedSet.has(o));
+
+  function toggle(val: string) {
+    const next = new Set(selected);
+    if (next.has(val)) next.delete(val); else next.add(val);
+    onChange(Array.from(next));
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+        style={{
+          border:     `1px solid ${selected.length > 0 ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+          color:      selected.length > 0 ? 'var(--gc-blue)' : 'var(--gc-text-2)',
+          background: selected.length > 0 ? 'rgba(26,115,232,0.06)' : 'var(--gc-surface)',
+        }}>
+        <Users size={12} /> Customer
+        {selected.length > 0 && (
+          <span className="text-[10px] font-bold tabular-nums px-1.5 rounded-full"
+            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 16, textAlign: 'center', lineHeight: '14px' }}>
+            {selected.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 rounded-xl py-1.5"
+          style={{
+            top: '100%', left: 0,
+            background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+            boxShadow: '0 12px 32px rgba(0,0,0,0.15)',
+            minWidth: 280, maxWidth: 340,
+          }}>
+          <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
+            style={{ color: 'var(--gc-text-3)' }}>
+            <span>
+              Customer
+              {selected.length > 0 && (
+                <span className="ml-1 normal-case tracking-normal text-[10px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                  ({selected.length})
+                </span>
+              )}
+            </span>
+            <span className="flex items-center gap-2">
+              <button onClick={() => onChange(allSelected ? [] : [...options])}
+                className="text-[10px] font-semibold normal-case tracking-normal"
+                style={{ color: 'var(--gc-blue)' }}>
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+              {selected.length > 0 && !allSelected && (
+                <button onClick={() => onChange([])}
+                  className="text-[10px] font-semibold normal-case tracking-normal"
+                  style={{ color: 'var(--gc-text-2)' }}>
+                  Clear
+                </button>
+              )}
+            </span>
+          </div>
+          <div className="px-2 pb-1.5">
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search customers…"
+              className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+              style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }} />
+          </div>
+          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] italic" style={{ color: 'var(--gc-text-3)' }}>
+                No matches
+              </div>
+            ) : (
+              filtered.map(o => (
+                <label key={o}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--gc-hover)]"
+                  style={{ color: 'var(--gc-text-1)' }}>
+                  <input type="checkbox" checked={selectedSet.has(o)} onChange={() => toggle(o)}
+                    style={{ accentColor: '#1a73e8' }} />
+                  <span className="truncate flex-1">{o}</span>
+                </label>
+              ))
+            )}
+          </div>
+          <div className="px-2 pt-1.5 pb-1" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+            <button onClick={() => setOpen(false)}
+              className="w-full text-[12px] font-semibold py-1.5 rounded-lg transition-colors"
+              style={{ background: '#1a73e8', color: '#fff' }}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── useColumnOrder ─────────────────────────────────────────────────────
+//
+// Drag-to-reorder column hook for queue tables. Persists order under the
+// supplied storage key. Returns the current order, a setter, and the
+// HTML-DnD handlers ready to spread onto each draggable <th>.
+//
+// Usage:
+//   const { order, setOrder, getRootProps, getHeaderProps } =
+//     useColumnOrder<ColKey>('closeout-cols-order-v2', defaultOrder);
+//   ... render header cells with {...getHeaderProps(col)}
+//
+// Implementation notes:
+// - HTML5 native DnD (no library) — handlers attached to each <th>.
+// - dragOver moves the row of dragged column header to the position
+//   under the cursor IMMEDIATELY (so the user sees the reflow live).
+// - drop just commits — the move already happened on dragOver.
+// - We tolerate unknown keys in the stored order (drops them on load)
+//   and append any newly-added columns to the end (so renaming/adding
+//   columns in code doesn't blow away user preferences).
+
+export function useColumnOrder<K extends string>(
+  storageKey: string,
+  defaultOrder: readonly K[],
+): {
+  order: K[];
+  setOrder: (next: K[]) => void;
+  getHeaderProps: (col: K) => {
+    draggable: true;
+    onDragStart: (e: React.DragEvent) => void;
+    onDragOver:  (e: React.DragEvent) => void;
+    onDragEnd:   (e: React.DragEvent) => void;
+    onDrop:      (e: React.DragEvent) => void;
+    'data-dragcol': K;
+  };
+  draggingCol: K | null;
+} {
+  const valid = new Set(defaultOrder);
+  const [order, setOrderState] = useState<K[]>(() => {
+    if (typeof window === 'undefined') return [...defaultOrder];
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return [...defaultOrder];
+      const parsed = JSON.parse(raw) as K[];
+      if (!Array.isArray(parsed)) return [...defaultOrder];
+      // Drop unknown keys; append newly-added keys to the end so code
+      // changes don't wipe user preferences.
+      const filtered = parsed.filter(k => valid.has(k));
+      const missing  = defaultOrder.filter(k => !filtered.includes(k));
+      return [...filtered, ...missing];
+    } catch { return [...defaultOrder]; }
+  });
+
+  const setOrder = (next: K[]) => {
+    setOrderState(next);
+    try { window.localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* quota / private mode */ }
+  };
+
+  const [draggingCol, setDraggingCol] = useState<K | null>(null);
+
+  function move(from: K, to: K) {
+    if (from === to) return;
+    setOrderState(prev => {
+      const i = prev.indexOf(from);
+      const j = prev.indexOf(to);
+      if (i < 0 || j < 0) return prev;
+      const next = [...prev];
+      next.splice(i, 1);
+      next.splice(j, 0, from);
+      try { window.localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* */ }
+      return next;
+    });
+  }
+
+  function getHeaderProps(col: K) {
+    return {
+      draggable: true as const,
+      'data-dragcol': col,
+      onDragStart: (e: React.DragEvent) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', col);
+        setDraggingCol(col);
+      },
+      onDragOver: (e: React.DragEvent) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        // Live reorder — find the nearest header under the pointer and
+        // move the dragged column to that position. Reading the data
+        // attribute keeps us from depending on DOM closure.
+        const overEl = (e.currentTarget as HTMLElement).closest('[data-dragcol]') as HTMLElement | null;
+        const overCol = overEl?.dataset.dragcol as K | undefined;
+        if (draggingCol && overCol && overCol !== draggingCol) {
+          move(draggingCol, overCol);
+        }
+      },
+      onDragEnd: () => setDraggingCol(null),
+      onDrop:    (e: React.DragEvent) => { e.preventDefault(); setDraggingCol(null); },
+    };
+  }
+
+  return { order, setOrder, getHeaderProps, draggingCol };
+}
+
+// ─── DragHandle ─────────────────────────────────────────────────────────
+//
+// Tiny visual cue that a header cell is reorderable. Renders just the
+// grip icon — the actual DnD lives on the parent <th> via
+// useColumnOrder's getHeaderProps.
+
+export function DragHandle() {
+  return (
+    <GripVertical size={11}
+      className="opacity-0 group-hover:opacity-100 transition-opacity cursor-grab"
+      style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
   );
 }
