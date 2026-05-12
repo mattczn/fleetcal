@@ -49,7 +49,12 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
     return partner ? (event.start <= partner.start ? 'pickup' : 'delivery') : null;
   })();
 
-  const color = asset.color;
+  // TONU loads render gray in the calendar — they didn't actually
+  // happen, so the asset's primary color would mislead the at-a-glance
+  // scan. Cancelled stays asset-color + dimmed (handled via opacity
+  // below) so the dispatcher still ties the slot to the carrier.
+  const isTonu = event.status === 'tonu';
+  const color = isTonu ? '#9aa0a6' : asset.color;
   const dateStr = localDateStr(currentDate);
   const top    = overrideTop  ?? (event.start.split('T')[0] < dateStr ? 0 : timeToPixels(event.start, rowHeight));
   const height = overrideHeight ?? timeHeightPixels(event.start, event.end, dateStr, rowHeight);
