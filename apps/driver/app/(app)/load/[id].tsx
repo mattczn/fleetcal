@@ -40,6 +40,7 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { needsConfirmation } from "@/lib/loadStatus";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
+import { RelayHandoffPhotos } from "@/components/RelayHandoffPhotos";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap } from "@/components/RouteMap";
 import { Toast } from "@/components/Toast";
@@ -1044,30 +1045,34 @@ export default function LoadDetailScreen() {
 
       {/* Details tab */}
       <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
-        {/* Relay disclaimer */}
-        {load.relayGroupId ? (
+        {/* Relay disclaimer + handoff photos. Photos are shared
+            across both legs (`kind='relay_handoff'` on load_documents).
+            Pickup driver leaves "where I parked the trailer" / paperwork
+            shots; delivery driver picks them up. */}
+        {load.relayGroupId && load.loadId ? (
           <View
             style={{
               backgroundColor: "#f3e8fd",
               borderRadius: 14,
               padding: 14,
               borderWidth: 1, borderColor: "#ddd6fe",
-              flexDirection: "row",
-              gap: 10,
               marginBottom: 14,
             }}
           >
-            <Repeat2 size={20} color="#6b21a8" strokeWidth={2.2} style={{ marginTop: 2 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={[txt(800), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
-                Relay Load — {load.relayRole === "pickup" ? "First Leg" : "Second Leg"}
-              </Text>
-              <Text style={[txt(500), { fontSize: 13, color: "#6b21a8", lineHeight: 19, marginTop: 4, opacity: 0.95 }]}>
-                {load.relayRole === "pickup"
-                  ? `You haul this load to the relay handoff point, then ${load.partnerDriverName ?? "another driver"} takes it the rest of the way.`
-                  : `${load.partnerDriverName ?? "Another driver"} starts this load. You pick it up at the relay point and finish the delivery.`}
-              </Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Repeat2 size={20} color="#6b21a8" strokeWidth={2.2} style={{ marginTop: 2 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={[txt(800), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+                  Relay Load — {load.relayRole === "pickup" ? "First Leg" : "Second Leg"}
+                </Text>
+                <Text style={[txt(500), { fontSize: 13, color: "#6b21a8", lineHeight: 19, marginTop: 4, opacity: 0.95 }]}>
+                  {load.relayRole === "pickup"
+                    ? `You haul this load to the relay handoff point, then ${load.partnerDriverName ?? "another driver"} takes it the rest of the way.`
+                    : `${load.partnerDriverName ?? "Another driver"} starts this load. You pick it up at the relay point and finish the delivery.`}
+                </Text>
+              </View>
             </View>
+            <RelayHandoffPhotos loadId={load.loadId} />
           </View>
         ) : null}
 

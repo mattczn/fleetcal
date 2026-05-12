@@ -376,11 +376,12 @@ export type DocumentKind =
   | "receipt"
   | "driver_sheet"
   | "invoice"
+  | "relay_handoff"
   | "other";
 
 /** Canonical ordered list — drives the UI chip order and validation. */
 export const DOCUMENT_KINDS: readonly DocumentKind[] = [
-  "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "other",
+  "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "relay_handoff", "other",
 ];
 
 /**

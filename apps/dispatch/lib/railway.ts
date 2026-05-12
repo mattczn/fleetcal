@@ -151,6 +151,29 @@ class RailwayClient {
   getDocumentUrl(documentId: string) {
     return this.req<GetDocumentUrlResponse>("GET", `/v1/documents/${documentId}/url`);
   }
+  deleteDocument(documentId: string) {
+    return this.req<{ ok: true }>("DELETE", `/v1/documents/${documentId}`);
+  }
+  /**
+   * Multipart upload — same shape as the web client's uploadLoadDocument.
+   * Dispatch ops occasionally upload on a driver's behalf (e.g. relay
+   * handoff photos when the driver app is unavailable).
+   */
+  async uploadLoadDocument(loadId: string, form: FormData) {
+    const token = _getToken ? await _getToken() : null;
+    const res = await fetch(`${BASE_URL}/v1/loads/${loadId}/documents`, {
+      method: "POST",
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: form,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let detail: unknown = text;
+      try { detail = JSON.parse(text); } catch { /* keep raw text */ }
+      throw new RailwayError(res.status, detail, `POST /v1/loads/${loadId}/documents → ${res.status}`);
+    }
+    return res.json() as Promise<{ document: { id: string; fileName: string; signedUrl?: string } }>;
+  }
 
   // ── Reference data ──────────────────────────────────────────────────
   listAssets()                               { return this.req<ListAssetsResponse>("GET", "/v1/assets"); }

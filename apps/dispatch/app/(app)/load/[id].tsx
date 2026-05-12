@@ -26,6 +26,7 @@ import { DateTimePickerSheet } from "@/components/DateTimePickerSheet";
 import { BrokerEditSheet } from "@/components/BrokerEditSheet";
 import { StopEditSheet } from "@/components/StopEditSheet";
 import { RelaySplitSheet } from "@/components/RelaySplitSheet";
+import { RelayHandoffPhotos } from "@/components/RelayHandoffPhotos";
 import { EditableStopCard } from "@/components/EditableStopCard";
 import { AccessorialSheet } from "@/components/AccessorialSheet";
 import { Toast } from "@/components/Toast";
@@ -698,6 +699,7 @@ function RelayDisclaimer({ load, onOpenPartner }: { load: Load; onOpenPartner?: 
           <ChevronRight size={14} color="#6b21a8" strokeWidth={2.4} />
         </TouchableOpacity>
       ) : null}
+      {load.loadId ? <RelayHandoffPhotos loadId={load.loadId} /> : null}
     </View>
   );
 }

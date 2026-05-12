@@ -22,6 +22,7 @@ import RouteMapPanel from './RouteMapPanel';
 import { uploadRateCon } from '@/lib/storage';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import CheckCallsSection from '@/components/calendar/CheckCallsSection';
+import { RelayHandoffPhotos } from '@/components/calendar/RelayHandoffPhotos';
 
 const RELAY_COLOR = '#7c3aed';
 
@@ -3725,6 +3726,10 @@ export default function EventModal() {
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#5b21b6', background: '#ede9fe', borderRadius: 6, padding: '6px 10px' }}>{delivAssetName}</div>
                               </div>
                             </div>
+                            {(() => {
+                              const currentEv = events.find(e => e.id === modalEventId);
+                              return currentEv?.loadId ? <RelayHandoffPhotos loadId={currentEv.loadId} /> : null;
+                            })()}
                           </div>
                         );
                       })()}
@@ -3785,6 +3790,10 @@ export default function EventModal() {
                                 }
                               </div>
                             );
+                          })()}
+                          {(() => {
+                            const currentEv = events.find(e => e.id === modalEventId);
+                            return currentEv?.loadId ? <RelayHandoffPhotos loadId={currentEv.loadId} /> : null;
                           })()}
                         </div>
                       )}

@@ -19,6 +19,7 @@ export type DocumentKind =
   | "receipt"
   | "driver_sheet"
   | "invoice"
+  | "relay_handoff"
   | "other";
 
 export interface LoadDocument {
