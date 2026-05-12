@@ -23,7 +23,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Star, Eye,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -65,7 +65,7 @@ const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ s
 type ColKey =
   | 'invoiceNum' | 'loadNum' | 'customer' | 'title'
   | 'rate' | 'accessorials' | 'total'
-  | 'docs' | 'priority' | 'notes'
+  | 'docs' | 'notes'
   | 'age' | 'released' | 'issued' | 'due' | 'method' | 'sendTo' | 'status' | 'view';
 
 interface ColumnDef {
@@ -82,8 +82,9 @@ interface ColumnDef {
 
 // Column order = render order in the table. The columns menu shows
 // the same order so the user's mental model matches what's on screen.
-// Priority sits next to Notes — they're both row-level metadata you
-// scan for, not part of the bill itself.
+//
+// Priority isn't a column — priority loads get a soft yellow row
+// band + left border instead (same treatment as /closeout).
 const COLUMNS: ColumnDef[] = [
   { key: 'age',          label: 'Age',           align: 'left',  filterable: false, toggleable: true },
   { key: 'released',     label: 'Released',      align: 'left',  filterable: false, toggleable: true },
@@ -102,11 +103,10 @@ const COLUMNS: ColumnDef[] = [
   { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
   { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
   { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
-  { key: 'priority',     label: 'P',             align: 'left',  filterable: true,  toggleable: true },
   { key: 'notes',        label: 'Notes',         align: 'left',  filterable: false, toggleable: true },
   { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
-  // View opens a PDF-only popup of the packet. No sort / no filter.
-  // Hidden on Released — no invoice exists yet there.
+  // View opens the combined PDF + actions modal. No sort / no
+  // filter. Hidden on Released — no invoice exists yet there.
   { key: 'view',         label: '',              align: 'left',  filterable: false, toggleable: false },
 ];
 
@@ -374,7 +374,6 @@ export default function AccountingPage() {
       case 'accessorials': return { sortValue: (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0) };
       case 'total':        return { sortValue: r.invoice?.total ?? (r.load.loadPrice ?? 0) };
       case 'docs':         return { sortValue: 0 };
-      case 'priority':     return { sortValue: r.load.priority ? 1 : 0, filterValue: r.load.priority ? 'Priority' : 'Normal' };
       case 'notes':        return { sortValue: (r.load.internalNotes ?? []).length };
       case 'age': {
         // Days since delivery. For relays we want the DELIVERY leg's
@@ -703,15 +702,6 @@ export default function AccountingPage() {
                         )}
                         {orderedVisibleColumns.map(c => {
                           switch (c.key) {
-                            case 'priority':
-                              // Outline star at all times (column stays visually consistent),
-                              // filled yellow when the load is flagged priority.
-                              return <Td key={c.key}>
-                                <Star size={14}
-                                  fill={load.priority ? '#eab308' : 'none'}
-                                  stroke={load.priority ? '#eab308' : 'var(--gc-text-3)'}
-                                  style={{ color: load.priority ? '#eab308' : 'var(--gc-text-3)' }} />
-                              </Td>;
                             case 'age':
                               return <Td key={c.key}>
                                 <span style={{ background: ageBg(age), color: ageFg(age), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
