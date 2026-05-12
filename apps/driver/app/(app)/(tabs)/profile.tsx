@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
-  LogOut, User, FileText, Trash2, ExternalLink, Plus, Calendar as CalendarIcon,
+  LogOut, User, FileText, Trash2, ExternalLink, Plus, Calendar as CalendarIcon, ChevronDown,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
@@ -31,6 +31,13 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
     weight === 700 ? "PlusJakartaSans_700Bold"     :
                      "PlusJakartaSans_800ExtraBold",
 });
+
+const US_STATES = [
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+  "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+  "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+  "VA","WA","WV","WI","WY",
+];
 
 const DOC_KIND_LABEL: Record<DriverDocumentKind, string> = {
   license:      "License",
@@ -110,7 +117,8 @@ export default function ProfileScreen() {
   const [medCardExp,    setMedCardExp]    = useState<string | undefined>(undefined);
   const [dob,           setDob]           = useState<string | undefined>(undefined);
 
-  const [pickerOpen,    setPickerOpen]    = useState<'licenseExp' | 'medicalCardExp' | 'dob' | null>(null);
+  const [pickerOpen,      setPickerOpen]      = useState<'licenseExp' | 'medicalCardExp' | 'dob' | null>(null);
+  const [statePickerOpen, setStatePickerOpen] = useState<'addr' | 'license' | null>(null);
 
   const loadAll = useCallback(async () => {
     try {
@@ -335,9 +343,15 @@ export default function ProfileScreen() {
                 <FormGrid>
                   <FormCol>
                     <FieldLabel label="State" />
-                    <TextField value={addr.state} onChangeText={(v) => setAddr({ ...addr, state: v.toUpperCase().slice(0, 2) })}
-                      autoCapitalize="characters" maxLength={2}
-                      onBlur={() => saveFields({ address: joinAddress(addr) })} />
+                    <StateField value={addr.state}
+                      open={statePickerOpen === 'addr'}
+                      setOpen={(v) => setStatePickerOpen(v ? 'addr' : null)}
+                      onChange={(s) => {
+                        const next = { ...addr, state: s };
+                        setAddr(next);
+                        void saveFields({ address: joinAddress(next) });
+                      }}
+                    />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Zip" />
@@ -360,9 +374,14 @@ export default function ProfileScreen() {
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="State" />
-                    <TextField value={licenseState} onChangeText={(v) => setLicenseState(v.toUpperCase().slice(0, 2))}
-                      autoCapitalize="characters" maxLength={2}
-                      onBlur={() => saveFields({ licenseState: licenseState.trim() || null })} />
+                    <StateField value={licenseState}
+                      open={statePickerOpen === 'license'}
+                      setOpen={(v) => setStatePickerOpen(v ? 'license' : null)}
+                      onChange={(s) => {
+                        setLicenseState(s);
+                        void saveFields({ licenseState: s || null });
+                      }}
+                    />
                   </FormCol>
                 </FormGrid>
                 <FieldLabel label="Expiration" />
@@ -592,6 +611,77 @@ function DateField({
           maximumDate={maximumDate}
           onChange={onPickerChange}
         />
+      )}
+    </>
+  );
+}
+
+// State picker — modal with the 50 US state abbreviations. Same
+// visual chrome as DateField (picker row → modal sheet) so the form
+// reads consistently.
+function StateField({
+  value, onChange, open, setOpen,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  open: boolean;
+  setOpen: (v: boolean) => void;
+}) {
+  return (
+    <>
+      <TouchableOpacity onPress={() => setOpen(!open)}
+        activeOpacity={0.7}
+        style={{
+          flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+          backgroundColor: "#fff",
+          borderRadius: 10,
+          borderWidth: 1, borderColor: "#e8eaed",
+          paddingHorizontal: 12, paddingVertical: 12,
+          marginBottom: 4,
+        }}>
+        <Text style={[txt(value ? 700 : 500), { fontSize: 15, color: value ? "#202124" : "#9aa0a6" }]}>
+          {value || "Select"}
+        </Text>
+        <ChevronDown size={16} color="#5f6368" />
+      </TouchableOpacity>
+      {open && (
+        <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => setOpen(false)}
+            style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.35)" }}>
+            <TouchableOpacity activeOpacity={1} style={{ backgroundColor: "#fff", paddingBottom: 24, maxHeight: "70%" }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#f1f3f4" }}>
+                {value
+                  ? <TouchableOpacity onPress={() => { onChange(""); setOpen(false); }}>
+                      <Text style={[txt(700), { fontSize: 14, color: "#b91c1c" }]}>Clear</Text>
+                    </TouchableOpacity>
+                  : <View />}
+                <Text style={[txt(800), { fontSize: 14, color: "#202124" }]}>Select State</Text>
+                <TouchableOpacity onPress={() => setOpen(false)}>
+                  <Text style={[txt(800), { fontSize: 14, color: "#1a73e8" }]}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView>
+                {US_STATES.map(s => {
+                  const selected = s === value;
+                  return (
+                    <TouchableOpacity key={s}
+                      onPress={() => { onChange(s); setOpen(false); }}
+                      activeOpacity={0.6}
+                      style={{
+                        paddingHorizontal: 18, paddingVertical: 13,
+                        borderBottomWidth: 1, borderBottomColor: "#f8f9fa",
+                        backgroundColor: selected ? "#e8f0fe" : "transparent",
+                      }}>
+                      <Text style={[txt(selected ? 800 : 600), { fontSize: 15, color: selected ? "#1a73e8" : "#202124" }]}>
+                        {s}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
       )}
     </>
   );
