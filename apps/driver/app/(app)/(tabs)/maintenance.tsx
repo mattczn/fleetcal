@@ -399,14 +399,14 @@ export default function MaintenanceScreen() {
                   width: '100%',
                   paddingVertical: 18,
                   borderRadius: 10,
-                  borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
+                  borderWidth: 1.5, borderColor: '#1a73e8', borderStyle: 'dashed',
                   alignItems: 'center', justifyContent: 'center',
                   flexDirection: 'row',
                   gap: 8,
-                  backgroundColor: '#f8f9fa',
+                  backgroundColor: '#e8f0fe',
                 }}>
-                <Camera size={18} color="#5f6368" strokeWidth={2.2} />
-                <Text style={[txt(700), { fontSize: 14, color: '#5f6368' }]}>
+                <Camera size={18} color="#1a73e8" strokeWidth={2.2} />
+                <Text style={[txt(700), { fontSize: 14, color: '#1a73e8' }]}>
                   {photos.length === 0 ? 'Upload Photo' : 'Add Another Photo'}
                 </Text>
               </TouchableOpacity>
