@@ -742,7 +742,11 @@ export default function LoadDetailScreen() {
     onSuccess: (_data, newStatus) => {
       queryClient.invalidateQueries({ queryKey: ["loads"] });
       queryClient.invalidateQueries({ queryKey: ["load", id] });
-      Alert.alert("Updated", `Load marked as ${newStatus.replace("_", " ")}.`);
+      // Brief toast instead of a modal — the badge in the header
+      // already shows the new state, the toast is just a confirmation
+      // pulse so the user knows the tap landed.
+      const label = newStatus.replace("_", " ").replace(/\b\w/g, c => c.toUpperCase());
+      showToast(`Marked as ${label}`);
     },
     onError: (err: Error) => Alert.alert("Update failed", err.message),
   });
@@ -789,6 +793,9 @@ export default function LoadDetailScreen() {
 
   async function handleMarkDelivered() {
     if (!load || !driver) return;
+    // Paperwork safety check stays — this isn't a "are you sure?"
+    // confirm, it's a productive prompt to get POD/BOL onto the load
+    // before it closes out. Skips straight through when docs exist.
     const docs = await fetchDocuments(load.id, driver.orgId);
     if (docs.length === 0) {
       Alert.alert(
@@ -812,14 +819,7 @@ export default function LoadDetailScreen() {
       );
       return;
     }
-    Alert.alert(
-      "Confirm",
-      `Mark load ${load.loadNum ? `#${load.loadNum}` : ""} as delivered?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Confirm", onPress: () => changeStatus("delivered") },
-      ],
-    );
+    changeStatus("delivered");
   }
 
   function handleStatusUpdate() {
@@ -828,35 +828,10 @@ export default function LoadDetailScreen() {
       handleMarkDelivered();
       return;
     }
-    if (nextStatus === "dispatched") {
-      let pickupLabel = "the scheduled start time";
-      if (load.start) {
-        const d = new Date(load.start.replace(" ", "T"));
-        if (!isNaN(d.getTime())) {
-          pickupLabel = d.toLocaleString("en-US", {
-            weekday: "short", month: "short", day: "numeric",
-            hour: "numeric", minute: "2-digit",
-          });
-        }
-      }
-      Alert.alert(
-        "Accept Load",
-        `You are confirming you will be on time to pick up at: ${pickupLabel}`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Confirm", onPress: () => changeStatus(nextStatus) },
-        ],
-      );
-      return;
-    }
-    Alert.alert(
-      "Confirm",
-      `Mark load ${load.loadNum ? `#${load.loadNum}` : ""} as ${nextStatus.replace("_", " ")}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Confirm", onPress: () => changeStatus(nextStatus) },
-      ],
-    );
+    // One-tap for every other transition (dispatched, en_route,
+    // picked_up). The toast on success and the status badge in the
+    // header give enough feedback — no confirm dialogs.
+    changeStatus(nextStatus);
   }
 
   return (
