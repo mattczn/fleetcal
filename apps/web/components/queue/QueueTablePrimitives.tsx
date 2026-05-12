@@ -250,7 +250,7 @@ export type QueueFilterState = Record<string, string[]>;
 // ─── MenuTh — sortable + filter-aware column header ─────────────────────
 
 export function MenuTh({
-  col, label, align, sort, selectedCount, setHeaderRef, onClick, dragProps, isDragging,
+  col, label, align, sort, selectedCount, setHeaderRef, onClick, width, onResizeStart,
 }: {
   col:           string;
   label:         string;
@@ -260,11 +260,14 @@ export function MenuTh({
   selectedCount: number;
   setHeaderRef:  (el: HTMLTableCellElement | null) => void;
   onClick:       () => void;
-  /** Spread onto the <th> to enable drag-to-reorder via
-   *  useColumnOrder.getHeaderProps. Optional — pages that don't want
-   *  reordering can omit it. */
-  dragProps?: React.HTMLAttributes<HTMLTableCellElement> & { draggable?: boolean; 'data-dragcol'?: string };
-  isDragging?: boolean;
+  /** User-set column width in px (from useColumnWidths). Applied via
+   *  inline width style. Browser still respects content min-content
+   *  in table-layout:auto, so cells with whitespace-nowrap won't get
+   *  clipped below their natural width. */
+  width?:        number;
+  /** Resize-handle mousedown handler from useColumnWidths.getResizeProps.
+   *  When provided, renders the handle on the right edge. */
+  onResizeStart?: (e: React.MouseEvent) => void;
 }) {
   const sortActive   = sort.key === col;
   const filterActive = selectedCount > 0;
@@ -273,15 +276,16 @@ export function MenuTh({
     <th
       ref={setHeaderRef}
       onClick={onClick}
-      {...(dragProps ?? {})}
       className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors whitespace-nowrap"
       style={{
         color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
-        background: anyActive ? 'rgba(26,115,232,0.06)' : isDragging ? 'rgba(26,115,232,0.18)' : undefined,
-        opacity:    isDragging ? 0.6 : 1,
+        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
+        position:   'relative',
+        width:      width != null ? `${width}px` : undefined,
+        minWidth:   width != null ? `${width}px` : undefined,
       }}
-      title={dragProps ? 'Click for sort + filter — drag to reorder' : 'Click for sort + filter'}>
+      title="Click for sort + filter — drag the right edge to resize">
       <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
         {label}
         {sortActive ? (
@@ -297,6 +301,9 @@ export function MenuTh({
           </span>
         )}
       </span>
+      {onResizeStart && (
+        <ColumnResizeHandle onMouseDown={onResizeStart} />
+      )}
     </th>
   );
 }
@@ -659,23 +666,21 @@ export function CustomerFilterDropdown({
 
 // ─── useColumnOrder ─────────────────────────────────────────────────────
 //
-// Drag-to-reorder column hook for queue tables. Persists order under the
-// supplied storage key. Returns the current order, a setter, and the
-// HTML-DnD handlers ready to spread onto each draggable <th>.
+// State + persistence for the user-controlled column order. Reordering
+// happens inside the Columns dropdown (drag rows there), NOT by dragging
+// the <th> elements themselves — header drag-to-reorder felt fragile
+// next to drag-to-resize, so we moved it into the menu where it's a
+// dedicated affordance.
 //
 // Usage:
-//   const { order, setOrder, getRootProps, getHeaderProps } =
-//     useColumnOrder<ColKey>('closeout-cols-order-v2', defaultOrder);
-//   ... render header cells with {...getHeaderProps(col)}
+//   const { order, setOrder, move } =
+//     useColumnOrder<ColKey>('closeout-cols-order-v1', defaultOrder);
 //
-// Implementation notes:
-// - HTML5 native DnD (no library) — handlers attached to each <th>.
-// - dragOver moves the row of dragged column header to the position
-//   under the cursor IMMEDIATELY (so the user sees the reflow live).
-// - drop just commits — the move already happened on dragOver.
-// - We tolerate unknown keys in the stored order (drops them on load)
-//   and append any newly-added columns to the end (so renaming/adding
-//   columns in code doesn't blow away user preferences).
+// Persistence notes:
+// - Unknown keys in the stored order are dropped on load (defensive
+//   against renamed columns).
+// - Newly-added keys (in defaultOrder but not yet stored) append to the
+//   end so code changes don't wipe user preferences.
 
 export function useColumnOrder<K extends string>(
   storageKey: string,
@@ -683,15 +688,11 @@ export function useColumnOrder<K extends string>(
 ): {
   order: K[];
   setOrder: (next: K[]) => void;
-  getHeaderProps: (col: K) => {
-    draggable: true;
-    onDragStart: (e: React.DragEvent) => void;
-    onDragOver:  (e: React.DragEvent) => void;
-    onDragEnd:   (e: React.DragEvent) => void;
-    onDrop:      (e: React.DragEvent) => void;
-    'data-dragcol': K;
-  };
-  draggingCol: K | null;
+  /** Move column `from` to the position currently held by column `to`. */
+  move: (from: K, to: K) => void;
+  /** Move by index — useful when the caller already knows positions
+   *  (e.g. a list with explicit indices). */
+  moveIndex: (fromIdx: number, toIdx: number) => void;
 } {
   const valid = new Set(defaultOrder);
   const [order, setOrderState] = useState<K[]>(() => {
@@ -701,22 +702,19 @@ export function useColumnOrder<K extends string>(
       if (!raw) return [...defaultOrder];
       const parsed = JSON.parse(raw) as K[];
       if (!Array.isArray(parsed)) return [...defaultOrder];
-      // Drop unknown keys; append newly-added keys to the end so code
-      // changes don't wipe user preferences.
       const filtered = parsed.filter(k => valid.has(k));
       const missing  = defaultOrder.filter(k => !filtered.includes(k));
       return [...filtered, ...missing];
     } catch { return [...defaultOrder]; }
   });
 
-  const setOrder = (next: K[]) => {
-    setOrderState(next);
+  const persist = (next: K[]) => {
     try { window.localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* quota / private mode */ }
   };
 
-  const [draggingCol, setDraggingCol] = useState<K | null>(null);
+  const setOrder = (next: K[]) => { setOrderState(next); persist(next); };
 
-  function move(from: K, to: K) {
+  const move = (from: K, to: K) => {
     if (from === to) return;
     setOrderState(prev => {
       const i = prev.indexOf(from);
@@ -725,50 +723,239 @@ export function useColumnOrder<K extends string>(
       const next = [...prev];
       next.splice(i, 1);
       next.splice(j, 0, from);
-      try { window.localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* */ }
+      persist(next);
       return next;
     });
-  }
+  };
 
-  function getHeaderProps(col: K) {
-    return {
-      draggable: true as const,
-      'data-dragcol': col,
-      onDragStart: (e: React.DragEvent) => {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', col);
-        setDraggingCol(col);
-      },
-      onDragOver: (e: React.DragEvent) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        // Live reorder — find the nearest header under the pointer and
-        // move the dragged column to that position. Reading the data
-        // attribute keeps us from depending on DOM closure.
-        const overEl = (e.currentTarget as HTMLElement).closest('[data-dragcol]') as HTMLElement | null;
-        const overCol = overEl?.dataset.dragcol as K | undefined;
-        if (draggingCol && overCol && overCol !== draggingCol) {
-          move(draggingCol, overCol);
-        }
-      },
-      onDragEnd: () => setDraggingCol(null),
-      onDrop:    (e: React.DragEvent) => { e.preventDefault(); setDraggingCol(null); },
-    };
-  }
+  const moveIndex = (fromIdx: number, toIdx: number) => {
+    setOrderState(prev => {
+      if (fromIdx < 0 || fromIdx >= prev.length || toIdx < 0 || toIdx >= prev.length || fromIdx === toIdx) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      persist(next);
+      return next;
+    });
+  };
 
-  return { order, setOrder, getHeaderProps, draggingCol };
+  return { order, setOrder, move, moveIndex };
 }
 
-// ─── DragHandle ─────────────────────────────────────────────────────────
+// ─── useColumnWidths ────────────────────────────────────────────────────
 //
-// Tiny visual cue that a header cell is reorderable. Renders just the
-// grip icon — the actual DnD lives on the parent <th> via
-// useColumnOrder's getHeaderProps.
+// State + persistence for user-resized column widths. Drag the right
+// edge of a column header to set; the value persists per-user via
+// localStorage.
+//
+// Usage:
+//   const { widths, getResizeProps } =
+//     useColumnWidths<ColKey>('closeout-cols-widths-v1');
+//   ...
+//   <MenuTh
+//     col={c}
+//     width={widths[c]}
+//     onResizeStart={getResizeProps(c)}
+//     ...
+//   />
+//
+// The hook returns the mousedown handler — the actual resize loop runs
+// on window-level mousemove/mouseup listeners (mounted on drag start
+// and torn down on drag end). This is how Excel/Sheets do it; tracking
+// state on the th itself is brittle because the cursor leaves the th
+// during fast drags.
 
-export function DragHandle() {
+export function useColumnWidths<K extends string>(
+  storageKey: string,
+): {
+  widths: Partial<Record<K, number>>;
+  setWidth:   (col: K, w: number) => void;
+  resetWidth: (col: K) => void;
+  getResizeProps: (col: K) => (e: React.MouseEvent) => void;
+} {
+  const [widths, setWidthsState] = useState<Partial<Record<K, number>>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return {};
+      return JSON.parse(raw) as Partial<Record<K, number>>;
+    } catch { return {}; }
+  });
+
+  const persist = (next: Partial<Record<K, number>>) => {
+    try { window.localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* */ }
+  };
+
+  // Minimum column width. Below this the column becomes unreadable.
+  const MIN_WIDTH = 50;
+
+  const setWidth = (col: K, w: number) => {
+    setWidthsState(prev => {
+      const next = { ...prev, [col]: Math.max(MIN_WIDTH, Math.round(w)) } as Partial<Record<K, number>>;
+      persist(next);
+      return next;
+    });
+  };
+
+  const resetWidth = (col: K) => {
+    setWidthsState(prev => {
+      const next = { ...prev };
+      delete next[col];
+      persist(next);
+      return next;
+    });
+  };
+
+  const getResizeProps = (col: K) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const th = (e.currentTarget as HTMLElement).closest('th') as HTMLElement | null;
+    if (!th) return;
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+    let liveW = startW;
+
+    const onMove = (ev: MouseEvent) => {
+      liveW = Math.max(MIN_WIDTH, startW + (ev.clientX - startX));
+      // Update DOM directly during the drag — calling setState on every
+      // mousemove would queue dozens of re-renders. We commit to state
+      // once on mouseup.
+      th.style.width    = `${liveW}px`;
+      th.style.minWidth = `${liveW}px`;
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor     = '';
+      setWidth(col, liveW);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor     = 'col-resize';
+  };
+
+  return { widths, setWidth, resetWidth, getResizeProps };
+}
+
+// ─── ColumnResizeHandle ─────────────────────────────────────────────────
+//
+// 6px-wide drag target absolutely positioned at the right edge of a
+// <th>. The handle is invisible by default; on hover the cursor changes
+// to col-resize and a thin blue accent line appears so the drag target
+// is discoverable.
+
+export function ColumnResizeHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
   return (
-    <GripVertical size={11}
-      className="opacity-0 group-hover:opacity-100 transition-opacity cursor-grab"
-      style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+    <span
+      onMouseDown={onMouseDown}
+      onClick={e => e.stopPropagation()}
+      className="group/resize"
+      style={{
+        position:  'absolute',
+        top:       0,
+        right:     -3,
+        bottom:    0,
+        width:     6,
+        cursor:    'col-resize',
+        zIndex:    1,
+        userSelect: 'none',
+      }}>
+      <span
+        className="opacity-0 group-hover/resize:opacity-100 transition-opacity"
+        style={{
+          position:  'absolute',
+          top:       4,
+          right:     2,
+          bottom:    4,
+          width:     2,
+          background: 'var(--gc-blue)',
+          borderRadius: 1,
+          pointerEvents: 'none',
+        }} />
+    </span>
+  );
+}
+
+// ─── ReorderableColumnsMenu ─────────────────────────────────────────────
+//
+// Drop-in replacement for ColumnsMenu that adds drag-to-reorder. Each
+// row has a grip handle (left) + checkbox + label. Drag the row by the
+// handle to move it within the list; the order callback fires with
+// new (from, to) indices.
+
+export function ReorderableColumnsMenu({
+  columns, visible, onToggle, onReorder,
+}: {
+  /** Columns in their current order. Drag a row to move it; the order
+   *  reflects this list order. */
+  columns:   Array<{ key: string; label: string }>;
+  visible:   Record<string, boolean>;
+  onToggle:  (key: string) => void;
+  /** Called with column keys (not indices) so the parent can translate
+   *  to whatever ordering scheme it uses — works even when the menu is
+   *  showing a filtered subset of the full column order. */
+  onReorder: (fromKey: string, toKey: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+        style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
+        <Columns3 size={12} /> Columns
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-20 rounded-xl py-1.5"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', minWidth: 240, maxHeight: 420, overflowY: 'auto' }}>
+          <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold"
+            style={{ color: 'var(--gc-text-3)' }}>
+            Show / reorder
+          </div>
+          {columns.map(c => (
+            <div key={c.key}
+              draggable
+              onDragStart={e => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', c.key);
+                setDraggingKey(c.key);
+              }}
+              onDragOver={e => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (draggingKey && draggingKey !== c.key) {
+                  onReorder(draggingKey, c.key);
+                }
+              }}
+              onDragEnd={() => setDraggingKey(null)}
+              onDrop={e => { e.preventDefault(); setDraggingKey(null); }}
+              className="flex items-center gap-2 px-2.5 py-1.5 text-[12px] cursor-grab hover:bg-[var(--gc-hover)]"
+              style={{
+                color:      'var(--gc-text-1)',
+                background: draggingKey === c.key ? 'rgba(26,115,232,0.08)' : undefined,
+              }}>
+              <GripVertical size={12} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+              <input type="checkbox" checked={!!visible[c.key]} onChange={() => onToggle(c.key)}
+                onClick={e => e.stopPropagation()}
+                style={{ accentColor: '#1a73e8' }} />
+              <span className="flex-1 truncate">{c.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

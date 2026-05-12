@@ -33,7 +33,7 @@ import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
-import { CustomerFilterDropdown, useColumnOrder } from '@/components/queue/QueueTablePrimitives';
+import { CustomerFilterDropdown, useColumnOrder, useColumnWidths, ReorderableColumnsMenu, ColumnResizeHandle } from '@/components/queue/QueueTablePrimitives';
 
 type Tab = 'pending' | 'flagged' | 'all';
 
@@ -565,8 +565,11 @@ export default function CloseoutView() {
     () => TOGGLEABLE_COLS.map(c => c.key as ToggleableCol),
     [],
   );
-  const { order: colOrder, getHeaderProps: getColDndProps, draggingCol } =
+  const { order: colOrder, move: moveCol } =
     useColumnOrder<ToggleableCol>('closeout-cols-order-v1', DEFAULT_COL_ORDER);
+  // User-resizable column widths. Drag the right edge of a header.
+  const { widths: colWidths, getResizeProps: getColResizeProps } =
+    useColumnWidths<ToggleableCol>('closeout-cols-widths-v1');
   // Visible columns in the user's current order. Filter out hidden
   // ones so the iteration in <thead>/<tbody> doesn't need to check.
   const orderedVisibleCols = useMemo(
@@ -574,19 +577,8 @@ export default function CloseoutView() {
     [colOrder, visibleCols],
   );
 
-  // Click-outside dismissal for the columns menu.
-  const [colsMenuOpen, setColsMenuOpen] = useState(false);
-  const colsMenuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!colsMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (colsMenuRef.current && !colsMenuRef.current.contains(e.target as Node)) {
-        setColsMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [colsMenuOpen]);
+  // (Columns dropdown click-outside is handled inside
+  // ReorderableColumnsMenu — no local state needed here anymore.)
 
   // Per-column header menu — combined sort + filter popover anchored to
   // the clicked column header. Replaces the prior always-visible filter
@@ -705,30 +697,15 @@ export default function CloseoutView() {
               options={customers.map(c => c.name).sort()}
               selected={filters.customer ?? []}
               onChange={(next) => setFilters(p => ({ ...p, customer: next }))} />
-            {/* Columns visibility menu */}
-            <div className="relative" ref={colsMenuRef}>
-              <button onClick={() => setColsMenuOpen(o => !o)}
-                className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
-                style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
-                <Columns3 size={12} /> Columns
-              </button>
-              {colsMenuOpen && (
-                <div className="absolute right-0 top-full mt-1 z-20 rounded-xl py-1.5"
-                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', minWidth: 180 }}>
-                  {TOGGLEABLE_COLS.map(c => (
-                    <label key={c.key}
-                      className="flex items-center gap-2 px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--gc-hover)]"
-                      style={{ color: 'var(--gc-text-1)' }}>
-                      <input type="checkbox"
-                        checked={visibleCols[c.key]}
-                        onChange={() => toggleCol(c.key)}
-                        style={{ accentColor: '#1a73e8' }} />
-                      {c.label}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Columns menu — show/hide + drag to reorder. */}
+            <ReorderableColumnsMenu
+              columns={colOrder.map(k => {
+                const def = TOGGLEABLE_COLS.find(t => t.key === k);
+                return { key: k, label: def?.label ?? k };
+              })}
+              visible={visibleCols as Record<string, boolean>}
+              onToggle={(k) => toggleCol(k as ToggleableCol)}
+              onReorder={(from, to) => moveCol(from as ToggleableCol, to as ToggleableCol)} />
             <button onClick={() => void refresh()}
               className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -777,21 +754,22 @@ export default function CloseoutView() {
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
                     {orderedVisibleCols.map(col => {
+                      const width = colWidths[col];
+                      const onResizeStart = getColResizeProps(col);
                       // Sortable columns render as MenuTh; 'docs' is a
                       // chip column with no sort/filter so it renders
                       // as a plain header (with the clear-filters affordance).
                       if (col === 'docs') {
                         return (
                           <th key="docs"
-                            {...getColDndProps('docs')}
                             className="px-2.5 py-2 font-semibold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
                             style={{
                               color: 'var(--gc-text-3)',
                               textAlign: 'left',
-                              background: draggingCol === 'docs' ? 'rgba(26,115,232,0.18)' : undefined,
-                              opacity: draggingCol === 'docs' ? 0.6 : 1,
-                            }}
-                            title="Drag to reorder">
+                              position: 'relative',
+                              width:    width != null ? `${width}px` : undefined,
+                              minWidth: width != null ? `${width}px` : undefined,
+                            }}>
                             Docs
                             {activeFilterCount > 0 && (
                               <button onClick={clearAllFilters}
@@ -801,6 +779,7 @@ export default function CloseoutView() {
                                 <X size={9} /> clear ({activeFilterCount})
                               </button>
                             )}
+                            <ColumnResizeHandle onMouseDown={onResizeStart} />
                           </th>
                         );
                       }
@@ -826,8 +805,8 @@ export default function CloseoutView() {
                           selectedCount={(filters[c] ?? []).length}
                           setHeaderRef={el => { headerRefs.current[c] = el; }}
                           onClick={() => setOpenHeaderCol(p => p === c ? null : c)}
-                          dragProps={getColDndProps(col)}
-                          isDragging={draggingCol === col}
+                          width={width}
+                          onResizeStart={onResizeStart}
                         />
                       );
                     })}
@@ -1446,11 +1425,10 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
 }
 
 /** Column header that opens a sort + filter popover when clicked.
- *  When `dragProps` is passed, the header also accepts drag-to-reorder
- *  gestures. The grip cursor only shows mid-drag — the rest of the time
- *  the header just looks clickable. */
+ *  A resize handle on the right edge drags to set the column width.
+ *  Reordering happens in the Columns dropdown, not on the header. */
 function MenuTh({
-  col, label, align, sort, selectedCount, setHeaderRef, onClick, dragProps, isDragging,
+  col, label, align, sort, selectedCount, setHeaderRef, onClick, width, onResizeStart,
 }: {
   col: ColKey;
   label: string;
@@ -1460,9 +1438,10 @@ function MenuTh({
   selectedCount: number;
   setHeaderRef: (el: HTMLTableCellElement | null) => void;
   onClick: () => void;
-  /** Spread onto the <th>: draggable + the four DnD handlers. */
-  dragProps?: React.HTMLAttributes<HTMLTableCellElement> & { draggable?: boolean; 'data-dragcol'?: string };
-  isDragging?: boolean;
+  /** User-set column width in px (from useColumnWidths). */
+  width?: number;
+  /** Mousedown handler from useColumnWidths.getResizeProps. */
+  onResizeStart?: (e: React.MouseEvent) => void;
 }) {
   const sortActive   = sort.key === col;
   const filterActive = selectedCount > 0;
@@ -1471,15 +1450,16 @@ function MenuTh({
     <th
       ref={setHeaderRef}
       onClick={onClick}
-      {...(dragProps ?? {})}
       className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors whitespace-nowrap"
       style={{
         color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
         textAlign:  align,
-        background: anyActive ? 'rgba(26,115,232,0.06)' : isDragging ? 'rgba(26,115,232,0.18)' : undefined,
-        opacity:    isDragging ? 0.6 : 1,
+        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
+        position:   'relative',
+        width:      width != null ? `${width}px` : undefined,
+        minWidth:   width != null ? `${width}px` : undefined,
       }}
-      title="Click for sort + filter — drag to reorder">
+      title="Click for sort + filter — drag the right edge to resize">
       <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
         {label}
         {sortActive ? (
@@ -1495,6 +1475,7 @@ function MenuTh({
           </span>
         )}
       </span>
+      {onResizeStart && <ColumnResizeHandle onMouseDown={onResizeStart} />}
     </th>
   );
 }

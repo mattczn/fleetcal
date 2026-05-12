@@ -37,8 +37,8 @@ import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
   Th, Td, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
-  MenuTh, HeaderMenu, ColumnsMenu, NotesButton,
-  CustomerFilterDropdown, useColumnOrder,
+  MenuTh, HeaderMenu, NotesButton,
+  CustomerFilterDropdown, useColumnOrder, useColumnWidths, ReorderableColumnsMenu,
   moneyFmt, fmtShortDate, daysSince,
   type QueueSortState, type QueueFilterState,
 } from '@/components/queue/QueueTablePrimitives';
@@ -489,8 +489,11 @@ export default function AccountingPage() {
   // per-user via localStorage; newly-added columns append to the end
   // so code changes don't blow away preferences.
   const DEFAULT_COL_ORDER = useMemo<ColKey[]>(() => COLUMNS.map(c => c.key), []);
-  const { order: colOrder, getHeaderProps: getColDndProps, draggingCol } =
+  const { order: colOrder, move: moveCol } =
     useColumnOrder<ColKey>('accounting-cols-order-v1', DEFAULT_COL_ORDER);
+  // User-resizable column widths. Drag the right edge of a column header.
+  const { widths: colWidths, getResizeProps: getColResizeProps } =
+    useColumnWidths<ColKey>('accounting-cols-widths-v1');
 
   const orderedVisibleColumns = useMemo(
     () => colOrder
@@ -664,10 +667,16 @@ export default function AccountingPage() {
               options={customers.map(c => c.name).sort()}
               selected={filters.customer ?? []}
               onChange={(next) => setFilters(p => ({ ...p, customer: next }))} />
-            <ColumnsMenu
-              columns={COLUMNS.filter(c => c.toggleable && !COLS_HIDDEN_PER_BUCKET[bucket].has(c.key))}
+            <ReorderableColumnsMenu
+              columns={colOrder
+                .filter(k => {
+                  const def = COL_BY_KEY[k];
+                  return def?.toggleable && !COLS_HIDDEN_PER_BUCKET[bucket].has(k);
+                })
+                .map(k => ({ key: k, label: COL_BY_KEY[k]?.label ?? k }))}
               visible={visibleCols as Record<string, boolean>}
-              onToggle={(k) => setVisibleCols(v => ({ ...v, [k as ColKey]: !v[k as ColKey] }))} />
+              onToggle={(k) => setVisibleCols(v => ({ ...v, [k as ColKey]: !v[k as ColKey] }))}
+              onReorder={(from, to) => moveCol(from as ColKey, to as ColKey)} />
             <button onClick={() => void refresh()}
               className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -717,8 +726,8 @@ export default function AccountingPage() {
                         selectedCount={(filters[c.key] ?? []).length}
                         setHeaderRef={el => { headerRefs.current[c.key] = el; }}
                         onClick={() => setOpenHeaderCol(p => p === c.key ? null : c.key)}
-                        dragProps={getColDndProps(c.key)}
-                        isDragging={draggingCol === c.key} />
+                        width={colWidths[c.key]}
+                        onResizeStart={getColResizeProps(c.key)} />
                     ))}
                   </tr>
                 </thead>
