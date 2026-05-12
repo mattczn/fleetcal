@@ -328,8 +328,8 @@ export default function FuelScreen() {
           }>
           {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 18 }}>
-            <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: "#e8f0fe", alignItems: "center", justifyContent: "center", marginRight: 10 }}>
-              <Fuel size={18} color="#1a73e8" strokeWidth={2.4} />
+            <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: "#1a73e8", alignItems: "center", justifyContent: "center", marginRight: 10 }}>
+              <Fuel size={18} color="#fff" strokeWidth={2.4} />
             </View>
             <Text style={[txt(800), { fontSize: 22, color: "#202124" }]}>Fuel Report</Text>
           </View>
