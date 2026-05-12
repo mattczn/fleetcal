@@ -287,24 +287,35 @@ export function MenuTh({
         position:   'relative',
         width:      width != null ? `${width}px` : undefined,
       }}>
-      {/* Sort/filter trigger is a small inline button inside the th
-          (not the whole th) so it doesn't fight with the resize handle.
-          The rest of the header — including the gap to the right edge —
-          is non-clickable, leaving the resize handle a clean target. */}
+      {/* Sort/filter trigger is a button that fills the th's content
+          area. The label takes flex: 1 and truncates with "…" when
+          the column is too narrow to fit it. */}
       <button
         type="button"
         onClick={onClick}
-        className="inline-flex items-center gap-1 font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
+        className="font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          width: '100%',
           color:  'inherit',
           cursor: 'pointer',
           background: 'transparent',
           border: 'none',
           padding: 0,
           flexDirection: align === 'right' ? 'row-reverse' : 'row',
+          textAlign: align,
         }}
         title="Click for sort + filter">
-        <span className="truncate" style={{ maxWidth: width != null ? `${Math.max(width - 40, 30)}px` : undefined }}>
+        <span style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          textAlign: align,
+        }}>
           {label}
         </span>
         {sortActive ? (

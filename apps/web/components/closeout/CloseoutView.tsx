@@ -1510,17 +1510,29 @@ function MenuTh({
       <button
         type="button"
         onClick={onClick}
-        className="inline-flex items-center gap-1 font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
+        className="font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
         style={{
-          color:      'inherit',
-          cursor:     'pointer',
-          background: 'transparent',
-          border:     'none',
-          padding:    0,
-          flexDirection: align === 'right' ? 'row-reverse' : 'row',
+          display:        'flex',
+          alignItems:     'center',
+          gap:            4,
+          width:          '100%',
+          color:          'inherit',
+          cursor:         'pointer',
+          background:     'transparent',
+          border:         'none',
+          padding:        0,
+          flexDirection:  align === 'right' ? 'row-reverse' : 'row',
+          textAlign:      align,
         }}
         title="Click for sort + filter">
-        <span className="truncate" style={{ maxWidth: width != null ? `${Math.max(width - 40, 30)}px` : undefined }}>
+        <span style={{
+          flex:          1,
+          minWidth:      0,
+          overflow:      'hidden',
+          textOverflow:  'ellipsis',
+          whiteSpace:    'nowrap',
+          textAlign:     align,
+        }}>
           {label}
         </span>
         {sortActive ? (
