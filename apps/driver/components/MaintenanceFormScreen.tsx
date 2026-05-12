@@ -1,23 +1,18 @@
 /**
- * Driver maintenance screen.
+ * MaintenanceFormScreen — body of the maintenance-report form,
+ * rendered inside the Report tab. SafeAreaView + blue page header
+ * live in the parent (`(tabs)/report.tsx`).
  *
- * Single screen with two stacked sections:
- *   1. Report form: pick truck OR trailer, describe the issue,
- *      attach photos, submit.
- *   2. History rail: every report on the selected truck/trailer
- *      (cross-driver, so the driver sees what's already been filed).
- *
- * Drivers can NOT set priority, status, or out-of-service flags. Those
- * are ops decisions and live on the action-item side. Drivers also
- * can NOT pick BOTH a truck and trailer — one or the other per report.
+ * Drivers can NOT set priority, status, or out-of-service flags
+ * (ops decisions). Drivers also can NOT pick BOTH a truck AND a
+ * trailer — one or the other per report.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator,
   KeyboardAvoidingView, Platform, RefreshControl, Image,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { Wrench, Truck, Container, Camera, ChevronDown, Check, X } from "lucide-react-native";
+import { Truck, Container, Camera, ChevronDown, Check, X } from "lucide-react-native";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
@@ -263,16 +258,6 @@ export default function MaintenanceScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
-      {/* Blue top bar — matches Schedule / Loads / Profile. */}
-      <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 22, paddingTop: 8, paddingBottom: 20 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <Wrench size={22} color="#fff" strokeWidth={2.4} />
-          <Text style={[txt(800), { fontSize: 22, color: "#fff", letterSpacing: -0.3 }]}>
-            Report Issue
-          </Text>
-        </View>
-      </View>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: '#f8f9fa' }}>
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
@@ -465,7 +450,6 @@ export default function MaintenanceScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
   );
 }
 

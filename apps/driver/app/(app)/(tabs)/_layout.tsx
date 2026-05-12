@@ -1,12 +1,15 @@
 import React from "react";
 import { Tabs } from "expo-router";
-import { Truck, User, Calendar, Fuel, Wrench } from "lucide-react-native";
+import { Truck, User, Calendar, ClipboardCheck } from "lucide-react-native";
 import { useNotificationDeepLink } from "@/lib/useNotificationDeepLink";
 
 export default function TabsLayout() {
   useNotificationDeepLink();
   return (
     <Tabs
+      // Loads is the driver's primary workspace — make it the default
+      // tab on cold open.
+      initialRouteName="index"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -37,26 +40,24 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: "Loads",
+          // Loads is the primary tab — slightly heavier icon so it
+          // visually anchors the bar.
           tabBarIcon: ({ color, focused }) => (
-            <Truck size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
+            <Truck size={26} color={color} strokeWidth={focused ? 2.8 : 2.4} />
           ),
+          tabBarLabelStyle: {
+            fontFamily: "PlusJakartaSans_800ExtraBold",
+            fontSize:   11.5,
+            letterSpacing: 0.2,
+          },
         }}
       />
       <Tabs.Screen
-        name="fuel"
+        name="report"
         options={{
-          title: "Fuel",
+          title: "Report",
           tabBarIcon: ({ color, focused }) => (
-            <Fuel size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="maintenance"
-        options={{
-          title: "Maintenance",
-          tabBarIcon: ({ color, focused }) => (
-            <Wrench size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
+            <ClipboardCheck size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
           ),
         }}
       />

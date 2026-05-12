@@ -1,20 +1,14 @@
 /**
- * Driver fuel-report form.
- *
- * The driver is already authenticated (Supabase JWT via driverAuth on
- * the API), so we only need three pieces of input that the app can't
- * derive on its own:
- *   1. Which asset they're fueling   — pickable from the org's asset list
- *   2. Diesel gallons + optional DEF + optional odometer
- *
- * Driver, state, GPS, and timestamp are all auto-captured.
+ * FuelFormScreen — body of the fuel-report form, rendered inside the
+ * Report tab. SafeAreaView + blue page header live in the parent
+ * (`(tabs)/report.tsx`) so Fuel + Maintenance share one header with
+ * a segmented control. All screen-level logic is preserved verbatim.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator,
   KeyboardAvoidingView, Platform, RefreshControl, Image,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Fuel, Truck, MapPin, Gauge, Check, ChevronDown, Camera, X, Receipt } from "lucide-react-native";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
@@ -314,16 +308,6 @@ export default function FuelScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#1a73e8" }} edges={["top"]}>
-      {/* Blue top bar — matches Schedule / Loads / Profile. */}
-      <View style={{ backgroundColor: "#1a73e8", paddingHorizontal: 22, paddingTop: 8, paddingBottom: 20 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <Fuel size={22} color="#fff" strokeWidth={2.4} />
-          <Text style={[txt(800), { fontSize: 22, color: "#fff", letterSpacing: -0.3 }]}>
-            Fuel Report
-          </Text>
-        </View>
-      </View>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={{ flex: 1, backgroundColor: "#f8f9fa" }}>
@@ -470,7 +454,6 @@ export default function FuelScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
   );
 }
 
