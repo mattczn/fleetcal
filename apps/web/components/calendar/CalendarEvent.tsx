@@ -55,6 +55,10 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   // below) so the dispatcher still ties the slot to the carrier.
   const isTonu = event.status === 'tonu';
   const color = isTonu ? '#9aa0a6' : asset.color;
+  // Prefix the title with "TONU · " on these loads so the at-a-glance
+  // scan reads what happened (or didn't) even before the status chip
+  // is visible — and so the prefix sticks across compact + full views.
+  const displayTitle = isTonu ? `TONU · ${event.title}` : event.title;
   const dateStr = localDateStr(currentDate);
   const top    = overrideTop  ?? (event.start.split('T')[0] < dateStr ? 0 : timeToPixels(event.start, rowHeight));
   const height = overrideHeight ?? timeHeightPixels(event.start, event.end, dateStr, rowHeight);
@@ -154,7 +158,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
         // Only relay events bypass the drag system entirely — all others are handled by mouseup
         if (isRelay) openEditModal(event.id);
       }}
-      title={`${event.title} · ${startTime}–${endTime}`}
+      title={`${displayTitle} · ${startTime}–${endTime}`}
     >
       {/* Non-revenue stripe overlay */}
       {event.eventKind === 'non_revenue' && (
@@ -167,7 +171,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
         /* Compact / triage mode: just title + time in one tight row */
         <div className="px-1.5 flex items-center h-full gap-1 overflow-hidden">
           <div className="text-[10px] font-extrabold leading-none truncate flex-1 min-w-0" style={{ color: 'white' }}>
-            {event.title}
+            {displayTitle}
           </div>
           <div className="text-[9px] font-semibold tabular-nums shrink-0" style={{ color: 'rgba(255,255,255,0.8)' }}>
             {startTime}
@@ -210,7 +214,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           {/* Title — always shown */}
           <div className="flex items-start gap-1">
             <div className="text-[11px] font-extrabold leading-tight break-words min-w-0" style={{ color: 'white', paddingRight: isRelay ? 22 : 0 }}>
-              {event.title}
+              {displayTitle}
             </div>
           </div>
           {/* User-configured fields */}
