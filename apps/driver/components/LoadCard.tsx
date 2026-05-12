@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
-import { MapPin, Truck, ChevronRight, Box, AlertTriangle } from "lucide-react-native";
+import { MapPin, Truck, ChevronRight, Container, AlertTriangle } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { Load, Stop } from "@/lib/types";
 import { needsConfirmation } from "@/lib/loadStatus";
@@ -161,7 +161,7 @@ export function LoadCard({ load }: Props) {
               ) : null}
               {load.trailerType ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Box size={11} color="#5f6368" strokeWidth={2.2} />
+                  <Container size={11} color="#5f6368" strokeWidth={2.2} />
                   <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]} numberOfLines={1}>
                     {load.trailerType}
                   </Text>

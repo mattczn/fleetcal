@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Modal, View, Text, TouchableOpacity, Pressable, FlatList, ActivityIndicator, TextInput, KeyboardAvoidingView, Platform } from "react-native";
 import { useQuery } from "@tanstack/react-query";
-import { Check, X, Box, Search } from "lucide-react-native";
+import { Check, X, Container, Search } from "lucide-react-native";
 import { fetchTrailers } from "@/lib/api/loads";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -164,7 +164,7 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                         alignItems: "center", justifyContent: "center",
                       }}
                     >
-                      <Box size={16} color="#1a73e8" strokeWidth={2.2} />
+                      <Container size={16} color="#1a73e8" strokeWidth={2.2} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[txt(700), { fontSize: 14, color: "#202124" }]}>

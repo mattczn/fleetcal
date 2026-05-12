@@ -16,7 +16,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Truck,
-  Box,
+  Container,
   DollarSign,
   Building2,
   Clock,
@@ -1195,10 +1195,10 @@ export default function LoadDetailScreen() {
         >
           {load.broker      ? <MetaRow Icon={Building2} label="Broker"  value={load.broker}      /> : null}
           {load.assetName   ? <MetaRow Icon={Truck}     label="Truck"   value={load.assetName}   /> : null}
-          {load.trailerType ? <MetaRow Icon={Box}       label="Trailer Type" value={load.trailerType} /> : null}
+          {load.trailerType ? <MetaRow Icon={Container} label="Trailer Type" value={load.trailerType} /> : null}
           <TouchableOpacity onPress={() => setTrailerPickerVisible(true)} activeOpacity={0.6}>
             <MetaRow
-              Icon={Box}
+              Icon={Container}
               label="Trailer"
               value={load.trailerName ?? "Tap to select"}
               color={load.trailerName ? "#202124" : "#1a73e8"}
