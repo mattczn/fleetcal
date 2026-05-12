@@ -3,19 +3,20 @@
  *
  * Driver app uploads photos to load_documents with kind='relay_handoff'.
  * This component shows them inside the EventModal's relay block on
- * both the pickup leg and the delivery leg. Ops can view, upload, and
- * delete — useful when a driver phones in a photo or ops needs to
- * pre-stage paperwork before the load goes out.
+ * both the pickup leg and the delivery leg. Clicking a thumbnail
+ * opens the existing side-panel docs viewer (same pattern as rate-con
+ * + uploaded paperwork) so download / delete are handled there
+ * instead of with a separate lightbox. Uploads go through the parent
+ * so a single docs cache stays authoritative.
  */
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, Image as ImageIcon, X, ExternalLink, Trash2, Upload, Loader2 } from 'lucide-react';
+import { useRef } from 'react';
+import { ArrowLeftRight, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 
 interface RelayPhotoRow {
   id: string;
-  kind: string;
   fileName: string;
   uploadedAt: string;
   signedUrl?: string;
@@ -23,59 +24,36 @@ interface RelayPhotoRow {
 
 interface Props {
   loadId: string;
+  /** Pre-filtered handoff photos. Sourced from the parent's
+   *  loadDocuments so deletes/uploads stay in sync without a duplicate
+   *  fetch in this component. */
+  photos: RelayPhotoRow[];
+  /** Open the docs side panel (rate-con style viewer) on the given
+   *  doc. The parent wires this to set showPdfViewer + docsTab +
+   *  selectedDocId. */
+  onSelectInPanel?: (docId: string) => void;
+  /** Called after a successful upload so the parent can re-fetch the
+   *  shared loadDocuments list. */
+  onUploaded?: () => void | Promise<void>;
 }
 
-export function RelayHandoffPhotos({ loadId }: Props) {
-  const [photos,  setPhotos]  = useState<RelayPhotoRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [preview, setPreview] = useState<RelayPhotoRow | null>(null);
-  const [uploading, setUploading] = useState(false);
+export function RelayHandoffPhotos({ loadId, photos, onSelectInPanel, onUploaded }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await railway.listLoadDocuments(loadId);
-      const all = res.documents ?? [];
-      const relay = all
-        .filter(d => d.kind === 'relay_handoff')
-        .sort((a, b) => String(b.uploadedAt).localeCompare(String(a.uploadedAt)));
-      // Cast — the typed response uses a stricter DocumentKind union;
-      // we narrowed at runtime above.
-      setPhotos(relay as unknown as RelayPhotoRow[]);
-    } catch (err) {
-      console.warn('[relay photos web] list:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [loadId]);
-
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  async function handleDelete(d: RelayPhotoRow) {
-    if (!confirm('Delete this handoff photo?')) return;
-    try {
-      await railway.deleteDocument(d.id);
-      await refresh();
-    } catch (err) {
-      alert(`Delete failed: ${(err as Error).message}`);
-    }
-  }
+  const uploadingRef = useRef(false);
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    setUploading(true);
+    if (uploadingRef.current) return;
+    uploadingRef.current = true;
     try {
-      // Upload sequentially — keeps API logs tidy and lets us bail early
-      // if a single file fails, without partial-failure ambiguity.
       for (const file of Array.from(files)) {
         await railway.uploadLoadDocument(loadId, file, 'relay_handoff');
       }
-      await refresh();
+      await onUploaded?.();
     } catch (err) {
       alert(`Upload failed: ${(err as Error).message}`);
     } finally {
-      setUploading(false);
+      uploadingRef.current = false;
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }
@@ -103,32 +81,21 @@ export function RelayHandoffPhotos({ loadId }: Props) {
           />
           <button type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors"
-            style={{
-              background: uploading ? '#a78bfa' : '#6b21a8',
-              color: '#fff',
-              opacity: uploading ? 0.7 : 1,
-              cursor: uploading ? 'wait' : 'pointer',
-            }}>
-            {uploading
-              ? <><Loader2 size={11} className="animate-spin" /> Uploading…</>
-              : <><Upload size={11} /> Upload</>}
+            style={{ background: '#6b21a8', color: '#fff', cursor: 'pointer' }}>
+            <Upload size={11} /> Upload
           </button>
         </div>
       </div>
-      {loading ? (
-        <div className="text-[12px]" style={{ color: '#6b21a8', opacity: 0.7 }}>Loading…</div>
-      ) : photos.length === 0 ? (
+      {photos.length === 0 ? (
         <button type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
           className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-md text-[12px] font-semibold transition-colors"
           style={{
             border: '1.5px dashed #8b5cf6',
             background: 'rgba(255,255,255,0.45)',
             color: '#6b21a8',
-            cursor: uploading ? 'wait' : 'pointer',
+            cursor: 'pointer',
           }}>
           <Upload size={12} /> Upload the first handoff photo
         </button>
@@ -137,54 +104,21 @@ export function RelayHandoffPhotos({ loadId }: Props) {
           {photos.map(p => (
             <button key={p.id}
               type="button"
-              onClick={() => setPreview(p)}
+              onClick={() => onSelectInPanel?.(p.id)}
+              title={p.fileName}
               className="rounded-md overflow-hidden hover:opacity-90 transition-opacity"
-              style={{ width: 72, height: 72, background: '#ede9fe', border: '1px solid #ddd6fe' }}>
+              style={{ width: 72, height: 72, background: '#ede9fe', border: '1px solid #ddd6fe', cursor: onSelectInPanel ? 'pointer' : 'default' }}>
               {p.signedUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={p.signedUrl} alt={p.fileName}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
-                <span className="text-[10px]" style={{ color: '#6b21a8' }}>No URL</span>
+                <div className="w-full h-full flex items-center justify-center">
+                  <Loader2 size={14} className="animate-spin" style={{ color: '#6b21a8' }} />
+                </div>
               )}
             </button>
           ))}
-        </div>
-      )}
-
-      {/* Lightbox-style preview. Web pattern matches dispatch's existing
-          full-screen photo viewer in the document panels. */}
-      {preview && (
-        <div
-          onClick={() => setPreview(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.92)' }}>
-          <div className="absolute top-4 right-4 flex items-center gap-2">
-            {preview.signedUrl && (
-              <a href={preview.signedUrl} target="_blank" rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5"
-                style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>
-                <ExternalLink size={12} /> Open
-              </a>
-            )}
-            <button type="button"
-              onClick={(e) => { e.stopPropagation(); void handleDelete(preview); setPreview(null); }}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5"
-              style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>
-              <Trash2 size={12} /> Delete
-            </button>
-            <button type="button" onClick={() => setPreview(null)}
-              className="p-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.15)', color: '#fff' }}>
-              <X size={16} />
-            </button>
-          </div>
-          {preview.signedUrl && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={preview.signedUrl} alt={preview.fileName}
-              onClick={e => e.stopPropagation()}
-              style={{ maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain' }} />
-          )}
         </div>
       )}
     </div>
@@ -193,21 +127,10 @@ export function RelayHandoffPhotos({ loadId }: Props) {
 
 // Compact title-row marker for the relay banner. Just shows "Handoff
 // photos: N" with an icon — for use in headers/summaries where the
-// full grid would be too noisy.
-export function RelayHandoffPhotosCount({ loadId }: { loadId: string }) {
-  const [count, setCount] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const res = await railway.listLoadDocuments(loadId);
-        if (!alive) return;
-        setCount((res.documents ?? []).filter(d => d.kind === 'relay_handoff').length);
-      } catch { /* */ }
-    })();
-    return () => { alive = false; };
-  }, [loadId]);
-  if (count == null || count === 0) return null;
+// full grid would be too noisy. Reads from a passed-in count so it
+// shares the parent's cache.
+export function RelayHandoffPhotosCount({ count }: { count: number }) {
+  if (count === 0) return null;
   return (
     <span className="inline-flex items-center gap-1 text-[11px] font-semibold"
       style={{ color: '#6b21a8' }}>

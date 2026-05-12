@@ -338,15 +338,16 @@ function UploadedDocsPanel({
   const [deletingId,    setDeletingId]    = useState<string | null>(null);
 
   const KIND_UPLOAD_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string }> = [
-    { kind: 'pod',          label: 'POD' },
-    { kind: 'rate_con',     label: 'Rate Con' },
-    { kind: 'bol',          label: 'BOL' },
-    { kind: 'lumper',       label: 'Lumper' },
-    { kind: 'scale',        label: 'Scale' },
-    { kind: 'receipt',      label: 'Receipt' },
-    { kind: 'driver_sheet', label: 'Driver Sheet' },
-    { kind: 'invoice',      label: 'Invoice' },
-    { kind: 'other',        label: 'Other' },
+    { kind: 'pod',           label: 'POD' },
+    { kind: 'rate_con',      label: 'Rate Con' },
+    { kind: 'bol',           label: 'BOL' },
+    { kind: 'lumper',        label: 'Lumper' },
+    { kind: 'scale',         label: 'Scale' },
+    { kind: 'receipt',       label: 'Receipt' },
+    { kind: 'driver_sheet',  label: 'Driver Sheet' },
+    { kind: 'invoice',       label: 'Invoice' },
+    { kind: 'relay_handoff', label: 'Relay Handoff' },
+    { kind: 'other',         label: 'Other' },
   ];
 
   const uploadAs = async (kind: import('@fleetcal/types').DocumentKind) => {
@@ -391,26 +392,28 @@ function UploadedDocsPanel({
   // them in sync is a manual chore but extracting a shared module
   // would mean cross-component coupling without much payoff.
   const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-    rate_con:     { bg: '#5b21b6', fg: '#fff' },  // Indigo
-    pod:          { bg: '#188038', fg: '#fff' },  // Google green
-    bol:          { bg: '#1a73e8', fg: '#fff' },  // Google blue
-    scale:        { bg: '#e37400', fg: '#fff' },  // Google orange
-    lumper:       { bg: '#a16207', fg: '#fff' },  // Amber, darkened for white text
-    receipt:      { bg: '#c2185b', fg: '#fff' },  // Pink
-    driver_sheet: { bg: '#00838f', fg: '#fff' },  // Teal
-    invoice:      { bg: '#7b1fa2', fg: '#fff' },  // Purple
-    other:        { bg: '#5f6368', fg: '#fff' },  // Gray
+    rate_con:      { bg: '#5b21b6', fg: '#fff' },  // Indigo
+    pod:           { bg: '#188038', fg: '#fff' },  // Google green
+    bol:           { bg: '#1a73e8', fg: '#fff' },  // Google blue
+    scale:         { bg: '#e37400', fg: '#fff' },  // Google orange
+    lumper:        { bg: '#a16207', fg: '#fff' },  // Amber, darkened for white text
+    receipt:       { bg: '#c2185b', fg: '#fff' },  // Pink
+    driver_sheet:  { bg: '#00838f', fg: '#fff' },  // Teal
+    invoice:       { bg: '#7b1fa2', fg: '#fff' },  // Purple
+    relay_handoff: { bg: '#6b21a8', fg: '#fff' },  // Purple (matches relay banner)
+    other:         { bg: '#5f6368', fg: '#fff' },  // Gray
   };
   const KIND_LABEL: Record<string, string> = {
-    rate_con:     'Rate Con',
-    pod:          'POD',
-    bol:          'BOL',
-    scale:        'Scale',
-    lumper:       'Lumper',
-    receipt:      'Receipt',
-    driver_sheet: 'Driver Sheet',
-    invoice:      'Invoice',
-    other:        'Other',
+    rate_con:      'Rate Con',
+    pod:           'POD',
+    bol:           'BOL',
+    scale:         'Scale',
+    lumper:        'Lumper',
+    receipt:       'Receipt',
+    driver_sheet:  'Driver Sheet',
+    invoice:       'Invoice',
+    relay_handoff: 'Relay Handoff',
+    other:         'Other',
   };
   const fmt = (iso: string) => new Date(iso).toLocaleString('en-US', {
     month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
@@ -1385,14 +1388,21 @@ export default function EventModal() {
     return () => { cancelled = true; };
   }, [modalOpen, modalEventId, orgId]);
 
-  // Lazy: load full docs (with signed URLs) + invoices only when the
-  // user opens the docs viewer. Invoices live in their own table but
+  // Lazy: load full docs (with signed URLs) + invoices when the user
+  // opens the docs viewer. Invoices live in their own table but
   // surface in the same panel as virtual rows above the uploaded docs.
+  //
+  // For relay loads we also load eagerly when the modal opens — the
+  // handoff-photo grid in the relay block needs the photos
+  // (and their signed URLs) to render thumbnails without an extra
+  // round-trip on every modal open.
   useEffect(() => {
-    if (!showPdfViewer || !modalEventId || !orgId) return;
-    if (loadDocuments.length > 0 || loadInvoices.length > 0) return; // already loaded
+    if (!modalEventId || !orgId) return;
     const ev = events.find(e => e.id === modalEventId);
     if (!ev?.loadId) return; // documents are load-scoped
+    const isRelayLeg = !!ev.relayRole; // 'pickup' or 'delivery'
+    if (!isRelayLeg && !showPdfViewer) return;
+    if (loadDocuments.length > 0 || loadInvoices.length > 0) return; // already loaded
     let cancelled = false;
     (async () => {
       const [{ fetchLoadDocuments }, { railway }] = await Promise.all([
@@ -3728,7 +3738,28 @@ export default function EventModal() {
                             </div>
                             {(() => {
                               const currentEv = events.find(e => e.id === modalEventId);
-                              return currentEv?.loadId ? <RelayHandoffPhotos loadId={currentEv.loadId} /> : null;
+                              if (!currentEv?.loadId) return null;
+                              const handoffPhotos = loadDocuments
+                                .filter(d => d.kind === 'relay_handoff')
+                                .map(d => ({ id: d.id, fileName: d.fileName, uploadedAt: d.uploadedAt, signedUrl: d.signedUrl }));
+                              return (
+                                <RelayHandoffPhotos
+                                  loadId={currentEv.loadId}
+                                  photos={handoffPhotos}
+                                  onSelectInPanel={(docId) => {
+                                    setShowPdfViewer(true);
+                                    setShowMapPanel(false);
+                                    setDocsTab('uploaded');
+                                    setSelectedDocId(docId);
+                                  }}
+                                  onUploaded={async () => {
+                                    if (!currentEv.loadId || !orgId) return;
+                                    const { fetchLoadDocuments } = await import('@/lib/db');
+                                    const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
+                                    setLoadDocuments(fresh);
+                                  }}
+                                />
+                              );
                             })()}
                           </div>
                         );
@@ -3793,7 +3824,28 @@ export default function EventModal() {
                           })()}
                           {(() => {
                             const currentEv = events.find(e => e.id === modalEventId);
-                            return currentEv?.loadId ? <RelayHandoffPhotos loadId={currentEv.loadId} /> : null;
+                            if (!currentEv?.loadId) return null;
+                            const handoffPhotos = loadDocuments
+                              .filter(d => d.kind === 'relay_handoff')
+                              .map(d => ({ id: d.id, fileName: d.fileName, uploadedAt: d.uploadedAt, signedUrl: d.signedUrl }));
+                            return (
+                              <RelayHandoffPhotos
+                                loadId={currentEv.loadId}
+                                photos={handoffPhotos}
+                                onSelectInPanel={(docId) => {
+                                  setShowPdfViewer(true);
+                                  setShowMapPanel(false);
+                                  setDocsTab('uploaded');
+                                  setSelectedDocId(docId);
+                                }}
+                                onUploaded={async () => {
+                                  if (!currentEv.loadId || !orgId) return;
+                                  const { fetchLoadDocuments } = await import('@/lib/db');
+                                  const fresh = await fetchLoadDocuments(currentEv.loadId, orgId);
+                                  setLoadDocuments(fresh);
+                                }}
+                              />
+                            );
                           })()}
                         </div>
                       )}
