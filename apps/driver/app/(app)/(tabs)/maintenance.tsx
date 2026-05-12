@@ -374,36 +374,43 @@ export default function MaintenanceScreen() {
 
             {/* Photos */}
             <FieldLabel label={`Photos (${photos.length}/8)`} />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              {photos.map((p, i) => (
-                <View key={`${p.uri}-${i}`} style={{ width: 72, height: 72, borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
-                  <Image source={{ uri: p.uri }} style={{ width: '100%', height: '100%' }} />
-                  <TouchableOpacity
-                    onPress={() => removePhoto(i)}
-                    style={{
-                      position: 'absolute', top: 2, right: 2,
-                      width: 22, height: 22, borderRadius: 11,
-                      backgroundColor: 'rgba(0,0,0,0.55)',
-                      alignItems: 'center', justifyContent: 'center',
-                    }}>
-                    <X size={12} color="#fff" strokeWidth={2.8} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-              {photos.length < 8 && (
-                <TouchableOpacity onPress={choosePhotoSource}
-                  style={{
-                    width: 72, height: 72, borderRadius: 8,
-                    borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
-                    alignItems: 'center', justifyContent: 'center',
-                  }}>
-                  <Camera size={20} color="#5f6368" />
-                  <Text style={[txt(600), { fontSize: 9, color: '#5f6368', marginTop: 2, textAlign: 'center' }]}>
-                    Upload{'\n'}Photo
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            {photos.length > 0 && (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                {photos.map((p, i) => (
+                  <View key={`${p.uri}-${i}`} style={{ width: 72, height: 72, borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
+                    <Image source={{ uri: p.uri }} style={{ width: '100%', height: '100%' }} />
+                    <TouchableOpacity
+                      onPress={() => removePhoto(i)}
+                      style={{
+                        position: 'absolute', top: 2, right: 2,
+                        width: 22, height: 22, borderRadius: 11,
+                        backgroundColor: 'rgba(0,0,0,0.55)',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}>
+                      <X size={12} color="#fff" strokeWidth={2.8} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+            {photos.length < 8 && (
+              <TouchableOpacity onPress={choosePhotoSource}
+                style={{
+                  width: '100%',
+                  paddingVertical: 18,
+                  borderRadius: 10,
+                  borderWidth: 1.5, borderColor: '#dadce0', borderStyle: 'dashed',
+                  alignItems: 'center', justifyContent: 'center',
+                  flexDirection: 'row',
+                  gap: 8,
+                  backgroundColor: '#f8f9fa',
+                }}>
+                <Camera size={18} color="#5f6368" strokeWidth={2.2} />
+                <Text style={[txt(700), { fontSize: 14, color: '#5f6368' }]}>
+                  {photos.length === 0 ? 'Upload Photo' : 'Add Another Photo'}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Submit */}
             <TouchableOpacity
