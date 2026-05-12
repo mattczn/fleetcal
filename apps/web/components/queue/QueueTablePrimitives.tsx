@@ -12,9 +12,9 @@
  * empty-state copy, filter logic) stays in the page file.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, forwardRef } from 'react';
 import {
-  Check, Copy, ArrowUp, ArrowDown, ChevronLeft, ChevronRight,
+  Check, Copy, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3,
 } from 'lucide-react';
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -232,5 +232,295 @@ export function PaginationFooter({
         </button>
       </div>
     </div>
+  );
+}
+
+// ─── Sort + filter state shapes ─────────────────────────────────────────
+//
+// The column system is generic over a string column-key type. Each
+// page defines its own union of column keys and threads it through
+// the sort + filter state.
+
+export interface QueueSortState {
+  key: string | null;
+  dir: 'asc' | 'desc';
+}
+export type QueueFilterState = Record<string, string[]>;
+
+// ─── MenuTh — sortable + filter-aware column header ─────────────────────
+
+export function MenuTh({
+  col, label, align, sort, selectedCount, setHeaderRef, onClick,
+}: {
+  col:           string;
+  label:         string;
+  align:         'left' | 'right';
+  sort:          QueueSortState;
+  /** How many filter values are currently selected for this column. */
+  selectedCount: number;
+  setHeaderRef:  (el: HTMLTableCellElement | null) => void;
+  onClick:       () => void;
+}) {
+  const sortActive   = sort.key === col;
+  const filterActive = selectedCount > 0;
+  const anyActive    = sortActive || filterActive;
+  return (
+    <th
+      ref={setHeaderRef}
+      onClick={onClick}
+      className="px-3 py-2.5 font-extrabold text-[11px] uppercase tracking-wider select-none cursor-pointer hover:bg-[var(--gc-hover)] transition-colors"
+      style={{
+        color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
+        textAlign:  align,
+        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
+      }}
+      title="Click for sort + filter">
+      <span className="inline-flex items-center gap-1" style={{ flexDirection: align === 'right' ? 'row-reverse' : 'row' }}>
+        {label}
+        {sortActive ? (
+          sort.dir === 'asc'
+            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)' }} />
+            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)' }} />
+        ) : null}
+        {filterActive && (
+          <span title={`${selectedCount} selected`}
+            className="text-[9px] font-bold tabular-nums px-1 rounded-lg"
+            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px' }}>
+            {selectedCount}
+          </span>
+        )}
+      </span>
+    </th>
+  );
+}
+
+// ─── HeaderMenu — popover with sort + multi-select filter ───────────────
+
+export const HeaderMenu = forwardRef<HTMLDivElement, {
+  col:           string;
+  anchorEl:      HTMLElement | null;
+  sort:          QueueSortState;
+  filterable:    boolean;
+  selected:      string[];
+  options:       string[];
+  onSort:        (dir: 'asc' | 'desc' | null) => void;
+  onToggleValue: (val: string) => void;
+  onClearFilter: () => void;
+  onSelectAll:   () => void;
+  onClose:       () => void;
+}>(function HeaderMenu({
+  col, anchorEl, sort, filterable, selected, options,
+  onSort, onToggleValue, onClearFilter, onSelectAll, onClose,
+}, ref) {
+  const [pos, setPos]   = useState<{ left: number; top: number } | null>(null);
+  const [search, setSearch] = useState('');
+  useEffect(() => {
+    if (!anchorEl) { setPos(null); return; }
+    const update = () => {
+      const r = anchorEl.getBoundingClientRect();
+      setPos({ left: r.left, top: r.bottom });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [anchorEl]);
+  if (!pos) return null;
+
+  const filteredOptions = search.trim() === ''
+    ? options
+    : options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
+  const selectedSet = new Set(selected);
+  const allSelected = options.length > 0 && options.every(o => selectedSet.has(o));
+
+  return (
+    <div ref={ref} className="rounded-xl py-1.5"
+      style={{
+        position: 'fixed', left: pos.left, top: pos.top + 4, zIndex: 50,
+        background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+        boxShadow: '0 12px 32px rgba(0,0,0,0.15)', minWidth: 240, maxWidth: 340,
+      }}>
+      {/* Sort group */}
+      <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold"
+        style={{ color: 'var(--gc-text-3)' }}>Sort</div>
+      <MenuRow active={sort.key === col && sort.dir === 'asc'}
+        icon={<ArrowUp size={12} />} label="Ascending"
+        onClick={() => onSort('asc')} />
+      <MenuRow active={sort.key === col && sort.dir === 'desc'}
+        icon={<ArrowDown size={12} />} label="Descending"
+        onClick={() => onSort('desc')} />
+      {sort.key === col && (
+        <MenuRow icon={<X size={12} />} label="Clear sort" onClick={() => onSort(null)} muted />
+      )}
+
+      {/* Filter — only when this column carries discrete values */}
+      {filterable && (
+        <>
+          <div className="my-1" style={{ borderTop: '1px solid var(--gc-border-light)' }} />
+          <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
+            style={{ color: 'var(--gc-text-3)' }}>
+            <span>Filter {selected.length > 0 && (
+              <span className="ml-1 text-[10px] font-semibold normal-case tracking-normal" style={{ color: 'var(--gc-text-2)' }}>({selected.length})</span>
+            )}</span>
+            <span className="flex items-center gap-2">
+              <button onClick={() => { allSelected ? onClearFilter() : onSelectAll(); }}
+                className="text-[10px] font-semibold normal-case tracking-normal"
+                style={{ color: 'var(--gc-blue)' }}>
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+              {selected.length > 0 && !allSelected && (
+                <button onClick={onClearFilter}
+                  className="text-[10px] font-semibold normal-case tracking-normal"
+                  style={{ color: 'var(--gc-text-2)' }}>Clear</button>
+              )}
+            </span>
+          </div>
+          {options.length > 8 && (
+            <div className="px-2 pb-1.5">
+              <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search…"
+                className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
+                style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }} />
+            </div>
+          )}
+          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] italic" style={{ color: 'var(--gc-text-3)' }}>No options</div>
+            ) : (
+              filteredOptions.map(opt => (
+                <CheckboxMenuRow key={opt}
+                  checked={selectedSet.has(opt)}
+                  label={opt}
+                  onToggle={() => onToggleValue(opt)} />
+              ))
+            )}
+          </div>
+          <div className="px-2 pt-1.5 pb-1" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+            <button onClick={onClose}
+              className="w-full text-[12px] font-semibold py-1.5 rounded-lg transition-colors"
+              style={{ background: '#1a73e8', color: '#fff' }}>
+              Done
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+});
+
+function MenuRow({
+  icon, label, onClick, active, muted,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  muted?:  boolean;
+}) {
+  return (
+    <button onClick={onClick}
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left transition-colors hover:bg-[var(--gc-hover)]"
+      style={{
+        background: active ? 'rgba(26,115,232,0.10)' : 'transparent',
+        color:      muted ? 'var(--gc-text-3)' : active ? 'var(--gc-blue)' : 'var(--gc-text-1)',
+        fontWeight: active ? 600 : 400,
+      }}>
+      {icon && <span className="flex-none">{icon}</span>}
+      <span className="flex-1">{label}</span>
+      {active && <Check size={12} className="flex-none" />}
+    </button>
+  );
+}
+
+function CheckboxMenuRow({
+  checked, label, onToggle,
+}: {
+  checked: boolean;
+  label:   string;
+  onToggle: () => void;
+}) {
+  return (
+    <label className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
+      style={{ color: 'var(--gc-text-1)' }}>
+      <input type="checkbox" checked={checked} onChange={onToggle}
+        className="flex-none" style={{ accentColor: '#1a73e8' }} />
+      <span className="truncate flex-1">{label}</span>
+    </label>
+  );
+}
+
+// ─── ColumnsMenu — show/hide column toggle ──────────────────────────────
+
+export function ColumnsMenu({
+  columns, visible, onToggle,
+}: {
+  columns:  Array<{ key: string; label: string }>;
+  visible:  Record<string, boolean>;
+  onToggle: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+        style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
+        <Columns3 size={12} /> Columns
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-20 rounded-xl py-1.5"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', minWidth: 200, maxHeight: 380, overflowY: 'auto' }}>
+          {columns.map(c => (
+            <label key={c.key}
+              className="flex items-center gap-2 px-3 py-1.5 text-[12px] cursor-pointer hover:bg-[var(--gc-hover)]"
+              style={{ color: 'var(--gc-text-1)' }}>
+              <input type="checkbox" checked={!!visible[c.key]} onChange={() => onToggle(c.key)}
+                style={{ accentColor: '#1a73e8' }} />
+              {c.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NotesButton — internal notes indicator + opener ────────────────────
+
+export function NotesButton({
+  count, onOpen,
+}: {
+  count:  number;
+  onOpen: () => void;
+}) {
+  const has = count > 0;
+  return (
+    <button onClick={e => { e.stopPropagation(); onOpen(); }}
+      className="rounded-full p-1 transition-colors relative"
+      title={has ? `${count} internal note${count !== 1 ? 's' : ''}` : 'Add internal note'}
+      style={{
+        background: has ? '#dbeafe' : 'transparent',
+        border:     `1px solid ${has ? '#1a73e8' : 'var(--gc-border)'}`,
+        color:      has ? '#1a73e8' : 'var(--gc-text-3)',
+      }}>
+      <MessageSquare size={11} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
+      {has && count > 1 && (
+        <span className="absolute -top-1 -right-1 text-[8px] font-bold rounded-lg px-1 leading-3 tabular-nums"
+          style={{ background: '#1a73e8', color: '#fff', minWidth: 12, textAlign: 'center' }}>
+          {count}
+        </span>
+      )}
+    </button>
   );
 }

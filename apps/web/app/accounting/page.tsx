@@ -7,43 +7,48 @@
  *   - /closeout    = "is this paperwork correct?"  POD verification.
  *   - /accounting  = "let's bill and get paid."    Billing pipeline.
  *
- * Loads transition between the two via the Release action in closeout.
- * Anything billing-related happens here.
+ * Visual style mirrors /closeout: sortable + filterable column headers,
+ * copyable cells, doc badges, columns show/hide menu, paginated table.
+ * Same primitives are imported from queue/QueueTablePrimitives so the
+ * two queues stay in lockstep.
  *
- * Bucket structure (Alvys-style):
- *   Released   — verified loads waiting to be invoiced
- *   Queued     — invoices drafted, not yet sent
- *   Invoiced   — sent invoices, awaiting payment
- *   Paid       — paid invoices (closed)
- *   All        — everything except voids
- *
- * Visual chrome mirrors /closeout (sortable headers, copyable cells,
- * doc badges, polished hover) so the two queues feel like one product.
+ * Buckets:
+ *   Released  — verified loads with no active invoice  (bill these)
+ *   Queued    — invoices drafted but unsent             (send these)
+ *   Invoiced  — sent invoices awaiting payment          (collect)
+ *   Paid      — closed out
+ *   All       — every billable artifact (except voids)
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Star,
 } from 'lucide-react';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth, useUser } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import DataLoader from '@/components/DataLoader';
+import EventModal from '@/components/calendar/EventModal';
 import { railway, RailwayError } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
+import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
-  Th, Td, SortTh, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
-  moneyFmt, fmtShortDate, daysSince, ageColor,
+  Th, Td, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
+  MenuTh, HeaderMenu, ColumnsMenu, NotesButton,
+  moneyFmt, fmtShortDate, daysSince,
+  type QueueSortState, type QueueFilterState,
 } from '@/components/queue/QueueTablePrimitives';
 import type {
   Invoice, InvoiceStatus, Customer, Load,
   BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
 } from '@fleetcal/types';
+// CalendarEvent is an app-side alias of Load (legacy naming).
+type CalendarEvent = Load;
 
-// ─── Bucket config ──────────────────────────────────────────────────────
+// ─── Buckets ────────────────────────────────────────────────────────────
 
 type Bucket = 'released' | 'queued' | 'invoiced' | 'paid' | 'all';
 
@@ -55,25 +60,73 @@ const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ s
   { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'Everything'       },
 ];
 
-// Per-bucket sort keys. We use distinct types so swapping buckets
-// resets sort cleanly without surfacing nonsense column keys.
-type ReleasedSort = 'released' | 'delivered' | 'internalId' | 'loadNum' | 'customer' | 'driver' | 'amount' | 'method';
-type InvoiceSort  = 'issued' | 'sent' | 'paid' | 'due' | 'dso' | 'invoiceNum' | 'loadNum' | 'customer' | 'amount' | 'status';
-type AnySortKey   = ReleasedSort | InvoiceSort;
+// ─── Columns ────────────────────────────────────────────────────────────
 
-interface SortState { key: AnySortKey | null; dir: 'asc' | 'desc' }
+type ColKey =
+  | 'invoiceNum' | 'loadNum' | 'customer' | 'title'
+  | 'rate' | 'accessorials' | 'total'
+  | 'docs' | 'priority' | 'notes'
+  | 'age' | 'released' | 'issued' | 'due' | 'method' | 'status';
 
+interface ColumnDef {
+  key:        ColKey;
+  label:      string;
+  align:      'left' | 'right';
+  /** Filterable columns surface a multi-select dropdown in the
+   *  header menu. Non-filterable columns only get sort. */
+  filterable: boolean;
+  /** Toggleable columns appear in the Columns menu and can be
+   *  hidden. Always-on columns (none right now) would set false. */
+  toggleable: boolean;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'priority',     label: 'P',             align: 'left',  filterable: true,  toggleable: true },
+  { key: 'age',          label: 'Age',           align: 'left',  filterable: false, toggleable: true },
+  { key: 'released',     label: 'Released',      align: 'left',  filterable: false, toggleable: true },
+  { key: 'issued',       label: 'Issued',        align: 'left',  filterable: false, toggleable: true },
+  { key: 'due',          label: 'Due',           align: 'left',  filterable: false, toggleable: true },
+  { key: 'invoiceNum',   label: 'Invoice #',     align: 'left',  filterable: false, toggleable: true },
+  { key: 'loadNum',      label: 'Load #',        align: 'left',  filterable: false, toggleable: true },
+  { key: 'title',        label: 'Title',         align: 'left',  filterable: false, toggleable: true },
+  { key: 'customer',     label: 'Customer',      align: 'left',  filterable: true,  toggleable: true },
+  { key: 'method',       label: 'Method',        align: 'left',  filterable: true,  toggleable: true },
+  { key: 'rate',         label: 'Rate',          align: 'right', filterable: false, toggleable: true },
+  { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
+  { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
+  { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
+  { key: 'notes',        label: 'Notes',         align: 'left',  filterable: false, toggleable: true },
+  { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
+];
+
+const COL_BY_KEY: Record<ColKey, ColumnDef> = COLUMNS.reduce((m, c) => { m[c.key] = c; return m; }, {} as Record<ColKey, ColumnDef>);
+
+// Per-bucket column visibility. Hides what doesn't make sense.
+const COLS_HIDDEN_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
+  released: new Set(['invoiceNum', 'issued', 'due']),
+  queued:   new Set(['status']),
+  invoiced: new Set(['status']),
+  paid:     new Set(['status']),
+  all:      new Set([]),
+};
+
+// Default column visibility (user can override and we persist).
+const DEFAULT_VISIBLE: Record<ColKey, boolean> = Object.fromEntries(
+  COLUMNS.map(c => [c.key, true]),
+) as Record<ColKey, boolean>;
+
+const COLS_STORAGE_KEY = 'accounting-cols-v1';
 const PAGE_SIZE = 50;
-
-const fmtDateLong = (iso?: string) => iso
-  ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  : '—';
 
 // ─── Page ───────────────────────────────────────────────────────────────
 
 export default function AccountingPage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
   const customers = useCalendarStore(s => s.customers);
+  const mergeEvents = useCalendarStore(s => s.mergeEvents);
+  const openEditModal = useCalendarStore(s => s.openEditModal);
+
   const customerById = useMemo(() => {
     const m = new Map<string, Customer>();
     for (const c of customers) m.set(c.id, c);
@@ -81,28 +134,71 @@ export default function AccountingPage() {
   }, [customers]);
 
   const [bucket, setBucket] = useState<Bucket>('released');
-  const [releasedLoads, setReleasedLoads] = useState<Load[]>([]);
-  const [docCounts,     setDocCounts]     = useState<Record<string, Record<string, number>>>({});
-  const [allInvoices,   setAllInvoices]   = useState<Invoice[]>([]);
+
+  // Source data
+  const [verifiedLoads,  setVerifiedLoads]  = useState<CalendarEvent[]>([]);
+  const [invoicedLoads,  setInvoicedLoads]  = useState<CalendarEvent[]>([]);
+  const [paidLoads,      setPaidLoads]      = useState<CalendarEvent[]>([]);
+  const [docCounts,      setDocCounts]      = useState<Record<string, Record<string, number>>>({});
+  const [allInvoices,    setAllInvoices]    = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
 
+  // UI state
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search,   setSearch]   = useState('');
-  const [sort,     setSort]     = useState<SortState>({ key: null, dir: 'asc' });
+  const [sort,     setSort]     = useState<QueueSortState>({ key: null, dir: 'asc' });
+  const [filters,  setFilters]  = useState<QueueFilterState>({});
   const [page,     setPage]     = useState(0);
 
+  // Column visibility (persisted)
+  const [visibleCols, setVisibleCols] = useState<Record<ColKey, boolean>>(() => {
+    if (typeof window === 'undefined') return DEFAULT_VISIBLE;
+    try {
+      const stored = window.localStorage.getItem(COLS_STORAGE_KEY);
+      if (!stored) return DEFAULT_VISIBLE;
+      const parsed = JSON.parse(stored) as Partial<Record<ColKey, boolean>>;
+      return { ...DEFAULT_VISIBLE, ...parsed };
+    } catch { return DEFAULT_VISIBLE; }
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols));
+  }, [visibleCols]);
+
+  // Header popover state
+  const [openHeaderCol, setOpenHeaderCol] = useState<ColKey | null>(null);
+  const headerRefs = useRef<Partial<Record<ColKey, HTMLTableCellElement | null>>>({});
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!openHeaderCol) return;
+    function handler(e: MouseEvent) {
+      const anchor = headerRefs.current[openHeaderCol!];
+      if (
+        headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)
+        && anchor && !anchor.contains(e.target as Node)
+      ) {
+        setOpenHeaderCol(null);
+      }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [openHeaderCol]);
+
+  // Sibling modals
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const [invoiceModalId,  setInvoiceModalId]  = useState<string | null>(null);
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
+  const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
   const [markPaidBusy,    setMarkPaidBusy]    = useState(false);
 
-  // Tab change → drop selection / sort / pagination so we never act
-  // on a stale id from a different bucket.
+  // Reset filters/sort/pagination/selection on bucket change so a
+  // stale id can't get acted on against the wrong list.
   useEffect(() => {
     setSelected(new Set());
     setSort({ key: null, dir: 'asc' });
+    setFilters({});
     setPage(0);
   }, [bucket]);
 
@@ -111,13 +207,21 @@ export default function AccountingPage() {
     setLoading(true);
     setError(null);
     try {
-      const [releasedRes, invoicesRes] = await Promise.all([
-        railway.listCloseoutQueue('verified', { limit: 200 }),
+      const [verifiedRes, invoicedRes, paidRes, invoicesRes] = await Promise.all([
+        railway.listCloseoutQueue('verified', { limit: 500 }),
+        railway.listCloseoutQueue('invoiced', { limit: 500 }),
+        railway.listCloseoutQueue('paid',     { limit: 500 }),
         railway.listInvoices({}),
       ]);
-      setReleasedLoads(releasedRes.loads);
-      setDocCounts(releasedRes.docCounts ?? {});
+      setVerifiedLoads(verifiedRes.loads as CalendarEvent[]);
+      setInvoicedLoads(invoicedRes.loads as CalendarEvent[]);
+      setPaidLoads(paidRes.loads as CalendarEvent[]);
+      setDocCounts({ ...verifiedRes.docCounts, ...invoicedRes.docCounts, ...paidRes.docCounts });
       setAllInvoices(invoicesRes.invoices);
+
+      // Merge into the calendar store so the EventModal can find the
+      // load when the user clicks a title.
+      mergeEvents([...verifiedRes.loads, ...invoicedRes.loads, ...paidRes.loads] as CalendarEvent[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounting data');
     } finally {
@@ -130,95 +234,187 @@ export default function AccountingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoaded, isSignedIn]);
 
-  // ── Bucket stats ────────────────────────────────────────────────────
+  // ── Build rows per bucket ───────────────────────────────────────────
+  //
+  // A row marries a load with its active invoice (when one exists).
+  // The closeout queue returns Load[] keyed by billing_status; we
+  // overlay invoices by loadId to figure out which slice goes into
+  // Queued vs Invoiced (both share billing_status='invoiced').
+
+  interface Row {
+    load:     Load;
+    invoice?: Invoice;
+    customer?: Customer;
+  }
+
+  const invoiceByLoadId = useMemo(() => {
+    const m = new Map<string, Invoice>();
+    for (const inv of allInvoices) {
+      if (inv.status === 'void') continue;
+      // Most-recent non-void wins (active invoice).
+      const cur = m.get(inv.loadId);
+      if (!cur || inv.issuedAt > cur.issuedAt) m.set(inv.loadId, inv);
+    }
+    return m;
+  }, [allInvoices]);
+
+  const releasedRows: Row[] = useMemo(() => verifiedLoads.map(l => ({
+    load: l,
+    customer: l.customerId ? customerById.get(l.customerId) : undefined,
+  })), [verifiedLoads, customerById]);
+
+  const queuedRows: Row[] = useMemo(() => {
+    return invoicedLoads
+      .map(l => {
+        const inv = l.loadId ? invoiceByLoadId.get(l.loadId) : undefined;
+        return { load: l, invoice: inv, customer: l.customerId ? customerById.get(l.customerId) : undefined };
+      })
+      .filter(r => r.invoice && r.invoice.status === 'draft');
+  }, [invoicedLoads, invoiceByLoadId, customerById]);
+
+  const invoicedRows: Row[] = useMemo(() => {
+    return invoicedLoads
+      .map(l => {
+        const inv = l.loadId ? invoiceByLoadId.get(l.loadId) : undefined;
+        return { load: l, invoice: inv, customer: l.customerId ? customerById.get(l.customerId) : undefined };
+      })
+      .filter(r => r.invoice && r.invoice.status === 'sent');
+  }, [invoicedLoads, invoiceByLoadId, customerById]);
+
+  const paidRows: Row[] = useMemo(() => paidLoads.map(l => ({
+    load: l,
+    invoice: l.loadId ? invoiceByLoadId.get(l.loadId) : undefined,
+    customer: l.customerId ? customerById.get(l.customerId) : undefined,
+  })), [paidLoads, invoiceByLoadId, customerById]);
+
+  const allRows: Row[] = useMemo(() => [...queuedRows, ...invoicedRows, ...paidRows], [queuedRows, invoicedRows, paidRows]);
+
+  const rowsForBucket: Row[] = bucket === 'released' ? releasedRows
+                              : bucket === 'queued'   ? queuedRows
+                              : bucket === 'invoiced' ? invoicedRows
+                              : bucket === 'paid'     ? paidRows
+                                                      : allRows;
+
+  // ── Bucket stats (count + $ — uses raw bucket counts, not filtered) ─
   const stats = useMemo(() => {
-    const sumLoads    = (xs: Load[])    => xs.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
-    const sumInvoices = (xs: Invoice[]) => xs.reduce((s, i) => s + i.total, 0);
-    const queued    = allInvoices.filter(i => i.status === 'draft');
-    const invoiced  = allInvoices.filter(i => i.status === 'sent');
-    const paid      = allInvoices.filter(i => i.status === 'paid');
-    const live      = allInvoices.filter(i => i.status !== 'void');
+    const sumLoadsRows    = (rs: Row[]) => rs.reduce((s, r) => s + (r.load.loadPrice ?? 0), 0);
+    const sumInvoiceRows  = (rs: Row[]) => rs.reduce((s, r) => s + (r.invoice?.total ?? r.load.loadPrice ?? 0), 0);
     return {
-      released: { count: releasedLoads.length, total: sumLoads(releasedLoads) },
-      queued:   { count: queued.length,        total: sumInvoices(queued) },
-      invoiced: { count: invoiced.length,      total: sumInvoices(invoiced) },
-      paid:     { count: paid.length,          total: sumInvoices(paid) },
-      all:      { count: live.length,          total: sumInvoices(live) },
+      released: { count: releasedRows.length, total: sumLoadsRows(releasedRows) },
+      queued:   { count: queuedRows.length,   total: sumInvoiceRows(queuedRows) },
+      invoiced: { count: invoicedRows.length, total: sumInvoiceRows(invoicedRows) },
+      paid:     { count: paidRows.length,     total: sumInvoiceRows(paidRows) },
+      all:      { count: allRows.length,      total: sumInvoiceRows(allRows) },
     };
-  }, [releasedLoads, allInvoices]);
+  }, [releasedRows, queuedRows, invoicedRows, paidRows, allRows]);
+
+  // ── Projection helpers (one place that knows how to read each col) ──
+  function projectCol(r: Row, col: ColKey): { sortValue: string | number; filterValue?: string; display?: string } {
+    switch (col) {
+      case 'invoiceNum':   return { sortValue: r.invoice?.invoiceNumber ?? '' };
+      case 'loadNum':      return { sortValue: r.load.loadNum ?? '' };
+      case 'customer': {
+        const name = r.customer?.name ?? r.load.broker ?? '';
+        return { sortValue: name, filterValue: name || '— (no broker)' };
+      }
+      case 'title':        return { sortValue: r.load.title ?? '' };
+      case 'rate':         return { sortValue: r.load.loadPrice ?? 0 };
+      case 'accessorials': return { sortValue: (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0) };
+      case 'total':        return { sortValue: r.invoice?.total ?? (r.load.loadPrice ?? 0) };
+      case 'docs':         return { sortValue: 0 };
+      case 'priority':     return { sortValue: r.load.priority ? 1 : 0, filterValue: r.load.priority ? 'Priority' : 'Normal' };
+      case 'notes':        return { sortValue: (r.load.internalNotes ?? []).length };
+      case 'age':          return { sortValue: daysSince(r.load.verifiedAt ?? r.load.end) };
+      case 'released':     return { sortValue: r.load.verifiedAt ?? '' };
+      case 'issued':       return { sortValue: r.invoice?.issuedAt ?? '' };
+      case 'due':          return { sortValue: r.invoice?.dueAt ?? '' };
+      case 'method': {
+        const m = r.customer?.invoiceMethod ?? 'email';
+        return { sortValue: m, filterValue: m === 'portal' ? 'Portal' : 'Email' };
+      }
+      case 'status':       return { sortValue: r.invoice?.status ?? '', filterValue: r.invoice?.status ?? '—' };
+    }
+  }
 
   // ── Filter + search + sort ──────────────────────────────────────────
-  const matchesSearch = (text: string) => {
+  const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return !q || text.toLowerCase().includes(q);
-  };
-
-  // Released bucket rows: loads from closeout queue (billing_status='verified').
-  const releasedView = useMemo(() => {
-    let xs = releasedLoads;
-    if (search.trim()) {
-      xs = xs.filter(l => {
-        const customer = l.customerId ? customerById.get(l.customerId) : undefined;
-        return matchesSearch(customer?.name ?? l.broker ?? '')
-          || matchesSearch(l.loadNum ?? '')
-          || matchesSearch(String(l.internalLoadId ?? ''))
-          || matchesSearch(l.driverName ?? '');
-      });
-    }
-    if (sort.key) {
-      const k = sort.key as ReleasedSort;
-      const dir = sort.dir === 'asc' ? 1 : -1;
-      xs = [...xs].sort((a, b) => {
-        const cmp = compareReleased(a, b, k, customerById);
-        return cmp * dir;
-      });
-    }
-    return xs;
+    return rowsForBucket.filter(r => {
+      if (q) {
+        const matches =
+             (r.invoice?.invoiceNumber ?? '').toLowerCase().includes(q)
+          || (r.load.loadNum ?? '').toLowerCase().includes(q)
+          || (r.customer?.name ?? r.load.broker ?? '').toLowerCase().includes(q)
+          || (r.load.title ?? '').toLowerCase().includes(q)
+          || String(r.load.internalLoadId ?? '').includes(q);
+        if (!matches) return false;
+      }
+      for (const [col, vals] of Object.entries(filters)) {
+        if (!vals || vals.length === 0) continue;
+        const def = COL_BY_KEY[col as ColKey];
+        if (!def?.filterable) continue;
+        const proj = projectCol(r, col as ColKey);
+        if (!proj.filterValue) return false;
+        if (!vals.includes(proj.filterValue)) return false;
+      }
+      return true;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [releasedLoads, customerById, search, sort.key, sort.dir]);
+  }, [rowsForBucket, search, filters]);
 
-  // Invoice buckets share a filter/sort path keyed on a different field set.
-  const invoicesForBucket = useMemo(() => {
-    if      (bucket === 'queued')   return allInvoices.filter(i => i.status === 'draft');
-    else if (bucket === 'invoiced') return allInvoices.filter(i => i.status === 'sent');
-    else if (bucket === 'paid')     return allInvoices.filter(i => i.status === 'paid');
-    else if (bucket === 'all')      return allInvoices.filter(i => i.status !== 'void');
-    return [];
-  }, [bucket, allInvoices]);
-
-  const invoiceView = useMemo(() => {
-    let xs = invoicesForBucket;
-    if (search.trim()) {
-      xs = xs.filter(inv => {
-        const customer = inv.customerId ? customerById.get(inv.customerId) : undefined;
-        return matchesSearch(inv.invoiceNumber)
-          || matchesSearch(customer?.name ?? inv.snapshot.brokerName ?? '')
-          || matchesSearch(inv.snapshot.loadNumber ?? '');
-      });
-    }
-    if (sort.key) {
-      const k = sort.key as InvoiceSort;
-      const dir = sort.dir === 'asc' ? 1 : -1;
-      xs = [...xs].sort((a, b) => compareInvoice(a, b, k, customerById) * dir);
-    }
-    return xs;
+  const sortedRows = useMemo(() => {
+    if (!sort.key) return filteredRows;
+    const key = sort.key as ColKey;
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...filteredRows].sort((a, b) => {
+      const av = projectCol(a, key).sortValue;
+      const bv = projectCol(b, key).sortValue;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+      return String(av).localeCompare(String(bv)) * dir;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [invoicesForBucket, customerById, search, sort.key, sort.dir]);
+  }, [filteredRows, sort.key, sort.dir]);
 
-  // ── Pagination slice ────────────────────────────────────────────────
-  const fullList: Load[] | Invoice[] = bucket === 'released' ? releasedView : invoiceView;
-  const total = fullList.length;
-  const paged = useMemo(() => fullList.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [fullList, page]);
+  const total = sortedRows.length;
+  const paged = useMemo(() => sortedRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [sortedRows, page]);
 
-  // ── Selection helpers ───────────────────────────────────────────────
+  // ── Per-column filter options (computed from the unfiltered bucket) ─
+  const filterOptions = useMemo(() => {
+    const opts: Partial<Record<ColKey, string[]>> = {};
+    for (const def of COLUMNS) {
+      if (!def.filterable) continue;
+      const set = new Set<string>();
+      for (const r of rowsForBucket) {
+        const v = projectCol(r, def.key).filterValue;
+        if (v) set.add(v);
+      }
+      opts[def.key] = Array.from(set).sort();
+    }
+    return opts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowsForBucket]);
+
+  // ── Visible columns for this bucket (intersect persisted + per-bucket hidden) ──
+  const visibleColsForBucket = useMemo(() => {
+    const hidden = COLS_HIDDEN_PER_BUCKET[bucket];
+    const out: Record<ColKey, boolean> = { ...visibleCols };
+    for (const k of hidden) out[k] = false;
+    return out;
+  }, [bucket, visibleCols]);
+
+  const orderedVisibleColumns = useMemo(() =>
+    COLUMNS.filter(c => visibleColsForBucket[c.key]),
+    [visibleColsForBucket],
+  );
+
+  // ── Selection (only on buckets where actions are available) ─────────
+  const canSelect = bucket === 'released' || bucket === 'queued' || bucket === 'invoiced';
   const selectableIds = useMemo(() => {
-    if (bucket === 'released') return (paged as Load[]).map(l => l.loadId ?? l.id);
-    if (bucket === 'queued' || bucket === 'invoiced') return (paged as Invoice[]).map(i => i.id);
-    return [];
-  }, [bucket, paged]);
+    if (!canSelect) return [];
+    return paged.map(r => bucket === 'released' ? (r.load.loadId ?? r.load.id) : r.invoice!.id);
+  }, [canSelect, paged, bucket]);
   const allSelected  = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
   const someSelected = selected.size > 0;
-
   function toggleId(id: string) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -232,12 +428,12 @@ export default function AccountingPage() {
 
   const selectedLoads = useMemo(() =>
     bucket === 'released'
-      ? (paged as Load[]).filter(l => selected.has(l.loadId ?? l.id))
+      ? paged.filter(r => selected.has(r.load.loadId ?? r.load.id)).map(r => r.load)
       : [],
     [bucket, paged, selected]);
   const selectedInvoices = useMemo(() =>
     (bucket === 'queued' || bucket === 'invoiced')
-      ? (paged as Invoice[]).filter(i => selected.has(i.id))
+      ? paged.filter(r => r.invoice && selected.has(r.invoice.id)).map(r => r.invoice!)
       : [],
     [bucket, paged, selected]);
 
@@ -256,19 +452,35 @@ export default function AccountingPage() {
     }
   }
 
+  function toggleFilterValue(col: ColKey, val: string) {
+    setFilters(prev => {
+      const cur = prev[col] ?? [];
+      const next = cur.includes(val) ? cur.filter(v => v !== val) : [...cur, val];
+      return { ...prev, [col]: next };
+    });
+  }
+  function clearColFilter(col: ColKey) {
+    setFilters(prev => ({ ...prev, [col]: [] }));
+  }
+  function setColFilterAll(col: ColKey, options: string[]) {
+    setFilters(prev => ({ ...prev, [col]: [...options] }));
+  }
+
+  const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
+
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
       <DataLoader />
       <ManagementHeader title="Accounting" icon={Receipt} />
 
-      <div className="flex-1 overflow-auto" style={{ background: 'var(--gc-bg)' }}>
-        <div className="px-6 py-5 space-y-4">
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-[1600px] mx-auto space-y-4">
 
           {/* Purpose hint */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
             Billing pipeline. Loads land in <strong>Released</strong> once Closeout marks them verified.
-            Generate invoices here, track delivery, mark paid.
+            Generate invoices, track delivery, mark paid.
           </div>
 
           {/* Bucket tiles */}
@@ -303,15 +515,15 @@ export default function AccountingPage() {
           </div>
 
           {/* Toolbar */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }} />
               <input type="text"
-                placeholder="Search broker, invoice #, load #…"
+                placeholder="Search broker, invoice #, load #, title…"
                 value={search}
                 onChange={e => { setSearch(e.target.value); setPage(0); }}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
-                style={{ width: 300, background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
+                style={{ width: 320, background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
               {search && (
                 <button onClick={() => setSearch('')}
                   className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-[var(--gc-hover)]">
@@ -345,14 +557,17 @@ export default function AccountingPage() {
               </button>
             )}
             {bucket === 'invoiced' && someSelected && (
-              <button onClick={() => void handleMarkPaid()}
-                disabled={markPaidBusy}
+              <button onClick={() => void handleMarkPaid()} disabled={markPaidBusy}
                 className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
                 style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
                 {markPaidBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Check size={12} className="inline mr-1.5" />}
                 Mark {selected.size} paid
               </button>
             )}
+            <ColumnsMenu
+              columns={COLUMNS.filter(c => c.toggleable && !COLS_HIDDEN_PER_BUCKET[bucket].has(c.key))}
+              visible={visibleCols as Record<string, boolean>}
+              onToggle={(k) => setVisibleCols(v => ({ ...v, [k as ColKey]: !v[k as ColKey] }))} />
             <button onClick={() => void refresh()}
               className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -369,40 +584,184 @@ export default function AccountingPage() {
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
               {error}
             </div>
+          ) : total === 0 ? (
+            <BucketEmpty bucket={bucket} hasFilters={search.trim() !== '' || Object.values(filters).some(v => v && v.length > 0)} />
           ) : (
             <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
-              {bucket === 'released' ? (
-                <ReleasedTable
-                  loads={paged as Load[]}
-                  total={total}
-                  customerById={customerById}
-                  customers={customers}
-                  docCounts={docCounts}
-                  selected={selected}
-                  allSelected={allSelected}
-                  onToggle={toggleId}
-                  onToggleAll={toggleAll}
-                  sort={sort}
-                  onSort={setSort}
-                  onOpenBroker={(id) => setBrokerProfileId(id)}
-                />
-              ) : (
-                <InvoicesTable
-                  invoices={paged as Invoice[]}
-                  bucket={bucket}
-                  total={total}
-                  customerById={customerById}
-                  customers={customers}
-                  selected={selected}
-                  allSelected={allSelected}
-                  onToggle={toggleId}
-                  onToggleAll={toggleAll}
-                  sort={sort}
-                  onSort={setSort}
-                  onOpenBroker={(id) => setBrokerProfileId(id)}
-                  onOpenInvoice={(id) => setInvoiceModalId(id)}
-                />
-              )}
+              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                    {canSelect && (
+                      <Th>
+                        <input type="checkbox" checked={allSelected} onChange={toggleAll}
+                          style={{ accentColor: '#1a73e8' }} />
+                      </Th>
+                    )}
+                    {orderedVisibleColumns.map(c => (
+                      <MenuTh key={c.key}
+                        col={c.key}
+                        label={c.label}
+                        align={c.align}
+                        sort={sort}
+                        selectedCount={(filters[c.key] ?? []).length}
+                        setHeaderRef={el => { headerRefs.current[c.key] = el; }}
+                        onClick={() => setOpenHeaderCol(p => p === c.key ? null : c.key)} />
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {paged.map((r) => {
+                    const load = r.load;
+                    const inv  = r.invoice;
+                    const id   = bucket === 'released' ? (load.loadId ?? load.id) : (inv?.id ?? load.id);
+                    const customer = r.customer;
+                    const cust = displayBrokerName(customer?.name ?? load.broker ?? '', customers);
+                    const method = customer?.invoiceMethod ?? 'email';
+                    const missingEmail = method === 'email' && !customer?.invoiceEmail && (bucket === 'released' || inv?.status === 'draft');
+                    const counts = docCounts[load.loadId ?? load.id] ?? {};
+                    const hasRC = !!load.rateConPdf;
+                    const accSum = (load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+                    const accCount = (load.accessorials ?? []).length;
+                    const notesCount = (load.internalNotes ?? []).length;
+                    const age = daysSince(load.verifiedAt ?? load.end);
+                    return (
+                      <tr key={id}
+                        style={{
+                          borderBottom: '1px solid var(--gc-border-light)',
+                          background: load.priority ? '#fefce8' : undefined,
+                          borderLeft: load.priority ? '3px solid #eab308' : '3px solid transparent',
+                        }}
+                        className="hover:bg-[var(--gc-hover)]">
+                        {canSelect && (
+                          <Td>
+                            <input type="checkbox" checked={selected.has(id)} onChange={() => toggleId(id)}
+                              style={{ accentColor: '#1a73e8' }} />
+                          </Td>
+                        )}
+                        {orderedVisibleColumns.map(c => {
+                          switch (c.key) {
+                            case 'priority':
+                              return <Td key={c.key}>
+                                {load.priority
+                                  ? <Star size={12} fill="#eab308" style={{ color: '#eab308' }} />
+                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                              </Td>;
+                            case 'age':
+                              return <Td key={c.key}>
+                                <span style={{ background: ageBg(age), color: ageFg(age), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+                                  {age === 0 ? 'today' : age === 1 ? '1 day' : `${age}d`}
+                                </span>
+                              </Td>;
+                            case 'released':
+                              return <Td key={c.key}>{load.verifiedAt ? fmtShortDate(load.verifiedAt) : '—'}</Td>;
+                            case 'issued':
+                              return <Td key={c.key}>{inv?.issuedAt ? fmtShortDate(inv.issuedAt) : '—'}</Td>;
+                            case 'due':
+                              return <Td key={c.key}>{inv?.dueAt ? fmtShortDate(inv.dueAt) : '—'}</Td>;
+                            case 'invoiceNum':
+                              return <Td key={c.key}>
+                                {inv ? (
+                                  <button onClick={e => { e.stopPropagation(); setInvoiceModalId(inv.id); }}
+                                    className="font-bold tabular-nums hover:underline"
+                                    style={{ color: '#1a73e8' }}>
+                                    #{inv.invoiceNumber}
+                                  </button>
+                                ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                              </Td>;
+                            case 'loadNum':
+                              return <Td key={c.key}>
+                                {load.loadNum
+                                  ? <CopyableLoadNum value={load.loadNum} />
+                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                              </Td>;
+                            case 'title':
+                              return <Td key={c.key}>
+                                <button type="button"
+                                  onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
+                                  className="text-left font-semibold hover:underline truncate max-w-[220px]"
+                                  style={{ color: 'var(--gc-blue)' }}
+                                  title="Open load details">
+                                  {load.title}
+                                </button>
+                              </Td>;
+                            case 'customer':
+                              return <Td key={c.key}>
+                                <div className="flex items-center gap-1.5">
+                                  {customer ? (
+                                    <button onClick={e => { e.stopPropagation(); setBrokerProfileId(customer.id); }}
+                                      className="text-left hover:underline truncate max-w-[180px]"
+                                      style={{ color: 'var(--gc-blue)' }}>
+                                      {cust}
+                                    </button>
+                                  ) : (
+                                    <span className="truncate max-w-[180px]" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                                      {cust || '—'}
+                                    </span>
+                                  )}
+                                  {missingEmail && (
+                                    <button onClick={e => { e.stopPropagation(); customer && setBrokerProfileId(customer.id); }}
+                                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+                                      title="No invoice email set">
+                                      <AlertCircle size={9} /> No email
+                                    </button>
+                                  )}
+                                </div>
+                              </Td>;
+                            case 'method':
+                              return <Td key={c.key}>
+                                <span className="text-[11px] font-semibold uppercase tracking-wider"
+                                  style={{ color: method === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
+                                  {method === 'portal' ? 'Portal' : 'Email'}
+                                </span>
+                              </Td>;
+                            case 'rate':
+                              return <Td key={c.key} align="right" className="font-semibold tabular-nums">
+                                {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
+                              </Td>;
+                            case 'accessorials':
+                              return <Td key={c.key} align="right" className="tabular-nums">
+                                {accCount === 0
+                                  ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+                                  : <span title={`${accCount} accessorial${accCount === 1 ? '' : 's'}`}>{moneyFmt.format(accSum)}</span>
+                                }
+                              </Td>;
+                            case 'total':
+                              return <Td key={c.key} align="right" className="font-bold tabular-nums">
+                                {inv ? moneyFmt.format(inv.total)
+                                     : load.loadPrice != null ? moneyFmt.format(load.loadPrice + accSum)
+                                     : '—'}
+                              </Td>;
+                            case 'docs':
+                              return <Td key={c.key}>
+                                <div className="flex flex-wrap gap-1">
+                                  {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+                                  {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
+                                  {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
+                                  {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
+                                  {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
+                                  {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
+                                  {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                                </div>
+                              </Td>;
+                            case 'notes':
+                              return <Td key={c.key}>
+                                <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
+                              </Td>;
+                            case 'status':
+                              return <Td key={c.key}>
+                                {inv ? <StatusPill status={inv.status} />
+                                     : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                              </Td>;
+                            default:
+                              return <Td key={c.key}>—</Td>;
+                          }
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
               {total > PAGE_SIZE && (
                 <PaginationFooter page={page} pageSize={PAGE_SIZE} total={total}
                   onPrev={() => setPage(Math.max(0, page - 1))}
@@ -413,7 +772,28 @@ export default function AccountingPage() {
         </div>
       </div>
 
-      {/* Modals */}
+      {/* Column header popover */}
+      {openHeaderCol && (
+        <HeaderMenu
+          ref={headerMenuRef}
+          col={openHeaderCol}
+          anchorEl={headerRefs.current[openHeaderCol] ?? null}
+          sort={sort}
+          filterable={COL_BY_KEY[openHeaderCol].filterable}
+          selected={filters[openHeaderCol] ?? []}
+          options={filterOptions[openHeaderCol] ?? []}
+          onSort={(dir) => {
+            if (dir === null) setSort({ key: null, dir: 'asc' });
+            else setSort({ key: openHeaderCol, dir });
+          }}
+          onToggleValue={(val) => toggleFilterValue(openHeaderCol, val)}
+          onClearFilter={() => clearColFilter(openHeaderCol)}
+          onSelectAll={() => setColFilterAll(openHeaderCol, filterOptions[openHeaderCol] ?? [])}
+          onClose={() => setOpenHeaderCol(null)} />
+      )}
+
+      {/* Sibling modals */}
+      <EventModal />
       {brokerProfileId && (
         <BrokerProfileModal initialBrokerId={brokerProfileId}
           onClose={() => { setBrokerProfileId(null); void refresh(); }} />
@@ -439,330 +819,78 @@ export default function AccountingPage() {
           onClose={() => setBatchSendOpen(false)}
           onComplete={() => { setBatchSendOpen(false); setSelected(new Set()); void refresh(); }} />
       )}
+      {notesTarget && (
+        <InternalNotesModal load={notesTarget} actorName={actorName}
+          onClose={() => setNotesTarget(null)}
+          onSaved={async () => { setNotesTarget(null); await refresh(); }} />
+      )}
     </div>
   );
 }
 
-// ─── Sort comparators ───────────────────────────────────────────────────
+// ─── Age color helpers (mirror closeout) ────────────────────────────────
 
-function compareReleased(a: Load, b: Load, key: ReleasedSort, customerById: Map<string, Customer>): number {
-  switch (key) {
-    case 'released':    // Newest delivered first when asc=desc-by-date
-      return ageDaysOf(a) - ageDaysOf(b);
-    case 'delivered':
-      return a.end.localeCompare(b.end);
-    case 'internalId':
-      return (a.internalLoadId ?? 0) - (b.internalLoadId ?? 0);
-    case 'loadNum':
-      return (a.loadNum ?? '').localeCompare(b.loadNum ?? '');
-    case 'customer': {
-      const aN = (a.customerId ? customerById.get(a.customerId)?.name : a.broker) ?? '';
-      const bN = (b.customerId ? customerById.get(b.customerId)?.name : b.broker) ?? '';
-      return aN.localeCompare(bN);
-    }
-    case 'driver':
-      return (a.driverName ?? '').localeCompare(b.driverName ?? '');
-    case 'amount':
-      return (a.loadPrice ?? 0) - (b.loadPrice ?? 0);
-    case 'method': {
-      const aM = (a.customerId ? customerById.get(a.customerId)?.invoiceMethod : null) ?? 'email';
-      const bM = (b.customerId ? customerById.get(b.customerId)?.invoiceMethod : null) ?? 'email';
-      return aM.localeCompare(bM);
-    }
-  }
+function ageBg(days: number): string {
+  if (days <= 1) return '#dcfce7';
+  if (days <= 3) return '#fef3c7';
+  if (days <= 7) return '#fed7aa';
+  return '#fee2e2';
+}
+function ageFg(days: number): string {
+  if (days <= 1) return '#15803d';
+  if (days <= 3) return '#92400e';
+  if (days <= 7) return '#9a3412';
+  return '#991b1b';
 }
 
-function compareInvoice(a: Invoice, b: Invoice, key: InvoiceSort, customerById: Map<string, Customer>): number {
-  switch (key) {
-    case 'issued':     return a.issuedAt.localeCompare(b.issuedAt);
-    case 'sent':       return (a.sentAt ?? '').localeCompare(b.sentAt ?? '');
-    case 'paid':       return (a.paidAt ?? '').localeCompare(b.paidAt ?? '');
-    case 'due':        return (a.dueAt ?? '').localeCompare(b.dueAt ?? '');
-    case 'dso': {
-      const aRef = a.sentAt ?? a.issuedAt;
-      const bRef = b.sentAt ?? b.issuedAt;
-      return daysSince(aRef) - daysSince(bRef);
-    }
-    case 'invoiceNum': return a.invoiceNumber.localeCompare(b.invoiceNumber);
-    case 'loadNum':    return (a.snapshot.loadNumber ?? '').localeCompare(b.snapshot.loadNumber ?? '');
-    case 'customer': {
-      const aN = (a.customerId ? customerById.get(a.customerId)?.name : a.snapshot.brokerName) ?? '';
-      const bN = (b.customerId ? customerById.get(b.customerId)?.name : b.snapshot.brokerName) ?? '';
-      return aN.localeCompare(bN);
-    }
-    case 'amount':     return a.total - b.total;
-    case 'status':     return a.status.localeCompare(b.status);
-  }
-}
+// ─── Bucket empty state ─────────────────────────────────────────────────
 
-function ageDaysOf(l: Load): number {
-  return daysSince(l.end);
-}
-
-// ─── Released table ─────────────────────────────────────────────────────
-
-interface ReleasedTableProps {
-  loads:        Load[];
-  total:        number;
-  customerById: Map<string, Customer>;
-  customers:    Customer[];
-  docCounts:    Record<string, Record<string, number>>;
-  selected:     Set<string>;
-  allSelected:  boolean;
-  onToggle:     (id: string) => void;
-  onToggleAll:  () => void;
-  sort:         SortState;
-  onSort:       (s: SortState) => void;
-  onOpenBroker: (id: string) => void;
-}
-
-function ReleasedTable({
-  loads, total, customerById, customers, docCounts, selected, allSelected,
-  onToggle, onToggleAll, sort, onSort, onOpenBroker,
-}: ReleasedTableProps) {
-  if (total === 0) {
+function BucketEmpty({ bucket, hasFilters }: { bucket: Bucket; hasFilters: boolean }) {
+  if (hasFilters) {
     return (
-      <Empty
-        icon={<AlertOctagon size={28} style={{ color: '#1a73e8' }} />}
-        title="Nothing released yet"
-        sub="Loads land here once Closeout marks them verified."
-      />
+      <div className="rounded-2xl py-16 text-center" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)' }}>
+        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>No matches</div>
+        <div className="text-sm">Filters hide every row on this page.</div>
+      </div>
     );
   }
+  const messages: Record<Bucket, { title: string; sub: string }> = {
+    released: { title: 'Nothing released yet',   sub: 'Loads land here once Closeout marks them verified.' },
+    queued:   { title: 'Nothing queued',         sub: 'Generated invoices waiting to be sent show up here.' },
+    invoiced: { title: 'Nothing invoiced',       sub: 'Sent invoices show up here until they\'re marked paid.' },
+    paid:     { title: 'Nothing paid yet',       sub: 'Paid invoices show up here for record-keeping.' },
+    all:      { title: 'No invoices yet',        sub: 'Generate one from the Released bucket.' },
+  };
+  const m = messages[bucket];
   return (
-    <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-      <thead>
-        <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-          <Th><input type="checkbox" checked={allSelected} onChange={onToggleAll}
-            style={{ accentColor: '#1a73e8' }} /></Th>
-          <SortTh<ReleasedSort> colKey="released"   label="Age"       sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="delivered"  label="Delivered" sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="internalId" label="Load ID"   sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="loadNum"    label="Load #"    sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="customer"   label="Customer"  sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="driver"     label="Driver(s)" sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="amount"     label="Amount"    align="right" sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<ReleasedSort> colKey="method"     label="Method"    sort={sort as { key: ReleasedSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <Th>Docs</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {loads.map((l) => {
-          const id = l.loadId ?? l.id;
-          const days = ageDaysOf(l);
-          const ac   = ageColor(days);
-          const customer = l.customerId ? customerById.get(l.customerId) : undefined;
-          const cust = displayBrokerName(customer?.name ?? l.broker ?? '', customers);
-          const method = customer?.invoiceMethod ?? 'email';
-          const missingEmail = method === 'email' && !customer?.invoiceEmail;
-          const counts = docCounts[id] ?? {};
-          const hasRC = !!l.rateConPdf;
-          return (
-            <tr key={id}
-              style={{ borderBottom: '1px solid var(--gc-border-light)' }}
-              className="hover:bg-[var(--gc-hover)]">
-              <Td>
-                <input type="checkbox" checked={selected.has(id)} onChange={() => onToggle(id)}
-                  style={{ accentColor: '#1a73e8' }} />
-              </Td>
-              <Td>
-                <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                  {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
-                </span>
-              </Td>
-              <Td>{fmtShortDate(l.end)}</Td>
-              <Td>
-                {l.internalLoadId != null
-                  ? <CopyableCell value={String(l.internalLoadId)} displayValue={String(l.internalLoadId)} title="Copy load ID / invoice #" />
-                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-              </Td>
-              <Td>
-                {l.loadNum
-                  ? <CopyableLoadNum value={l.loadNum} />
-                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-              </Td>
-              <Td>
-                <div className="flex items-center gap-1.5">
-                  {customer ? (
-                    <button onClick={() => onOpenBroker(customer.id)}
-                      className="text-left hover:underline truncate max-w-[180px]"
-                      style={{ color: 'var(--gc-blue)' }}
-                      title={`Open profile — ${cust}`}>
-                      {cust}
-                    </button>
-                  ) : (
-                    <span className="truncate max-w-[180px]" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>{cust || '—'}</span>
-                  )}
-                  {missingEmail && (
-                    <button onClick={() => customer && onOpenBroker(customer.id)}
-                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-                      title="No invoice email set">
-                      <AlertCircle size={9} /> No email
-                    </button>
-                  )}
-                </div>
-              </Td>
-              <Td>{l.driverName ?? <span style={{ color: 'var(--gc-text-3)' }}>—</span>}</Td>
-              <Td align="right" className="font-semibold tabular-nums">
-                {l.loadPrice != null ? moneyFmt.format(l.loadPrice) : '—'}
-              </Td>
-              <Td>
-                <span className="text-[11px] font-semibold uppercase tracking-wider"
-                  style={{ color: method === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
-                  {method === 'portal' ? 'Portal' : 'Email'}
-                </span>
-              </Td>
-              <Td>
-                <div className="flex flex-wrap gap-1">
-                  {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
-                  {(counts.pod    ?? 0) > 0 && <DocBadge label="POD"    count={counts.pod}    />}
-                  {(counts.bol    ?? 0) > 0 && <DocBadge label="BOL"    count={counts.bol}    />}
-                  {(counts.lumper ?? 0) > 0 && <DocBadge label="Lumper" count={counts.lumper} />}
-                  {(counts.scale  ?? 0) > 0 && <DocBadge label="Scale"  count={counts.scale}  />}
-                  {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                </div>
-              </Td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <div className="rounded-2xl py-16 text-center" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)' }}>
+      <Receipt size={28} className="mx-auto mb-3" style={{ color: 'var(--gc-text-3)' }} />
+      <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>{m.title}</div>
+      <div className="text-sm">{m.sub}</div>
+    </div>
   );
 }
 
-// ─── Invoices table ─────────────────────────────────────────────────────
+// ─── Status pill ────────────────────────────────────────────────────────
 
-interface InvoicesTableProps {
-  invoices:      Invoice[];
-  bucket:        Bucket;
-  total:         number;
-  customerById:  Map<string, Customer>;
-  customers:     Customer[];
-  selected:      Set<string>;
-  allSelected:   boolean;
-  onToggle:      (id: string) => void;
-  onToggleAll:   () => void;
-  sort:          SortState;
-  onSort:        (s: SortState) => void;
-  onOpenBroker:  (id: string) => void;
-  onOpenInvoice: (id: string) => void;
-}
-
-function InvoicesTable({
-  invoices, bucket, total, customerById, customers, selected, allSelected,
-  onToggle, onToggleAll, sort, onSort, onOpenBroker, onOpenInvoice,
-}: InvoicesTableProps) {
-  const selectable = bucket === 'queued' || bucket === 'invoiced';
-  const showStatus = bucket === 'all';
-  const showDSO    = bucket === 'invoiced';
-  const showPaid   = bucket === 'paid';
-
-  if (total === 0) {
-    const map: Record<Bucket, { title: string; sub: string }> = {
-      released: { title: '',                     sub: '' },
-      queued:   { title: 'Nothing queued',       sub: 'Generated invoices waiting to be sent show up here.' },
-      invoiced: { title: 'Nothing invoiced',     sub: 'Sent invoices show up here until they\'re marked paid.' },
-      paid:     { title: 'Nothing paid yet',     sub: 'Paid invoices show up here for record-keeping.' },
-      all:      { title: 'No invoices yet',      sub: 'Generate one from the Released bucket.' },
-    };
-    const m = map[bucket];
-    return <Empty icon={<Receipt size={28} style={{ color: 'var(--gc-text-3)' }} />} title={m.title} sub={m.sub} />;
-  }
-
+function StatusPill({ status }: { status: InvoiceStatus }) {
+  const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string; label: string }> = {
+    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Unsent' },
+    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Sent'   },
+    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid'   },
+    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Void'   },
+  };
+  const p = palette[status];
   return (
-    <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-      <thead>
-        <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-          {selectable && (
-            <Th><input type="checkbox" checked={allSelected} onChange={onToggleAll}
-              style={{ accentColor: '#1a73e8' }} /></Th>
-          )}
-          <SortTh<InvoiceSort> colKey="invoiceNum" label="Invoice #" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<InvoiceSort> colKey="loadNum"    label="Load"      sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<InvoiceSort> colKey="customer"   label="Customer"  sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          <SortTh<InvoiceSort> colKey="issued"     label="Issued"    sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          {bucket === 'invoiced' && <SortTh<InvoiceSort> colKey="sent" label="Sent" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
-          {showPaid && <SortTh<InvoiceSort> colKey="paid" label="Paid" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
-          <SortTh<InvoiceSort> colKey="due" label="Due" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          {showDSO && <SortTh<InvoiceSort> colKey="dso" label="DSO" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
-          <SortTh<InvoiceSort> colKey="amount" label="Amount" align="right" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />
-          {showStatus && <SortTh<InvoiceSort> colKey="status" label="Status" sort={sort as { key: InvoiceSort | null; dir: 'asc' | 'desc' }} onSort={onSort} />}
-        </tr>
-      </thead>
-      <tbody>
-        {invoices.map(inv => {
-          const customer = inv.customerId ? customerById.get(inv.customerId) : undefined;
-          const brokerName = customer?.name ?? inv.snapshot.brokerName ?? '';
-          const brokerLabel = displayBrokerName(brokerName, customers) || '—';
-          const method = customer?.invoiceMethod ?? 'email';
-          const missingEmail = inv.status === 'draft' && method === 'email' && !customer?.invoiceEmail;
-          const dsoRef = inv.sentAt ?? inv.issuedAt;
-          const dsoDays = daysSince(dsoRef);
-          const dsoColor = ageColor(dsoDays);
-          return (
-            <tr key={inv.id}
-              className="cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
-              style={{ borderBottom: '1px solid var(--gc-border-light)' }}
-              onClick={() => onOpenInvoice(inv.id)}>
-              {selectable && (
-                <Td onClick={e => e.stopPropagation()}>
-                  <input type="checkbox" checked={selected.has(inv.id)} onChange={() => onToggle(inv.id)}
-                    style={{ accentColor: '#1a73e8' }} />
-                </Td>
-              )}
-              <Td>
-                <span className="font-bold tabular-nums" style={{ color: '#1a73e8' }}>#{inv.invoiceNumber}</span>
-              </Td>
-              <Td>
-                {inv.snapshot.loadNumber
-                  ? <CopyableCell value={inv.snapshot.loadNumber} displayValue={inv.snapshot.loadNumber} title="Copy load ID" />
-                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-              </Td>
-              <Td onClick={e => e.stopPropagation()}>
-                <div className="flex items-center gap-1.5">
-                  {customer ? (
-                    <button onClick={() => onOpenBroker(customer.id)}
-                      className="text-left hover:underline truncate max-w-[180px]"
-                      style={{ color: 'var(--gc-blue)' }}>
-                      {brokerLabel}
-                    </button>
-                  ) : (
-                    <span style={{ color: 'var(--gc-text-3)' }}>{brokerLabel}</span>
-                  )}
-                  {missingEmail && (
-                    <button onClick={() => customer && onOpenBroker(customer.id)}
-                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
-                      <AlertCircle size={9} /> No email
-                    </button>
-                  )}
-                </div>
-              </Td>
-              <Td>{fmtShortDate(inv.issuedAt)}</Td>
-              {bucket === 'invoiced' && <Td>{inv.sentAt ? fmtShortDate(inv.sentAt) : '—'}</Td>}
-              {showPaid && <Td>{inv.paidAt ? fmtShortDate(inv.paidAt) : '—'}</Td>}
-              <Td>{inv.dueAt ? fmtShortDate(inv.dueAt) : '—'}</Td>
-              {showDSO && (
-                <Td>
-                  <span style={{ background: dsoColor.bg, color: dsoColor.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                    {dsoDays}d
-                  </span>
-                </Td>
-              )}
-              <Td align="right" className="font-semibold tabular-nums">
-                {moneyFmt.format(inv.total)}
-              </Td>
-              {showStatus && <Td><StatusPill status={inv.status} /></Td>}
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <span className="text-[10.5px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block"
+      style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
+      {p.label}
+    </span>
   );
 }
 
 // ─── Invoice Summary modal (batch generate from loads) ──────────────────
+// Identical to the previous implementation — preserved here.
 
 interface InvoiceSummaryModalProps {
   loads:        Load[];
@@ -782,31 +910,18 @@ function InvoiceSummaryModal({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BatchGenerateInvoicesResponse | null>(null);
 
-  const groups = useMemo(() => {
-    const byBroker = new Map<string, { broker: Customer | null; loads: Load[] }>();
-    for (const l of loads) {
-      const key = l.customerId ?? '__missing__';
-      const cur = byBroker.get(key);
-      if (cur) cur.loads.push(l);
-      else byBroker.set(key, {
-        broker: l.customerId ? customerById.get(l.customerId) ?? null : null,
-        loads: [l],
-      });
-    }
-    return Array.from(byBroker.values());
-  }, [loads, customerById]);
-
   const totalAmount = loads.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
   const willSend = action === 'generateSend';
-  const missingEmail = willSend && groups.some(g => g.broker && (g.broker.invoiceMethod ?? 'email') === 'email' && !g.broker.invoiceEmail);
+  const missingEmail = willSend && loads.some(l => {
+    const c = l.customerId ? customerById.get(l.customerId) : undefined;
+    return c && (c.invoiceMethod ?? 'email') === 'email' && !c.invoiceEmail;
+  });
 
   async function handleGo() {
     setBusy(true);
     try {
       const loadIds = loads.map(l => l.loadId ?? l.id);
-      const res = await railway.batchGenerateInvoices({
-        loadIds, thenSend: willSend, bccSelf, attachLoadDocs,
-      });
+      const res = await railway.batchGenerateInvoices({ loadIds, thenSend: willSend, bccSelf, attachLoadDocs });
       setResult(res);
     } catch (err) {
       console.error('[invoiceSummary] batchGenerate failed:', err);
@@ -1041,8 +1156,7 @@ function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComp
     setBusy(true);
     try {
       const res = await railway.batchSendInvoices({
-        invoiceIds: invoices.map(i => i.id),
-        bccSelf, attachLoadDocs,
+        invoiceIds: invoices.map(i => i.id), bccSelf, attachLoadDocs,
       });
       setResult(res);
     } catch (err) {
@@ -1188,35 +1302,3 @@ function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComp
     </div>
   );
 }
-
-// ─── Empty + StatusPill ─────────────────────────────────────────────────
-
-function StatusPill({ status }: { status: InvoiceStatus }) {
-  const palette: Record<InvoiceStatus, { bg: string; fg: string; border: string; label: string }> = {
-    draft: { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Unsent' },
-    sent:  { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Sent'   },
-    paid:  { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid'   },
-    void:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Void'   },
-  };
-  const p = palette[status];
-  return (
-    <span className="text-[10.5px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full inline-block"
-      style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
-      {p.label}
-    </span>
-  );
-}
-
-function Empty({ icon, title, sub }: { icon: React.ReactNode; title: string; sub: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-24 gap-3 text-sm text-center" style={{ color: 'var(--gc-text-3)' }}>
-      {icon}
-      <div className="text-base font-semibold" style={{ color: 'var(--gc-text-1)' }}>{title}</div>
-      {sub && <div className="text-[12.5px]">{sub}</div>}
-    </div>
-  );
-}
-
-// Suppress unused-import lint when fmtDateLong isn't called in the
-// active code path. Kept for future detail views.
-void fmtDateLong;
