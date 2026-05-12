@@ -1,22 +1,25 @@
 /**
- * Driver Profile — read + edit own HR / compliance fields, plus
- * upload + manage license / medical card / MVR / other documents.
+ * Driver Profile — edit own HR / compliance fields, upload + manage
+ * documents (license / medical card / MVR / other). Field changes
+ * save on blur. Documents render as a single flat list with a
+ * category badge per row.
  *
- * Fields save per-blur (no big "Save" button) to match the DriversModal
- * pattern on the dispatch side. Documents upload one at a time and the
- * list refreshes after each operation.
+ * Sync with the web's DriversModal: same DB columns, same API, same
+ * normalization. The header (avatar + name + phone) re-fetches after
+ * a first/last name save so the display matches what the web shows.
  */
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator,
-  KeyboardAvoidingView, Platform, RefreshControl,
+  KeyboardAvoidingView, Platform, RefreshControl, Modal, Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
-  Phone, BadgeCheck, Building2, Info, LogOut, User, Mail, MapPin,
-  IdCard, Heart, Calendar as CalendarIcon, FileText, Camera, Trash2, ExternalLink,
+  BadgeCheck, LogOut, User, FileText, Camera, Trash2, ExternalLink, Plus, Calendar as CalendarIcon, ChevronDown,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { supabase } from "@/lib/supabase";
 import { railway, type DriverProfileUpdate, type DriverMeResponse } from "@/lib/railway";
 import type { DriverDocument, DriverDocumentKind } from "@fleetcal/types";
@@ -29,27 +32,27 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
-const DOC_KINDS: { key: DriverDocumentKind; label: string }[] = [
-  { key: 'license',      label: 'License'        },
-  { key: 'medical_card', label: 'Medical Card'   },
-  { key: 'mvr',          label: 'MVR'            },
-  { key: 'other',        label: 'Other'          },
-];
+const DOC_KIND_LABEL: Record<DriverDocumentKind, string> = {
+  license:      "License",
+  medical_card: "Medical Card",
+  mvr:          "MVR",
+  other:        "Other",
+};
 
-// ── Address ↔ structured helpers ────────────────────────────────────────
-//
-// We store the address as a single text field in the DB but capture it
-// in 4 structured inputs (street, city, state, zip) for usability.
-// On save: join "Street, City, ST Zip". On load: best-effort parse via
-// regex — if it doesn't match, dump the whole thing in `street` and
-// leave city/state/zip blank so the driver can re-enter cleanly.
+const DOC_KIND_TINT: Record<DriverDocumentKind, { bg: string; fg: string }> = {
+  license:      { bg: "#e8f0fe", fg: "#1a73e8" },
+  medical_card: { bg: "#fce8e8", fg: "#c5221f" },
+  mvr:          { bg: "#fef3c7", fg: "#92400e" },
+  other:        { bg: "#f1f3f4", fg: "#5f6368" },
+};
+
+// ── Address ⇄ structured parts ──────────────────────────────────────────
 
 interface AddressParts { street: string; city: string; state: string; zip: string; }
 
 function parseAddress(s: string | undefined): AddressParts {
   const empty = { street: "", city: "", state: "", zip: "" };
   if (!s) return empty;
-  // "Street, City, ST Zip"  (zip optional, state 2-letter)
   const m = s.match(/^(.*?),\s*(.*?),\s*([A-Z]{2})(?:\s+(\d{5}(?:-\d{4})?))?$/);
   if (m) return { street: m[1].trim(), city: m[2].trim(), state: m[3], zip: m[4] ?? "" };
   return { street: s, city: "", state: "", zip: "" };
@@ -64,28 +67,27 @@ function joinAddress(p: AddressParts): string | null {
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
-// ── Date helpers (MM/DD/YYYY ↔ ISO YYYY-MM-DD) ──────────────────────────
+// ── Date helpers ────────────────────────────────────────────────────────
+
+function isoToDate(iso?: string): Date | undefined {
+  if (!iso) return undefined;
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return undefined;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+function dateToIso(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 function isoToDisplay(iso?: string): string {
   if (!iso) return "";
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return iso;
   return `${m[2]}/${m[3]}/${m[1]}`;
-}
-
-function displayToIso(display: string): string | null {
-  const t = display.trim();
-  if (!t) return null;
-  // Accept "MM/DD/YYYY", "M/D/YYYY", or already-ISO.
-  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return t;
-  const us = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (us) {
-    const mm = us[1].padStart(2, "0");
-    const dd = us[2].padStart(2, "0");
-    return `${us[3]}-${mm}-${dd}`;
-  }
-  return null;
 }
 
 // ── Screen ──────────────────────────────────────────────────────────────
@@ -104,9 +106,11 @@ export default function ProfileScreen() {
   const [addr,      setAddr]      = useState<AddressParts>({ street: "", city: "", state: "", zip: "" });
   const [licenseNumber, setLicenseNumber] = useState("");
   const [licenseState,  setLicenseState]  = useState("");
-  const [licenseExp,    setLicenseExp]    = useState("");
-  const [medCardExp,    setMedCardExp]    = useState("");
-  const [dob,           setDob]           = useState("");
+  const [licenseExp,    setLicenseExp]    = useState<string | undefined>(undefined);
+  const [medCardExp,    setMedCardExp]    = useState<string | undefined>(undefined);
+  const [dob,           setDob]           = useState<string | undefined>(undefined);
+
+  const [pickerOpen,    setPickerOpen]    = useState<'licenseExp' | 'medicalCardExp' | 'dob' | null>(null);
 
   const loadAll = useCallback(async () => {
     try {
@@ -123,9 +127,9 @@ export default function ProfileScreen() {
       setAddr(parseAddress(meRes.address));
       setLicenseNumber(meRes.licenseNumber ?? "");
       setLicenseState(meRes.licenseState ?? "");
-      setLicenseExp(isoToDisplay(meRes.licenseExp));
-      setMedCardExp(isoToDisplay(meRes.medicalCardExp));
-      setDob(isoToDisplay(meRes.dob));
+      setLicenseExp(meRes.licenseExp);
+      setMedCardExp(meRes.medicalCardExp);
+      setDob(meRes.dob);
     } catch (err) {
       console.warn("[profile] load:", err);
     } finally {
@@ -135,67 +139,104 @@ export default function ProfileScreen() {
 
   useEffect(() => { void loadAll(); }, [loadAll]);
 
-  // Save one or more fields. Used in onBlur handlers so the form
-  // commits as the driver moves between inputs — no big save button.
-  async function saveFields(patch: DriverProfileUpdate) {
+  async function saveFields(patch: DriverProfileUpdate, refresh = false) {
     try {
       await railway.updateMe(patch);
+      // Refresh after name changes so the header reflects the
+      // computed full name (server combines first + last).
+      if (refresh) await loadAll();
     } catch (err) {
       Alert.alert("Save failed", (err as Error).message);
     }
   }
 
-  function saveDateField(key: 'licenseExp' | 'medicalCardExp' | 'dob', display: string) {
-    if (display.trim() === "") return saveFields({ [key]: null } as DriverProfileUpdate);
-    const iso = displayToIso(display);
-    if (!iso) {
-      Alert.alert("Invalid date", "Use MM/DD/YYYY format.");
-      return;
-    }
-    return saveFields({ [key]: iso } as DriverProfileUpdate);
-  }
-
-  async function uploadDoc(kind: DriverDocumentKind) {
+  // Document upload — single flat flow: pick category, then source.
+  async function startUpload() {
     Alert.alert(
-      "Add Document",
-      undefined,
+      "Upload Document",
+      "What type of document?",
       [
-        { text: "Take Photo", onPress: () => void startUpload(kind, "camera") },
-        { text: "Choose from Library", onPress: () => void startUpload(kind, "library") },
+        { text: "License",      onPress: () => pickSource("license") },
+        { text: "Medical Card", onPress: () => pickSource("medical_card") },
+        { text: "MVR",          onPress: () => pickSource("mvr") },
+        { text: "Other",        onPress: () => pickSource("other") },
         { text: "Cancel", style: "cancel" },
       ],
       { cancelable: true },
     );
   }
 
-  async function startUpload(kind: DriverDocumentKind, source: "camera" | "library") {
+  async function pickSource(kind: DriverDocumentKind) {
+    Alert.alert(
+      `Upload ${DOC_KIND_LABEL[kind]}`,
+      undefined,
+      [
+        { text: "Take Photo",          onPress: () => void uploadFrom(kind, "camera") },
+        { text: "Choose from Library", onPress: () => void uploadFrom(kind, "library") },
+        { text: "Choose File",         onPress: () => void uploadFrom(kind, "file") },
+        { text: "Cancel", style: "cancel" },
+      ],
+      { cancelable: true },
+    );
+  }
+
+  async function uploadFrom(kind: DriverDocumentKind, source: "camera" | "library" | "file") {
     try {
-      const perm = source === "camera"
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert("Permission needed", "Enable access in Settings.");
-        return;
+      let uri: string | undefined;
+      let mimeType: string | undefined;
+      let fileName: string | undefined;
+
+      if (source === "camera") {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!perm.granted) { Alert.alert("Permission needed", "Enable camera access in Settings."); return; }
+        const res = await ImagePicker.launchCameraAsync({ quality: 0.85 });
+        if (res.canceled) return;
+        uri = res.assets[0]?.uri;
+        mimeType = res.assets[0]?.mimeType ?? "image/jpeg";
+        fileName = res.assets[0]?.fileName ?? `${kind}-${Date.now()}.jpg`;
+      } else if (source === "library") {
+        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!perm.granted) { Alert.alert("Permission needed", "Enable photo access in Settings."); return; }
+        const res = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          quality: 0.85, allowsMultipleSelection: false,
+        });
+        if (res.canceled) return;
+        uri = res.assets[0]?.uri;
+        mimeType = res.assets[0]?.mimeType ?? "image/jpeg";
+        fileName = res.assets[0]?.fileName ?? `${kind}-${Date.now()}.jpg`;
+      } else {
+        const res = await DocumentPicker.getDocumentAsync({
+          type: ["application/pdf", "image/*"],
+          multiple: false,
+          copyToCacheDirectory: true,
+        });
+        if (res.canceled) return;
+        const a = res.assets?.[0];
+        uri = a?.uri;
+        mimeType = a?.mimeType ?? "application/octet-stream";
+        fileName = a?.name ?? `${kind}-${Date.now()}`;
       }
-      const res = source === "camera"
-        ? await ImagePicker.launchCameraAsync({ quality: 0.85 })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85,
-            allowsMultipleSelection: false,
-          });
-      if (res.canceled) return;
-      const a = res.assets[0];
-      if (!a) return;
+
+      if (!uri) return;
+
       const form = new FormData();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      form.append("file", { uri: a.uri, name: a.fileName ?? `doc-${Date.now()}.jpg`, type: a.mimeType ?? "image/jpeg" } as any);
+      form.append("file", { uri, name: fileName, type: mimeType } as any);
       form.append("kind", kind);
       await railway.uploadMyDocument(form);
       await loadAll();
     } catch (err) {
       Alert.alert("Upload failed", (err as Error).message);
     }
+  }
+
+  async function viewDoc(d: DriverDocument) {
+    if (!d.signedUrl) {
+      Alert.alert("Unavailable", "Refresh and try again.");
+      return;
+    }
+    await Linking.openURL(d.signedUrl);
   }
 
   async function deleteDoc(d: DriverDocument) {
@@ -266,12 +307,14 @@ export default function ProfileScreen() {
                   <FormCol>
                     <FieldLabel label="First Name" />
                     <TextField value={firstName} onChangeText={setFirstName}
-                      onBlur={() => saveFields({ firstName: firstName.trim() || null })} />
+                      autoCapitalize="words"
+                      onBlur={() => saveFields({ firstName: firstName.trim() || null }, /* refresh */ true)} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Last Name" />
                     <TextField value={lastName} onChangeText={setLastName}
-                      onBlur={() => saveFields({ lastName: lastName.trim() || null })} />
+                      autoCapitalize="words"
+                      onBlur={() => saveFields({ lastName: lastName.trim() || null }, /* refresh */ true)} />
                   </FormCol>
                 </FormGrid>
                 <FieldLabel label="Phone" />
@@ -295,8 +338,7 @@ export default function ProfileScreen() {
                   <FormCol>
                     <FieldLabel label="State" />
                     <TextField value={addr.state} onChangeText={(v) => setAddr({ ...addr, state: v.toUpperCase().slice(0, 2) })}
-                      autoCapitalize="characters"
-                      maxLength={2}
+                      autoCapitalize="characters" maxLength={2}
                       onBlur={() => saveFields({ address: joinAddress(addr) })} />
                   </FormCol>
                   <FormCol>
@@ -314,66 +356,74 @@ export default function ProfileScreen() {
                 <FormGrid>
                   <FormCol style={{ flex: 2 }}>
                     <FieldLabel label="License #" />
-                    <TextField value={licenseNumber} onChangeText={setLicenseNumber} autoCapitalize="characters"
+                    <TextField value={licenseNumber} onChangeText={setLicenseNumber}
+                      autoCapitalize="characters"
                       onBlur={() => saveFields({ licenseNumber: licenseNumber.trim() || null })} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="State" />
                     <TextField value={licenseState} onChangeText={(v) => setLicenseState(v.toUpperCase().slice(0, 2))}
-                      autoCapitalize="characters"
-                      maxLength={2}
+                      autoCapitalize="characters" maxLength={2}
                       onBlur={() => saveFields({ licenseState: licenseState.trim() || null })} />
                   </FormCol>
                 </FormGrid>
-                <FieldLabel label="Expiration (MM/DD/YYYY)" />
-                <TextField value={licenseExp} onChangeText={setLicenseExp} keyboardType="number-pad"
-                  placeholder="MM/DD/YYYY"
-                  onBlur={() => saveDateField('licenseExp', licenseExp)} />
+                <FieldLabel label="Expiration" />
+                <DateField
+                  value={licenseExp}
+                  onChange={(iso) => { setLicenseExp(iso); void saveFields({ licenseExp: iso ?? null }); }}
+                  open={pickerOpen === 'licenseExp'}
+                  setOpen={(v) => setPickerOpen(v ? 'licenseExp' : null)}
+                />
               </Card>
 
-              {/* Medical + DOB */}
+              {/* Compliance */}
               <SectionHeader label="Compliance" />
               <Card>
-                <FieldLabel label="Medical Card Expiration (MM/DD/YYYY)" />
-                <TextField value={medCardExp} onChangeText={setMedCardExp} keyboardType="number-pad"
-                  placeholder="MM/DD/YYYY"
-                  onBlur={() => saveDateField('medicalCardExp', medCardExp)} />
-                <FieldLabel label="Date of Birth (MM/DD/YYYY)" />
-                <TextField value={dob} onChangeText={setDob} keyboardType="number-pad"
-                  placeholder="MM/DD/YYYY"
-                  onBlur={() => saveDateField('dob', dob)} />
+                <FieldLabel label="Medical Card Expiration" />
+                <DateField
+                  value={medCardExp}
+                  onChange={(iso) => { setMedCardExp(iso); void saveFields({ medicalCardExp: iso ?? null }); }}
+                  open={pickerOpen === 'medicalCardExp'}
+                  setOpen={(v) => setPickerOpen(v ? 'medicalCardExp' : null)}
+                />
+                <FieldLabel label="Date of Birth" />
+                <DateField
+                  value={dob}
+                  onChange={(iso) => { setDob(iso); void saveFields({ dob: iso ?? null }); }}
+                  open={pickerOpen === 'dob'}
+                  setOpen={(v) => setPickerOpen(v ? 'dob' : null)}
+                  /* DOB is bounded — no future dates. */
+                  maximumDate={new Date()}
+                />
               </Card>
 
-              {/* Documents */}
+              {/* Documents — single flat list */}
               <SectionHeader label="Documents" />
               <Card>
-                {DOC_KINDS.map((k, idx) => {
-                  const docsForKind = docs.filter(d => d.kind === k.key);
-                  return (
-                    <View key={k.key} style={{ paddingVertical: 12,
-                      borderTopWidth: idx === 0 ? 0 : 1,
-                      borderTopColor: "#e8eaed" }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
-                        <Text style={[txt(700), { flex: 1, fontSize: 13, color: "#202124" }]}>{k.label}</Text>
-                        <TouchableOpacity onPress={() => uploadDoc(k.key)}
-                          style={{
-                            flexDirection: "row", alignItems: "center", gap: 4,
-                            paddingHorizontal: 10, paddingVertical: 6,
-                            borderRadius: 8,
-                            backgroundColor: "#e8f0fe",
-                          }}>
-                          <Camera size={12} color="#1a73e8" />
-                          <Text style={[txt(700), { fontSize: 11, color: "#1a73e8" }]}>Upload</Text>
-                        </TouchableOpacity>
-                      </View>
-                      {docsForKind.length === 0 ? (
-                        <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6" }]}>None uploaded.</Text>
-                      ) : (
-                        docsForKind.map(d => <DocRow key={d.id} doc={d} onDelete={() => deleteDoc(d)} />)
-                      )}
-                    </View>
-                  );
-                })}
+                <TouchableOpacity onPress={startUpload}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    paddingVertical: 14,
+                    borderRadius: 10,
+                    borderWidth: 1.5, borderColor: '#1a73e8', borderStyle: 'dashed',
+                    backgroundColor: '#e8f0fe',
+                    marginBottom: docs.length > 0 ? 12 : 0,
+                  }}>
+                  <Plus size={16} color="#1a73e8" strokeWidth={2.4} />
+                  <Text style={[txt(700), { fontSize: 14, color: '#1a73e8' }]}>Upload Document</Text>
+                </TouchableOpacity>
+                {docs.length === 0 ? (
+                  <Text style={[txt(500), { fontSize: 12, color: '#9aa0a6', textAlign: 'center', paddingVertical: 12 }]}>
+                    No documents uploaded yet.
+                  </Text>
+                ) : (
+                  docs.map((d, idx) => (
+                    <DocRow key={d.id} doc={d}
+                      isLast={idx === docs.length - 1}
+                      onView={() => viewDoc(d)}
+                      onDelete={() => deleteDoc(d)} />
+                  ))
+                )}
               </Card>
 
               {/* Sign out */}
@@ -416,7 +466,7 @@ function Card({ children }: { children: React.ReactNode }) {
       backgroundColor: "#fff",
       borderRadius: 14,
       paddingHorizontal: 14,
-      paddingVertical: 6,
+      paddingVertical: 8,
       borderWidth: 1, borderColor: "#e8eaed",
     }}>
       {children}
@@ -478,6 +528,81 @@ function TextField({
   );
 }
 
+// Native date picker. iOS shows in a sheet, Android in a dialog.
+function DateField({
+  value, onChange, open, setOpen, maximumDate,
+}: {
+  value:        string | undefined;     // ISO YYYY-MM-DD
+  onChange:     (iso: string | undefined) => void;
+  open:         boolean;
+  setOpen:      (v: boolean) => void;
+  maximumDate?: Date;
+}) {
+  const display = isoToDisplay(value);
+
+  function onPickerChange(_event: unknown, selected?: Date) {
+    // iOS keeps the picker open in inline/spinner mode; Android
+    // fires once with the selection and closes itself.
+    if (Platform.OS !== 'ios') setOpen(false);
+    if (selected) onChange(dateToIso(selected));
+  }
+
+  return (
+    <>
+      <TouchableOpacity onPress={() => setOpen(!open)}
+        activeOpacity={0.7}
+        style={{
+          flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+          backgroundColor: "#fff",
+          borderRadius: 10,
+          borderWidth: 1, borderColor: "#e8eaed",
+          paddingHorizontal: 12, paddingVertical: 12,
+          marginBottom: 4,
+        }}>
+        <Text style={[txt(display ? 700 : 500), { fontSize: 15, color: display ? "#202124" : "#9aa0a6" }]}>
+          {display || "Select date"}
+        </Text>
+        <CalendarIcon size={16} color="#5f6368" />
+      </TouchableOpacity>
+      {open && Platform.OS === 'ios' && (
+        <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => setOpen(false)}
+            style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' }}>
+            <TouchableOpacity activeOpacity={1} style={{ backgroundColor: '#fff', paddingTop: 8, paddingBottom: 24 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 8 }}>
+                {value
+                  ? <TouchableOpacity onPress={() => { onChange(undefined); setOpen(false); }}>
+                      <Text style={[txt(700), { fontSize: 14, color: '#b91c1c' }]}>Clear</Text>
+                    </TouchableOpacity>
+                  : <View />}
+                <TouchableOpacity onPress={() => setOpen(false)}>
+                  <Text style={[txt(800), { fontSize: 14, color: '#1a73e8' }]}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker
+                value={isoToDate(value) ?? new Date()}
+                mode="date"
+                display="spinner"
+                maximumDate={maximumDate}
+                onChange={onPickerChange}
+              />
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+      )}
+      {open && Platform.OS !== 'ios' && (
+        <DateTimePicker
+          value={isoToDate(value) ?? new Date()}
+          mode="date"
+          display="default"
+          maximumDate={maximumDate}
+          onChange={onPickerChange}
+        />
+      )}
+    </>
+  );
+}
+
 function FormGrid({ children }: { children: React.ReactNode }) {
   return <View style={{ flexDirection: "row", gap: 10 }}>{children}</View>;
 }
@@ -488,7 +613,7 @@ function FormCol({ children, style }: { children: React.ReactNode; style?: objec
 
 function ReadOnlyRow({
   Icon, label, value,
-}: { Icon: typeof Phone; label: string; value: string }) {
+}: { Icon: typeof BadgeCheck; label: string; value: string }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 12 }}>
       <View style={{
@@ -507,37 +632,44 @@ function ReadOnlyRow({
   );
 }
 
-function DocRow({ doc, onDelete }: { doc: DriverDocument; onDelete: () => void }) {
+function DocRow({
+  doc, isLast, onView, onDelete,
+}: {
+  doc: DriverDocument; isLast: boolean; onView: () => void; onDelete: () => void;
+}) {
+  const tint = DOC_KIND_TINT[doc.kind];
   const date = new Date(doc.uploadedAt);
-  const dateLabel = date.toLocaleDateString();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 8 }}>
+    <View style={{
+      flexDirection: "row", alignItems: "center", gap: 10,
+      paddingVertical: 10,
+      borderBottomWidth: isLast ? 0 : 1, borderBottomColor: '#f1f3f4',
+    }}>
       <View style={{
-        width: 28, height: 28, borderRadius: 8,
-        backgroundColor: "#f8f9fa",
-        alignItems: "center", justifyContent: "center",
-        marginRight: 10,
+        width: 32, height: 32, borderRadius: 8,
+        backgroundColor: '#f8f9fa',
+        alignItems: 'center', justifyContent: 'center',
       }}>
-        <FileText size={14} color="#5f6368" strokeWidth={2.2} />
+        <FileText size={15} color="#5f6368" strokeWidth={2.2} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={[txt(600), { fontSize: 13, color: "#202124" }]} numberOfLines={1}>{doc.fileName}</Text>
-        <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", marginTop: 1 }]}>
-          {dateLabel}{doc.expiresOn ? ` · exp ${isoToDisplay(doc.expiresOn)}` : ""}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: tint.bg }}>
+            <Text style={[txt(700), { fontSize: 9, color: tint.fg, textTransform: 'uppercase', letterSpacing: 0.4 }]}>
+              {DOC_KIND_LABEL[doc.kind]}
+            </Text>
+          </View>
+          <Text style={[txt(500), { fontSize: 11, color: '#9aa0a6' }]}>
+            {date.toLocaleDateString()}
+          </Text>
+        </View>
+        <Text style={[txt(600), { fontSize: 13, color: '#202124' }]} numberOfLines={1}>
+          {doc.fileName}
         </Text>
       </View>
-      {doc.signedUrl && (
-        <TouchableOpacity onPress={() => {
-          // Open the signed URL in the system browser. Async import to
-          // keep the screen lean.
-          void (async () => {
-            const { Linking } = await import("react-native");
-            await Linking.openURL(doc.signedUrl!);
-          })();
-        }} style={{ padding: 6 }}>
-          <ExternalLink size={16} color="#1a73e8" />
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity onPress={onView} style={{ padding: 6 }}>
+        <ExternalLink size={16} color="#1a73e8" />
+      </TouchableOpacity>
       <TouchableOpacity onPress={onDelete} style={{ padding: 6 }}>
         <Trash2 size={16} color="#b91c1c" />
       </TouchableOpacity>
