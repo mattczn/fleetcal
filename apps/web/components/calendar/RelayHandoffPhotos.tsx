@@ -3,13 +3,14 @@
  *
  * Driver app uploads photos to load_documents with kind='relay_handoff'.
  * This component shows them inside the EventModal's relay block on
- * both the pickup leg and the delivery leg. Ops can view + delete;
- * they don't typically upload (this is driver-to-driver communication).
+ * both the pickup leg and the delivery leg. Ops can view, upload, and
+ * delete — useful when a driver phones in a photo or ops needs to
+ * pre-stage paperwork before the load goes out.
  */
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeftRight, Image as ImageIcon, X, ExternalLink, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeftRight, Image as ImageIcon, X, ExternalLink, Trash2, Upload, Loader2 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 
 interface RelayPhotoRow {
@@ -28,6 +29,8 @@ export function RelayHandoffPhotos({ loadId }: Props) {
   const [photos,  setPhotos]  = useState<RelayPhotoRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [preview, setPreview] = useState<RelayPhotoRow | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -59,6 +62,24 @@ export function RelayHandoffPhotos({ loadId }: Props) {
     }
   }
 
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      // Upload sequentially — keeps API logs tidy and lets us bail early
+      // if a single file fails, without partial-failure ambiguity.
+      for (const file of Array.from(files)) {
+        await railway.uploadLoadDocument(loadId, file, 'relay_handoff');
+      }
+      await refresh();
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
   return (
     <div className="rounded-lg" style={{ background: 'rgba(255,255,255,0.65)', padding: 12 }}>
       <div className="flex items-center gap-2 mb-2">
@@ -71,13 +92,46 @@ export function RelayHandoffPhotos({ loadId }: Props) {
             · {photos.length}
           </span>
         )}
+        <div className="ml-auto">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={e => void handleFiles(e.target.files)}
+            style={{ display: 'none' }}
+          />
+          <button type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors"
+            style={{
+              background: uploading ? '#a78bfa' : '#6b21a8',
+              color: '#fff',
+              opacity: uploading ? 0.7 : 1,
+              cursor: uploading ? 'wait' : 'pointer',
+            }}>
+            {uploading
+              ? <><Loader2 size={11} className="animate-spin" /> Uploading…</>
+              : <><Upload size={11} /> Upload</>}
+          </button>
+        </div>
       </div>
       {loading ? (
         <div className="text-[12px]" style={{ color: '#6b21a8', opacity: 0.7 }}>Loading…</div>
       ) : photos.length === 0 ? (
-        <div className="text-[12px]" style={{ color: '#6b21a8', opacity: 0.65 }}>
-          Drivers can attach photos at the handoff point (trailer location, paperwork). Nothing uploaded yet.
-        </div>
+        <button type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-md text-[12px] font-semibold transition-colors"
+          style={{
+            border: '1.5px dashed #8b5cf6',
+            background: 'rgba(255,255,255,0.45)',
+            color: '#6b21a8',
+            cursor: uploading ? 'wait' : 'pointer',
+          }}>
+          <Upload size={12} /> Upload the first handoff photo
+        </button>
       ) : (
         <div className="flex flex-wrap gap-2">
           {photos.map(p => (

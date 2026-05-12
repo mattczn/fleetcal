@@ -33,7 +33,49 @@ interface DocLike {
   signedUrl?: string;
 }
 
-export function RelayHandoffPhotos({ loadId }: { loadId: string }) {
+/**
+ * Shared upload flow — exposed so the stop-card button below the
+ * Navigate / Check In row can reuse the exact same camera/library
+ * prompt without duplicating the picker glue.
+ */
+export async function uploadRelayHandoffPhoto(loadId: string, source: "camera" | "library"): Promise<void> {
+  const perm = source === "camera"
+    ? await ImagePicker.requestCameraPermissionsAsync()
+    : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) {
+    Alert.alert("Permission needed", "Enable access in Settings.");
+    return;
+  }
+  const res = source === "camera"
+    ? await ImagePicker.launchCameraAsync({ quality: 0.85 })
+    : await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.85, allowsMultipleSelection: false,
+      });
+  if (res.canceled) return;
+  const a = res.assets[0];
+  if (!a) return;
+  const form = new FormData();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  form.append("file", { uri: a.uri, name: a.fileName ?? `relay-${Date.now()}.jpg`, type: a.mimeType ?? "image/jpeg" } as any);
+  form.append("kind", "relay_handoff");
+  await railway.uploadDocument(loadId, form);
+}
+
+export function promptRelayHandoffUpload(loadId: string, onUploaded?: () => void) {
+  Alert.alert(
+    "Add Relay Handoff Photo",
+    "Trailer location, paperwork — leave it for the next driver.",
+    [
+      { text: "Take Photo",          onPress: async () => { try { await uploadRelayHandoffPhoto(loadId, "camera");  onUploaded?.(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } } },
+      { text: "Choose from Library", onPress: async () => { try { await uploadRelayHandoffPhoto(loadId, "library"); onUploaded?.(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } } },
+      { text: "Cancel", style: "cancel" },
+    ],
+    { cancelable: true },
+  );
+}
+
+export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; reloadKey?: number }) {
   const [photos,   setPhotos]   = useState<DocLike[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [busy,     setBusy]     = useState(false);
@@ -57,53 +99,23 @@ export function RelayHandoffPhotos({ loadId }: { loadId: string }) {
     }
   }, [loadId]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh, reloadKey]);
 
-  async function addPhoto() {
+  function addPhoto() {
     if (busy) return;
+    // We can't reliably detect Alert.alert dismissal, so we don't toggle
+    // busy on the prompt itself — just on the actual upload, via inline
+    // wrappers so the spinner shows while the file is going up.
     Alert.alert(
       "Add Relay Handoff Photo",
       "Trailer location, paperwork — leave it for the next driver.",
       [
-        { text: "Take Photo",          onPress: () => void uploadFrom("camera") },
-        { text: "Choose from Library", onPress: () => void uploadFrom("library") },
+        { text: "Take Photo",          onPress: async () => { setBusy(true);  try { await uploadRelayHandoffPhoto(loadId, "camera");  await refresh(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } finally { setBusy(false); } } },
+        { text: "Choose from Library", onPress: async () => { setBusy(true);  try { await uploadRelayHandoffPhoto(loadId, "library"); await refresh(); } catch (err) { Alert.alert("Upload failed", (err as Error).message); } finally { setBusy(false); } } },
         { text: "Cancel", style: "cancel" },
       ],
       { cancelable: true },
     );
-  }
-
-  async function uploadFrom(source: "camera" | "library") {
-    setBusy(true);
-    try {
-      const perm = source === "camera"
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert("Permission needed", "Enable access in Settings.");
-        return;
-      }
-      const res = source === "camera"
-        ? await ImagePicker.launchCameraAsync({ quality: 0.85 })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85, allowsMultipleSelection: false,
-          });
-      if (res.canceled) return;
-      const a = res.assets[0];
-      if (!a) return;
-
-      const form = new FormData();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      form.append("file", { uri: a.uri, name: a.fileName ?? `relay-${Date.now()}.jpg`, type: a.mimeType ?? "image/jpeg" } as any);
-      form.append("kind", "relay_handoff");
-      await railway.uploadDocument(loadId, form);
-      await refresh();
-    } catch (err) {
-      Alert.alert("Upload failed", (err as Error).message);
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function deletePhoto(d: DocLike) {

@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   MapPin,
   CircleDot,
+  Camera,
 } from "lucide-react-native";
 import * as Location from "expo-location";
 import * as Clipboard from "expo-clipboard";
@@ -40,7 +41,7 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { needsConfirmation } from "@/lib/loadStatus";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
-import { RelayHandoffPhotos } from "@/components/RelayHandoffPhotos";
+import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/RelayHandoffPhotos";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap } from "@/components/RouteMap";
 import { Toast } from "@/components/Toast";
@@ -490,6 +491,7 @@ function TimeAnchor({
 
 function StopCard({
   stop, index, onAddressCopied, orgId, onCheckedIn, eventId, driverName,
+  loadId, onPhotoUploaded,
 }: {
   stop: Stop;
   index: number;
@@ -498,6 +500,10 @@ function StopCard({
   onCheckedIn?: (action?: "checkin" | "redo" | "undo") => void;
   eventId?: string;
   driverName?: string;
+  // For relay stops, when these are provided the card renders a
+  // "Upload Pictures" button right under Navigate / Check In.
+  loadId?: string;
+  onPhotoUploaded?: () => void;
 }) {
   const accent = STOP_ACCENT[stop.type];
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
@@ -609,6 +615,28 @@ function StopCard({
           : <CheckInButton stop={stop} orgId={orgId} onCheckedIn={onCheckedIn} eventId={eventId} driverName={driverName} />}
       </View>
 
+      {/* Relay handoff: dedicated upload-pictures button so drivers see
+          it without scrolling to the gallery. Drops a photo onto the
+          load (kind='relay_handoff') for the partner driver. */}
+      {stop.type === "relay" && loadId ? (
+        <TouchableOpacity
+          onPress={() => promptRelayHandoffUpload(loadId, onPhotoUploaded)}
+          activeOpacity={0.85}
+          style={{
+            flexDirection: "row", alignItems: "center", justifyContent: "center",
+            gap: 8,
+            paddingVertical: 12,
+            backgroundColor: "#faf5ff",
+            borderTopWidth: 1, borderTopColor: "#f1f3f4",
+          }}
+        >
+          <Camera size={14} color="#6b21a8" strokeWidth={2.4} />
+          <Text style={[txt(700), { fontSize: 13, color: "#6b21a8", letterSpacing: 0.2 }]}>
+            Upload Pictures
+          </Text>
+        </TouchableOpacity>
+      ) : null}
+
       {stop.instructions ? (
         <View style={{ paddingHorizontal: 14, paddingVertical: 12, backgroundColor: "#fff7ed", borderTopWidth: 1, borderTopColor: "#f1f3f4" }}>
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
@@ -636,6 +664,9 @@ export default function LoadDetailScreen() {
   const [trailerPickerVisible,  setTrailerPickerVisible] = useState(false);
   const [toastMessage,          setToastMessage]         = useState<string | null>(null);
   const [tab,                   setTab]                  = useState<0 | 1 | 2>(0);
+  // Bumped whenever a relay handoff photo is uploaded from anywhere on
+  // this screen — passed to the gallery so it re-fetches.
+  const [relayPhotosReloadKey,  setRelayPhotosReloadKey] = useState(0);
   const pagerRef = React.useRef<ScrollView>(null);
   const SCREEN_W = Dimensions.get("window").width;
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -949,7 +980,9 @@ export default function LoadDetailScreen() {
                   if (action !== "undo") handleAfterCheckIn(s.id);
                 }}
                 eventId={load.id}
-                driverName={driver?.name} />);
+                driverName={driver?.name}
+                loadId={load.loadId}
+                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />);
           }
 
           const isPickupLeg = load.relayRole !== "delivery";
@@ -967,7 +1000,9 @@ export default function LoadDetailScreen() {
                   if (action !== "undo") handleAfterCheckIn(s.id);
                 }}
                 eventId={load.id}
-                driverName={driver?.name} />)}
+                driverName={driver?.name}
+                loadId={load.loadId}
+                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />)}
                 <RelayHandoffBanner mode="pickup" partnerDriverName={load.partnerDriverName} />
                 {partner.length > 0 ? (
                   <>
@@ -1014,7 +1049,9 @@ export default function LoadDetailScreen() {
                   if (action !== "undo") handleAfterCheckIn(s.id);
                 }}
                 eventId={load.id}
-                driverName={driver?.name} />
+                driverName={driver?.name}
+                loadId={load.loadId}
+                onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }} />
                     ))}
                   </View>
                 </>
@@ -1032,6 +1069,10 @@ export default function LoadDetailScreen() {
                     showToast(action === "undo" ? "Check In Undone" : "Checked in");
                     if (action !== "undo") handleAfterCheckIn(s.id);
                   }}
+                  eventId={load.id}
+                  driverName={driver?.name}
+                  loadId={load.loadId}
+                  onPhotoUploaded={() => { showToast("Photo uploaded"); setRelayPhotosReloadKey(k => k + 1); }}
                 />
               ))}
             </>
@@ -1072,7 +1113,7 @@ export default function LoadDetailScreen() {
                 </Text>
               </View>
             </View>
-            <RelayHandoffPhotos loadId={load.loadId} />
+            <RelayHandoffPhotos loadId={load.loadId} reloadKey={relayPhotosReloadKey} />
           </View>
         ) : null}
 
