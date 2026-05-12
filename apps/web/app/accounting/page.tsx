@@ -693,14 +693,23 @@ export default function AccountingPage() {
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
               }}>
-              <table className="text-[12.5px] w-full"
+              <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // min-width:max-content forces columns to natural widths
-                  // — if total > wrapper, wrapper's overflow-x:auto scrolls;
-                  // else width:100% from the class takes over and the
-                  // table fills the wrapper.
-                  minWidth: 'max-content',
+                  // "Stretch to at least wrapper, otherwise content-sized":
+                  //   width: max-content  → preferred = content
+                  //   min-width: 100%     → at least the wrapper's width
+                  //
+                  // wrapper > content → min-width:100% wins, table fills
+                  // wrapper < content → width:max-content wins, table
+                  //                     overflows, wrapper scrolls
+                  //
+                  // The opposite pairing (width:100% + min-width:max-content)
+                  // is unreliable for <table> — browsers can lock the table
+                  // at max-content even when 100% would be larger, leaving
+                  // an empty band on the right.
+                  width:    'max-content',
+                  minWidth: '100%',
                 }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>

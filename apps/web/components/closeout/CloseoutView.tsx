@@ -769,16 +769,26 @@ export default function CloseoutView() {
                 border: '1px solid var(--gc-border-light)',
                 background: 'var(--gc-surface)',
               }}>
-              <table className="text-[12.5px] w-full"
+              <table className="text-[12.5px]"
                 style={{
                   borderCollapse: 'collapse',
-                  // min-width:max-content forces columns to their natural
-                  // widths — if total exceeds the wrapper, the wrapper's
-                  // overflow-x:auto scrolls. width:100% from the class
-                  // (above) takes over when wrapper > max-content so the
-                  // table fills the wrapper without empty bands on either
-                  // side.
-                  minWidth: 'max-content',
+                  // The "stretch to at least the wrapper, otherwise be
+                  // content-sized" pattern. The previous combo of
+                  // `width:100% + min-width:max-content` was unreliable
+                  // for <table> elements — browsers treat the two
+                  // properties differently than for block elements and
+                  // would lock the table at max-content even when the
+                  // wrapper was wider, leaving an empty band on the right.
+                  //
+                  // Flipping it:
+                  //   width: max-content     → preferred = content width
+                  //   min-width: 100%        → at least fill the wrapper
+                  // Result:
+                  //   wrapper > content  → min-width:100% wins, table fills
+                  //   wrapper < content  → width:max-content wins, table
+                  //                        overflows wrapper, wrapper scrolls
+                  width:    'max-content',
+                  minWidth: '100%',
                 }}>
                 <thead>
                   <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
