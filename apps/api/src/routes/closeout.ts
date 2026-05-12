@@ -193,18 +193,24 @@ closeout.get("/queue", async (c) => {
   // the DB-paginated path (verified/invoiced/paid) leaves it at 0
   // since computing it there would require a separate aggregate.
   let totalLoadValue = 0;
+  // Reduce a set of event rows to (uniqueLoadCount, sumLoadValue) by
+  // deduping on loadId. Relays surface as two events sharing one
+  // load_id; without dedup the count is inflated and the $ would be
+  // double-counted (we sum the load row's load_price, which is the
+  // same across legs).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sumLoadValuesDeduped = (rows: any[]): number => {
+  const aggregateByLoad = (rows: any[]): { count: number; value: number } => {
     const byLoadId = new Map<string, number>();
+    let standaloneEvents = 0; // events without a load (defensive — shouldn't happen for revenue events but we count them)
     for (const r of rows) {
       const lid = r.load?.id as string | undefined;
       const price = Number(r.load?.load_price ?? 0) || 0;
-      if (!lid) continue;
+      if (!lid) { standaloneEvents++; continue; }
       if (!byLoadId.has(lid)) byLoadId.set(lid, price);
     }
-    let sum = 0;
-    for (const v of byLoadId.values()) sum += v;
-    return sum;
+    let value = 0;
+    for (const v of byLoadId.values()) value += v;
+    return { count: byLoadId.size + standaloneEvents, value };
   };
   // Reuse-flag — when the wide-candidate path runs, we've already
   // built loadIds + we'll need POD counts; track them here so the
@@ -223,18 +229,27 @@ closeout.get("/queue", async (c) => {
     rawRows    = (data ?? []) as unknown[] as typeof rawRows;
     totalCount = count ?? rawRows.length;
   } else if (wideCandidatePath) {
-    // Fetch up to 500 candidates that COULD belong to pending or
-    // flagged. We'll filter to one bucket below.
+    // Fetch up to 2000 candidate events that COULD belong to
+    // pending/flagged/all (billing_status IN ['pending', 'on_hold']).
+    // We filter to one bucket below and dedupe to a load count.
+    // 2000 events ≈ 1000-2000 unique loads (relays inflate). A busy
+    // org with more than that backlog should already be investigating
+    // — the cap exists so a single query can't OOM the API. Log a
+    // warning so the operator sees it before users do.
+    const CANDIDATE_CAP = 2000;
     const { data, error } = await buildBaseQuery(false)
       .order("priority", { ascending: false })
       .order("end",      { ascending: true })
-      .range(0, 499);
+      .range(0, CANDIDATE_CAP - 1);
     if (error) {
       console.error("[GET /v1/closeout/queue] failed:", error);
       return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const candidates = (data ?? []) as any[];
+    if (candidates.length >= CANDIDATE_CAP) {
+      console.warn(`[GET /v1/closeout/queue] candidate cap hit (${CANDIDATE_CAP}) for org=${orgId} tab=${tab} — bucket totals may undercount`);
+    }
 
     // Pull POD presence for these candidates — needed for the
     // missing-POD impediment check.
@@ -271,9 +286,13 @@ closeout.get("/queue", async (c) => {
       return tab === "flagged" ? flagged : !flagged;
     });
 
-    totalCount = filtered.length;
-    totalLoadValue = sumLoadValuesDeduped(filtered);
-    rawRows    = filtered.slice(offset, offset + limit);
+    // Count UNIQUE loads (deduped by load_id). Relays are two events
+    // for one load — the bucket tile should reflect "one load" so the
+    // count matches what the user sees in the table (also deduped).
+    const agg = aggregateByLoad(filtered);
+    totalCount = agg.count;
+    totalLoadValue = agg.value;
+    rawRows = filtered.slice(offset, offset + limit);
   } else {
     // ── Search path: two parallel queries, merged + paginated in JS.
     // Mirrors the pattern used by /v1/loads/search since PostgREST's
@@ -371,9 +390,12 @@ closeout.get("/queue", async (c) => {
         return tab === "flagged" ? flagged : !flagged;
       });
     }
-    totalCount = finalRows.length;
-    totalLoadValue = sumLoadValuesDeduped(finalRows);
-    rawRows    = finalRows.slice(offset, offset + limit);
+    // Same dedup as the wide-candidate path so the count matches
+    // what's in the deduped table render.
+    const agg = aggregateByLoad(finalRows);
+    totalCount = agg.count;
+    totalLoadValue = agg.value;
+    rawRows = finalRows.slice(offset, offset + limit);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
