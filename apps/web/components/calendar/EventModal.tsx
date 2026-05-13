@@ -4465,10 +4465,10 @@ export default function EventModal() {
               </div>
               <div className="flex-1">
                 <div className="text-[13px] font-bold" style={{ color: '#b1271b' }}>
-                  Delete permanently
+                  Move to Recently Deleted
                 </div>
                 <div className="text-[12px] mt-0.5" style={{ color: '#b1271b', opacity: 0.85 }}>
-                  Remove the event and the load record. This can&apos;t be undone.
+                  Removes the event and the load record. Restorable from Trash for 30 days.
                 </div>
               </div>
             </button>
