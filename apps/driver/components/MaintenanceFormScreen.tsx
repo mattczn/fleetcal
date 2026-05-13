@@ -271,7 +271,7 @@ export default function MaintenanceScreen() {
           <View style={{ backgroundColor: '#fff', borderRadius: 14, padding: 16 }}>
 
             {/* Target kind toggle */}
-            <Text style={[txt(700), { fontSize: 11, color: '#5f6368', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 8 }]}>
               What's affected?
             </Text>
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
@@ -428,7 +428,7 @@ export default function MaintenanceScreen() {
 
           {/* History rail */}
           <View style={{ marginTop: 24 }}>
-            <Text style={[txt(800), { fontSize: 11, color: '#5f6368', letterSpacing: 1.1, marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 1.1, marginBottom: 8 }]}>
               {selectedLabel ? `RECENT REPORTS · ${selectedLabel.toUpperCase()}` : 'RECENT REPORTS'}
             </Text>
             {!selectedLabel ? (
@@ -483,7 +483,7 @@ function ToggleChip({
 function FieldLabel({ label, required }: { label: string; required?: boolean }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 6, gap: 4 }}>
-      <Text style={[txt(700), { fontSize: 11, color: '#5f6368', letterSpacing: 0.5, textTransform: 'uppercase' }]}>{label}</Text>
+      <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 0.5, textTransform: 'uppercase' }]}>{label}</Text>
       {required && <Text style={[txt(700), { fontSize: 11, color: '#c62828' }]}>*</Text>}
     </View>
   );
@@ -500,7 +500,7 @@ function HistoryRow({ report }: { report: MaintenanceReport }) {
   return (
     <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <Text style={[txt(500), { fontSize: 12, color: '#5f6368' }]}>{dateLabel}</Text>
+        <Text style={[txt(600), { fontSize: 12, color: '#202124' }]}>{dateLabel}</Text>
         <View style={{
           paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8,
           backgroundColor: statusColor.bg,

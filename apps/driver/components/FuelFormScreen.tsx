@@ -441,7 +441,7 @@ export default function FuelScreen() {
 
           {/* Recent submissions */}
           <View style={{ marginTop: 24 }}>
-            <Text style={[txt(800), { fontSize: 11, color: "#5f6368", letterSpacing: 1.1, marginBottom: 8 }]}>
+            <Text style={[txt(800), { fontSize: 11, color: "#202124", letterSpacing: 1.1, marginBottom: 8 }]}>
               YOUR RECENT REPORTS
             </Text>
             {recent.length === 0 ? (
@@ -471,8 +471,8 @@ function FieldLabel({
 }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12, marginBottom: 6, gap: 6 }}>
-      <Icon size={12} color="#5f6368" strokeWidth={2.2} />
-      <Text style={[txt(700), { fontSize: 11, color: "#5f6368", letterSpacing: 0.5, textTransform: "uppercase" }]}>
+      <Icon size={12} color="#202124" strokeWidth={2.4} />
+      <Text style={[txt(800), { fontSize: 11, color: "#202124", letterSpacing: 0.5, textTransform: "uppercase" }]}>
         {label}
       </Text>
       {required && <Text style={[txt(700), { fontSize: 11, color: "#c62828" }]}>*</Text>}
@@ -603,7 +603,7 @@ function RecentRow({
         <Text style={[txt(700), { fontSize: 14, color: "#202124" }]}>
           {asset ? formatAssetLabel(asset) : `Asset #${report.assetId}`} · {report.state}
         </Text>
-        <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginTop: 2 }]}>
+        <Text style={[txt(600), { fontSize: 12, color: "#202124", marginTop: 2 }]}>
           {dateLabel}
           {report.odometer != null ? ` · ${report.odometer.toLocaleString()} mi` : ""}
         </Text>
