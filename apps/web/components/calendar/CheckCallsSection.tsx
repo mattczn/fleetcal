@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Phone, MessageSquare, Mail, FileText, Plus, Trash2, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 import { railway } from '@/lib/railway';
+import { getSupabase } from '@/lib/supabase';
 import type { CheckCall, CheckCallChannel, CheckCallParty } from '@fleetcal/types';
 
 interface Props {
@@ -72,7 +73,31 @@ export default function CheckCallsSection({ loadId, currentUserName, accentColor
       .then(res => { if (!cancelled) setCalls(res.checkCalls); })
       .catch(err => console.error('listCheckCalls:', err))
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+
+    // Realtime subscription — refetch on any insert / delete to this
+    // load's check_calls. Catches both manual logs from other
+    // dispatchers AND auto-logged driver actions (check-in / status
+    // flips / confirm). Filter on load_id so we don't get spam from
+    // every other load in the org.
+    const supabase = getSupabase();
+    const channel = supabase
+      .channel(`check-calls-${loadId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'check_calls', filter: `load_id=eq.${loadId}` },
+        () => {
+          if (cancelled) return;
+          railway.listCheckCalls(loadId)
+            .then(res => { if (!cancelled) setCalls(res.checkCalls); })
+            .catch(err => console.error('listCheckCalls (realtime):', err));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
   }, [loadId]);
 
   const submit = async () => {

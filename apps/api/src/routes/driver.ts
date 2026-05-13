@@ -94,6 +94,16 @@ function rowToStop(s: StopRow): Stop {
 interface AssetMini { id: number; name: string; unit: string | null; color: string | null; motive_vehicle_id: string | null }
 interface TrailerMini { id: number; name: string; trailer_number: string | null }
 
+// Human-friendly stop-type labels for auto-generated check call bodies.
+const STOP_TYPE_LABEL = {
+  pickup:    "PICKUP",
+  delivery:  "DELIVERY",
+  drop:      "DROP",
+  drop_hook: "DROP & HOOK",
+  stop:      "STOP",
+  relay:     "RELAY",
+} as const;
+
 /**
  * Take a list of joined event rows + their stop/asset/trailer rows and
  * stitch them into the Load[] domain shape. Same pattern as loads.ts but
@@ -626,6 +636,35 @@ async function appendAudit(
   if (writeErr) console.error("[driver/appendAudit] write:", writeErr);
 }
 
+// Auto-log a system-generated check call for driver-side events
+// (check-ins, status flips, confirm). Dispatchers see these in the
+// load modal's Check Calls panel alongside manually-logged calls.
+// channel='note', with_party='driver' since these are all driver
+// actions. No-op on non-revenue events (loadId is null).
+async function recordDriverCheckCall(
+  loadId:  string | null | undefined,
+  orgId:   string,
+  byName:  string,
+  body:    string,
+  ts?:     string,
+): Promise<void> {
+  if (!loadId) return; // non-revenue events have no parent load
+  const { error } = await supabase
+    .from("check_calls")
+    .insert({
+      org_id:     orgId,
+      load_id:    loadId,
+      ts:         ts ?? new Date().toISOString(),
+      by_name:    byName,
+      channel:    "note",
+      with_party: "driver",
+      body,
+    } as never);
+  if (error) {
+    console.error("[recordDriverCheckCall]", loadId, body, error);
+  }
+}
+
 // Stamp acknowledged_at on any pending load_notifications matching the
 // driver action that just happened. Idempotent — re-running ack for
 // the same kind is a no-op since we only target rows where
@@ -740,6 +779,20 @@ driver.patch("/loads/:id", async (c) => {
     }
     if (body.status === "delivered") ackKinds.push("mark_delivery");
     if (ackKinds.length) await ackLoadNotifications(id, orgId, ackKinds);
+
+    // Surface picked_up + delivered to the check-calls panel for
+    // active dispatcher visibility. Only fire on these two — earlier
+    // transitions (dispatched/en_route) aren't useful as call logs.
+    if (body.status === "picked_up" || body.status === "delivered") {
+      const { data: evRow } = await supabase
+        .from("events")
+        .select("load_id")
+        .eq("id", id)
+        .maybeSingle();
+      const loadId = (evRow as { load_id: string | null } | null)?.load_id ?? null;
+      const label  = body.status === "picked_up" ? "Marked picked up" : "Marked delivered";
+      await recordDriverCheckCall(loadId, orgId, driverName, label);
+    }
   }
   if (body.trailerId !== undefined && body.trailerId !== prev.trailer_id) {
     await appendAudit(id, orgId, {
@@ -822,6 +875,18 @@ driver.post("/loads/:id/confirm", async (c) => {
   // Driver explicitly confirmed — ack any pending 'confirm' nudges
   // for this event so the dispatcher's pending-count drops to zero.
   await ackLoadNotifications(id, orgId, ["confirm"]);
+
+  // Log to the check-calls timeline so dispatchers see the
+  // confirmation alongside their manual call/text logs.
+  const { data: evRow } = await supabase
+    .from("events")
+    .select("load_id")
+    .eq("id", id)
+    .maybeSingle();
+  await recordDriverCheckCall(
+    (evRow as { load_id: string | null } | null)?.load_id ?? null,
+    orgId, driverName, "Confirmed load", nowIso,
+  );
   return c.json({ ok: true, confirmedAt: nowIso });
 });
 
@@ -877,6 +942,25 @@ driver.post("/stops/:id/check-in", async (c) => {
       distanceMi:   body.distanceMi,
     },
   });
+
+  // Surface the check-in to the dispatcher's check-calls panel as
+  // well as the audit log — dispatchers actively monitor the calls
+  // panel for in-flight loads.
+  const { data: evRow } = await supabase
+    .from("events")
+    .select("load_id")
+    .eq("id", stop.event_id)
+    .maybeSingle();
+  const loadId = (evRow as { load_id: string | null } | null)?.load_id ?? null;
+  const stopLabel = STOP_TYPE_LABEL[stop.type as keyof typeof STOP_TYPE_LABEL] ?? stop.type.toUpperCase();
+  const facility  = stop.facility_name ? ` — ${stop.facility_name}` : "";
+  const distNote  = body.distanceMi != null
+    ? (body.distanceMi < 0.1 ? " (on-site)" : ` (${body.distanceMi.toFixed(1)} mi off)`)
+    : "";
+  await recordDriverCheckCall(
+    loadId, orgId, driverName,
+    `Checked in at ${stopLabel}${facility}${distNote}`,
+  );
 
   return c.json({ ok: true });
 });
