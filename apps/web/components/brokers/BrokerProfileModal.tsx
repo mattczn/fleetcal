@@ -567,7 +567,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] font-extrabold uppercase tracking-wider"
-              style={{ color: 'var(--gc-text-3)' }}>
+              style={{ color: 'var(--gc-text-1)' }}>
               Contacts
             </span>
             <button type="button"
@@ -1136,8 +1136,8 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center text-[10px] font-bold uppercase tracking-widest"
-      style={{ color: 'var(--gc-text-3)' }}>
+    <div className="flex items-center text-[10px] font-extrabold uppercase tracking-widest mb-1.5"
+      style={{ color: 'var(--gc-text-1)' }}>
       {children}
     </div>
   );
@@ -1146,8 +1146,8 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function PField({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
-      <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider mb-1.5"
-        style={{ color: 'var(--gc-text-3)' }}>
+      <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider mb-1.5"
+        style={{ color: 'var(--gc-text-1)' }}>
         {icon}{label}
       </label>
       {children}
