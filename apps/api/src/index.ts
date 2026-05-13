@@ -171,13 +171,20 @@ serve(
 // the second would simply find nothing to flip.
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const SWEEP_STARTUP_DELAY_MS = 30_000;    // wait for app to settle
+console.log(`[auto-deliver-sweep] scheduled: startup in ${SWEEP_STARTUP_DELAY_MS / 1000}s, then every ${SWEEP_INTERVAL_MS / 60000}min`);
 setTimeout(() => {
-  void sweepAutoDeliver().catch((err) => {
-    console.error("[auto-deliver-sweep] startup run failed:", err);
-  });
+  console.log("[auto-deliver-sweep] running startup pass…");
+  void sweepAutoDeliver()
+    .then((r) => console.log(`[auto-deliver-sweep] startup pass done: swept=${r.swept}`))
+    .catch((err) => {
+      console.error("[auto-deliver-sweep] startup run failed:", err);
+    });
 }, SWEEP_STARTUP_DELAY_MS).unref();
 setInterval(() => {
-  void sweepAutoDeliver().catch((err) => {
-    console.error("[auto-deliver-sweep] hourly run failed:", err);
-  });
+  console.log("[auto-deliver-sweep] running hourly pass…");
+  void sweepAutoDeliver()
+    .then((r) => console.log(`[auto-deliver-sweep] hourly pass done: swept=${r.swept}`))
+    .catch((err) => {
+      console.error("[auto-deliver-sweep] hourly run failed:", err);
+    });
 }, SWEEP_INTERVAL_MS).unref();
