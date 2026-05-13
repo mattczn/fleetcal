@@ -647,28 +647,38 @@ export default function CloseoutView() {
   const [followUpTarget, setFollowUpTarget] = useState<Load | null>(null);
 
   // Column show/hide menu — persisted to localStorage so the user's
-  // layout sticks across sessions.
-  const [visibleCols, setVisibleCols] = useState<Record<ToggleableCol, boolean>>(() => {
-    if (typeof window === 'undefined') {
-      return Object.fromEntries(TOGGLEABLE_COLS.map(c => [c.key, true])) as Record<ToggleableCol, boolean>;
-    }
+  // layout sticks across sessions. Initial state MUST match what the
+  // server renders (all columns visible) so React can hydrate without
+  // a mismatch warning. The real saved-prefs are read on mount via the
+  // hydrate effect below, and the column count momentarily flips to
+  // the persisted value once that effect commits — a one-frame shift
+  // the user won't see, vs the noisy hydration warning we'd get if we
+  // read localStorage during the initial useState call.
+  const [visibleCols, setVisibleCols] = useState<Record<ToggleableCol, boolean>>(
+    () => Object.fromEntries(TOGGLEABLE_COLS.map(c => [c.key, true])) as Record<ToggleableCol, boolean>,
+  );
+  // Track whether the initial localStorage read has happened. Without
+  // this, the persist effect below would run during the first commit
+  // with the "all visible" default and clobber the user's stored
+  // preferences before the hydrate effect has a chance to read them.
+  const [colsHydrated, setColsHydrated] = useState(false);
+  useEffect(() => {
     try {
       const stored = window.localStorage.getItem(COLS_STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored) as Record<string, boolean>;
-        // Re-build with defaults for any new column added since the
-        // user last saved their preferences.
         const out: Record<ToggleableCol, boolean> = {} as Record<ToggleableCol, boolean>;
         for (const c of TOGGLEABLE_COLS) out[c.key] = parsed[c.key] ?? true;
-        return out;
+        setVisibleCols(out);
       }
-    } catch { /* fall through to default */ }
-    return Object.fromEntries(TOGGLEABLE_COLS.map(c => [c.key, true])) as Record<ToggleableCol, boolean>;
-  });
+    } catch { /* ignore */ }
+    setColsHydrated(true);
+  }, []);
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols));
-  }, [visibleCols]);
+    if (!colsHydrated) return;
+    try { window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols)); }
+    catch { /* ignore */ }
+  }, [visibleCols, colsHydrated]);
   const toggleCol = (key: ToggleableCol) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
 
   // Persisted column prefs — hidden / order / widths / pinned.
