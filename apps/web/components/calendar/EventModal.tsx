@@ -1499,7 +1499,12 @@ export default function EventModal() {
 
   // Compute loaded mileage from geocoded stops via Mapbox Directions.
   // For relay legs, only count stops up to (pickup) or from (delivery) the relay handoff.
+  // Skipped when status is 'tonu' or 'cancelled' (load didn't move → 0 miles).
   useEffect(() => {
+    if (status === 'tonu' || status === 'cancelled') {
+      setLoadedMiles(0);
+      return;
+    }
     const relayIdx = stops.findIndex(s => s.type === 'relay');
     let legStops: typeof stops;
     if (relayIdx === -1) {
@@ -1520,7 +1525,7 @@ export default function EventModal() {
       calcRoadMiles(geocoded).then(miles => { if (!cancelled) setLoadedMiles(miles); })
     );
     return () => { cancelled = true; };
-  }, [stops, relayRole]);
+  }, [stops, relayRole, status]);
 
   // Partner leg miles — for relay loads only, to compute total rate/mile correctly
   useEffect(() => {
