@@ -1057,10 +1057,16 @@ export const useCalendarStore = create<CalendarStore>()(
     // "another dispatcher updated" banner.
     const isSelfEcho = consumeSelfWrite(event.id);
     set((state) => ({
-      events: state.events.map(e => e.id === event.id
-        // Realtime payload never includes stops (not a column) — preserve existing stops
-        ? { ...e, ...event, stops: e.stops }
-        : e),
+      events: state.events.map(e => {
+        if (e.id !== event.id) return e;
+        // RealtimeSync refetches via railway.getEvent which returns a
+        // fully-joined Load including fresh stops. Take the incoming
+        // stops when they look populated; only fall back to the local
+        // copy when the refetch came back empty (defensive — e.g., if
+        // a future path ever passes a partial payload).
+        const stops = (event.stops && event.stops.length > 0) ? event.stops : e.stops;
+        return { ...e, ...event, stops };
+      }),
       modalConflict: !isSelfEcho && state.modalOpen && state.modalEventId === event.id
         ? 'updated'
         : state.modalConflict,
