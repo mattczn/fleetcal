@@ -223,15 +223,32 @@ export function QueueTable<R>({
       else newOther.push(c);
     }
     const all = [...newSystem, ...ordered, ...newOther];
-    const left: QueueColumn<R>[] = [];
+    // Within the left/right pinned partitions, system columns
+    // (`pinned: true`) always sit at the OUTER edge — left-pinned
+    // system at the very start, right-pinned system at the very
+    // end — regardless of where they appear in the user's saved
+    // column order. That guarantees row utilities like Star + Notes
+    // stay anchored next to the select checkbox even after the user
+    // drags some other column around in the Columns menu (which
+    // would otherwise drop `flags` somewhere in the middle of the
+    // left partition).
+    const leftSystem: QueueColumn<R>[] = [];
+    const leftUser: QueueColumn<R>[] = [];
     const free: QueueColumn<R>[] = [];
-    const right: QueueColumn<R>[] = [];
+    const rightSystem: QueueColumn<R>[] = [];
+    const rightUser: QueueColumn<R>[] = [];
     for (const c of all) {
-      if (isPinnedRight(c)) right.push(c);
-      else if (isPinnedLeft(c)) left.push(c);
-      else free.push(c);
+      if (isPinnedRight(c)) {
+        if (c.pinned) rightSystem.push(c);
+        else rightUser.push(c);
+      } else if (isPinnedLeft(c)) {
+        if (c.pinned) leftSystem.push(c);
+        else leftUser.push(c);
+      } else {
+        free.push(c);
+      }
     }
-    return [...left, ...free, ...right];
+    return [...leftSystem, ...leftUser, ...free, ...rightUser, ...rightSystem];
   }, [columns, columnOrder, hiddenColumns, isPinnedLeft, isPinnedRight]);
 
   // Click-to-sort cycler — asc → desc → off.
