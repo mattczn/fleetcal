@@ -173,6 +173,11 @@ export function QueueTable<R>({
   isLoading, emptyMessage = 'No rows match.',
   footerExtra,
 }: QueueTableProps<R>) {
+  // Hovered row id — tracked in React state (not just CSS :hover) so
+  // sticky-pinned cells, which need their own opaque background to
+  // keep scrolling content from showing through, can flip color in
+  // sync with the rest of the row.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   // A column is left-pinned via user override (pinnedColumns) or its
   // own pinLeft default. pinRight is always static (no user override).
   // Non-togglable columns (`pinned: true`) — typically system columns
@@ -475,10 +480,21 @@ export function QueueTable<R>({
             ) : (
               rows.map(r => {
                 const id = rowKey(r);
-                const rowBg = rowClassName?.(r) ? undefined : 'var(--gc-surface)';
+                const hovered = hoveredId === id;
+                // When the row has a rowClassName (priority tint, etc.)
+                // we let that class drive the resting color and apply
+                // hover on top via a slight tint; otherwise we paint
+                // every cell with the surface color so sticky cells
+                // stay opaque during horizontal scroll.
+                const customBg = !!rowClassName?.(r);
+                const restingBg = customBg ? undefined : 'var(--gc-surface)';
+                const hoverBg = customBg ? 'var(--gc-hover-strong)' : 'var(--gc-hover)';
+                const rowBg = hovered ? hoverBg : restingBg;
                 return (
                   <tr key={id}
                     onClick={onRowClick ? () => onRowClick(r) : undefined}
+                    onMouseEnter={() => setHoveredId(id)}
+                    onMouseLeave={() => setHoveredId(prev => (prev === id ? null : prev))}
                     className={`group transition-colors ${rowClassName?.(r) ?? ''}`}
                     style={{
                       cursor: onRowClick ? 'pointer' : 'default',
@@ -489,6 +505,7 @@ export function QueueTable<R>({
                         textAlign: 'center',
                         position: 'sticky', left: 0, zIndex: 5,
                         background: rowBg ?? 'inherit',
+                        transition: 'background-color 80ms ease-out',
                       }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox"
                           checked={!!selected?.has(id)}
@@ -510,7 +527,15 @@ export function QueueTable<R>({
                             left: lpx,
                             right: rpx,
                             zIndex: sticky ? 5 : undefined,
-                            background: sticky ? (rowBg ?? 'inherit') : undefined,
+                            transition: 'background-color 80ms ease-out',
+                            // Sticky cells need an opaque background;
+                            // non-sticky cells only need a background
+                            // when the row is hovered or has a custom
+                            // tint (otherwise the tbody/table behind
+                            // shows through normally).
+                            background: sticky
+                              ? (rowBg ?? 'inherit')
+                              : (hovered ? hoverBg : undefined),
                             boxShadow: pinEdgeShadow(c, visibleColumns, pinnedKeySet, isPinnedLeft, isPinnedRight),
                           }}>
                           {c.render(r)}
