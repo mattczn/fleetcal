@@ -1246,7 +1246,7 @@ export default function EventModal() {
     createRelayPair, splitToRelay, saveRelayBoth, removeRelay,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
     batchItems, batchIndex, batchNext, clearBatch,
-    orgId, dispatchers, customers, addCustomer, addCustomerAlias, updateCustomer,
+    orgId, dispatchers, customers, addCustomer, addCustomerAlias, addCustomerContact, updateCustomer,
     trailers,
     driverPayPct,
     eldLocations,
@@ -1800,6 +1800,15 @@ export default function EventModal() {
             vals['broker'] = match.customer.name;
             if (String(p.broker).trim() !== match.customer.name) {
               void addCustomerAlias(match.customer.id, String(p.broker).trim());
+            }
+            // Same auto-append-contact behavior as the single-parse path.
+            const bp = (p as Record<string, unknown>).brokerProfile as { contactName?: string; contactEmail?: string; contactPhone?: string } | undefined;
+            if (bp && (bp.contactName || bp.contactEmail || bp.contactPhone)) {
+              void addCustomerContact(match.customer.id, {
+                name:  bp.contactName,
+                email: bp.contactEmail,
+                phone: bp.contactPhone,
+              });
             }
           }
           setBrokerMatch(match);
@@ -2460,6 +2469,18 @@ export default function EventModal() {
             setField('broker', match.customer.name);
             if (String(parsed.broker).trim() !== match.customer.name) {
               void addCustomerAlias(match.customer.id, String(parsed.broker).trim());
+            }
+            // AI-extracted rep info from the rate con — append to the
+            // matched customer's contacts[] if we don't already have a
+            // contact with the same email/phone. Helps build out the
+            // contact list passively over time.
+            const bp = parsed.brokerProfile as { contactName?: string; contactEmail?: string; contactPhone?: string } | undefined;
+            if (bp && (bp.contactName || bp.contactEmail || bp.contactPhone)) {
+              void addCustomerContact(match.customer.id, {
+                name:  bp.contactName,
+                email: bp.contactEmail,
+                phone: bp.contactPhone,
+              });
             }
           } else {
             resolvedBroker = String(parsed.broker);

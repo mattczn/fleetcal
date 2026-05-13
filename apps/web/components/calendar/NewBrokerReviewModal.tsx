@@ -55,14 +55,30 @@ export function NewBrokerReviewModal({
     if (!canCreate) return;
     setBusy(true);
     try {
+      // Seed contacts[0] from the extracted name/email/phone so the new
+      // multi-contact UI sees the rep we just parsed off the rate con.
+      // Skip if none of the three were filled in.
+      const name_  = contactName.trim();
+      const email_ = contactEmail.trim();
+      const phone_ = contactPhone.trim();
+      const initialContacts = (name_ || email_ || phone_)
+        ? [{
+            id:    crypto.randomUUID(),
+            name:  name_  || undefined,
+            email: email_ || undefined,
+            phone: phone_ || undefined,
+          }]
+        : [];
       await onConfirm({
         name:                trimmedName,
         aliases:             [],
-        contacts:            [],
+        contacts:            initialContacts,
         shortName:           shortName.trim()            || undefined,
-        contactName:         contactName.trim()          || undefined,
-        contactEmail:        contactEmail.trim()         || undefined,
-        contactPhone:        contactPhone.trim()         || undefined,
+        // Legacy fields kept in sync for backwards-compat with anywhere
+        // still reading customer.contactName/email/phone.
+        contactName:         name_  || undefined,
+        contactEmail:        email_ || undefined,
+        contactPhone:        phone_ || undefined,
         invoiceMethod:       invoiceMethod || undefined,
         invoiceEmail:        invoiceMethod === 'email'  ? (invoiceEmail.trim()  || undefined) : undefined,
         invoicePortal:       invoiceMethod === 'portal' ? (invoicePortal.trim() || undefined) : undefined,

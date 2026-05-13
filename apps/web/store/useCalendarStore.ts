@@ -262,6 +262,10 @@ interface CalendarStore extends ModalState {
   updateCustomer: (id: string, updates: Partial<Omit<Customer, 'id'>>) => Promise<void>;
   removeCustomer: (id: string) => Promise<void>;
   addCustomerAlias: (id: string, alias: string) => Promise<void>;
+  /** Append a contact to customer.contacts[] if no existing entry has
+   *  the same email OR phone (case/whitespace-insensitive). No-op when
+   *  the contact lacks name+email+phone. */
+  addCustomerContact: (id: string, contact: { name?: string; email?: string; phone?: string }) => Promise<void>;
 
   trailers: Trailer[];
   fetchTrailers: () => Promise<void>;
@@ -603,6 +607,34 @@ export const useCalendarStore = create<CalendarStore>()(
     const newAliases = [...customer.aliases, alias];
     await updateCustomer(id, { aliases: newAliases });
     set((s) => ({ customers: s.customers.map(c => c.id === id ? { ...c, aliases: newAliases } : c) }));
+  },
+  addCustomerContact: async (id, contact) => {
+    const customer = get().customers.find(c => c.id === id);
+    if (!customer) return;
+    const name  = contact.name?.trim();
+    const email = contact.email?.trim().toLowerCase();
+    const phone = contact.phone?.trim().replace(/\D/g, '');
+    // Nothing meaningful → don't add.
+    if (!name && !email && !phone) return;
+    // Dedup by email or phone (case-insensitive / digits-only).
+    const existing = customer.contacts ?? [];
+    const dupe = existing.some(c => {
+      const e = c.email?.trim().toLowerCase();
+      const p = c.phone?.trim().replace(/\D/g, '');
+      return (email && e && email === e) || (phone && p && phone === p);
+    });
+    if (dupe) return;
+    const next = [
+      ...existing,
+      {
+        id:    crypto.randomUUID(),
+        name:  contact.name?.trim()  || undefined,
+        email: contact.email?.trim() || undefined,
+        phone: contact.phone?.trim() || undefined,
+      },
+    ];
+    await updateCustomer(id, { contacts: next });
+    set((s) => ({ customers: s.customers.map(c => c.id === id ? { ...c, contacts: next } : c) }));
   },
 
   // ── Trailers ──────────────────────────────────────────────────────────────
