@@ -1,9 +1,9 @@
 /**
  * Clerk JWT verification middleware.
  *
- * Verifies the Bearer token, extracts the active org and user, and attaches
- * them to the Hono context. Routes that need auth pull `c.get('orgId')` /
- * `c.get('userId')`.
+ * Verifies the Bearer token, extracts the active org + user + role, and
+ * attaches them to the Hono context. Routes that need auth pull
+ * `c.get('orgId')` / `c.get('userId')` / `c.get('orgRole')`.
  *
  * Returns:
  *   401 if no Authorization header or token is invalid/expired
@@ -12,11 +12,17 @@
 
 import type { MiddlewareHandler } from "hono";
 import { verifyToken } from "@clerk/backend";
+import { parseClerkRole, type OrgRole } from "@fleetcal/types";
 import { env } from "../lib/env.js";
 
 export type AuthVariables = {
   userId: string;
   orgId: string;
+  /** Resolved role for this user in the active org, derived from the
+   *  Clerk role slug on the JWT (`org_role` or `o.rol`). Undefined
+   *  when the token was minted before we added the claim — callers
+   *  that gate on this MUST treat undefined as least-privileged. */
+  orgRole: OrgRole | undefined;
 };
 
 export const clerkAuth: MiddlewareHandler<{ Variables: AuthVariables }> =
@@ -38,9 +44,16 @@ export const clerkAuth: MiddlewareHandler<{ Variables: AuthVariables }> =
       const userId = claims.sub;
       // Clerk session tokens carry the active org as `org_id` (or `o.id` in
       // newer templates). Accept either.
-      const orgId =
-        (claims as Record<string, unknown>).org_id ??
-        (claims as { o?: { id?: string } }).o?.id;
+      const claimsRec = claims as Record<string, unknown>;
+      const orgClaim = claimsRec.o as { id?: string; rol?: string } | undefined;
+      const orgId = (claimsRec.org_id as string | undefined) ?? orgClaim?.id;
+      // Role slug — Clerk passes `org:owner` / `org:admin` / etc. We
+      // accept either the long-form `org_role` claim (custom template)
+      // or the short `o.rol` from Clerk's default session shape.
+      const roleSlug =
+        (claimsRec.org_role as string | undefined) ??
+        orgClaim?.rol ??
+        undefined;
 
       if (!userId) {
         return c.json({ error: "unauthorized", reason: "no_subject" }, 401);
@@ -52,8 +65,9 @@ export const clerkAuth: MiddlewareHandler<{ Variables: AuthVariables }> =
         );
       }
 
-      c.set("userId", userId);
-      c.set("orgId",  orgId);
+      c.set("userId",  userId);
+      c.set("orgId",   orgId);
+      c.set("orgRole", parseClerkRole(roleSlug));
       await next();
     } catch (err) {
       const message = err instanceof Error ? err.message : "verification_failed";

@@ -97,3 +97,7 @@ export {
 
 export * from "./api";
 export * from "./realtime";
+
+// ── Org roles + capability model ────────────────────────────────────────
+
+export * from "./permissions";
