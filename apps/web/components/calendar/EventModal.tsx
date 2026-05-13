@@ -1259,9 +1259,41 @@ export default function EventModal() {
   const isEdit  = modalMode === 'edit';
   const isBatch = batchItems.length > 0;
 
+  // Canonical display name — prefers the modern firstName + lastName
+  // combo so a driver that was renamed via the new fields surfaces
+  // their full name everywhere. Falls back to the legacy `.name` for
+  // records that haven't been split yet.
+  const canonicalDriverName = (d: { firstName?: string; lastName?: string; name?: string }) => {
+    const full = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
+    return full || d.name || '';
+  };
+
+  // Resolve a driver name string (legacy or canonical) back to the
+  // matching driver record. Matches by canonical name OR by the
+  // legacy .name field, case-insensitive — so a load saved before
+  // the firstName/lastName split still finds the right person.
+  const findDriverByName = (name: string | undefined) => {
+    if (!name) return undefined;
+    const lower = name.trim().toLowerCase();
+    if (!lower) return undefined;
+    return drivers.find(d =>
+      canonicalDriverName(d).toLowerCase() === lower ||
+      (d.name ?? '').toLowerCase() === lower
+    );
+  };
+
+  // Preferred-driver autofill when an asset is selected. Looks up
+  // the asset's preferred driverId in driverPrefs, resolves to the
+  // current driver record, and returns the canonical display name.
+  // Previously this returned d.name (legacy) which surfaced empty
+  // when a driver was renamed but the legacy field stayed blank —
+  // the asset change would clear the driver field instead of
+  // filling it.
   const preferredDriverName = (aid: number) => {
     const driverId = driverPrefs[aid];
-    return driverId ? (drivers.find(d => d.id === driverId)?.name ?? '') : '';
+    if (!driverId) return '';
+    const d = drivers.find(x => x.id === driverId);
+    return d ? canonicalDriverName(d) : '';
   };
 
   // Core fields (always visible)
@@ -1623,11 +1655,29 @@ export default function EventModal() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fieldValues['loadPrice'], driverPayPct]);
 
+  // Resolve the driver name to display for an event. Looks up by
+  // driverId FK first — rename-resistant — then falls back to the
+  // stored name string for legacy rows that don't have the FK set
+  // yet. Empty string when neither resolves so the dropdown shows
+  // "— No driver —".
+  const resolveDriverNameForEvent = (ev: CalendarEvent): string => {
+    if (ev.driverId != null) {
+      const d = drivers.find(x => x.id === ev.driverId);
+      if (d) return canonicalDriverName(d);
+    }
+    if (ev.driverName) {
+      const d = findDriverByName(ev.driverName);
+      if (d) return canonicalDriverName(d);
+      return ev.driverName;
+    }
+    return '';
+  };
+
   // Re-initialize form from a CalendarEvent (used by conflict "Reload" banner)
   const reinitForm = (ev: CalendarEvent) => {
     setTitle(ev.title);
     setAssetId(ev.assetId);
-    setDriverName(ev.driverName ?? '');
+    setDriverName(resolveDriverNameForEvent(ev));
     const [sd, st = ''] = ev.start.split('T');
     const [ed, et = ''] = ev.end.split('T');
     prevStartDateRef.current = sd;
@@ -1681,7 +1731,7 @@ export default function EventModal() {
       if (!ev) return;
       setTitle(ev.title);
       setAssetId(ev.assetId);
-      setDriverName(ev.driverName ?? '');
+      setDriverName(resolveDriverNameForEvent(ev));
       const [sd, st = ''] = ev.start.split('T');
       const [ed, et = ''] = ev.end.split('T');
       prevStartDateRef.current = sd;
@@ -1848,7 +1898,11 @@ export default function EventModal() {
       setTitle(d.title ?? '');
       const initialAssetId = d.assetId ?? assets[0]?.id ?? 1;
       setAssetId(initialAssetId);
-      setDriverName(d.driverName ?? preferredDriverName(initialAssetId));
+      setDriverName(
+        d.driverName
+          ? (canonicalDriverName(findDriverByName(d.driverName) ?? { name: d.driverName }) || d.driverName)
+          : preferredDriverName(initialAssetId)
+      );
       prevStartDateRef.current = sd;
       setStartDate(sd); setStartTime(st.slice(0, 5));
       setEndDate(ed);   setEndTime(et.slice(0, 5));
@@ -2039,6 +2093,16 @@ export default function EventModal() {
     const rateConField = storedPdf ?? null;
     const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: rateConField, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, ...internalNoteFields };
 
+    // Resolve the typed driverId FROM the current driverName string
+    // so every save persists the FK as well as the legacy name. Without
+    // this, loads written from this modal kept driver_id NULL and
+    // downstream features (payroll grouping, the driver-link button on
+    // reports, etc.) had to limp along matching by name — which breaks
+    // the moment a driver is renamed. Same logic for the relay's
+    // delivery leg.
+    const driverId          = findDriverByName(driverName)?.id          ?? undefined;
+    const relayDelivDriverId = findDriverByName(relayDelivDriverName)?.id ?? undefined;
+
     const relayStop = stops.find(s => s.type === 'relay');
     const pickupLegEnd      = relayStop?.apptStart ?? `${endDate}T${endTime}`;
     const deliveryLegStart  = relayStop?.apptEnd   ?? pickupLegEnd;
@@ -2050,14 +2114,14 @@ export default function EventModal() {
 
     if (isPickupLeg && relayPartner && relayGroupId) {
       const pickupUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
-        ...shared, assetId, driverName: driverName || undefined,
+        ...shared, assetId, driverName: driverName || undefined, driverId,
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
         driverPay: pickupPay,
         status, relayGroupId, relayRole: 'pickup',
       };
       const deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
         ...shared,
-        assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined,
+        assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined, driverId: relayDelivDriverId,
         start: deliveryLegStart,
         end: relayPartner.end,
         driverPay: deliveryPay,
@@ -2068,14 +2132,14 @@ export default function EventModal() {
 
     } else if (isDeliveryLeg && relayPartner && relayGroupId) {
       const deliveryUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
-        ...shared, assetId, driverName: driverName || undefined,
+        ...shared, assetId, driverName: driverName || undefined, driverId,
         start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
         driverPay: deliveryPay,
         status, relayGroupId, relayRole: 'delivery',
       };
       const pickupUpdates: Partial<Omit<CalendarEvent, 'id'>> = {
         ...shared,
-        assetId: relayPartner.assetId, driverName: relayPartner.driverName,
+        assetId: relayPartner.assetId, driverName: relayPartner.driverName, driverId: relayPartner.driverId,
         start: relayPartner.start, end: pickupLegEnd,
         driverPay: pickupPay,
         status: relayPartner.status ?? 'scheduled',
@@ -2090,7 +2154,7 @@ export default function EventModal() {
       const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       const relayAuditLog = isEdit && existingEv ? appendAuditEntry(auditLog, buildAuditEntry(existingEv, { assetId, driverName: driverName || undefined, newLoadPrice: parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined, newDriverPay: parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined, newStopCount: stops.length, newAccessorials: accessorials, relayCreated: true }, currentUserName)) : undefined;
       const pickupData: Omit<CalendarEvent, 'id'> = {
-        ...shared, assetId, driverName: driverName || undefined,
+        ...shared, assetId, driverName: driverName || undefined, driverId,
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
         driverPay: pickupPay,
         status, relayGroupId: rgId, relayRole: 'pickup',
@@ -2099,7 +2163,7 @@ export default function EventModal() {
       };
       const deliveryData: Omit<CalendarEvent, 'id'> = {
         ...shared,
-        assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined,
+        assetId: relayDelivAssetId, driverName: relayDelivDriverName || undefined, driverId: relayDelivDriverId,
         start: deliveryLegStart, end: `${delivEndDate}T${endTime}`,
         driverPay: deliveryPay,
         status: 'scheduled', relayGroupId: rgId, relayRole: 'delivery',
@@ -2121,7 +2185,7 @@ export default function EventModal() {
         : undefined;
 
       const payload: Omit<CalendarEvent, 'id'> = {
-        ...shared, assetId, driverName: newDriverName,
+        ...shared, assetId, driverName: newDriverName, driverId,
         start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
         status,
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
@@ -3761,10 +3825,13 @@ export default function EventModal() {
                 <StyledSelect value={driverName} onChange={e => { markDirty(); setDriverName(e.target.value); }}
                   style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
                   <option value="">— No driver —</option>
-                  {drivers.map(d => <option key={d.id} value={d.name}>{driverDisplayName(d)}</option>)}
+                  {drivers.map(d => {
+                    const display = canonicalDriverName(d);
+                    return <option key={d.id} value={display}>{display}</option>;
+                  })}
                 </StyledSelect>
                 {(() => {
-                  const sel = driverName ? drivers.find(d => d.name === driverName) : null;
+                  const sel = findDriverByName(driverName) ?? null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
                   const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
                   const showNotify = eventKind === 'revenue' && isEdit && !!sel?.id && !!modalEventId;
@@ -4061,7 +4128,10 @@ export default function EventModal() {
                               <StyledSelect value={relayDelivDriverName} onChange={e => setRelayDelivDriverName(e.target.value)}
                                 style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
                                 <option value="">— No driver —</option>
-                                {drivers.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+                                {drivers.map(d => {
+                                  const display = canonicalDriverName(d);
+                                  return <option key={d.id} value={display}>{display}</option>;
+                                })}
                               </StyledSelect>
                             </Field>
                           </div>
