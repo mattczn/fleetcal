@@ -19,7 +19,7 @@
  * calendar's loaded window.
  */
 
-import { useEffect, useMemo, useRef, useState, forwardRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, forwardRef } from 'react';
 import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
@@ -33,7 +33,7 @@ import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
-import { CustomerFilterDropdown, useColumnOrder, useColumnWidths, ReorderableColumnsMenu, ColumnResizeHandle } from '@/components/queue/QueueTablePrimitives';
+import { QueueTable, QueueColumnsButton, usePersistedColumnPrefs, type QueueColumn } from '@/components/queue/QueueTable';
 
 type Tab = 'pending' | 'flagged' | 'all';
 
@@ -574,56 +574,310 @@ export default function CloseoutView() {
   }, [visibleCols]);
   const toggleCol = (key: ToggleableCol) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
 
-  // Reorderable column order — drag a header to a new position, the
-  // change persists per-user via localStorage. The default order
-  // matches the TOGGLEABLE_COLS list; newly-added columns append to
-  // the end so code changes don't blow away user preferences.
-  const DEFAULT_COL_ORDER = useMemo<ToggleableCol[]>(
-    () => TOGGLEABLE_COLS.map(c => c.key as ToggleableCol),
-    [],
+  // Persisted column prefs — hidden / order / widths. Replaces the old
+  // useColumnOrder + useColumnWidths + visibleCols trio.
+  const {
+    hidden: hiddenCols, setHidden: setHiddenCols,
+    order: colOrder, setOrder: setColOrder,
+    widths: colWidths, setWidths: setColWidths,
+  } = usePersistedColumnPrefs('closeout-cols-v2',
+    new Set(Object.entries(visibleCols).filter(([, v]) => !v).map(([k]) => k)),
   );
-  const { order: colOrder, move: moveCol } =
-    useColumnOrder<ToggleableCol>('closeout-cols-order-v1', DEFAULT_COL_ORDER);
-  // User-resizable column widths. Drag the right edge of a header.
-  const { widths: colWidths, getResizeProps: getColResizeProps } =
-    useColumnWidths<ToggleableCol>('closeout-cols-widths-v1');
-  // Visible columns in the user's current order. Filter out hidden
-  // ones so the iteration in <thead>/<tbody> doesn't need to check.
-  const orderedVisibleCols = useMemo(
-    () => colOrder.filter(c => visibleCols[c]),
-    [colOrder, visibleCols],
-  );
+  const [tablePageSize, setTablePageSize] = useState(PAGE_SIZE);
 
-  // (Columns dropdown click-outside is handled inside
-  // ReorderableColumnsMenu — no local state needed here anymore.)
+  // ── QueueTable column config ────────────────────────────────────────
+  // Closures capture state setters above so cell renderers can fire
+  // their own actions (open modal, flag, follow up, etc.) without
+  // prop-drilling through QueueTable.
+  const tableColumns = useMemo<QueueColumn<QueueRow>[]>(() => {
+    // Pinned-left columns — stay anchored during horizontal scroll.
+    const PIN_LEFT: Set<string> = new Set(['internalId', 'loadNum', 'customer', 'rate', 'docs']);
+    const PRIORITY = (load: QueueRow) => !!load.priority;
 
-  // Per-column header menu — combined sort + filter popover anchored to
-  // the clicked column header. Replaces the prior always-visible filter
-  // row, which felt cramped.
-  const [openHeaderCol, setOpenHeaderCol] = useState<ColKey | null>(null);
-  const headerRefs = useRef<Partial<Record<ColKey, HTMLTableCellElement | null>>>({});
-  const headerMenuRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!openHeaderCol) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (headerMenuRef.current?.contains(target)) return;
-      const inAnyHeader = Object.values(headerRefs.current).some(el => el?.contains(target));
-      if (inAnyHeader) return; // header click toggles via its own onClick
-      setOpenHeaderCol(null);
+    const sortVal = (key: ColKey, r: QueueRow): string | number | null => {
+      switch (key) {
+        case 'age':          return ageDays(effectiveDeliveryEnd(r));
+        case 'delivered':    return effectiveDeliveryEnd(r);
+        case 'internalId':   return r.internalLoadId ?? '';
+        case 'loadNum':      return r.loadNum ?? '';
+        case 'title':        return r.title ?? '';
+        case 'customer':     return displayBrokerName(r.broker, customers);
+        case 'driver':       return r.driverName ?? '';
+        case 'rate':         return r.loadPrice ?? 0;
+        case 'accessorials': return (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+      }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [openHeaderCol]);
+
+    const filterCustomerOpts = Array.from(new Set(
+      rows.map(r => displayBrokerName(r.broker, customers)).filter(Boolean),
+    )).sort();
+
+    const cols: QueueColumn<QueueRow>[] = [];
+
+    // age
+    cols.push({
+      key: 'age', label: 'Age', width: DEFAULT_COL_WIDTHS.age,
+      sortable: true, pinLeft: PIN_LEFT.has('age'),
+      sortValue: r => sortVal('age', r),
+      render: r => {
+        const days = ageDays(effectiveDeliveryEnd(r));
+        const c = ageColor(days);
+        return (
+          <span style={{ background: c.bg, color: c.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+            {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
+          </span>
+        );
+      },
+    });
+
+    // delivered
+    cols.push({
+      key: 'delivered', label: 'Delivered', width: DEFAULT_COL_WIDTHS.delivered,
+      sortable: true, pinLeft: PIN_LEFT.has('delivered'),
+      sortValue: r => sortVal('delivered', r),
+      render: r => fmtDate(effectiveDeliveryEnd(r)) || '—',
+    });
+
+    // internalId
+    cols.push({
+      key: 'internalId', label: 'ID / Inv #', width: DEFAULT_COL_WIDTHS.internalId,
+      sortable: true, pinLeft: PIN_LEFT.has('internalId'),
+      filter: { kind: 'text' },
+      sortValue: r => sortVal('internalId', r),
+      filterValue: r => String(r.internalLoadId ?? ''),
+      render: r => r.internalLoadId != null
+        ? <CopyableCell value={String(r.internalLoadId)} displayValue={String(r.internalLoadId)} title="Copy ID / invoice #" />
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    // loadNum
+    cols.push({
+      key: 'loadNum', label: 'Load #', width: DEFAULT_COL_WIDTHS.loadNum,
+      sortable: true, pinLeft: PIN_LEFT.has('loadNum'),
+      filter: { kind: 'text' },
+      sortValue: r => sortVal('loadNum', r),
+      filterValue: r => r.loadNum ?? '',
+      render: r => r.loadNum
+        ? <CopyableLoadNum value={r.loadNum} />
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    // title
+    cols.push({
+      key: 'title', label: 'Title', width: DEFAULT_COL_WIDTHS.title,
+      sortable: true, pinLeft: PIN_LEFT.has('title'),
+      filter: { kind: 'text' },
+      sortValue: r => sortVal('title', r),
+      filterValue: r => r.title ?? '',
+      render: r => (
+        <button type="button"
+          onClick={(e) => { e.stopPropagation(); void openLoadInModal(r); }}
+          className="text-left font-bold hover:underline truncate"
+          style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+          title="Open load details">{r.title}</button>
+      ),
+    });
+
+    // customer
+    cols.push({
+      key: 'customer', label: 'Customer', width: DEFAULT_COL_WIDTHS.customer,
+      sortable: true, pinLeft: PIN_LEFT.has('customer'),
+      filter: { kind: 'multi', options: filterCustomerOpts },
+      sortValue: r => sortVal('customer', r),
+      filterValue: r => displayBrokerName(r.broker, customers),
+      render: r => {
+        const cust = displayBrokerName(r.broker, customers);
+        const matched = customers.find(c =>
+          c.name === r.broker || (c.aliases ?? []).includes(r.broker ?? ''),
+        );
+        return matched ? (
+          <button type="button"
+            onClick={(e) => { e.stopPropagation(); setBrokerProfileId(matched.id); }}
+            className="text-left hover:underline truncate block"
+            style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+            title={`Open customer profile — ${cust}`}>{cust}</button>
+        ) : (
+          <span className="truncate block"
+            title={cust || undefined}
+            style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)', maxWidth: '100%' }}>
+            {cust || '—'}
+          </span>
+        );
+      },
+    });
+
+    // driver
+    cols.push({
+      key: 'driver', label: 'Driver(s)', width: DEFAULT_COL_WIDTHS.driver,
+      sortable: true, pinLeft: PIN_LEFT.has('driver'),
+      filter: { kind: 'text' },
+      sortValue: r => sortVal('driver', r),
+      filterValue: r => r.driverName ?? '',
+      render: r => {
+        const partner = r.relayGroupId
+          ? rows.find(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
+          : null;
+        const drivers: string[] = [];
+        if (r.driverName) drivers.push(r.driverName);
+        if (partner?.driverName && partner.driverName !== r.driverName) drivers.push(partner.driverName);
+        if (drivers.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>;
+        if (drivers.length === 1) return <span>{drivers[0]}</span>;
+        return (
+          <div>
+            <div className="text-[12.5px]">{drivers[0]}</div>
+            <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+          </div>
+        );
+      },
+    });
+
+    // rate
+    cols.push({
+      key: 'rate', label: 'Rate', width: DEFAULT_COL_WIDTHS.rate,
+      align: 'right', sortable: true, pinLeft: PIN_LEFT.has('rate'),
+      sortValue: r => sortVal('rate', r),
+      render: r => (
+        <span className="font-semibold tabular-nums">
+          {r.loadPrice != null ? moneyFmt.format(r.loadPrice) : '—'}
+        </span>
+      ),
+    });
+
+    // accessorials
+    cols.push({
+      key: 'accessorials', label: 'Accessorials', width: DEFAULT_COL_WIDTHS.accessorials,
+      align: 'right', sortable: true, pinLeft: PIN_LEFT.has('accessorials'),
+      sortValue: r => sortVal('accessorials', r),
+      render: r => {
+        const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        const accCount = (r.accessorials ?? []).length;
+        return accCount === 0
+          ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+          : (
+            <div>
+              <div className="font-semibold tabular-nums">{moneyFmt.format(accSum)}</div>
+              <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accCount} item{accCount !== 1 ? 's' : ''}</div>
+            </div>
+          );
+      },
+    });
+
+    // docs (+ flag chips)
+    cols.push({
+      key: 'docs', label: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
+      pinLeft: PIN_LEFT.has('docs'),
+      render: r => {
+        const counts = docCounts[r.loadId ?? r.id] ?? {};
+        const hasRC = !!r.rateConPdf;
+        return (
+          <div>
+            <div className="flex flex-wrap items-center gap-1">
+              {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+              {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
+              {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
+              {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
+              {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
+              {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
+              {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
+              {((counts.invoice ?? 0) > 0 || r.billingStatus === 'invoiced' || r.billingStatus === 'paid') && (
+                <DocBadge label="Invoice" count={Math.max(counts.invoice ?? 0, 1)} />
+              )}
+              {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
+              {!hasRC && Object.keys(counts).length === 0 && (
+                <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
+              )}
+            </div>
+            {(() => {
+              const reasons = computeFlagReasons(r, counts);
+              const showTonu = r.isTonu;
+              if (reasons.length === 0 && !showTonu) return null;
+              return (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {reasons.map((rs, i) => <FlagChip key={i} reason={rs} />)}
+                  {showTonu && (
+                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
+                      style={{ background: '#eff6ff', color: '#1d4ed8' }}
+                      title="Truck Order Not Used — POD not required">
+                      TONU
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        );
+      },
+    });
+
+    // actions — non-sortable, non-filterable, sits at the right
+    cols.push({
+      key: 'actions', label: 'Actions', width: 260, align: 'right',
+      pinned: true, // not togglable in the dropdown
+      render: r => {
+        const counts = docCounts[r.loadId ?? r.id] ?? {};
+        const rowFlagged = tab === 'flagged' || (tab === 'all' && computeFlagReasons(r, counts).length > 0);
+        const rowIdx = rows.findIndex(x => x.id === r.id);
+        // Suppressing TS for the inline handlers - they pull from
+        // surrounding closure scope.
+        return (
+          <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => void handleTogglePriority(r)}
+              className="rounded-full p-1 transition-colors"
+              title={r.priority ? 'Unmark priority' : 'Mark as priority'}
+              style={{
+                background: r.priority ? '#fef9c3' : 'transparent',
+                border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
+                color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
+              }}>
+              <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
+            </button>
+            <NotesButton load={r} onOpen={() => setNotesTarget(r)} />
+            <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+              style={{ background: '#15803d', color: '#fff' }}
+              title="Open in review queue">
+              <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
+            </button>
+            <button onClick={() => void handleVerify(r)}
+              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+              style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
+              title="Release without opening review queue">
+              <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
+            </button>
+            {!rowFlagged ? (
+              <button onClick={() => handleFlag(r)}
+                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
+                <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+              </button>
+            ) : (
+              <button onClick={() => setFollowUpTarget(r)}
+                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}
+                title="Log a follow-up + optionally update accessorial status / clear flag">
+                <MessageSquare size={11} style={{ display: 'inline', marginRight: 3 }} /> Follow up
+              </button>
+            )}
+          </div>
+        );
+      },
+    });
+
+    // Priority highlight applied per row, not per cell. Mark in helper later.
+    void PRIORITY;
+    return cols;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customers, rows, docCounts, tab]);
+
+  const rowKey = useCallback((r: QueueRow) => r.id, []);
 
   return (
     <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
       <ManagementHeader title="Closeout" icon={FileCheck2} />
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-6">
-        {/* 95vw inner container, centered. Bucket cards, toolbar, and
-            the table area all share this width. Beyond 95vw, the table
-            scrolls horizontally inside its own wrapper. */}
-        <div className="mx-auto space-y-4" style={{ width: '95vw' }}>
+      {/* Fixed-height content area — table claims the remaining space
+          and scrolls inside its own viewport. Outer padding lives here. */}
+      <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
+        <div className="mx-auto w-full min-h-0 flex-1 flex flex-col gap-4" style={{ maxWidth: 1800 }}>
 
           {/* Purpose hint — keeps the split between Closeout and
               Accounting visible while users are still building muscle
@@ -707,22 +961,13 @@ export default function CloseoutView() {
                 <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
             )}
-            {/* Customer filter — sourced from the full customers state
-                (not just rows on screen) so users can pre-set a filter
-                that follows them across pages / buckets. */}
-            <CustomerFilterDropdown
-              options={customers.map(c => c.name).sort()}
-              selected={filters.customer ?? []}
-              onChange={(next) => setFilters(p => ({ ...p, customer: next }))} />
-            {/* Columns menu — show/hide + drag to reorder. */}
-            <ReorderableColumnsMenu
-              columns={colOrder.map(k => {
-                const def = TOGGLEABLE_COLS.find(t => t.key === k);
-                return { key: k, label: def?.label ?? k };
-              })}
-              visible={visibleCols as Record<string, boolean>}
-              onToggle={(k) => toggleCol(k as ToggleableCol)}
-              onReorder={(from, to) => moveCol(from as ToggleableCol, to as ToggleableCol)} />
+            <QueueColumnsButton
+              columns={tableColumns}
+              hiddenColumns={hiddenCols}
+              onHiddenColumnsChange={setHiddenCols}
+              columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
+              onColumnOrderChange={setColOrder}
+            />
             <button onClick={() => void refresh()}
               className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -743,386 +988,40 @@ export default function CloseoutView() {
             </div>
           )}
 
-          {/* Body */}
-          {loading ? (
-            <div className="flex items-center justify-center py-24" style={{ color: 'var(--gc-text-3)' }}>
-              <Loader2 size={20} className="animate-spin" />
-            </div>
-          ) : error ? (
+          {/* Body — fills remaining vertical space, scrolls internally. */}
+          {error ? (
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
               {error}
             </div>
-          ) : visible.length === 0 ? (
-            <EmptyState tab={tab} hasFilters={activeFilterCount > 0} onClearFilters={clearAllFilters} />
           ) : (
-            // Table container: pinned to parent (95vw), horizontally
-            // scrollable, table inside fills it.
-            <div className="rounded-2xl overflow-x-auto"
-              style={{
-                border: '1px solid var(--gc-border-light)',
-                background: 'var(--gc-surface)',
-              }}>
-              <table className="text-[12.5px]"
-                style={{
-                  borderCollapse: 'collapse',
-                  // Spreadsheet behavior: each column has an exact
-                  // pixel width, the table is sum-of-column-widths
-                  // wide. If sum < wrapper, leftover space sits to
-                  // the right (like Excel's gray area). If sum >
-                  // wrapper, the wrapper scrolls horizontally.
-                  //
-                  // The critical thing here is NO `minWidth: 100%` on
-                  // the table — that was forcing the table to fill
-                  // the wrapper, which under table-layout: fixed makes
-                  // the browser PROPORTIONALLY SCALE all columns up to
-                  // fit. Setting a column to 50px would visually render
-                  // at ~100px because the table needed extra width to
-                  // hit 100%. With width: max-content + no minWidth,
-                  // the columns are their exact px widths.
-                  tableLayout: 'fixed',
-                  width:       'max-content',
-                }}>
-                <thead>
-                  <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {orderedVisibleCols.map(col => {
-                      // With table-layout: fixed, every column needs a
-                      // width — fall back to the static default when
-                      // the user hasn't resized this column yet.
-                      const width = colWidths[col] ?? DEFAULT_COL_WIDTHS[col];
-                      const onResizeStart = getColResizeProps(col);
-                      // Sortable columns render as MenuTh; 'docs' is a
-                      // chip column with no sort/filter so it renders
-                      // as a plain header (with the clear-filters affordance).
-                      if (col === 'docs') {
-                        return (
-                          <th key="docs"
-                            className="px-2.5 py-2 font-semibold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
-                            style={{
-                              color: 'var(--gc-text-3)',
-                              textAlign: 'left',
-                              position: 'relative',
-                              width:    width != null ? `${width}px` : undefined,
-                              overflow: 'hidden',
-                            }}>
-                            Docs
-                            {activeFilterCount > 0 && (
-                              <button onClick={clearAllFilters}
-                                className="ml-2 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg"
-                                style={{ background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}
-                                title="Clear all filters">
-                                <X size={9} /> clear ({activeFilterCount})
-                              </button>
-                            )}
-                            <ColumnResizeHandle onMouseDown={onResizeStart} />
-                          </th>
-                        );
-                      }
-                      const c = col as ColKey;
-                      const label =
-                        c === 'age'          ? 'Age'          :
-                        c === 'delivered'    ? 'Delivered'    :
-                        c === 'internalId'   ? 'ID / Inv #'   :
-                        c === 'loadNum'      ? 'Load #'       :
-                        c === 'title'        ? 'Title'        :
-                        c === 'customer'     ? 'Customer'     :
-                        c === 'driver'       ? 'Driver(s)'    :
-                        c === 'rate'         ? 'Rate'         :
-                                               'Accessorials';
-                      const align: 'left' | 'right' = (c === 'rate' || c === 'accessorials') ? 'right' : 'left';
-                      return (
-                        <MenuTh
-                          key={c}
-                          col={c}
-                          label={label}
-                          align={align}
-                          sort={sort}
-                          selectedCount={(filters[c] ?? []).length}
-                          setHeaderRef={el => { headerRefs.current[c] = el; }}
-                          onClick={() => setOpenHeaderCol(p => p === c ? null : c)}
-                          width={width}
-                          onResizeStart={onResizeStart}
-                        />
-                      );
-                    })}
-                    <th className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
-                      style={{ color: 'var(--gc-text-2)', textAlign: 'right', width: ACTIONS_COL_WIDTH }}>
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((load, rowIdx) => {
-                    const dvDate = effectiveDeliveryEnd(load);
-                    const days   = ageDays(dvDate);
-                    const ac     = ageColor(days);
-                    const cust = displayBrokerName(load.broker, customers);
-                    // Customer profile lookup — need the canonical id, not the raw name
-                    const matchedCustomer = customers.find(c =>
-                      c.name === load.broker || (c.aliases ?? []).includes(load.broker ?? ''),
-                    );
-                    // For relays, surface BOTH drivers
-                    const relayPartner = load.relayGroupId
-                      ? rows.find(r => r.id !== load.id && r.relayGroupId === load.relayGroupId)
-                      : null;
-                    const drivers: string[] = [];
-                    if (load.driverName) drivers.push(load.driverName);
-                    if (relayPartner?.driverName && relayPartner.driverName !== load.driverName) drivers.push(relayPartner.driverName);
-                    const accessorialsSum = (load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-                    const accessorialsCount = (load.accessorials ?? []).length;
-                    const targetLoadId = load.loadId ?? load.id;
-                    const counts = docCounts[targetLoadId] ?? {};
-                    const hasRC = !!load.rateConPdf;
-                    return (
-                      <tr key={load.id}
-                        style={{
-                          borderBottom: '1px solid var(--gc-border-light)',
-                          // Priority loads stand out — soft yellow band so
-                          // the dispatcher can scan and find them instantly.
-                          background: load.priority ? '#fefce8' : undefined,
-                          borderLeft: load.priority ? '3px solid #eab308' : '3px solid transparent',
-                        }}
-                        className="hover:bg-[var(--gc-hover)]">
-                        {orderedVisibleCols.map(col => {
-                          switch (col) {
-                            case 'age':
-                              return (
-                                <Td key="age">
-                                  <span style={{ background: ac.bg, color: ac.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                                    {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
-                                  </span>
-                                </Td>
-                              );
-                            case 'delivered':
-                              return <Td key="delivered">{fmtDate(dvDate)}</Td>;
-                            case 'internalId':
-                              return (
-                                <Td key="internalId">
-                                  {load.internalLoadId != null
-                                    ? <CopyableCell
-                                        value={String(load.internalLoadId)}
-                                        displayValue={String(load.internalLoadId)}
-                                        title="Copy ID / invoice #"
-                                      />
-                                    : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                                </Td>
-                              );
-                            case 'loadNum':
-                              return (
-                                <Td key="loadNum">
-                                  {load.loadNum
-                                    ? <CopyableLoadNum value={load.loadNum} />
-                                    : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                                </Td>
-                              );
-                            case 'title':
-                              return (
-                                <Td key="title">
-                                  <button type="button"
-                                    onClick={e => { e.stopPropagation(); void openLoadInModal(load); }}
-                                    className="text-left font-bold hover:underline truncate max-w-[280px]"
-                                    style={{ color: 'var(--gc-blue)' }}
-                                    title="Open load details">
-                                    {load.title}
-                                  </button>
-                                </Td>
-                              );
-                            case 'customer':
-                              return (
-                                <Td key="customer">
-                                  {matchedCustomer ? (
-                                    <button type="button"
-                                      onClick={e => { e.stopPropagation(); setBrokerProfileId(matchedCustomer.id); }}
-                                      className="text-left hover:underline truncate block max-w-[160px]"
-                                      style={{ color: 'var(--gc-blue)' }}
-                                      title={`Open customer profile — ${cust}`}>
-                                      {cust}
-                                    </button>
-                                  ) : (
-                                    <span className="truncate block max-w-[160px]"
-                                      title={cust || undefined}
-                                      style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-                                      {cust || '—'}
-                                    </span>
-                                  )}
-                                </Td>
-                              );
-                            case 'driver':
-                              return (
-                                <Td key="driver">
-                                  {drivers.length === 0
-                                    ? <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>
-                                    : drivers.length === 1
-                                      ? <span>{drivers[0]}</span>
-                                      : (
-                                        <div>
-                                          <div className="text-[12.5px]">{drivers[0]}</div>
-                                          <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
-                                        </div>
-                                      )}
-                                </Td>
-                              );
-                            case 'rate':
-                              return (
-                                <Td key="rate" align="right" className="font-semibold tabular-nums">
-                                  {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
-                                </Td>
-                              );
-                            case 'accessorials':
-                              return (
-                                <Td key="accessorials" align="right" className="tabular-nums">
-                                  {accessorialsCount === 0
-                                    ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-                                    : (
-                                      <div>
-                                        <div className="font-semibold">{moneyFmt.format(accessorialsSum)}</div>
-                                        <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accessorialsCount} item{accessorialsCount !== 1 ? 's' : ''}</div>
-                                      </div>
-                                    )}
-                                </Td>
-                              );
-                            case 'docs':
-                              return (
-                                <Td key="docs">
-                                  <div className="flex flex-wrap items-center gap-1">
-                                    {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"     count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
-                                    {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
-                                    {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
-                                    {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
-                                    {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
-                                    {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
-                                    {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
-                                    {((counts.invoice ?? 0) > 0 || load.billingStatus === 'invoiced' || load.billingStatus === 'paid') && (
-                                      <DocBadge label="Invoice" count={Math.max(counts.invoice ?? 0, 1)} />
-                                    )}
-                                    {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
-                                    {!hasRC && Object.keys(counts).length === 0 && (
-                                      <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
-                                    )}
-                                  </div>
-                                  {(() => {
-                                    const reasons = computeFlagReasons(load, counts);
-                                    const showTonu = load.isTonu;
-                                    if (reasons.length === 0 && !showTonu) return null;
-                                    return (
-                                      <div className="mt-1 flex flex-wrap gap-1">
-                                        {reasons.map((r, i) => <FlagChip key={i} reason={r} />)}
-                                        {showTonu && (
-                                          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
-                                            style={{ background: '#eff6ff', color: '#1d4ed8' }}
-                                            title="Truck Order Not Used — POD not required">
-                                            TONU
-                                          </span>
-                                        )}
-                                      </div>
-                                    );
-                                  })()}
-                                </Td>
-                              );
-                            default:
-                              return null;
-                          }
-                        })}
-                        {/* Actions */}
-                        <Td align="right" onClick={e => e.stopPropagation()}>
-                          <div className="flex items-center justify-end gap-1.5">
-                            {/* Priority toggle — visible on every tab so a
-                                load can be flagged/unflagged anywhere. */}
-                            <button onClick={() => void handleTogglePriority(load)}
-                              className="rounded-full p-1 transition-colors"
-                              title={load.priority ? 'Unmark priority' : 'Mark as priority'}
-                              style={{
-                                background: load.priority ? '#fef9c3' : 'transparent',
-                                border:     `1px solid ${load.priority ? '#eab308' : 'var(--gc-border)'}`,
-                                color:      load.priority ? '#854d0e' : 'var(--gc-text-3)',
-                              }}>
-                              <Star size={11} fill={load.priority ? '#eab308' : 'none'} />
-                            </button>
-                            {/* Internal notes — opens a small thread modal.
-                                Filled icon when at least one note exists. */}
-                            <NotesButton load={load} onOpen={() => setNotesTarget(load)} />
-                            {(() => {
-                              // On the All tab we derive flag state per row
-                              // (the bucket doesn't tell us) so the Flag vs
-                              // Follow up affordance matches what the row
-                              // actually is. Pending and Flagged tabs use
-                              // the bucket directly — cheaper + matches the
-                              // mental model.
-                              const rowFlagged = tab === 'flagged'
-                                || (tab === 'all' && computeFlagReasons(load, counts).length > 0);
-                              return (
-                                <>
-                                  <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
-                                    className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                    style={{ background: '#15803d', color: '#fff' }}
-                                    title="Open in review queue">
-                                    <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
-                                  </button>
-                                  <button onClick={() => void handleVerify(load)}
-                                    className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                    style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
-                                    title="Release without opening review queue">
-                                    <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
-                                  </button>
-                                  {!rowFlagged && (
-                                    <button onClick={() => handleFlag(load)}
-                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                      style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
-                                      <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
-                                    </button>
-                                  )}
-                                  {rowFlagged && (
-                                    <button onClick={() => setFollowUpTarget(load)}
-                                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                                      style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}
-                                      title="Log a follow-up + optionally update accessorial status / clear flag">
-                                      <MessageSquare size={11} style={{ display: 'inline', marginRight: 3 }} /> Follow up
-                                    </button>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </Td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {/* Pagination footer — only shown when total exceeds one page */}
-              {total > PAGE_SIZE && (
-                <PaginationFooter
-                  page={page}
-                  pageSize={PAGE_SIZE}
-                  total={total}
-                  onPrev={() => setPage(Math.max(0, page - 1))}
-                  onNext={() => setPage(page + 1)}
-                />
-              )}
+            <div className="flex-1 min-h-0 min-w-0 flex">
+              <QueueTable<QueueRow>
+                rows={visible}
+                columns={tableColumns}
+                rowKey={rowKey}
+                sort={sort as { key: string | null; dir: 'asc' | 'desc' }}
+                onSortChange={(next) => setSort(next as { key: ColKey | null; dir: 'asc' | 'desc' })}
+                filters={filters as Record<string, string | string[]>}
+                onFiltersChange={(next) => setFilters(next as FilterState)}
+                page={page}
+                pageSize={tablePageSize}
+                total={total}
+                onPageChange={setPage}
+                onPageSizeChange={(n) => { setTablePageSize(n); setPage(0); }}
+                hiddenColumns={hiddenCols}
+                onHiddenColumnsChange={setHiddenCols}
+                columnOrder={colOrder}
+                onColumnOrderChange={setColOrder}
+                columnWidths={colWidths}
+                onColumnWidthsChange={setColWidths}
+                rowClassName={(r) => r.priority ? 'bg-[#fefce8]' : ''}
+                isLoading={loading}
+                emptyMessage={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
+              />
             </div>
           )}
         </div>
       </div>
-
-      {/* Combined sort + filter popover for the active column header */}
-      {openHeaderCol && (
-        <HeaderMenu
-          ref={headerMenuRef}
-          col={openHeaderCol}
-          anchorEl={headerRefs.current[openHeaderCol] ?? null}
-          sort={sort}
-          filterable={isFilterable(openHeaderCol)}
-          selected={filters[openHeaderCol] ?? []}
-          options={filterOptions[openHeaderCol] ?? []}
-          onSort={(dir) => {
-            if (dir === null) setSort({ key: null, dir: 'asc' });
-            else setSort({ key: openHeaderCol, dir });
-          }}
-          onToggleValue={(val) => toggleFilterValue(openHeaderCol, val)}
-          onClearFilter={() => clearColFilter(openHeaderCol)}
-          onSelectAll={() => setColFilterAll(openHeaderCol, filterOptions[openHeaderCol] ?? [])}
-          onClose={() => setOpenHeaderCol(null)}
-        />
-      )}
 
       {/* Customer profile modal */}
       {brokerProfileId && (
@@ -1473,249 +1372,6 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
 
 /** Column header. Inner button is the sort/filter trigger so it doesn't
  *  fight with the resize handle on the right edge. */
-function MenuTh({
-  col, label, align, sort, selectedCount, setHeaderRef, onClick, width, onResizeStart,
-}: {
-  col: ColKey;
-  label: string;
-  align: 'left' | 'right';
-  sort: SortState;
-  /** How many filter values are currently selected for this column. */
-  selectedCount: number;
-  setHeaderRef: (el: HTMLTableCellElement | null) => void;
-  onClick: () => void;
-  /** Column width in px. Enforced by table-layout: fixed on the parent. */
-  width?: number;
-  /** Mousedown handler from useColumnWidths.getResizeProps. */
-  onResizeStart?: (e: React.MouseEvent) => void;
-}) {
-  const sortActive   = sort.key === col;
-  const filterActive = selectedCount > 0;
-  const anyActive    = sortActive || filterActive;
-  return (
-    <th
-      ref={setHeaderRef}
-      className="px-2.5 py-2 select-none whitespace-nowrap"
-      style={{
-        color:      anyActive ? 'var(--gc-text-1)' : 'var(--gc-text-2)',
-        textAlign:  align,
-        background: anyActive ? 'rgba(26,115,232,0.06)' : undefined,
-        position:   'relative',
-        width:      width != null ? `${width}px` : undefined,
-        // NO minWidth here — table-layout: fixed makes width strict.
-        // Setting minWidth would prevent the live drag from shrinking
-        // the column (the hook only mutates style.width).
-        overflow:   'hidden',
-      }}>
-      <button
-        type="button"
-        onClick={onClick}
-        className="font-extrabold text-[10.5px] uppercase tracking-wider hover:text-[var(--gc-blue)] transition-colors"
-        style={{
-          display:        'flex',
-          alignItems:     'center',
-          gap:            4,
-          width:          '100%',
-          color:          'inherit',
-          cursor:         'pointer',
-          background:     'transparent',
-          border:         'none',
-          padding:        0,
-          flexDirection:  align === 'right' ? 'row-reverse' : 'row',
-          textAlign:      align,
-        }}
-        title="Click for sort + filter">
-        <span style={{
-          flex:          1,
-          minWidth:      0,
-          overflow:      'hidden',
-          textOverflow:  'ellipsis',
-          whiteSpace:    'nowrap',
-          textAlign:     align,
-        }}>
-          {label}
-        </span>
-        {sortActive ? (
-          sort.dir === 'asc'
-            ? <ArrowUp   size={11} style={{ color: 'var(--gc-blue)', flexShrink: 0 }} />
-            : <ArrowDown size={11} style={{ color: 'var(--gc-blue)', flexShrink: 0 }} />
-        ) : null}
-        {filterActive && (
-          <span title={`${selectedCount} selected`}
-            className="text-[9px] font-bold tabular-nums px-1 rounded-lg"
-            style={{ background: 'var(--gc-blue)', color: '#fff', minWidth: 14, textAlign: 'center', lineHeight: '14px', flexShrink: 0 }}>
-            {selectedCount}
-          </span>
-        )}
-      </button>
-      {onResizeStart && <ColumnResizeHandle onMouseDown={onResizeStart} />}
-    </th>
-  );
-}
-
-/** Combined sort + filter popover. Anchored to the clicked header via
- *  getBoundingClientRect, repositioned on resize/scroll. Rendered with
- *  fixed positioning so it escapes the table's overflow-hidden ancestor.
- *
- *  Filter is multi-select: clicking an option toggles it in/out of the
- *  selection. Empty selection = no filter active. Helpers for "Select
- *  all" / "Clear" are provided in the filter header. */
-const HeaderMenu = forwardRef<HTMLDivElement, {
-  col: ColKey;
-  anchorEl: HTMLElement | null;
-  sort: SortState;
-  filterable: boolean;
-  selected: string[];
-  options: string[];
-  onSort: (dir: 'asc' | 'desc' | null) => void;
-  onToggleValue: (val: string) => void;
-  onClearFilter: () => void;
-  onSelectAll: () => void;
-  onClose: () => void;
-}>(function HeaderMenu({
-  col, anchorEl, sort, filterable, selected, options, onSort, onToggleValue, onClearFilter, onSelectAll, onClose,
-}, ref) {
-  const [pos, setPos]   = useState<{ left: number; top: number } | null>(null);
-  const [search, setSearch] = useState('');
-  // Re-position on mount + on resize/scroll. Closing on scroll would be
-  // jarring (the user might scroll the table to see options), so we
-  // just reposition.
-  useEffect(() => {
-    if (!anchorEl) { setPos(null); return; }
-    const update = () => {
-      const r = anchorEl.getBoundingClientRect();
-      setPos({ left: r.left, top: r.bottom });
-    };
-    update();
-    window.addEventListener('resize', update);
-    window.addEventListener('scroll', update, true);
-    return () => {
-      window.removeEventListener('resize', update);
-      window.removeEventListener('scroll', update, true);
-    };
-  }, [anchorEl]);
-  if (!pos) return null;
-
-  const filteredOptions = search.trim() === ''
-    ? options
-    : options.filter(o => o.toLowerCase().includes(search.toLowerCase()));
-  const selectedSet = new Set(selected);
-  const allSelected = options.length > 0 && options.every(o => selectedSet.has(o));
-
-  return (
-    <div
-      ref={ref}
-      className="rounded-xl py-1.5"
-      style={{
-        position:   'fixed',
-        left:       pos.left,
-        top:        pos.top + 4,
-        zIndex:     50,
-        background: 'var(--gc-surface)',
-        border:     '1px solid var(--gc-border)',
-        boxShadow:  '0 12px 32px rgba(0,0,0,0.15)',
-        minWidth:   240,
-        maxWidth:   340,
-      }}>
-      {/* Sort group */}
-      <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold"
-        style={{ color: 'var(--gc-text-3)' }}>
-        Sort
-      </div>
-      <MenuRow
-        active={sort.key === col && sort.dir === 'asc'}
-        icon={<ArrowUp size={12} />}
-        label="Ascending"
-        onClick={() => { onSort('asc'); }}
-      />
-      <MenuRow
-        active={sort.key === col && sort.dir === 'desc'}
-        icon={<ArrowDown size={12} />}
-        label="Descending"
-        onClick={() => { onSort('desc'); }}
-      />
-      {sort.key === col && (
-        <MenuRow
-          icon={<X size={12} />}
-          label="Clear sort"
-          onClick={() => { onSort(null); }}
-          muted
-        />
-      )}
-
-      {/* Multi-select filter */}
-      {filterable && (
-        <>
-          <div className="my-1" style={{ borderTop: '1px solid var(--gc-border-light)' }} />
-          <div className="px-3 pt-1 pb-1.5 text-[10px] uppercase tracking-wider font-semibold flex items-center justify-between"
-            style={{ color: 'var(--gc-text-3)' }}>
-            <span>Filter {selected.length > 0 && (
-              <span className="ml-1 text-[10px] font-semibold normal-case tracking-normal" style={{ color: 'var(--gc-text-2)' }}>
-                ({selected.length})
-              </span>
-            )}</span>
-            <span className="flex items-center gap-2">
-              <button onClick={() => { allSelected ? onClearFilter() : onSelectAll(); }}
-                className="text-[10px] font-semibold normal-case tracking-normal"
-                style={{ color: 'var(--gc-blue)' }}>
-                {allSelected ? 'Deselect all' : 'Select all'}
-              </button>
-              {selected.length > 0 && !allSelected && (
-                <button onClick={() => { onClearFilter(); }}
-                  className="text-[10px] font-semibold normal-case tracking-normal"
-                  style={{ color: 'var(--gc-text-2)' }}>
-                  Clear
-                </button>
-              )}
-            </span>
-          </div>
-          {options.length > 8 && (
-            <div className="px-2 pb-1.5">
-              <input
-                type="text"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search…"
-                className="w-full text-[11px] px-2 py-1 rounded-md outline-none"
-                style={{
-                  background: 'var(--gc-bg)',
-                  border:     '1px solid var(--gc-border-light)',
-                  color:      'var(--gc-text-1)',
-                }}
-              />
-            </div>
-          )}
-          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-            {filteredOptions.length === 0 ? (
-              <div className="px-3 py-2 text-[12px] italic" style={{ color: 'var(--gc-text-3)' }}>
-                No options
-              </div>
-            ) : (
-              filteredOptions.map(opt => (
-                <CheckboxMenuRow
-                  key={opt}
-                  checked={selectedSet.has(opt)}
-                  label={opt}
-                  onToggle={() => onToggleValue(opt)}
-                />
-              ))
-            )}
-          </div>
-          {/* Done button — gives the user an explicit way out of the
-              multi-select panel since clicking a checkbox doesn't auto-
-              close (you'd lose the ability to pick multiple). */}
-          <div className="px-2 pt-1.5 pb-1" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-            <button onClick={onClose}
-              className="w-full text-[12px] font-semibold py-1.5 rounded-lg transition-colors"
-              style={{ background: '#1a73e8', color: '#fff' }}>
-              Done
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-});
 
 function MenuRow({
   icon, label, onClick, active, muted, truncate,
