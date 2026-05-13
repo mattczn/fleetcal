@@ -162,7 +162,12 @@ export default function BrokerProfileModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      // z-[230] so it stacks above the EventModal (z-[200]) when
+      // opened from the broker link inside a load — EventModal stays
+      // mounted in the background, broker profile takes the focus.
+      // Below the inline confirm dialogs (z-240+) so any prompts the
+      // broker UI fires can still appear on top.
+      className="fixed inset-0 z-[230] flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.32)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) tryClose(onClose); }}
     >
