@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MapPin, Loader2, RefreshCw, Truck, Zap } from 'lucide-react';
+import { MapPin, Loader2, RefreshCw, Truck } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W } from '@/lib/time-utils';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
@@ -96,7 +96,7 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 }
 
 export default function CalendarHeader() {
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, triageMode, setTriageMode } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   const visibleAssets = [
     ...(unassignedAsset ? [unassignedAsset] : []),
@@ -184,25 +184,11 @@ export default function CalendarHeader() {
                   {asset.unit ? `#${asset.unit}` : asset.type}
                 </span>
               </div>
-              {asset.id === unassignedAssetId && (
-                <button
-                  type="button"
-                  title={triageMode ? 'Exit compress mode' : 'Compress: show each load in a 1-hour slot'}
-                  onClick={() => setTriageMode(!triageMode)}
-                  style={{
-                    marginLeft: 'auto',
-                    display: 'flex', alignItems: 'center',
-                    padding: '3px 5px', borderRadius: 6, border: 'none', cursor: 'pointer',
-                    background: triageMode ? '#f59e0b' : 'var(--gc-hover)',
-                    color: triageMode ? '#fff' : 'var(--gc-text-3)',
-                    fontSize: 10, fontWeight: 700,
-                    transition: 'background 150ms',
-                    flexShrink: 0,
-                  }}
-                >
-                  <Zap size={12} />
-                </button>
-              )}
+              {/* Triage/compress button + SmartAssignDrawer removed
+                  for now. Store state (triageMode, smartAssignEventId)
+                  + the drawer component are preserved so we can
+                  re-enable by uncommenting in CalendarHeader +
+                  calendar/index.tsx. */}
             </div>
 
             {loc && age ? (

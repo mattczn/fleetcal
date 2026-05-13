@@ -7,7 +7,10 @@ import CalendarHeader from './CalendarHeader';
 import CalendarColumn from './CalendarColumn';
 import HourGutter from './HourGutter';
 import NowLine from './NowLine';
-import SmartAssignDrawer from './SmartAssignDrawer';
+// SmartAssignDrawer + triage compress mode removed for now. Component
+// still on disk — re-add the import + <SmartAssignDrawer /> render
+// below and the triage button in CalendarHeader to bring it back.
+// import SmartAssignDrawer from './SmartAssignDrawer';
 
 interface DragPreview {
   assetId: number;
@@ -27,7 +30,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function CalendarView() {
-  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked, triageMode, setSmartAssignEventId } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   const assets = [
     ...(unassignedAsset ? [unassignedAsset] : []),
@@ -153,7 +156,7 @@ export default function CalendarView() {
 
   return (
     <>
-    <SmartAssignDrawer />
+    {/* <SmartAssignDrawer />  removed with triage compress mode */}
     <div
       ref={scrollRef}
       className="flex-1 overflow-auto"
@@ -189,17 +192,9 @@ export default function CalendarView() {
               />
             ))}
 
-            {assets.map((asset) => {
-              const isUnassigned = asset.id === unassignedAssetId;
-              return (
-                <CalendarColumn
-                  key={asset.id}
-                  asset={asset}
-                  compact={isUnassigned && triageMode}
-                  onSmartAssign={isUnassigned && triageMode ? setSmartAssignEventId : undefined}
-                />
-              );
-            })}
+            {assets.map((asset) => (
+              <CalendarColumn key={asset.id} asset={asset} />
+            ))}
 
             <NowLine />
 
