@@ -19,6 +19,7 @@ import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from
 import DatePicker from './DatePicker';
 import StopsSection from './StopsSection';
 import RouteMapPanel from './RouteMapPanel';
+import DriverSummaryPanel from './DriverSummaryPanel';
 import { uploadRateCon } from '@/lib/storage';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import CheckCallsSection from '@/components/calendar/CheckCallsSection';
@@ -1399,6 +1400,7 @@ export default function EventModal() {
   const [rateConPdf,    setRateConPdf]    = useState<string | undefined>(undefined);
   const [showPdfViewer,  setShowPdfViewer]  = useState(false);
   const [showMapPanel,   setShowMapPanel]   = useState(false);
+  const [showDriverSummary, setShowDriverSummary] = useState(false);
   const [docsTab,        setDocsTab]        = useState<'rateCon' | 'uploaded'>('rateCon');
   const [loadDocuments,  setLoadDocuments]  = useState<import('@/lib/db').LoadDocument[]>([]);
   const [loadInvoices,   setLoadInvoices]   = useState<import('@fleetcal/types').Invoice[]>([]);
@@ -1648,7 +1650,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -3115,8 +3117,10 @@ export default function EventModal() {
       onMouseDown={e => { if (e.target === e.currentTarget) handleBackdropClick(); }}>
       <div className="flex"
         style={{
-          width: (showPdfViewer || showMapPanel) ? '96vw' : '100%',
-          maxWidth: (showPdfViewer || showMapPanel) ? 1800 : 1020,
+          width: (showPdfViewer || showMapPanel || showDriverSummary) ? '96vw' : '100%',
+          maxWidth: (showPdfViewer || showMapPanel)
+            ? (showDriverSummary ? 2180 : 1800)
+            : (showDriverSummary ? 1400 : 1020),
           height: '92vh',
           borderRadius: 14,
           boxShadow: 'var(--shadow-3)',
@@ -3426,6 +3430,19 @@ export default function EventModal() {
                 onMouseLeave={e => (e.currentTarget.style.background = showMapPanel ? `${headerColor}22` : `${headerColor}12`)}>
                 <MapPin size={13} /> {showMapPanel ? 'Hide Map' : 'View Map'}
               </button>
+            )}
+            {/* Driver Summary toggle — copy-pasteable load brief for
+                driver group chats. Only meaningful on saved loads. */}
+            {eventKind === 'revenue' && isEdit && (
+              <Tooltip content="Copy-pasteable load summary for driver group chats">
+                <button type="button" onClick={() => setShowDriverSummary(v => !v)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showDriverSummary ? `${headerColor}22` : `${headerColor}12` }}
+                  onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
+                  onMouseLeave={e => (e.currentTarget.style.background = showDriverSummary ? `${headerColor}22` : `${headerColor}12`)}>
+                  <Copy size={13} /> Driver Summary
+                </button>
+              </Tooltip>
             )}
             {eventKind === 'revenue' && (rateConPdf ? (
               <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
@@ -4475,6 +4492,35 @@ export default function EventModal() {
           )}
         </form>
         </div>{/* end form pane / drop zone */}
+
+        {/* ── Driver summary pane (right) — copy-pasteable summary for
+            driver group chats. Hidden by default; toggled via the
+            "Driver Summary" button in the toolbar. */}
+        {showDriverSummary && isEdit && (() => {
+          const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+          const summaryEvent = {
+            title,
+            start: startDate && startTime ? `${startDate}T${startTime}` : undefined,
+            end:   endDate && endTime   ? `${endDate}T${endTime}`     : undefined,
+            loadNum: typeof fieldValues['loadNum'] === 'string' ? fieldValues['loadNum'] as string : undefined,
+            refNums: Array.isArray(fieldValues['refNums']) ? fieldValues['refNums'] as RefNum[] : undefined,
+            trailerType: typeof fieldValues['trailerType'] === 'string' ? fieldValues['trailerType'] as string : undefined,
+            stops,
+            notes: currentEv?.notes ?? (typeof fieldValues['notes'] === 'string' ? fieldValues['notes'] as string : undefined),
+            specialInstructions: currentEv?.specialInstructions,
+          };
+          const summaryAsset   = assets.find(a => a.id === assetId);
+          const summaryTrailer = linkedTrailerId != null ? trailers.find(t => t.id === linkedTrailerId) : undefined;
+          return (
+            <DriverSummaryPanel
+              event={summaryEvent}
+              asset={summaryAsset}
+              trailer={summaryTrailer}
+              driverName={driverName || undefined}
+              onClose={() => setShowDriverSummary(false)}
+            />
+          );
+        })()}
       </div>{/* end modal box */}
     </div>{/* end backdrop */}
     {showBrokerProfile && (() => {
