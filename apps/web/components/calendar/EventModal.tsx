@@ -2117,9 +2117,13 @@ export default function EventModal() {
   //                           the system (search, accounting, TONU).
   //   3. Delete Permanent  — full soft-delete (load + event → Trash).
   function buildCancelAuditEntry(mode: 'status' | 'remove-event' | 'permanent'): LoadAuditEntry {
-    // Snapshot rate + miles so a future Reinstate can restore them.
+    // Snapshot rate + miles + driver pay so a future Reinstate can
+    // restore them. Driver pay is zeroed alongside on cancel, but the
+    // dispatcher can still type a TONU/layover amount back in — the
+    // load stays visible in payroll either way.
     const prevLP = parseFloat(String(fieldValues['loadPrice'] ?? ''));
     const prevLM = loadedMiles;
+    const prevDP = parseFloat(String(fieldValues['driverPay'] ?? ''));
     return {
       changedAt: new Date().toISOString(),
       changedByName: currentUserName,
@@ -2128,6 +2132,7 @@ export default function EventModal() {
         ...(Number.isFinite(prevLP) && prevLP > 0 ? { prevLoadPrice: prevLP } : {}),
         ...(prevLM != null && prevLM > 0 ? { prevLoadedMiles: prevLM } : {}),
       },
+      ...(Number.isFinite(prevDP) && prevDP > 0 ? { prevDriverPay: prevDP } : {}),
       // Surface the status flip in the audit timeline for mode='status'.
       ...(mode === 'status' ? { prevStatus: status as EventStatus, newStatus: 'cancelled' as EventStatus } : {}),
       // Mirror loadDeleted on permanent so existing audit renderers
@@ -2138,14 +2143,15 @@ export default function EventModal() {
   const handleCancelMarkStatus = () => {
     if (!modalEventId) return;
     const entry = buildCancelAuditEntry('status');
-    // Zero out rate + miles so accounting doesn't keep counting
-    // revenue for a load that never moved. driverPay is *not* zeroed —
-    // user might still owe TONU, layover, or detention pay even on a
-    // cancelled load; that stays editable in the modal.
+    // Zero out rate + miles + driver pay so accounting/payroll don't
+    // keep counting the original numbers. The load still shows up in
+    // payroll though — dispatcher can type a TONU/layover/detention
+    // amount back into driverPay manually.
     updateEvent(modalEventId, {
       status: 'cancelled',
       loadPrice: 0,
       loadedMiles: 0,
+      driverPay: 0,
       auditLog: appendAuditEntry(auditLog, entry),
     });
     if (relayGroupId && relayPartner) {
@@ -2153,6 +2159,7 @@ export default function EventModal() {
         status: 'cancelled',
         loadPrice: 0,
         loadedMiles: 0,
+        driverPay: 0,
         auditLog: appendAuditEntry(relayPartner.auditLog ?? [], entry),
       });
     }
@@ -2163,14 +2170,15 @@ export default function EventModal() {
     if (!modalEventId) return;
     if (relayGroupId && relayPartner) {
       // Drop the relay link on the partner first so it doesn't end up
-      // half-orphaned. Zero its rate + miles too; driverPay stays for
-      // payroll (TONU/layover).
+      // half-orphaned, and zero its financials — the whole load is
+      // being removed.
       updateEvent(relayPartner.id, {
         ...relayPartner,
         relayGroupId: undefined,
         relayRole: undefined,
         loadPrice: 0,
         loadedMiles: 0,
+        driverPay: 0,
       });
     } else {
       // Single-leg load: zero rate on the load record before the
@@ -2209,6 +2217,7 @@ export default function EventModal() {
     const prevStatus = (lastCancel?.prevStatus as EventStatus | undefined) ?? 'scheduled';
     const prevLP = lastCancel?.loadCancelled?.prevLoadPrice;
     const prevLM = lastCancel?.loadCancelled?.prevLoadedMiles;
+    const prevDP = lastCancel?.prevDriverPay;
     const entry: LoadAuditEntry = {
       changedAt: new Date().toISOString(),
       changedByName: currentUserName,
@@ -2216,11 +2225,13 @@ export default function EventModal() {
       prevStatus: 'cancelled' as EventStatus,
       newStatus: prevStatus,
       ...(prevLP != null ? { newLoadPrice: prevLP } : {}),
+      ...(prevDP != null ? { newDriverPay: prevDP } : {}),
     };
     updateEvent(modalEventId, {
       status: prevStatus,
       ...(prevLP != null ? { loadPrice: prevLP } : {}),
       ...(prevLM != null ? { loadedMiles: prevLM } : {}),
+      ...(prevDP != null ? { driverPay: prevDP } : {}),
       auditLog: appendAuditEntry(auditLog, entry),
     });
     if (relayGroupId && relayPartner) {
@@ -2235,6 +2246,7 @@ export default function EventModal() {
         status: prevStatus,
         ...(prevLP != null ? { loadPrice: prevLP } : {}),
         ...(prevLM != null ? { loadedMiles: prevLM } : {}),
+        ...(prevDP != null ? { driverPay: prevDP } : {}),
         auditLog: appendAuditEntry(relayPartner.auditLog ?? [], partnerEntry),
       });
     }
@@ -4497,7 +4509,7 @@ export default function EventModal() {
                   Mark cancelled (keep on calendar)
                 </div>
                 <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                  Event stays visible, greyed out. Rate + miles zeroed; driver pay stays editable for TONU/layover.
+                  Event stays greyed out. Rate, miles, and driver pay zero out — still shows in payroll so you can add TONU/layover pay.
                 </div>
               </div>
             </button>
