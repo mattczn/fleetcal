@@ -175,8 +175,14 @@ export function QueueTable<R>({
 }: QueueTableProps<R>) {
   // A column is left-pinned via user override (pinnedColumns) or its
   // own pinLeft default. pinRight is always static (no user override).
+  // Non-togglable columns (`pinned: true`) — typically system columns
+  // like row-utility / actions — ALWAYS honor their declared pinLeft
+  // direction regardless of the user's saved pinnedColumns set, so a
+  // newly-added system column doesn't end up un-pinned just because
+  // the user's localStorage was saved before the column existed.
   const isPinnedLeft = useCallback((c: QueueColumn<R>) => {
     if (c.pinRight) return false; // right wins
+    if (c.pinned && c.pinLeft) return true;
     if (pinnedColumns) return pinnedColumns.has(c.key);
     return !!c.pinLeft;
   }, [pinnedColumns]);
@@ -185,7 +191,12 @@ export function QueueTable<R>({
   // Effective visible columns, in user-defined order:
   //   [pinned-left] [free] [pinned-right]
   // Pinned partitions preserve their internal order so sticky offsets
-  // layer cleanly from each edge.
+  // layer cleanly from each edge. Non-togglable system columns
+  // (`pinned: true`) the user hasn't seen before — typically newly-
+  // added row utilities — are PREPENDED to their partition rather
+  // than appended, so a new flags column slots to the start of the
+  // left edge instead of getting buried after the user's previously-
+  // ordered columns.
   const visibleColumns = useMemo(() => {
     const colsByKey = new Map(columns.map(c => [c.key, c]));
     const ordered: QueueColumn<R>[] = [];
@@ -196,15 +207,21 @@ export function QueueTable<R>({
       if (hiddenColumns?.has(k)) continue;
       ordered.push(c);
     }
+    // Columns from props that weren't in the saved order. System
+    // pinned columns go FIRST; everything else still appends.
+    const newSystem: QueueColumn<R>[] = [];
+    const newOther: QueueColumn<R>[] = [];
     for (const c of columns) {
       if (order.includes(c.key)) continue;
       if (hiddenColumns?.has(c.key)) continue;
-      ordered.push(c);
+      if (c.pinned) newSystem.push(c);
+      else newOther.push(c);
     }
+    const all = [...newSystem, ...ordered, ...newOther];
     const left: QueueColumn<R>[] = [];
     const free: QueueColumn<R>[] = [];
     const right: QueueColumn<R>[] = [];
-    for (const c of ordered) {
+    for (const c of all) {
       if (isPinnedRight(c)) right.push(c);
       else if (isPinnedLeft(c)) left.push(c);
       else free.push(c);
