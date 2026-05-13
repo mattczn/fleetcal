@@ -49,16 +49,22 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
     return partner ? (event.start <= partner.start ? 'pickup' : 'delivery') : null;
   })();
 
-  // TONU loads render gray in the calendar — they didn't actually
-  // happen, so the asset's primary color would mislead the at-a-glance
-  // scan. Cancelled stays asset-color + dimmed (handled via opacity
-  // below) so the dispatcher still ties the slot to the carrier.
+  // TONU + cancelled loads render gray in the calendar — they didn't
+  // actually run, so the asset's primary color would mislead the
+  // at-a-glance scan. Cancelled also dims further (handled in `opacity`
+  // below) so it reads as "not happening" regardless of the user's
+  // status-overlay toggle.
   const isTonu = event.status === 'tonu';
-  const color = isTonu ? '#9aa0a6' : asset.color;
-  // Prefix the title with "TONU · " on these loads so the at-a-glance
-  // scan reads what happened (or didn't) even before the status chip
-  // is visible — and so the prefix sticks across compact + full views.
-  const displayTitle = isTonu ? `TONU · ${event.title}` : event.title;
+  const isCancelled = event.status === 'cancelled';
+  const color = isTonu || isCancelled ? '#9aa0a6' : asset.color;
+  // Prefix the title so the at-a-glance scan reads what happened (or
+  // didn't) even before the status chip is visible — and so it sticks
+  // across compact + full views.
+  const displayTitle = isTonu
+    ? `TONU · ${event.title}`
+    : isCancelled
+      ? `CANCELLED · ${event.title}`
+      : event.title;
   const dateStr = localDateStr(currentDate);
   const top    = overrideTop  ?? (event.start.split('T')[0] < dateStr ? 0 : timeToPixels(event.start, rowHeight));
   const height = overrideHeight ?? timeHeightPixels(event.start, event.end, dateStr, rowHeight);
@@ -136,7 +142,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
         borderLeft: totalCols >= 3 ? '2px solid rgba(255,255,255,0.6)' : `3px solid ${color}`,
         borderRight: totalCols >= 3 ? '2px solid rgba(255,255,255,0.6)' : 'none',
         cursor: isDragging ? 'grabbing' : 'grab',
-        opacity: isDragging ? 0.3 : (showStatusOverlay && event.status === 'cancelled') ? 0.6 : 1,
+        opacity: isDragging ? 0.3 : isCancelled ? 0.55 : 1,
         pointerEvents: isDragging ? 'none' : 'auto',
         transition: isDragging ? 'none' : 'filter 100ms ease, box-shadow 100ms ease',
         userSelect: 'none',

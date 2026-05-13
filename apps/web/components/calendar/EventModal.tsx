@@ -2130,15 +2130,14 @@ export default function EventModal() {
   const handleCancelMarkStatus = () => {
     if (!modalEventId) return;
     const entry = buildCancelAuditEntry('status');
-    // Zero out rate + miles + driver pay so accounting and reports
-    // don't keep counting revenue for a load that never moved. The
-    // load record stays for search/history; the financial side reads
-    // as a true cancellation.
+    // Zero out rate + miles so accounting doesn't keep counting
+    // revenue for a load that never moved. driverPay is *not* zeroed —
+    // user might still owe TONU, layover, or detention pay even on a
+    // cancelled load; that stays editable in the modal.
     updateEvent(modalEventId, {
       status: 'cancelled',
       loadPrice: 0,
       loadedMiles: 0,
-      driverPay: 0,
       auditLog: appendAuditEntry(auditLog, entry),
     });
     if (relayGroupId && relayPartner) {
@@ -2146,7 +2145,6 @@ export default function EventModal() {
         status: 'cancelled',
         loadPrice: 0,
         loadedMiles: 0,
-        driverPay: 0,
         auditLog: appendAuditEntry(relayPartner.auditLog ?? [], entry),
       });
     }
@@ -2156,16 +2154,15 @@ export default function EventModal() {
   const handleCancelRemoveEvent = () => {
     if (!modalEventId) return;
     if (relayGroupId && relayPartner) {
-      // Drop the relay link on the partner first so it doesn't end
-      // up half-orphaned, and zero its financials too — the whole
-      // load is being cancelled.
+      // Drop the relay link on the partner first so it doesn't end up
+      // half-orphaned. Zero its rate + miles too; driverPay stays for
+      // payroll (TONU/layover).
       updateEvent(relayPartner.id, {
         ...relayPartner,
         relayGroupId: undefined,
         relayRole: undefined,
         loadPrice: 0,
         loadedMiles: 0,
-        driverPay: 0,
       });
     } else {
       // Single-leg load: zero rate on the load record before the
@@ -4397,6 +4394,7 @@ export default function EventModal() {
             background: 'var(--gc-surface)',
             boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
             border:     '1px solid var(--gc-border)',
+            overflow:   'hidden', // clip the footer's bg so it doesn't poke past rounded corners
           }}>
           {/* Header */}
           <div className="flex items-start gap-3 px-5 pt-5 pb-3">
@@ -4430,7 +4428,7 @@ export default function EventModal() {
                   Mark cancelled (keep on calendar)
                 </div>
                 <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                  Event stays visible, greyed out. Status flips to Cancelled.
+                  Event stays visible, greyed out. Rate + miles zeroed; driver pay stays editable for TONU/layover.
                 </div>
               </div>
             </button>
