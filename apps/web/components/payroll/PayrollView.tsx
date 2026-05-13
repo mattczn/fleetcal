@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import Link from 'next/link';
 import { useOrganization } from '@clerk/nextjs';
 import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw } from 'lucide-react';
@@ -555,10 +555,34 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
     `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim().toLowerCase() === row.driverName.toLowerCase()
   );
 
+  // Revenue per LEG for relay loads — pro-rated by routed leg miles
+  // so a 500-mile pickup paired with a 200-mile delivery on a
+  // $1,400 load credits the pickup driver $1,000 and the delivery
+  // driver $400. When any leg is missing loadedMiles, fall back
+  // to an even 1/N split across the legs. Non-relay loads return
+  // their stored loadPrice unchanged.
+  //
+  // The authoritative load price is the MAX across legs — handles
+  // both the common case (loadPrice duplicated on every leg) and
+  // the case where it was set on only one leg.
+  const legRevenue = useCallback((l: CalendarEvent): number => {
+    if (!l.relayGroupId) return l.loadPrice ?? 0;
+    const legs = allEvents.filter(e => e.relayGroupId === l.relayGroupId);
+    if (legs.length <= 1) return l.loadPrice ?? 0;
+    const totalPrice = Math.max(...legs.map(e => e.loadPrice ?? 0));
+    if (totalPrice <= 0) return 0;
+    const everyLegHasMiles = legs.every(e => e.loadedMiles != null && e.loadedMiles > 0);
+    if (everyLegHasMiles) {
+      const totalMiles = legs.reduce((s, e) => s + (e.loadedMiles ?? 0), 0);
+      return totalPrice * ((l.loadedMiles ?? 0) / totalMiles);
+    }
+    return totalPrice / legs.length;
+  }, [allEvents]);
+
   const loadPay  = row.loads.reduce((s, l) => s + (l.driverPay ?? 0), 0);
   const accTotal = payToDriverAccs.reduce((s, a) => s + a.amount, 0);
   const totalPay = loadPay + adjTotal + accTotal;
-  const totalRev = row.loads.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+  const totalRev = row.loads.reduce((s, l) => s + legRevenue(l), 0);
   const isFinalized = record !== null;
 
   // Remove a payToDriver accessorial by setting payToDriver: false on the source event
@@ -803,19 +827,39 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                         : '—'}
                     </td>
                     <td className="px-4 py-3 font-semibold whitespace-nowrap" style={{ color: 'var(--gc-text-1)' }}>
-                      {load.loadPrice != null ? fmtMoney(load.loadPrice) : '—'}
+                      {(() => {
+                        const rev = legRevenue(load);
+                        if (load.loadPrice == null) return '—';
+                        // Tag prorated relay legs so the dispatcher
+                        // sees this is a SHARE of the full rate, not
+                        // the whole thing.
+                        if (load.relayGroupId) {
+                          return (
+                            <span
+                              title={`Pro-rated share of $${(load.loadPrice ?? 0).toLocaleString()} total load value`}
+                              style={{ borderBottom: '1px dotted var(--gc-text-3)' }}>
+                              {fmtMoney(rev)}
+                            </span>
+                          );
+                        }
+                        return fmtMoney(rev);
+                      })()}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <PayCell load={load} />
-                        {load.driverPay != null && load.loadPrice != null && load.loadPrice > 0 && (
-                          <span
-                            className="print:hidden shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg whitespace-nowrap"
-                            style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-3)' }}
-                          >
-                            {Math.round((load.driverPay / load.loadPrice) * 100)}%
-                          </span>
-                        )}
+                        {(() => {
+                          const rev = legRevenue(load);
+                          if (load.driverPay == null || rev <= 0) return null;
+                          return (
+                            <span
+                              className="print:hidden shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg whitespace-nowrap"
+                              style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-3)' }}
+                            >
+                              {Math.round((load.driverPay / rev) * 100)}%
+                            </span>
+                          );
+                        })()}
                       </div>
                     </td>
                     {/* Defer / Undo icon */}
