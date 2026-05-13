@@ -891,3 +891,32 @@ export interface MaintenanceActionItem {
   createdAt:      string;
   updatedAt:      string;
 }
+
+
+// ── Load notifications (dispatcher → driver nudge timeline) ────────────
+
+export type LoadNotificationKind =
+  | 'confirm'
+  | 'mark_pickup'
+  | 'mark_delivery'
+  | 'upload_pod'
+  | 'report_trailer';
+
+export const LOAD_NOTIFICATION_KINDS: readonly LoadNotificationKind[] = [
+  'confirm', 'mark_pickup', 'mark_delivery', 'upload_pod', 'report_trailer',
+];
+
+export interface LoadNotification {
+  id:             string;
+  orgId:          string;
+  eventId:        string;
+  loadId?:        string;
+  driverId:       number;
+  kind:           LoadNotificationKind;
+  sentAt:         string;
+  sentByName:     string;
+  /** Set by the server when the driver does the thing the nudge asked
+   *  for (status advance, POD upload, trailer report, confirm). Until
+   *  set the row is "pending" and counts toward the driver's badge. */
+  acknowledgedAt?: string;
+}

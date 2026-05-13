@@ -282,6 +282,42 @@ export type Database = {
         }
         Relationships: []
       }
+      load_notifications: {
+        Row: {
+          id:              string
+          org_id:          string
+          event_id:        string
+          load_id:         string | null
+          driver_id:       number
+          kind:            string
+          sent_at:         string
+          sent_by_name:    string
+          acknowledged_at: string | null
+        }
+        Insert: {
+          id?:              string
+          org_id:           string
+          event_id:         string
+          load_id?:         string | null
+          driver_id:        number
+          kind:             string
+          sent_at?:         string
+          sent_by_name:     string
+          acknowledged_at?: string | null
+        }
+        Update: {
+          id?:              string
+          org_id?:          string
+          event_id?:        string
+          load_id?:         string | null
+          driver_id?:       number
+          kind?:            string
+          sent_at?:         string
+          sent_by_name?:    string
+          acknowledged_at?: string | null
+        }
+        Relationships: []
+      }
       drivers: {
         Row: {
           address: string | null

@@ -219,6 +219,26 @@ CREATE TABLE driver_evening_sweeps (
   PRIMARY KEY (org_id, driver_id, local_date)
 );
 
+-- Dispatcher → driver nudge timeline. One row per push sent. See
+-- migration 20260513_load_notifications.sql for the full doc.
+CREATE TABLE load_notifications (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id          text   NOT NULL,
+  event_id        uuid   NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  load_id         uuid   REFERENCES loads(id) ON DELETE CASCADE,
+  driver_id       bigint NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+  kind            text   NOT NULL,
+  sent_at         timestamptz NOT NULL DEFAULT now(),
+  sent_by_name    text   NOT NULL,
+  acknowledged_at timestamptz
+);
+CREATE INDEX idx_load_notifications_driver_pending
+  ON load_notifications (driver_id, event_id) WHERE acknowledged_at IS NULL;
+CREATE INDEX idx_load_notifications_event_sent
+  ON load_notifications (event_id, sent_at DESC);
+CREATE INDEX idx_load_notifications_event_kind_sent
+  ON load_notifications (event_id, kind, sent_at DESC);
+
 -- ── Row Level Security ────────────────────────────────────
 -- Enable after setting up Clerk JWT template in Supabase.
 -- In Clerk Dashboard → JWT Templates → create "supabase" template with:

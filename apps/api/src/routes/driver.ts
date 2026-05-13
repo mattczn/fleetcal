@@ -596,6 +596,29 @@ async function appendAudit(
   if (writeErr) console.error("[driver/appendAudit] write:", writeErr);
 }
 
+// Stamp acknowledged_at on any pending load_notifications matching the
+// driver action that just happened. Idempotent — re-running ack for
+// the same kind is a no-op since we only target rows where
+// acknowledged_at IS NULL. Cheap query (covered by the
+// idx_load_notifications_driver_pending partial index).
+async function ackLoadNotifications(
+  eventId: string,
+  orgId: string,
+  kinds: readonly string[],
+): Promise<void> {
+  if (kinds.length === 0) return;
+  const { error } = await supabase
+    .from("load_notifications")
+    .update({ acknowledged_at: new Date().toISOString() } as never)
+    .eq("event_id", eventId)
+    .eq("org_id", orgId)
+    .in("kind", kinds as unknown as string[])
+    .is("acknowledged_at", null);
+  if (error) {
+    console.error("[ackLoadNotifications]", eventId, kinds, error);
+  }
+}
+
 // Fetch the event ensuring it belongs to the auth'd driver. Used as a
 // pre-check before mutating writes — refuses 404 / 403 explicitly so
 // the driver app can show a clear error rather than a silent no-op.
@@ -675,6 +698,18 @@ driver.patch("/loads/:id", async (c) => {
       // separate driver actions).
       ...(advancingPastScheduled ? { loadConfirmed: true } : {}),
     });
+
+    // Auto-acknowledge any pending load_notifications that this status
+    // transition satisfies. e.g., reaching picked_up acks both
+    // 'mark_pickup' and any 'confirm' nudges (since picked_up implies
+    // the driver accepted the load).
+    const ackKinds: string[] = [];
+    if (advancingPastScheduled) ackKinds.push("confirm");
+    if (body.status === "picked_up" || body.status === "delivered") {
+      ackKinds.push("mark_pickup");
+    }
+    if (body.status === "delivered") ackKinds.push("mark_delivery");
+    if (ackKinds.length) await ackLoadNotifications(id, orgId, ackKinds);
   }
   if (body.trailerId !== undefined && body.trailerId !== prev.trailer_id) {
     await appendAudit(id, orgId, {
@@ -685,6 +720,10 @@ driver.patch("/loads/:id", async (c) => {
         next: body.trailerId != null  ? String(body.trailerId)  : undefined,
       },
     });
+    // Driver picked a trailer — acks any pending 'report_trailer' nudge.
+    if (body.trailerId != null) {
+      await ackLoadNotifications(id, orgId, ["report_trailer"]);
+    }
   }
 
   return c.json({ ok: true });
@@ -749,6 +788,10 @@ driver.post("/loads/:id/confirm", async (c) => {
     loadConfirmed: true,
     ...(willBumpStatus ? { prevStatus: "scheduled", newStatus: "dispatched" } : {}),
   });
+
+  // Driver explicitly confirmed — ack any pending 'confirm' nudges
+  // for this event so the dispatcher's pending-count drops to zero.
+  await ackLoadNotifications(id, orgId, ["confirm"]);
   return c.json({ ok: true, confirmedAt: nowIso });
 });
 
@@ -1029,6 +1072,13 @@ driver.post("/loads/:id/documents", async (c) => {
     changedByName: driverName,
     documentUploaded: { fileName: doc.fileName, kind: doc.kind },
   });
+
+  // POD upload acks any pending 'upload_pod' nudge on this event so the
+  // dispatcher's pending count drops. Other kinds (BOL, scale, other)
+  // don't auto-ack POD nudges.
+  if (kind === "pod") {
+    await ackLoadNotifications(id, orgId, ["upload_pod"]);
+  }
 
   return c.json({ document: doc });
 });

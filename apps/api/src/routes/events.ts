@@ -31,6 +31,9 @@ import {
   type LoadAuditEntry,
   type LoadStatus,
   LOAD_STATUSES,
+  type LoadNotification,
+  type LoadNotificationKind,
+  LOAD_NOTIFICATION_KINDS,
   type Stop,
   type StopType,
 } from "@fleetcal/types";
@@ -463,6 +466,129 @@ events.get("/:id/audit-log", async (c) => {
   );
   const res: GetAuditLogResponse = { entries: merged };
   return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Load-notification timeline (dispatcher → driver nudges).
+// One row per push sent; auto-acknowledged when the driver does the
+// thing the nudge asked for. See migration 20260513_load_notifications.sql.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface LoadNotificationRow {
+  id:              string;
+  org_id:          string;
+  event_id:        string;
+  load_id:         string | null;
+  driver_id:       number;
+  kind:            string;
+  sent_at:         string;
+  sent_by_name:    string;
+  acknowledged_at: string | null;
+}
+
+function rowToLoadNotification(r: LoadNotificationRow): LoadNotification {
+  return {
+    id:              r.id,
+    orgId:           r.org_id,
+    eventId:         r.event_id,
+    loadId:          r.load_id ?? undefined,
+    driverId:        r.driver_id,
+    kind:            r.kind as LoadNotificationKind,
+    sentAt:          r.sent_at,
+    sentByName:      r.sent_by_name,
+    acknowledgedAt:  r.acknowledged_at ?? undefined,
+  };
+}
+
+// GET /v1/events/:id/notifications — chronological list of every push
+// sent for this event. Used by the dispatcher modal to render the
+// nudge timeline.
+events.get("/:id/notifications", async (c) => {
+  const orgId = c.get("orgId");
+  const eventId = c.req.param("id");
+
+  const { data, error } = await supabase
+    .from("load_notifications")
+    .select("id,org_id,event_id,load_id,driver_id,kind,sent_at,sent_by_name,acknowledged_at")
+    .eq("event_id", eventId)
+    .eq("org_id", orgId)
+    .order("sent_at", { ascending: false });
+
+  if (error) {
+    console.error("[GET /v1/events/:id/notifications] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  const notifications = ((data ?? []) as LoadNotificationRow[]).map(rowToLoadNotification);
+  return c.json({ notifications });
+});
+
+// POST /v1/events/:id/notify — dispatcher sends a nudge to the driver.
+// Body: { kind, sentByName, force? }. Also creates the load_notifications
+// row and (best-effort) fires the actual push via the existing
+// /api/driver-push surface — but since the Railway API doesn't have
+// direct push access we just record the row here. The DISPATCHER WEB
+// is responsible for also calling /api/driver-push so the push fans
+// out via Expo. Both writes happen client-side in the store.
+//
+// (Cron sweeps will call this endpoint server-to-server with a synthetic
+// sentByName like 'Auto: evening sweep'.)
+events.post("/:id/notify", async (c) => {
+  const orgId = c.get("orgId");
+  const eventId = c.req.param("id");
+  const body = await c.req.json<{ kind: string; sentByName: string; force?: boolean }>();
+
+  if (!LOAD_NOTIFICATION_KINDS.includes(body.kind as LoadNotificationKind)) {
+    return c.json(
+      { error: "validation_failed", errors: [`invalid kind: ${body.kind}`] } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+  if (!body.sentByName?.trim()) {
+    return c.json(
+      { error: "validation_failed", errors: ["sentByName required"] } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+
+  // Pull the event so we can populate load_id + driver_id, and so we
+  // can refuse to nudge a load that has no driver assigned.
+  const { data: ev, error: evErr } = await supabase
+    .from("events")
+    .select("id,load_id,driver_id,org_id")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (evErr) {
+    console.error("[POST /v1/events/:id/notify] event read:", evErr);
+    return c.json({ error: "fetch_failed", detail: evErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!ev) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const evRow = ev as { id: string; load_id: string | null; driver_id: number | null };
+  if (!evRow.driver_id) {
+    return c.json(
+      { error: "no_driver", detail: "Event has no driver assigned" } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("load_notifications")
+    .insert({
+      org_id:       orgId,
+      event_id:     eventId,
+      load_id:      evRow.load_id,
+      driver_id:    evRow.driver_id,
+      kind:         body.kind,
+      sent_by_name: body.sentByName.trim(),
+    } as never)
+    .select("id,org_id,event_id,load_id,driver_id,kind,sent_at,sent_by_name,acknowledged_at")
+    .single();
+  if (insErr || !inserted) {
+    console.error("[POST /v1/events/:id/notify] insert:", insErr);
+    return c.json({ error: "insert_failed", detail: insErr?.message } satisfies ApiErrorResponse, 500);
+  }
+
+  return c.json({ notification: rowToLoadNotification(inserted as LoadNotificationRow) });
 });
 
 export default events;
