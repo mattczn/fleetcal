@@ -424,6 +424,11 @@ export const useCalendarStore = create<CalendarStore>()(
         ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         : t;
       document.documentElement.setAttribute('data-theme', resolved);
+      // Mirror the resolved value into a cookie so the next page's
+      // SSR can apply the correct data-theme attribute up-front and
+      // avoid a flash. 1-year lifetime; same-site lax so it persists
+      // across normal navigation.
+      document.cookie = `fleetcal-theme=${resolved}; path=/; max-age=31536000; samesite=lax`;
     }
   },
 

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
@@ -41,19 +42,37 @@ const darkModeCSS = `
 }
 `;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/**
+ * Resolved theme is read from a cookie set by the client whenever the
+ * user changes their preference (see store/setTheme + ThemeProvider).
+ * Server applies the value directly as `data-theme` on <html> so the
+ * first paint already shows the right palette — no JSX <script> tag
+ * needed, which means no React 19 warning, no FOUC.
+ *
+ * Cookie missing (first visit ever) falls back to 'light'. The
+ * ThemeProvider client component will resolve the user's actual
+ * preference (including 'system' → OS detection) on mount and update
+ * the cookie for the next page load. The brief mis-paint on a first
+ * visit by a dark-OS user is unavoidable without a blocking script;
+ * any subsequent navigation reads the correct theme from the cookie.
+ */
+function readThemeCookie(value: string | undefined): 'light' | 'dark' {
+  return value === 'dark' ? 'dark' : 'light';
+}
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const cookieStore = await cookies();
+  const theme = readThemeCookie(cookieStore.get('fleetcal-theme')?.value);
+
   return (
     <ClerkProvider>
-      <html lang="en" className={`${font.variable} h-full`} suppressHydrationWarning>
+      <html
+        lang="en"
+        data-theme={theme}
+        className={`${font.variable} h-full`}
+        suppressHydrationWarning
+      >
         <head>
-          {/* Theme init runs synchronously before paint to set
-              data-theme on <html> from the user's saved preference.
-              Loaded from a static file rather than inlined into the
-              React tree — React 19 warns about inline <script>
-              elements because they don't re-execute on client
-              re-render. External script refs sidestep the warning
-              and still block paint until evaluated (no async/defer). */}
-          <script src="/theme-init.js" />
           <style dangerouslySetInnerHTML={{ __html: darkModeCSS }} />
         </head>
         <body className="h-full overflow-hidden antialiased" style={{ fontFamily: 'var(--font-jakarta), sans-serif' }}>
