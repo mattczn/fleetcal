@@ -166,10 +166,17 @@ const INPUT_STYLE: React.CSSProperties = {
 // ─── Adjustments section ─────────────────────────────────────────────────────
 
 function AdjustmentsSection({
-  orgId, driverName, weekStart, sat, onTotalChange, onListChange, refreshTick,
+  orgId, driverName, driverAliases, weekStart, sat, onTotalChange, onListChange, refreshTick,
 }: {
   orgId: string;
+  /** Canonical display name — used when writing new adjustments
+   *  so future saves go under one consistent name. */
   driverName: string;
+  /** Every historical name the driver has been known by. Includes
+   *  `driverName`. Used to PULL existing adjustments that were saved
+   *  under any of those names, so a renamed driver still sees their
+   *  old deferred-pay / per-diem / etc. lines. */
+  driverAliases: string[];
   weekStart: string;
   sat: Date;
   onTotalChange: (total: number) => void;
@@ -199,10 +206,19 @@ function AdjustmentsSection({
     onListChange(list);
   }
 
+  // Match adjustments against any alias the driver has been known
+  // by (case-insensitive). Without this, a rename — which leaves
+  // old adjustments tagged to the old name in the DB — would orphan
+  // them under a duplicate row.
+  const aliasMatch = useMemo(() => {
+    const set = new Set(driverAliases.map(a => a.trim().toLowerCase()).filter(Boolean));
+    return (n?: string) => !!n && set.has(n.trim().toLowerCase());
+  }, [driverAliases]);
+
   useEffect(() => {
     if (!orgId || !weekStart) return;
-    fetchPayrollAdjustments(orgId, weekStart).then(all => sync(all.filter(a => a.driverName === driverName)));
-  }, [orgId, driverName, weekStart, refreshTick]); // eslint-disable-line
+    fetchPayrollAdjustments(orgId, weekStart).then(all => sync(all.filter(a => aliasMatch(a.driverName))));
+  }, [orgId, driverName, weekStart, refreshTick, aliasMatch]); // eslint-disable-line
 
   function openAdd() { setCategory(ADJ_CATEGORIES[0]); setDesc(''); setAmount(''); setMode('add'); }
   function openDefer() { setDeferToIdx(0); setDeferAmt(''); setMode('defer'); }
@@ -447,7 +463,16 @@ function AdjustmentsSection({
 // ─── Driver payroll card ──────────────────────────────────────────────────────
 
 interface DriverRow {
+  /** Canonical display name — current name from the driver record
+   *  if we matched by id, else the stored driverName from the load. */
   driverName: string;
+  /** Every historical name string we've seen this driver under,
+   *  including the canonical one. Used to fold in adjustments /
+   *  records that were saved before a rename. */
+  aliases: string[];
+  /** Driver record id when this row is anchored to one. Loads that
+   *  carry only a legacy `driverName` (no driverId) stand alone. */
+  driverId?: number;
   loads: CalendarEvent[];
 }
 
@@ -602,8 +627,26 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
 
   useEffect(() => {
     if (!orgId || !weekStart) return;
-    fetchPayrollRecord(orgId, row.driverName, weekStart).then(setRecord);
-  }, [orgId, row.driverName, weekStart]);
+    // Try the canonical name first, then any historical alias. A
+    // finalized record from before a driver rename is stored under
+    // the old name in the DB — without this fallback it would
+    // disappear from the queue and the driver could be finalized
+    // twice for the same week.
+    let cancelled = false;
+    (async () => {
+      const tried = new Set<string>();
+      for (const name of [row.driverName, ...row.aliases]) {
+        const key = name.trim();
+        if (!key || tried.has(key.toLowerCase())) continue;
+        tried.add(key.toLowerCase());
+        const found = await fetchPayrollRecord(orgId, key, weekStart);
+        if (cancelled) return;
+        if (found) { setRecord(found); return; }
+      }
+      if (!cancelled) setRecord(null);
+    })();
+    return () => { cancelled = true; };
+  }, [orgId, row.driverName, row.aliases, weekStart]);
 
   async function handleFinalize() {
     setFinalizing(true);
@@ -971,7 +1014,8 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
       )}
 
       <AdjustmentsSection
-        orgId={orgId} driverName={row.driverName} weekStart={weekStart}
+        orgId={orgId} driverName={row.driverName} driverAliases={row.aliases}
+        weekStart={weekStart}
         sat={sat} onTotalChange={setAdjTotal}
         onListChange={setAdjList}
       />
@@ -1157,34 +1201,124 @@ export default function PayrollView() {
     return (d >= sat && d <= fri) || e.deferredToWeek === weekStart;
   }), [events, assets, sat, fri, weekStart, unassignedAssetId]);
 
-  // Group by driver name — also include drivers who have adjustments but no loads this week
+  // Group by driver — IDENTITY-based, not name-based. Loads carrying
+  // a driverId fold into one row keyed by that id, with the canonical
+  // current name from the driver record shown as the label. This
+  // prevents a renamed driver from spawning duplicate payroll rows
+  // (one under the old name, one under the new) the way pure name-
+  // based grouping did. Each row tracks every name alias we've seen
+  // for that driver so historical adjustments saved under the old
+  // name still flow into the right group.
   const driverGroups = useMemo((): DriverRow[] => {
-    const map = new Map<string, CalendarEvent[]>();
+    const NO_DRIVER = '(No Driver Assigned)';
+    // Map key: "id:<id>" for id-anchored groups, "name:<lowercased>"
+    // for legacy-only groups. Keeps the two namespaces separate so a
+    // driverName that happens to match the canonical name of an
+    // un-related id-anchored row doesn't accidentally merge.
+    const groups = new Map<string, { row: DriverRow; aliasSet: Set<string> }>();
+
+    const canonicalName = (d: typeof drivers[number]) =>
+      `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim() || d.name || '';
+
+    const addEvent = (key: string, row: Omit<DriverRow, 'loads'>, ev: CalendarEvent | null) => {
+      const existing = groups.get(key);
+      if (existing) {
+        if (ev) existing.row.loads.push(ev);
+        // Track any name variant that landed in this group.
+        const nm = ev?.driverName?.trim();
+        if (nm) existing.aliasSet.add(nm);
+        return;
+      }
+      const aliasSet = new Set<string>(row.aliases);
+      const nm = ev?.driverName?.trim();
+      if (nm) aliasSet.add(nm);
+      const newRow: DriverRow = {
+        ...row,
+        loads: ev ? [ev] : [],
+        aliases: [...aliasSet],
+      };
+      groups.set(key, { row: newRow, aliasSet });
+    };
+
     for (const e of weekEvents) {
-      const key = e.driverName?.trim() || '(No Driver Assigned)';
-      const arr = map.get(key) ?? [];
-      arr.push(e);
-      map.set(key, arr);
+      // Prefer id-based match: rename-resistant.
+      const driverRec = e.driverId != null
+        ? drivers.find(d => d.id === e.driverId)
+        : undefined;
+      if (driverRec) {
+        const display = canonicalName(driverRec);
+        const aliases = new Set<string>();
+        if (display) aliases.add(display);
+        if (driverRec.name) aliases.add(driverRec.name);
+        addEvent(`id:${driverRec.id}`, {
+          driverName: display || (e.driverName?.trim() ?? NO_DRIVER),
+          aliases: [...aliases],
+          driverId: driverRec.id,
+        }, e);
+        continue;
+      }
+      // No id (or no matching record) — fall back to the load's
+      // stored driverName. Legacy rows with the same name still
+      // collapse together here.
+      const name = e.driverName?.trim() || '';
+      if (!name) {
+        addEvent(`name:${NO_DRIVER}`, { driverName: NO_DRIVER, aliases: [NO_DRIVER] }, e);
+      } else {
+        addEvent(`name:${name.toLowerCase()}`, { driverName: name, aliases: [name] }, e);
+      }
     }
-    // Add drivers who have adjustments (e.g. deferred carry-ins) but no loads this week
-    for (const name of adjDriverNames) {
-      if (name && !map.has(name)) map.set(name, []);
+
+    // Pull in any driver records that have adjustments this week
+    // but no loads — keeps deferred carry-ins from disappearing.
+    // Match by any alias the record's canonical or legacy name
+    // would generate.
+    for (const adjName of adjDriverNames) {
+      if (!adjName) continue;
+      const lower = adjName.toLowerCase();
+      // Already represented by some group's alias set?
+      let matched = false;
+      for (const g of groups.values()) {
+        if (g.aliasSet.has(adjName) ||
+            [...g.aliasSet].some(a => a.toLowerCase() === lower)) {
+          g.aliasSet.add(adjName);
+          g.row.aliases = [...g.aliasSet];
+          matched = true;
+          break;
+        }
+      }
+      if (matched) continue;
+      // Try to attach to a driver record by name (handles the case
+      // where loads weren't run this week but the driver exists).
+      const rec = drivers.find(d => {
+        const can = canonicalName(d).toLowerCase();
+        return can === lower || (d.name ?? '').toLowerCase() === lower;
+      });
+      if (rec) {
+        const display = canonicalName(rec);
+        addEvent(`id:${rec.id}`, {
+          driverName: display || adjName,
+          aliases: [display || adjName, rec.name ?? '', adjName].filter(Boolean) as string[],
+          driverId: rec.id,
+        }, null);
+      } else {
+        addEvent(`name:${lower}`, { driverName: adjName, aliases: [adjName] }, null);
+      }
     }
-    // Sort each driver's loads by start date asc, then group alphabetically by driver name
-    const rows: DriverRow[] = [...map.entries()].map(([driverName, loads]) => ({
-      driverName,
-      loads: [...loads].sort((a, b) => a.start.localeCompare(b.start)),
+
+    const rows: DriverRow[] = [...groups.values()].map(g => ({
+      ...g.row,
+      loads: [...g.row.loads].sort((a, b) => a.start.localeCompare(b.start)),
     }));
-    // Named drivers first (alphabetical), then no-driver group last
+
     rows.sort((a, b) => {
-      const aNo = a.driverName === '(No Driver Assigned)';
-      const bNo = b.driverName === '(No Driver Assigned)';
+      const aNo = a.driverName === NO_DRIVER;
+      const bNo = b.driverName === NO_DRIVER;
       if (aNo && !bNo) return 1;
       if (!aNo && bNo) return -1;
       return a.driverName.localeCompare(b.driverName);
     });
     return rows;
-  }, [weekEvents, adjDriverNames]);
+  }, [weekEvents, adjDriverNames, drivers]);
 
   const totalPay = driverGroups.reduce((s, g) => s + g.loads.reduce((ss, l) => ss + (l.driverPay ?? 0), 0), 0);
   const totalLoads = weekEvents.length;
