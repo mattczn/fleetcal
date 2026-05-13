@@ -108,16 +108,16 @@ function DriverPhoneCopy({ phone }: { phone: string }) {
   };
   return (
     <button type="button" onClick={onClick}
-      title="Click to copy"
+      title={copied ? 'Copied!' : 'Click to copy'}
       className="mt-1.5 text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
       style={{ color: copied ? '#15803d' : 'var(--gc-text-3)', background: 'transparent', border: 'none', cursor: 'pointer' }}
       onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
       <Phone size={11} />
       <span style={{ fontVariantNumeric: 'tabular-nums' }}>{phone}</span>
-      <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 4 }}>
-        {copied ? '✓ Copied' : 'Copy'}
-      </span>
+      {copied && (
+        <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 4 }}>✓</span>
+      )}
     </button>
   );
 }
