@@ -140,6 +140,25 @@ async function fetchEventJoined(
 
   const joined = joinEventLoadToApp(evRow, loadRow);
   joined.stops = stops;
+
+  // Document counts by kind — drives the green POD doc icon on the
+  // calendar card. Loads share doc counts across relay legs, so we
+  // key by load_id. Non-revenue events have no load → skip.
+  if (joined.loadId) {
+    const { data: docs } = await supabase
+      .from("load_documents")
+      .select("kind")
+      .eq("org_id", orgId)
+      .eq("load_id", joined.loadId);
+    if (docs && docs.length > 0) {
+      const counts: Record<string, number> = {};
+      for (const d of docs as Array<{ kind: string }>) {
+        counts[d.kind] = (counts[d.kind] ?? 0) + 1;
+      }
+      joined.documentCounts = counts;
+    }
+  }
+
   return joined;
 }
 

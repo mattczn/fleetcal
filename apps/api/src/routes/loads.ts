@@ -162,11 +162,27 @@ async function fetchLoadJoined(
     stopsByEvent.set(s.event_id, arr);
   }
 
+  // Document counts by kind — drives the green POD doc icon on the
+  // calendar card. Relay legs share counts since docs are load-scoped.
+  const { data: docs } = await supabase
+    .from("load_documents")
+    .select("kind")
+    .eq("org_id", orgId)
+    .eq("load_id", loadId);
+  const documentCounts: Record<string, number> = {};
+  if (docs) {
+    for (const d of docs as Array<{ kind: string }>) {
+      documentCounts[d.kind] = (documentCounts[d.kind] ?? 0) + 1;
+    }
+  }
+  const hasDocs = Object.keys(documentCounts).length > 0;
+
   return eventRows.map((ev) => {
     const joined = joinEventLoadToApp(ev, loadRow);
     joined.stops = (stopsByEvent.get(ev.id) ?? []).slice().sort(
       (a, b) => a.sequence - b.sequence,
     );
+    if (hasDocs) joined.documentCounts = documentCounts;
     return joined;
   });
 }
@@ -371,11 +387,37 @@ loads.get("/", async (c) => {
     }
   }
 
+  // Document counts by kind — drives the green POD icon overlay on
+  // the calendar card. Batched once across all visible loads.
+  const loadIds = Array.from(new Set(
+    (rows as Array<Record<string, unknown>>)
+      .map(r => (r.load_id as string | null))
+      .filter((id): id is string => !!id),
+  ));
+  const countsByLoad = new Map<string, Record<string, number>>();
+  if (loadIds.length > 0) {
+    const { data: docs } = await supabase
+      .from("load_documents")
+      .select("load_id, kind")
+      .eq("org_id", orgId)
+      .in("load_id", loadIds);
+    for (const d of (docs ?? []) as Array<{ load_id: string | null; kind: string }>) {
+      if (!d.load_id) continue;
+      const m = countsByLoad.get(d.load_id) ?? {};
+      m[d.kind] = (m[d.kind] ?? 0) + 1;
+      countsByLoad.set(d.load_id, m);
+    }
+  }
+
   const result: Load[] = rows.map((e) => {
     const ev = e as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
     const loadRow = Array.isArray(ev.load) ? (ev.load[0] ?? null) : (ev.load ?? null);
     const joined = joinEventLoadToApp(ev, loadRow);
     joined.stops = (stopsByEvent.get(joined.id) ?? []).slice().sort((a, b) => a.sequence - b.sequence);
+    if (joined.loadId) {
+      const counts = countsByLoad.get(joined.loadId);
+      if (counts) joined.documentCounts = counts;
+    }
     return joined;
   });
 

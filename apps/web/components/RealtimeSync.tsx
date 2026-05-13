@@ -105,10 +105,32 @@ export default function RealtimeSync() {
       )
       .subscribe();
 
+    // load_documents — POD uploads / deletes change documentCounts on
+    // the joined Load shape, which drives the green doc-icon overlay
+    // on the calendar card. Same pattern as loads: refetch every event
+    // tied to the changed load_id.
+    const docsChannel = supabase
+      .channel(`org-${orgId}-load-documents`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'load_documents', filter: `org_id=eq.${orgId}` },
+        (payload) => {
+          const row = (payload.new ?? payload.old) as { load_id?: string | null };
+          if (!row?.load_id) return;
+          const loadId = row.load_id;
+          const events = useCalendarStore.getState().events;
+          for (const ev of events) {
+            if (ev.loadId === loadId) void refetchEvent(ev.id);
+          }
+        },
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
       supabase.removeChannel(stopsChannel);
       supabase.removeChannel(loadsChannel);
+      supabase.removeChannel(docsChannel);
     };
   }, [orgId, updateFromRemote, removeFromRemote]);
 
