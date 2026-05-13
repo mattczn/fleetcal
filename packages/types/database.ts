@@ -258,6 +258,30 @@ export type Database = {
           },
         ]
       }
+      driver_evening_sweeps: {
+        Row: {
+          org_id:     string
+          driver_id:  number
+          local_date: string
+          sent_at:    string
+          load_count: number
+        }
+        Insert: {
+          org_id:      string
+          driver_id:   number
+          local_date:  string
+          sent_at?:    string
+          load_count?: number
+        }
+        Update: {
+          org_id?:     string
+          driver_id?:  string
+          local_date?: string
+          sent_at?:    string
+          load_count?: number
+        }
+        Relationships: []
+      }
       drivers: {
         Row: {
           address: string | null
