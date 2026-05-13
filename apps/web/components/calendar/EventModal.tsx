@@ -1210,7 +1210,7 @@ export default function EventModal() {
   const {
     assets, events, drivers, driverPrefs, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
-    addEvent, updateEvent, removeEvent, closeModal,
+    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
     createRelayPair, splitToRelay, saveRelayBoth, removeRelay,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
@@ -1246,6 +1246,7 @@ export default function EventModal() {
   const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue'>('revenue');
   const [nonRevenueType, setNonRevenueType] = useState<string>('Maintenance');
   const [confirmDel,           setConfirmDel]           = useState(false);
+  const [cancelDialogOpen,     setCancelDialogOpen]    = useState(false);
   const [historyExpanded,      setHistoryExpanded]      = useState(false);
   const [auditLog,             setAuditLog]             = useState<LoadAuditEntry[]>([]);
   const [confirmRemoveRateCon, setConfirmRemoveRateCon] = useState(false);
@@ -2104,6 +2105,63 @@ export default function EventModal() {
       const deleteEntry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, loadDeleted: true };
       removeEvent(modalEventId, deleteEntry);
     }
+    closeModal();
+  };
+
+  // ── Cancel flow ─────────────────────────────────────────────────────
+  // Three paths; the dialog walks the user through them:
+  //   1. Mark Cancelled    — sets status='cancelled', event stays
+  //                           on the calendar greyed out.
+  //   2. Remove from Cal.  — event soft-deleted, load preserved in
+  //                           the system (search, accounting, TONU).
+  //   3. Delete Permanent  — full soft-delete (load + event → Trash).
+  function buildCancelAuditEntry(mode: 'status' | 'remove-event' | 'permanent'): LoadAuditEntry {
+    return {
+      changedAt: new Date().toISOString(),
+      changedByName: currentUserName,
+      loadCancelled: { mode },
+      // Surface the status flip in the audit timeline for mode='status'.
+      ...(mode === 'status' ? { prevStatus: status as EventStatus, newStatus: 'cancelled' as EventStatus } : {}),
+      // Mirror loadDeleted on permanent so existing audit renderers
+      // still highlight it as a destructive event.
+      ...(mode === 'permanent' ? { loadDeleted: true } : {}),
+    };
+  }
+  const handleCancelMarkStatus = () => {
+    if (!modalEventId) return;
+    const entry = buildCancelAuditEntry('status');
+    updateEvent(modalEventId, {
+      status: 'cancelled',
+      auditLog: appendAuditEntry(auditLog, entry),
+    });
+    if (relayGroupId && relayPartner) {
+      updateEvent(relayPartner.id, {
+        status: 'cancelled',
+        auditLog: appendAuditEntry(relayPartner.auditLog ?? [], entry),
+      });
+    }
+    setCancelDialogOpen(false);
+    closeModal();
+  };
+  const handleCancelRemoveEvent = () => {
+    if (!modalEventId) return;
+    if (relayGroupId && relayPartner) {
+      // Drop the relay link on the partner first so it doesn't end
+      // up half-orphaned. Partner stays on the calendar as a normal
+      // single-leg load.
+      updateEvent(relayPartner.id, { ...relayPartner, relayGroupId: undefined, relayRole: undefined });
+    }
+    cancelEventKeepLoad(modalEventId, buildCancelAuditEntry('remove-event'));
+    setCancelDialogOpen(false);
+    closeModal();
+  };
+  const handleCancelPermanent = () => {
+    if (!modalEventId) return;
+    if (relayGroupId && relayPartner) {
+      updateEvent(relayPartner.id, { ...relayPartner, relayGroupId: undefined, relayRole: undefined });
+    }
+    removeEvent(modalEventId, buildCancelAuditEntry('permanent'));
+    setCancelDialogOpen(false);
     closeModal();
   };
 
@@ -4221,14 +4279,25 @@ export default function EventModal() {
               <div className="flex items-center gap-1">
                 {isEdit && (
                   <>
-                    <button type="button" onClick={handleDelete}
-                      className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
-                      style={confirmDel ? { background: '#d93025', color: 'white' } : { color: '#d93025', background: 'transparent' }}
-                      onMouseEnter={e => { if (!confirmDel) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
-                      onMouseLeave={e => { if (!confirmDel) e.currentTarget.style.background = 'transparent'; }}>
-                      <Trash2 size={15} />
-                      {confirmDel ? 'Confirm?' : 'Delete'}
-                    </button>
+                    {eventKind === 'revenue' ? (
+                      <button type="button" onClick={() => setCancelDialogOpen(true)}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                        style={{ color: '#d93025', background: 'transparent' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        <Trash2 size={15} />
+                        Cancel load
+                      </button>
+                    ) : (
+                      <button type="button" onClick={handleDelete}
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                        style={confirmDel ? { background: '#d93025', color: 'white' } : { color: '#d93025', background: 'transparent' }}
+                        onMouseEnter={e => { if (!confirmDel) e.currentTarget.style.background = 'rgba(217,48,37,.1)'; }}
+                        onMouseLeave={e => { if (!confirmDel) e.currentTarget.style.background = 'transparent'; }}>
+                        <Trash2 size={15} />
+                        {confirmDel ? 'Confirm?' : 'Delete'}
+                      </button>
+                    )}
                     {!isPickupLeg && !isDeliveryLeg && (
                       <>
                         <button type="button" onClick={handleDuplicate}
@@ -4284,6 +4353,112 @@ export default function EventModal() {
         />
       );
     })()}
+
+    {/* Cancel load dialog — three destructive paths plus exit.
+        Layered at z-240 so it sits above EventModal main (z-200) and
+        its inline confirm dialogs (z-220) but below the document
+        delete dialog. */}
+    {cancelDialogOpen && (
+      <div className="fixed inset-0 flex items-center justify-center px-4"
+        style={{ background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
+        onMouseDown={e => { if (e.target === e.currentTarget) setCancelDialogOpen(false); }}>
+        <div className="rounded-2xl flex flex-col w-full"
+          style={{
+            maxWidth:   480,
+            background: 'var(--gc-surface)',
+            boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
+            border:     '1px solid var(--gc-border)',
+          }}>
+          {/* Header */}
+          <div className="flex items-start gap-3 px-5 pt-5 pb-3">
+            <div className="flex items-center justify-center flex-shrink-0 rounded-full"
+              style={{ width: 36, height: 36, background: '#fce8e6', color: '#d93025' }}>
+              <AlertTriangle size={18} />
+            </div>
+            <div className="flex-1">
+              <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
+                Cancel this load?
+              </div>
+              <div className="text-[13px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
+                Pick how to handle it. You can always look it up later by load #.
+              </div>
+            </div>
+          </div>
+
+          {/* Three action rows */}
+          <div className="flex flex-col gap-2 px-5 pb-2">
+            <button type="button" onClick={handleCancelMarkStatus}
+              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
+              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
+                style={{ width: 28, height: 28, background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
+                <Calendar size={14} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                  Mark cancelled (keep on calendar)
+                </div>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Event stays visible, greyed out. Status flips to Cancelled.
+                </div>
+              </div>
+            </button>
+
+            <button type="button" onClick={handleCancelRemoveEvent}
+              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
+              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
+                style={{ width: 28, height: 28, background: '#fef3c7', color: '#92400e' }}>
+                <Trash2 size={14} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                  Remove from calendar (keep load record)
+                </div>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Event disappears, but the load stays searchable in accounting / history.
+                </div>
+              </div>
+            </button>
+
+            <button type="button" onClick={handleCancelPermanent}
+              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
+              style={{ border: '1px solid #f4c7c3', background: '#fdecea' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#fadcd9')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#fdecea')}>
+              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
+                style={{ width: 28, height: 28, background: '#fce8e6', color: '#d93025' }}>
+                <AlertCircle size={14} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-bold" style={{ color: '#b1271b' }}>
+                  Delete permanently
+                </div>
+                <div className="text-[12px] mt-0.5" style={{ color: '#b1271b', opacity: 0.85 }}>
+                  Remove the event and the load record. This can&apos;t be undone.
+                </div>
+              </div>
+            </button>
+          </div>
+
+          {/* Footer — exit only */}
+          <div className="flex items-center justify-end gap-2 px-5 py-4 mt-2"
+            style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+            <button type="button" onClick={() => setCancelDialogOpen(false)}
+              className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              Never mind
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* Closeout review panel launched from the load modal. Resolves
         the relay pickup leg before launching since ReviewQueue's

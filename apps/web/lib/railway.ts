@@ -214,6 +214,9 @@ class RailwayClient {
     return this.req<UpdateEventByIdResponse>('PATCH',   `/v1/events/${id}`, body);
   }
   deleteEvent(id: string)                         { return this.req<DeleteEventResponse>('DELETE',   `/v1/events/${id}`); }
+  /** Soft-delete a revenue event row but leave the parent load
+   *  intact. Used by the "Cancel & Remove from Calendar" flow. */
+  cancelEventKeepLoad(id: string)                 { return this.req<DeleteEventResponse>('DELETE',   `/v1/events/${id}?keepLoad=true`); }
   replaceStops(eventId: string, body: ReplaceStopsRequest) {
     return this.req<ReplaceStopsResponse>('PUT',  `/v1/events/${eventId}/stops`, body);
   }

@@ -154,6 +154,11 @@ interface CalendarStore extends ModalState {
 
   addEvent: (event: Omit<CalendarEvent, 'id'>, presetId?: string) => void;
   updateEvent: (id: string, updates: Partial<Omit<CalendarEvent, 'id'>>) => void;
+  /** Soft-delete just the event row and leave the parent load intact.
+   *  Used by the "Cancel & Remove from Calendar" flow — load stays in
+   *  search / accounting / TONU paths but vanishes from the calendar.
+   *  The audit entry attaches to the load via updateLoad. */
+  cancelEventKeepLoad: (id: string, auditEntry?: import('@/lib/types').LoadAuditEntry) => void;
   removeEvent: (id: string, auditEntry?: import('@/lib/types').LoadAuditEntry) => void;
   // Remote-only (realtime): apply without writing back to DB
   addEventFromRemote: (event: CalendarEvent) => void;
@@ -922,6 +927,42 @@ export const useCalendarStore = create<CalendarStore>()(
         }
       })
       .catch((err) => console.error('updateEvent:', err));
+  },
+
+  cancelEventKeepLoad: (id, auditEntry) => {
+    if (get().isDemo) return;
+    const ev = get().events.find((e) => e.id === id);
+    if (!ev) return;
+    markSelfWrite(id);
+    // Drop the event from local state — same effect as a delete from
+    // the user's perspective on the calendar — but DON'T move it to
+    // the trash store (deletedEvents) because the load itself is
+    // still active. If they want it back, they re-create the event
+    // against the existing load.
+    set((state) => ({
+      events: state.events.filter((e) => e.id !== id),
+    }));
+    const { orgId } = get();
+    if (!orgId) return;
+
+    if (ev.eventKind === 'non_revenue' || !ev.loadId) {
+      // Non-revenue events have no parent load to preserve; this path
+      // is equivalent to a normal delete.
+      railway.deleteEvent(id).catch((err) => console.error('cancelEventKeepLoad (non-revenue):', err));
+      return;
+    }
+
+    // Persist the audit entry on the load before nuking the event so
+    // the cancellation reason isn't orphaned.
+    if (auditEntry) {
+      const nextLog = [...(ev.auditLog ?? []), auditEntry];
+      railway.updateLoad(ev.loadId, { auditLog: nextLog }).catch((err) =>
+        console.error('cancelEventKeepLoad audit append:', err),
+      );
+    }
+    railway.cancelEventKeepLoad(id).catch((err) =>
+      console.error('cancelEventKeepLoad:', err),
+    );
   },
 
   removeEvent: (id, auditEntry) => {

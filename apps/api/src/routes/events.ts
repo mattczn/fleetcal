@@ -310,14 +310,20 @@ events.patch("/:id", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// DELETE /v1/events/:id — soft-delete a non-revenue event
+// DELETE /v1/events/:id — soft-delete an event row.
+//   - Non-revenue events: always allowed.
+//   - Revenue events: only allowed when ?keepLoad=true. Use case:
+//     the "Cancel & Remove from Calendar" workflow, where the load
+//     record stays in the system (searchable, accounting,
+//     potentially TONU-billable) but the event vanishes from the
+//     calendar / dispatch board.
 // ─────────────────────────────────────────────────────────────────────────
 
 events.delete("/:id", async (c) => {
   const orgId = c.get("orgId");
   const eventId = c.req.param("id");
+  const keepLoad = c.req.query("keepLoad") === "true";
 
-  // Verify the event is non-revenue (revenue events go via DELETE /v1/loads/:id)
   const { data: ev, error: fetchErr } = await supabase
     .from("events")
     .select("id,event_kind,load_id")
@@ -331,8 +337,9 @@ events.delete("/:id", async (c) => {
     return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   }
   const evRow = ev as { event_kind: string; load_id: string | null };
-  if (evRow.event_kind === "revenue" || evRow.load_id !== null) {
-    return badRequest(c, ["cannot delete a revenue event directly; delete the parent load instead"]);
+  const isRevenue = evRow.event_kind === "revenue" || evRow.load_id !== null;
+  if (isRevenue && !keepLoad) {
+    return badRequest(c, ["cannot delete a revenue event directly; pass keepLoad=true to drop the event but keep the load, or DELETE /v1/loads/:id to delete both"]);
   }
 
   const { error: delErr } = await supabase

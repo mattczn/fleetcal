@@ -378,6 +378,13 @@ export interface LoadAuditEntry {
   relayRemoved?: boolean;
   loadDeleted?: boolean;
   loadRestored?: boolean;
+  /** Set when a dispatcher cancels the load. mode distinguishes the
+   *  three cancel paths:
+   *    'status'       — event stays on calendar, greyed out
+   *    'remove-event' — event removed, load preserved in system
+   *    'permanent'    — full delete via removeEvent (mirrored by loadDeleted)
+   */
+  loadCancelled?: { mode: 'status' | 'remove-event' | 'permanent'; reason?: string };
   accessorialsChanged?: AccessorialChange[];
   prevStatus?: LoadStatus;
   newStatus?: LoadStatus;
