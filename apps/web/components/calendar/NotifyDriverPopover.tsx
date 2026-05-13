@@ -333,6 +333,20 @@ export default function NotifyDriverPopover({
               style={{ color: 'var(--gc-text-1)' }}>
               Recent nudges
             </div>
+            {/* Sticky "driver confirmed at" line at the top of the
+                history. Always visible when confirmedAt is set,
+                independent of whether any notification was sent. */}
+            {event?.confirmedAt && (
+              <div className="flex items-center gap-2 px-3 py-1.5 mx-1 mb-1 rounded"
+                style={{ background: '#dcfce7', border: '1px solid #86efac' }}>
+                <CheckCircle2 size={12} style={{ color: '#15803d' }} />
+                <span className="text-[11px]" style={{ color: '#15803d', fontWeight: 800 }}>
+                  Driver confirmed at {new Date(event.confirmedAt).toLocaleString('en-US', {
+                    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+                  })}
+                </span>
+              </div>
+            )}
             <div className="max-h-48 overflow-auto px-1 pb-2">
               {loading && !notifs ? (
                 <div className="flex items-center justify-center py-3">
