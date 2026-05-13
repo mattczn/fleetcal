@@ -975,9 +975,16 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                                 {customer.shortName?.trim() || customer.name}
                               </button>
                             );
-                          } else if (col.id === 'driver' && load.driverName) {
-                            const driverRec = drivers.find(d => d.name === load.driverName);
+                          } else if (col.id === 'driver') {
+                            // Match by driver_id FK first so renames don't break the link;
+                            // fall back to name match for legacy rows missing the id.
+                            const driverRec =
+                              (load.driverId != null ? drivers.find(d => d.id === load.driverId) : undefined) ??
+                              (load.driverName ? drivers.find(d => d.name === load.driverName) : undefined);
                             if (driverRec) {
+                              // Always render the CURRENT driver name — if the dispatcher
+                              // updates first/last on the record, the report reflects it.
+                              const fullName = `${driverRec.firstName ?? ''} ${driverRec.lastName ?? ''}`.trim() || driverRec.name;
                               inner = (
                                 <button
                                   type="button"
@@ -986,9 +993,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                                   onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
                                   onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
                                 >
-                                  {load.driverName}
+                                  {fullName}
                                 </button>
                               );
+                            } else if (load.driverName) {
+                              // No matching record — still show the stored name so the
+                              // cell isn't blank.
+                              inner = load.driverName;
                             }
                           } else if (col.id === 'asset') {
                             const a = assets.find(x => x.id === load.assetId);

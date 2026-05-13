@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Fuel, Wrench } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -851,6 +851,24 @@ export default function CalendarToolbar() {
               >
                 <Users size={15} style={{ color: 'var(--gc-text-3)' }} />
                 Payroll
+              </Link>
+              <Link href="/fuel" onClick={() => setMoreOpen(false)}
+                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              >
+                <Fuel size={15} style={{ color: 'var(--gc-text-3)' }} />
+                Fuel
+              </Link>
+              <Link href="/maintenance" onClick={() => setMoreOpen(false)}
+                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              >
+                <Wrench size={15} style={{ color: 'var(--gc-text-3)' }} />
+                Maintenance
               </Link>
             </div>
           )}
