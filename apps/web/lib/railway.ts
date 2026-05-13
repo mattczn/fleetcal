@@ -26,6 +26,7 @@ import type {
   DeleteEventResponse,
   ReplaceStopsRequest, ReplaceStopsResponse,
   GetAuditLogResponse,
+  LoadNotification, LoadNotificationKind,
   GetRateConUrlResponse,
   ListDocumentsResponse,
   GetDocumentUrlResponse,
@@ -222,6 +223,17 @@ class RailwayClient {
   }
   getEventAuditLog(eventId: string) {
     return this.req<GetAuditLogResponse>('GET', `/v1/events/${eventId}/audit-log`);
+  }
+  // ── Notifications (dispatcher → driver nudges) ────────────────────────
+  listEventNotifications(eventId: string) {
+    return this.req<{ notifications: LoadNotification[] }>(
+      'GET', `/v1/events/${eventId}/notifications`,
+    );
+  }
+  sendEventNotification(eventId: string, body: { kind: LoadNotificationKind; sentByName: string }) {
+    return this.req<{ notification: LoadNotification }>(
+      'POST', `/v1/events/${eventId}/notify`, body,
+    );
   }
   getRateConUrl(loadId: string) {
     return this.req<GetRateConUrlResponse>('GET', `/v1/loads/${loadId}/rate-con-url`);

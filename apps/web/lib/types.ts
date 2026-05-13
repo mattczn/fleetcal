@@ -28,8 +28,10 @@ export type {
   AccessorialChange,
   LoadAuditEntry,
   GeocodeStatus,
+  LoadNotification,
+  LoadNotificationKind,
 } from "@fleetcal/types";
-export { NON_REVENUE_TYPES } from "@fleetcal/types";
+export { NON_REVENUE_TYPES, LOAD_NOTIFICATION_KINDS } from "@fleetcal/types";
 
 // Backwards-compatible aliases for existing web code
 export type CalendarEvent = Load;
