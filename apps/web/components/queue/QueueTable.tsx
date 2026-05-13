@@ -475,9 +475,14 @@ function lastPinnedShadow<R>(c: QueueColumn<R>, cols: QueueColumn<R>[]): string 
 
 // ─── Header cell styles ─────────────────────────────────────────────────
 
+// Cells get a 1px gray right + bottom border so columns and rows
+// visually separate. Using the lighter border var so the grid reads
+// as structure, not noise. The last column's right-border is
+// effectively hidden by the table's own border.
 const stHeaderCell: React.CSSProperties = {
   height: 36, padding: '0 10px',
   borderBottom: '1px solid var(--gc-border)',
+  borderRight: '1px solid var(--gc-border-light)',
   textAlign: 'left',
   position: 'relative',
   overflow: 'hidden',
@@ -487,6 +492,7 @@ const stHeaderCell: React.CSSProperties = {
 const stFilterCell: React.CSSProperties = {
   height: 32, padding: '4px 6px',
   borderBottom: '1px solid var(--gc-border-light)',
+  borderRight: '1px solid var(--gc-border-light)',
   background: 'var(--gc-surface)',
   overflow: 'visible',
 };
@@ -494,6 +500,7 @@ const stFilterCell: React.CSSProperties = {
 const stBodyCell: React.CSSProperties = {
   height: 36, padding: '0 10px',
   borderBottom: '1px solid var(--gc-border-light)',
+  borderRight: '1px solid var(--gc-border-light)',
   fontSize: 12.5,
   color: 'var(--gc-text-1)',
   overflow: 'hidden',
