@@ -903,8 +903,8 @@ export default function CloseoutView() {
                 ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.rateConPdf ? 1 : 0)} />
                 : (
                   <span
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
-                    style={{ background: '#fee2e2', color: '#991b1b' }}
+                    className="flex items-center gap-1 text-[10px] font-semibold"
+                    style={{ color: '#991b1b' }}
                     title="No rate confirmation uploaded">
                     <Flag size={9} /> Missing RC
                   </span>
@@ -1532,17 +1532,25 @@ export function computeFlagReasons(
 
 function FlagChip({ reason }: { reason: ImpedimentReason }) {
   // Tone per chip type — keeps the row readable when several are
-  // stacked. Manual flag in amber (existing convention), missing POD
-  // in red (POD blocks billing entirely), pending accessorial in
-  // green-ish (it's money, kind of) with the amount inline.
-  const tone =
-    reason.kind === 'manual'      ? { bg: '#fef3c7', fg: '#92400e' }
-    : reason.kind === 'missing_pod' ? { bg: '#fee2e2', fg: '#991b1b' }
-                                    : { bg: '#dcfce7', fg: '#166534' };
+  // stacked. Manual flag in amber and pending accessorial in
+  // green-ish still get the pill treatment (they're additive info).
+  // Missing POD renders as plain red text only — stacking pink pills
+  // for Missing POD + Missing RC + manual flags reads as noise.
   const label =
     reason.kind === 'manual'      ? reason.label
     : reason.kind === 'missing_pod' ? 'Missing POD'
                                     : `${ACCESSORIAL_LABELS[reason.category] ?? 'Accessorial'} ${moneyShort(reason.amount)}`;
+  if (reason.kind === 'missing_pod') {
+    return (
+      <span className="flex items-center gap-1 text-[10px] font-semibold"
+        style={{ color: '#991b1b' }}>
+        <Flag size={9} /> {label}
+      </span>
+    );
+  }
+  const tone = reason.kind === 'manual'
+    ? { bg: '#fef3c7', fg: '#92400e' }
+    : { bg: '#dcfce7', fg: '#166534' };
   return (
     <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
       style={{ background: tone.bg, color: tone.fg }}>
