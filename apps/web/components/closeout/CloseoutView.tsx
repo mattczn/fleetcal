@@ -972,8 +972,13 @@ export default function CloseoutView() {
     // scroll. Star + Notes live in the left-pinned `flags` column
     // above. Push so this column lands last in the visible order;
     // pin-right preserves input order from the right edge.
+    //
+    // Review keeps its full label because it's the primary action.
+    // Release and Flag / Follow-up are icon-only square buttons with
+    // tooltips — keeps the column narrow enough that Review never
+    // gets clipped on smaller viewports.
     cols.push({
-      key: 'actions', label: '', width: 220, align: 'right',
+      key: 'actions', label: '', width: 170, align: 'right',
       pinRight: true,
       pinned: true,
       render: r => {
@@ -989,23 +994,36 @@ export default function CloseoutView() {
               <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
             </button>
             <button onClick={() => void handleVerify(r)}
-              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-              style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}
+              className="rounded-lg transition-colors inline-flex items-center justify-center"
+              style={{
+                background: '#dcfce7', color: '#15803d',
+                border: '1px solid #86efac',
+                width: 26, height: 24,
+              }}
               title="Release without opening review queue">
-              <CheckCircle2 size={11} style={{ display: 'inline', marginRight: 3 }} /> Release
+              <CheckCircle2 size={12} />
             </button>
             {!rowFlagged ? (
               <button onClick={() => handleFlag(r)}
-                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
-                <Flag size={11} style={{ display: 'inline', marginRight: 3 }} /> Flag
+                className="rounded-lg transition-colors inline-flex items-center justify-center"
+                style={{
+                  background: '#fef3c7', color: '#92400e',
+                  border: '1px solid #fde68a',
+                  width: 26, height: 24,
+                }}
+                title="Flag — needs follow-up">
+                <Flag size={12} />
               </button>
             ) : (
               <button onClick={() => setFollowUpTarget(r)}
-                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-                style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}
+                className="rounded-lg transition-colors inline-flex items-center justify-center"
+                style={{
+                  background: '#fff7ed', color: '#9a3412',
+                  border: '1px solid #fed7aa',
+                  width: 26, height: 24,
+                }}
                 title="Log a follow-up + optionally update accessorial status / clear flag">
-                <MessageSquare size={11} style={{ display: 'inline', marginRight: 3 }} /> Follow up
+                <MessageSquare size={12} />
               </button>
             )}
           </div>
