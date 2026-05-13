@@ -3431,19 +3431,6 @@ export default function EventModal() {
                 <MapPin size={13} /> {showMapPanel ? 'Hide Map' : 'View Map'}
               </button>
             )}
-            {/* Driver Summary toggle — copy-pasteable load brief for
-                driver group chats. Only meaningful on saved loads. */}
-            {eventKind === 'revenue' && isEdit && (
-              <Tooltip content="Copy-pasteable load summary for driver group chats">
-                <button type="button" onClick={() => setShowDriverSummary(v => !v)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                  style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showDriverSummary ? `${headerColor}22` : `${headerColor}12` }}
-                  onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
-                  onMouseLeave={e => (e.currentTarget.style.background = showDriverSummary ? `${headerColor}22` : `${headerColor}12`)}>
-                  <Copy size={13} /> Driver Summary
-                </button>
-              </Tooltip>
-            )}
             {eventKind === 'revenue' && (rateConPdf ? (
               <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
@@ -3748,7 +3735,29 @@ export default function EventModal() {
                 </StyledSelect>
                 {(() => {
                   const sel = driverName ? drivers.find(d => d.name === driverName) : null;
-                  return sel?.phone ? <DriverPhoneCopy phone={sel.phone} /> : null;
+                  const showSummaryBtn = eventKind === 'revenue' && isEdit;
+                  if (!sel?.phone && !showSummaryBtn) return null;
+                  return (
+                    <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                      {sel?.phone && <DriverPhoneCopy phone={sel.phone} />}
+                      {showSummaryBtn && (
+                        <Tooltip content="Copy-pasteable load summary for driver group chats">
+                          <button type="button" onClick={() => setShowDriverSummary(v => !v)}
+                            className="text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
+                            style={{
+                              color: showDriverSummary ? headerColor : 'var(--gc-text-3)',
+                              background: showDriverSummary ? `${headerColor}14` : 'transparent',
+                              border: 'none', cursor: 'pointer',
+                            }}
+                            onMouseEnter={e => { if (!showDriverSummary) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                            onMouseLeave={e => (e.currentTarget.style.background = showDriverSummary ? `${headerColor}14` : 'transparent')}>
+                            <Copy size={11} />
+                            <span>Driver summary</span>
+                          </button>
+                        </Tooltip>
+                      )}
+                    </div>
+                  );
                 })()}
               </Field>
             </div>
