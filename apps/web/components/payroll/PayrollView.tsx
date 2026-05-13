@@ -749,7 +749,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         <table className="w-full text-sm">
           <thead>
             <tr style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-              {['Date', 'Leg', 'Event Title', 'Load #', 'Load Value', 'Driver Pay'].map(h => (
+              {['Date', 'Leg', 'Event Title', 'Load #', 'Miles', 'Load Value', 'Driver Pay'].map(h => (
                 <th key={h} className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>{h}</th>
               ))}
               <th className="px-2 py-2.5 print:hidden" style={{ width: 44 }} />
@@ -796,6 +796,11 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                       {load.loadNum
                         ? <CopyChip value={load.loadNum} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-2)' }} />
                         : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap tabular-nums" style={{ color: load.loadedMiles != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                      {load.loadedMiles != null
+                        ? `${Math.round(load.loadedMiles).toLocaleString()} mi`
+                        : '—'}
                     </td>
                     <td className="px-4 py-3 font-semibold whitespace-nowrap" style={{ color: 'var(--gc-text-1)' }}>
                       {load.loadPrice != null ? fmtMoney(load.loadPrice) : '—'}
@@ -849,7 +854,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                   {/* Undo defer confirm */}
                   {isUndoOpen && (
                     <tr style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                      <td colSpan={7} style={{ padding: '10px 16px 12px', background: 'var(--gc-surface)' }}>
+                      <td colSpan={8} style={{ padding: '10px 16px 12px', background: 'var(--gc-surface)' }}>
                         <div className="flex items-center gap-3 flex-wrap">
                           <span className="text-sm flex-1" style={{ color: 'var(--gc-text-2)' }}>
                             Move <strong>{load.title ?? 'this load'}</strong> back to its original week?
@@ -879,7 +884,7 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                   {/* Inline defer form */}
                   {isDeferOpen && (
                     <tr style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                      <td colSpan={7} style={{ padding: '10px 16px 12px', background: 'var(--gc-surface)' }}>
+                      <td colSpan={8} style={{ padding: '10px 16px 12px', background: 'var(--gc-surface)' }}>
                         {!deferConfirm ? (
                           /* ── Form: just pick the target week ── */
                           <div className="flex items-end gap-3 flex-wrap">
