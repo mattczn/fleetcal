@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Script from 'next/script';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
@@ -17,15 +16,6 @@ export const metadata: Metadata = {
   title: 'FleetCal',
   description: 'Fleet dispatch scheduling',
 };
-
-const themeScript = `
-try {
-  var s = JSON.parse(localStorage.getItem('dispatch-ui-settings') || '{}');
-  var t = s.theme || 'light';
-  var d = t === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : t;
-  document.documentElement.setAttribute('data-theme', d);
-} catch(e) {}
-`;
 
 const darkModeCSS = `
 [data-theme="dark"] {
@@ -56,14 +46,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <ClerkProvider>
       <html lang="en" className={`${font.variable} h-full`} suppressHydrationWarning>
         <head>
-          {/* Theme init runs before paint to set data-theme from
-              localStorage so the page renders in the right palette
-              without a flash. next/script with beforeInteractive is
-              the React 19 / Next.js 16-friendly equivalent of a raw
-              <script> tag in <head>. */}
-          <Script id="theme-init" strategy="beforeInteractive">
-            {themeScript}
-          </Script>
+          {/* Theme init runs synchronously before paint to set
+              data-theme on <html> from the user's saved preference.
+              Loaded from a static file rather than inlined into the
+              React tree — React 19 warns about inline <script>
+              elements because they don't re-execute on client
+              re-render. External script refs sidestep the warning
+              and still block paint until evaluated (no async/defer). */}
+          <script src="/theme-init.js" />
           <style dangerouslySetInnerHTML={{ __html: darkModeCSS }} />
         </head>
         <body className="h-full overflow-hidden antialiased" style={{ fontFamily: 'var(--font-jakarta), sans-serif' }}>
