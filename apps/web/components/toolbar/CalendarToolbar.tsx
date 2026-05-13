@@ -702,7 +702,6 @@ export default function CalendarToolbar() {
                 { key: 'status',    label: 'Load status pill',   value: showStatusOverlay,    set: setShowStatusOverlay    },
                 { key: 'confirmed', label: 'Driver confirmed',   value: showConfirmedOverlay, set: setShowConfirmedOverlay },
                 { key: 'pod',       label: 'POD uploaded',       value: showPodOverlay,       set: setShowPodOverlay       },
-                { key: 'billing',   label: 'Billing status',     value: showBillingOverlay,   set: setShowBillingOverlay   },
               ] as const).map(row => (
                 <label key={row.key}
                   className="flex items-center justify-between gap-3 px-2.5 py-2 rounded cursor-pointer transition-colors"

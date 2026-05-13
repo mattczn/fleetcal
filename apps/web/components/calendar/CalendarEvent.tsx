@@ -234,32 +234,10 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               </div>
             );
           })()}
-          {/* Billing-status pill — top-left corner. Shows the closeout
-              workflow state on the card so dispatchers can spot
-              flagged / invoiced / paid loads at a glance. */}
-          {!isRelay && showBillingOverlay && event.billingStatus && event.billingStatus !== 'pending' && (() => {
-            const billingPalette: Record<NonNullable<EventType['billingStatus']>, { bg: string; fg: string; label: string }> = {
-              pending:   { bg: 'rgba(255,255,255,0.35)', fg: '#1f2937', label: '·' },
-              verified:  { bg: '#dbeafe',                fg: '#1e40af', label: 'V' },
-              invoiced:  { bg: '#dcfce7',                fg: '#15803d', label: 'I' },
-              paid:      { bg: '#d1fae5',                fg: '#065f46', label: 'P' },
-              on_hold:   { bg: '#fee2e2',                fg: '#991b1b', label: '!' },
-            };
-            const p = billingPalette[event.billingStatus];
-            return (
-              <span title={`Billing: ${event.billingStatus.replace('_', ' ')}`}
-                style={{
-                  position: 'absolute', top: 3, left: 3,
-                  fontSize: 9, fontWeight: 900,
-                  width: 14, height: 14, lineHeight: '14px', textAlign: 'center',
-                  borderRadius: 999, background: p.bg, color: p.fg,
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
-                  pointerEvents: 'none',
-                }}>
-                {p.label}
-              </span>
-            );
-          })()}
+          {/* Billing-status overlay removed for now; deciding whether
+              to do it via a left-edge stripe (asset-color stays on
+              card body) or some other treatment. The store flag
+              showBillingOverlay is preserved for easy re-enable. */}
           {/* Relay overlay — top-right corner */}
           {isRelay && (
             <div style={{
