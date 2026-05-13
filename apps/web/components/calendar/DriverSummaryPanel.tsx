@@ -113,6 +113,17 @@ function stopLabel(t: Stop['type']): string {
   }
 }
 
+// Mirror the StopsSection palette so dispatchers see the same color
+// language in both panes (pickup green, delivery red, etc.).
+const STOP_TYPE_COLORS: Record<Stop['type'], { fg: string; bg: string }> = {
+  pickup:    { fg: '#166534', bg: '#dcfce7' },
+  delivery:  { fg: '#991b1b', bg: '#fee2e2' },
+  drop:      { fg: '#0e7490', bg: '#cffafe' },
+  drop_hook: { fg: '#1e40af', bg: '#dbeafe' },
+  stop:      { fg: '#92400e', bg: '#fef3c7' },
+  relay:     { fg: '#6d28d9', bg: '#f5f3ff' },
+};
+
 function fullAddress(s: Stop): string {
   const parts = [s.address, s.city, s.state].filter(Boolean);
   return parts.join(', ');
@@ -358,8 +369,8 @@ export default function DriverSummaryPanel({ event, asset, trailer, driverName, 
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded"
                       style={{
-                        background: s.type === 'pickup' ? '#dbeafe' : s.type === 'delivery' ? '#dcfce7' : 'var(--gc-border-light)',
-                        color: s.type === 'pickup' ? '#1e40af' : s.type === 'delivery' ? '#15803d' : 'var(--gc-text-2)',
+                        background: STOP_TYPE_COLORS[s.type]?.bg ?? 'var(--gc-border-light)',
+                        color:      STOP_TYPE_COLORS[s.type]?.fg ?? 'var(--gc-text-2)',
                       }}>
                       {idx + 1}. {stopLabel(s.type)}
                     </span>
