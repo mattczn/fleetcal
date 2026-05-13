@@ -128,6 +128,13 @@ export const railway = {
   updateLoad(id: string, body: { status?: string; trailerId?: number | null }) {
     return req<{ ok: true }>("PATCH", `/v1/driver/loads/${id}`, body);
   },
+  /**
+   * Driver taps Confirm on an assigned load. Idempotent — calling it on
+   * an already-confirmed load just returns the existing timestamp.
+   */
+  confirmLoad(id: string) {
+    return req<{ ok: true; confirmedAt: string }>("POST", `/v1/driver/loads/${id}/confirm`);
+  },
 
   // Stops
   checkInStop(stopId: string, body: { lat: number; lng: number; distanceMi?: number }) {

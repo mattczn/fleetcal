@@ -64,6 +64,15 @@ export async function updateLoadTrailer(
   await railway.updateLoad(id, { trailerId });
 }
 
+/**
+ * Driver-side confirm. Returns the confirmedAt timestamp the server
+ * stamped (or the existing one if already confirmed).
+ */
+export async function confirmLoad(id: string): Promise<string> {
+  const { confirmedAt } = await railway.confirmLoad(id);
+  return confirmedAt;
+}
+
 export async function checkInStop(
   stopId: string,
   _orgId: string,

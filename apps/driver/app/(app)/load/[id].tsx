@@ -35,7 +35,7 @@ import {
 } from "lucide-react-native";
 import * as Location from "expo-location";
 import * as Clipboard from "expo-clipboard";
-import { fetchLoad, updateLoadStatus, updateLoadTrailer, checkInStop, undoCheckInStop } from "@/lib/api/loads";
+import { fetchLoad, updateLoadStatus, updateLoadTrailer, checkInStop, undoCheckInStop, confirmLoad } from "@/lib/api/loads";
 import { railway } from "@/lib/railway";
 import { fetchDocuments } from "@/lib/api/documents";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
@@ -740,6 +740,18 @@ export default function LoadDetailScreen() {
     staleTime: 30 * 1000,
   });
 
+  const { mutate: confirmLoadMut, isPending: isConfirming } = useMutation({
+    mutationFn: () => confirmLoad(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["load", id] });
+      queryClient.invalidateQueries({ queryKey: ["loads"] });
+      showToast("Load confirmed");
+    },
+    onError: () => {
+      showToast("Couldn't confirm — try again");
+    },
+  });
+
   const { mutate: changeStatus, isPending } = useMutation({
     mutationFn: (newStatus: LoadStatus) =>
       updateLoadStatus(id!, driver!.orgId, newStatus, load?.status, driver?.name),
@@ -953,6 +965,62 @@ export default function LoadDetailScreen() {
       >
       {/* Stops tab — route map + timeline */}
       <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
+        {/* Confirm banner — only shown for unconfirmed assigned loads.
+            Lets the driver acknowledge an upcoming load without yet
+            advancing the status (e.g., the 7 PM evening sweep prompts
+            them to confirm tomorrow's runs). */}
+        {load.status === "scheduled" && !load.confirmedAt && load.eventKind !== "non_revenue" ? (
+          <TouchableOpacity
+            onPress={() => confirmLoadMut()}
+            activeOpacity={0.85}
+            disabled={isConfirming}
+            style={{
+              backgroundColor: "#0f9d58",
+              borderRadius: 14,
+              paddingVertical: 14,
+              paddingHorizontal: 16,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 14,
+              shadowColor: "#0f9d58",
+              shadowOpacity: 0.3,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 4 },
+            }}
+          >
+            {isConfirming ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Check size={20} color="#ffffff" strokeWidth={3} />
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={[txt(800), { fontSize: 15, color: "#ffffff" }]}>
+                Confirm Load
+              </Text>
+              <Text style={[txt(500), { fontSize: 12, color: "rgba(255,255,255,0.85)", marginTop: 1 }]}>
+                Tap to let dispatch know you've got this run
+              </Text>
+            </View>
+          </TouchableOpacity>
+        ) : load.confirmedAt ? (
+          <View style={{
+            backgroundColor: "#e6f4ea",
+            borderRadius: 12,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 14,
+          }}>
+            <CheckCircle2 size={16} color="#0f9d58" strokeWidth={2.4} />
+            <Text style={[txt(700), { fontSize: 13, color: "#137333" }]}>
+              Confirmed
+            </Text>
+          </View>
+        ) : null}
+
         {/* Route map */}
         <View style={{ marginBottom: 14 }}>
           <RouteMap
