@@ -11,5 +11,13 @@
     "dev:dispatch": "npm run start -w @fleetcal/dispatch",
     "dev:api": "npm run dev -w @fleetcal/api",
     "types:gen": "supabase gen types typescript --project-id vgybqmvmorjhlgbsssmi --schema public | sed '/<claude-code-hint/d' > packages/types/database.ts"
+  },
+  "overrides": {
+    "@expo/cli": {
+      "expo-router": "~55.0.14"
+    },
+    "@expo/router-server": {
+      "expo-router": "~55.0.14"
+    }
   }
 }
