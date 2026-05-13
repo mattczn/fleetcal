@@ -164,8 +164,13 @@ export function QueueTable<R>({
       if (hiddenColumns?.has(k)) continue;
       ordered.push(c);
     }
+    // Append columns the parent didn't include in `order` (newly-added
+    // columns) — still respecting the hidden set so per-bucket exclusions
+    // from the parent stick.
     for (const c of columns) {
-      if (!order.includes(c.key)) ordered.push(c);
+      if (order.includes(c.key)) continue;
+      if (hiddenColumns?.has(c.key)) continue;
+      ordered.push(c);
     }
     // Stable partition: pinned-left first, then the rest.
     const pinned: QueueColumn<R>[] = [];
