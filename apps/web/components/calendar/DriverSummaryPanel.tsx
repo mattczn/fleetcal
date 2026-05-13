@@ -12,7 +12,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Copy, ExternalLink, X } from 'lucide-react';
+import { Copy, X } from 'lucide-react';
 import type { CalendarEvent, Stop, RefNum, Asset, Trailer } from '@/lib/types';
 
 interface Props {
@@ -81,7 +81,10 @@ function fullAddress(s: Stop): string {
 function googleMapsUrl(s: Stop): string {
   const q = fullAddress(s) || s.facilityName || '';
   if (!q) return '';
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+  // Short ?q= form — universally redirects to the Maps app on mobile
+  // and the Maps web app on desktop. ~30 chars shorter per stop than
+  // the verbose /maps/search/?api=1&query= variant.
+  return `https://maps.google.com/?q=${encodeURIComponent(q)}`;
 }
 
 // ── Plain-text summary builder ──────────────────────────────────────
@@ -132,8 +135,9 @@ function buildPlainText(args: {
       const addr = fullAddress(s);
       if (addr) {
         const url = googleMapsUrl(s);
-        lines.push(url ? `   ${addr}` : `   ${addr}`);
-        if (url) lines.push(`   ${url}`);
+        // Single line: "address — maps.google.com/?q=…". Keeps the
+        // copy compact in chats; the URL is still tappable.
+        lines.push(url ? `   ${addr} — ${url}` : `   ${addr}`);
       }
       const appt = fmtAppointment(s);
       if (appt) lines.push(`   ${appt}`);
@@ -276,17 +280,18 @@ export default function DriverSummaryPanel({ event, asset, trailer, driverName, 
                     {s.facilityName && <span style={{ fontWeight: 700 }}>{s.facilityName}</span>}
                   </div>
                   {addr && (
-                    <div className="flex items-start gap-1">
-                      <span style={{ color: 'var(--gc-text-2)' }}>{addr}</span>
-                      {url && (
-                        <a href={url} target="_blank" rel="noopener noreferrer"
-                          className="inline-flex items-center gap-0.5 shrink-0"
-                          style={{ color: 'var(--gc-blue)', fontWeight: 700 }}
-                          title="Open in Google Maps">
-                          <ExternalLink size={11} />
-                        </a>
-                      )}
-                    </div>
+                    url ? (
+                      <a href={url} target="_blank" rel="noopener noreferrer"
+                        title="Open in Google Maps"
+                        className="block transition-colors"
+                        style={{ color: 'var(--gc-blue)', textDecoration: 'underline', textDecorationColor: 'var(--gc-border)' }}
+                        onMouseEnter={e => (e.currentTarget.style.textDecorationColor = 'var(--gc-blue)')}
+                        onMouseLeave={e => (e.currentTarget.style.textDecorationColor = 'var(--gc-border)')}>
+                        {addr}
+                      </a>
+                    ) : (
+                      <div style={{ color: 'var(--gc-text-2)' }}>{addr}</div>
+                    )
                   )}
                   {appt && (
                     <div style={{ color: 'var(--gc-text-2)', fontVariantNumeric: 'tabular-nums' }}>
