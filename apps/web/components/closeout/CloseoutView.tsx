@@ -574,12 +574,12 @@ export default function CloseoutView() {
   }, [visibleCols]);
   const toggleCol = (key: ToggleableCol) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
 
-  // Persisted column prefs — hidden / order / widths. Replaces the old
-  // useColumnOrder + useColumnWidths + visibleCols trio.
+  // Persisted column prefs — hidden / order / widths / pinned.
   const {
     hidden: hiddenCols, setHidden: setHiddenCols,
     order: colOrder, setOrder: setColOrder,
     widths: colWidths, setWidths: setColWidths,
+    pinned: pinnedCols, setPinned: setPinnedCols,
   } = usePersistedColumnPrefs('closeout-cols-v2',
     new Set(Object.entries(visibleCols).filter(([, v]) => !v).map(([k]) => k)),
   );
@@ -967,6 +967,8 @@ export default function CloseoutView() {
               onHiddenColumnsChange={setHiddenCols}
               columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
               onColumnOrderChange={setColOrder}
+              pinnedColumns={pinnedCols}
+              onPinnedColumnsChange={setPinnedCols}
             />
             <button onClick={() => void refresh()}
               className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
@@ -1014,6 +1016,8 @@ export default function CloseoutView() {
                 onColumnOrderChange={setColOrder}
                 columnWidths={colWidths}
                 onColumnWidthsChange={setColWidths}
+                pinnedColumns={pinnedCols}
+                onPinnedColumnsChange={setPinnedCols}
                 rowClassName={(r) => r.priority ? 'bg-[#fefce8]' : ''}
                 isLoading={loading}
                 emptyMessage={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}

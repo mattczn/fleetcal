@@ -480,12 +480,12 @@ export default function AccountingPage() {
     return out;
   }, [bucket, visibleCols]);
 
-  // Persisted column prefs — hidden set, order, widths. One hook covers
-  // all three; QueueTable wires them in.
+  // Persisted column prefs — hidden / order / widths / pinned.
   const {
     hidden: hiddenCols, setHidden: setHiddenCols,
     order: colOrder, setOrder: setColOrder,
     widths: colWidths, setWidths: setColWidths,
+    pinned: pinnedCols, setPinned: setPinnedCols,
   } = usePersistedColumnPrefs('accounting-cols-v2');
 
   // Per-bucket hidden columns are ANDed with the user's hidden set.
@@ -806,6 +806,8 @@ export default function AccountingPage() {
               onHiddenColumnsChange={setHiddenCols}
               columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
               onColumnOrderChange={setColOrder}
+              pinnedColumns={pinnedCols}
+              onPinnedColumnsChange={setPinnedCols}
             />
             <button onClick={() => void refresh()}
               className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
@@ -841,6 +843,8 @@ export default function AccountingPage() {
                 onColumnOrderChange={setColOrder}
                 columnWidths={colWidths}
                 onColumnWidthsChange={setColWidths}
+                pinnedColumns={pinnedCols}
+                onPinnedColumnsChange={setPinnedCols}
                 selectable={canSelect}
                 selected={selected}
                 onSelectionChange={setSelected}

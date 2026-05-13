@@ -31,7 +31,7 @@ import React, {
 } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Filter, X, Check, ChevronLeft, ChevronRight,
-  Search, GripVertical, Eye, EyeOff,
+  Search, GripVertical, Eye, EyeOff, Pin, PinOff,
 } from 'lucide-react';
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -115,6 +115,11 @@ export interface QueueTableProps<R> {
   /** Resized column widths. */
   columnWidths?: Record<string, number>;
   onColumnWidthsChange?: (next: Record<string, number>) => void;
+  /** User-pinned column keys. Overrides the per-column `pinLeft`
+   *  default. Passing this lets the parent persist a user-modified
+   *  pinning set; otherwise the static `pinLeft` flags apply. */
+  pinnedColumns?: Set<string>;
+  onPinnedColumnsChange?: (next: Set<string>) => void;
 
   /** Row interactions. */
   onRowClick?: (row: R) => void;
@@ -145,15 +150,22 @@ export function QueueTable<R>({
   hiddenColumns, onHiddenColumnsChange,
   columnOrder, onColumnOrderChange,
   columnWidths, onColumnWidthsChange,
+  pinnedColumns,
   onRowClick, rowClassName,
   selectable, selected, onSelectionChange,
   isLoading, emptyMessage = 'No rows match.',
   footerExtra,
 }: QueueTableProps<R>) {
-  // Effective visible columns, in user-defined order. Pinned-left
-  // columns are pulled to the front of the order (within their own
-  // relative order) so sticky-left rendering layers cleanly without
-  // gaps from non-pinned columns slotting in between.
+  // A column is effectively pinned if the user has it in pinnedColumns
+  // OR (no user override exists and) the column declares pinLeft.
+  const isPinned = useCallback((c: QueueColumn<R>) => {
+    if (pinnedColumns) return pinnedColumns.has(c.key);
+    return !!c.pinLeft;
+  }, [pinnedColumns]);
+
+  // Effective visible columns, in user-defined order. Pinned columns
+  // are pulled to the front (preserving their relative order) so the
+  // sticky-left rendering layers without gaps.
   const visibleColumns = useMemo(() => {
     const colsByKey = new Map(columns.map(c => [c.key, c]));
     const ordered: QueueColumn<R>[] = [];
@@ -164,20 +176,16 @@ export function QueueTable<R>({
       if (hiddenColumns?.has(k)) continue;
       ordered.push(c);
     }
-    // Append columns the parent didn't include in `order` (newly-added
-    // columns) — still respecting the hidden set so per-bucket exclusions
-    // from the parent stick.
     for (const c of columns) {
       if (order.includes(c.key)) continue;
       if (hiddenColumns?.has(c.key)) continue;
       ordered.push(c);
     }
-    // Stable partition: pinned-left first, then the rest.
     const pinned: QueueColumn<R>[] = [];
     const free: QueueColumn<R>[] = [];
-    for (const c of ordered) (c.pinLeft ? pinned : free).push(c);
+    for (const c of ordered) (isPinned(c) ? pinned : free).push(c);
     return [...pinned, ...free];
-  }, [columns, columnOrder, hiddenColumns]);
+  }, [columns, columnOrder, hiddenColumns, isPinned]);
 
   // Click-to-sort cycler — asc → desc → off.
   const toggleSort = useCallback((key: string) => {
@@ -248,13 +256,21 @@ export function QueueTable<R>({
     const m = new Map<string, number>();
     let acc = selectable ? 40 : 0;
     for (const c of visibleColumns) {
-      if (!c.pinLeft) continue;
+      if (!isPinned(c)) continue;
       m.set(c.key, acc);
       acc += widthOf(c);
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleColumns, selectable, columnWidths]);
+  }, [visibleColumns, selectable, columnWidths, isPinned]);
+
+  // Set of currently-pinned column keys — used by lastPinnedShadow
+  // to find the rightmost pinned column for the seam shadow.
+  const pinnedKeySet = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of visibleColumns) if (isPinned(c)) s.add(c.key);
+    return s;
+  }, [visibleColumns, isPinned]);
 
   return (
     <div className="flex flex-col min-h-0 min-w-0 rounded-lg shadow-sm overflow-hidden h-full w-full"
@@ -294,7 +310,7 @@ export function QueueTable<R>({
                 const w = widthOf(c);
                 const active = sort.key === c.key;
                 const Indicator = active ? (sort.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
-                const pinnedLeft = c.pinLeft ? stickyOffsets.get(c.key) : undefined;
+                const pinnedLeft = isPinned(c) ? stickyOffsets.get(c.key) : undefined;
                 return (
                   <th key={c.key}
                     onClick={() => c.sortable && toggleSort(c.key)}
@@ -306,7 +322,7 @@ export function QueueTable<R>({
                       left: pinnedLeft,
                       zIndex: pinnedLeft != null ? 30 : 20,
                       background: 'var(--gc-surface)',
-                      boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns) : undefined,
+                      boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns, pinnedKeySet) : undefined,
                     }}
                     className="select-none">
                     <div className="flex items-center gap-1.5"
@@ -346,7 +362,7 @@ export function QueueTable<R>({
                   }} />
                 ) : null}
                 {visibleColumns.map(c => {
-                  const pinnedLeft = c.pinLeft ? stickyOffsets.get(c.key) : undefined;
+                  const pinnedLeft = isPinned(c) ? stickyOffsets.get(c.key) : undefined;
                   return (
                     <th key={c.key}
                       style={{
@@ -355,7 +371,7 @@ export function QueueTable<R>({
                         left: pinnedLeft,
                         zIndex: pinnedLeft != null ? 29 : 19,
                         background: 'var(--gc-surface)',
-                        boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns) : undefined,
+                        boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns, pinnedKeySet) : undefined,
                       }}>
                       {c.filter ? (
                         <FilterInput
@@ -413,7 +429,7 @@ export function QueueTable<R>({
                       </td>
                     ) : null}
                     {visibleColumns.map(c => {
-                      const pinnedLeft = c.pinLeft ? stickyOffsets.get(c.key) : undefined;
+                      const pinnedLeft = isPinned(c) ? stickyOffsets.get(c.key) : undefined;
                       return (
                         <td key={c.key}
                           className={c.cellClassName ?? ''}
@@ -424,7 +440,7 @@ export function QueueTable<R>({
                             left: pinnedLeft,
                             zIndex: pinnedLeft != null ? 5 : undefined,
                             background: pinnedLeft != null ? (rowBg ?? 'inherit') : undefined,
-                            boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns) : undefined,
+                            boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns, pinnedKeySet) : undefined,
                           }}>
                           {c.render(r)}
                         </td>
@@ -464,9 +480,9 @@ export function QueueTable<R>({
 
 /** Drop a subtle shadow on the right edge of the last pinned column
  *  so the scrolling content visually slides under it. */
-function lastPinnedShadow<R>(c: QueueColumn<R>, cols: QueueColumn<R>[]): string | undefined {
-  if (!c.pinLeft) return undefined;
-  const pinned = cols.filter(x => x.pinLeft);
+function lastPinnedShadow<R>(c: QueueColumn<R>, cols: QueueColumn<R>[], pinnedKeys: Set<string>): string | undefined {
+  if (!pinnedKeys.has(c.key)) return undefined;
+  const pinned = cols.filter(x => pinnedKeys.has(x.key));
   if (pinned[pinned.length - 1]?.key === c.key) {
     return '2px 0 4px -2px rgba(0,0,0,0.08)';
   }
@@ -654,12 +670,18 @@ function NavBtn({ onClick, disabled, title, icon, extra }: {
 export function QueueColumnsButton<R>({
   columns, hiddenColumns, onHiddenColumnsChange,
   columnOrder, onColumnOrderChange,
+  pinnedColumns, onPinnedColumnsChange,
 }: {
   columns: QueueColumn<R>[];
   hiddenColumns: Set<string>;
   onHiddenColumnsChange: (next: Set<string>) => void;
   columnOrder: string[];
   onColumnOrderChange?: (next: string[]) => void;
+  /** When provided, each column gets a per-row Pin/Unpin toggle.
+   *  The set tracks user-pinned columns (overrides the per-column
+   *  pinLeft default). */
+  pinnedColumns?: Set<string>;
+  onPinnedColumnsChange?: (next: Set<string>) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -720,6 +742,8 @@ export function QueueColumnsButton<R>({
           </div>
           {ordered.map(c => {
             const visible = !hiddenColumns.has(c.key);
+            const pinned = pinnedColumns ? pinnedColumns.has(c.key) : !!c.pinLeft;
+            const canPin = !!onPinnedColumnsChange && !c.pinned;
             return (
               <div key={c.key}
                 draggable={!!onColumnOrderChange && !c.pinned}
@@ -729,7 +753,7 @@ export function QueueColumnsButton<R>({
                   if (dragKeyRef.current && dragKeyRef.current !== c.key) reorder(dragKeyRef.current, c.key);
                   dragKeyRef.current = null;
                 }}
-                className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--gc-hover)]"
+                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-[var(--gc-hover)]"
                 style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
                 {onColumnOrderChange && !c.pinned ? (
                   <GripVertical size={11} style={{ color: 'var(--gc-text-3)', cursor: 'grab' }} />
@@ -741,19 +765,32 @@ export function QueueColumnsButton<R>({
                   {visible
                     ? <Eye size={11} style={{ color: 'var(--gc-text-2)' }} />
                     : <EyeOff size={11} style={{ color: 'var(--gc-text-3)' }} />}
-                  <span className="text-[12px] truncate"
+                  <span className="text-[12px] truncate flex-1"
                     style={{
                       color: visible ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
                       opacity: c.pinned ? 0.5 : 1,
                     }}>
                     {c.label || '(unlabeled)'}
                   </span>
-                  {c.pinLeft ? (
-                    <span className="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded"
-                      style={{ color: 'var(--gc-text-3)', background: 'var(--gc-bg)' }}
-                      title="Pinned to left">PIN</span>
-                  ) : null}
                 </button>
+                {canPin ? (
+                  <button type="button"
+                    onClick={() => {
+                      const next = new Set(pinnedColumns ?? new Set<string>(
+                        columns.filter(x => x.pinLeft).map(x => x.key),
+                      ));
+                      if (next.has(c.key)) next.delete(c.key); else next.add(c.key);
+                      onPinnedColumnsChange?.(next);
+                    }}
+                    className="p-1 rounded hover:bg-[var(--gc-border-light)]"
+                    title={pinned ? 'Unpin from left' : 'Pin to left'}>
+                    {pinned
+                      ? <Pin size={11} style={{ color: '#1a73e8' }} fill="#1a73e8" />
+                      : <PinOff size={11} style={{ color: 'var(--gc-text-3)' }} />}
+                  </button>
+                ) : pinned ? (
+                  <Pin size={11} style={{ color: 'var(--gc-text-3)' }} />
+                ) : null}
               </div>
             );
           })}
@@ -824,7 +861,11 @@ export function applyQueueFilters<R>(
 
 // ─── Persisted column-prefs hooks ───────────────────────────────────────
 
-export function usePersistedColumnPrefs(storageKey: string, defaultHidden: Set<string> = new Set()) {
+export function usePersistedColumnPrefs(
+  storageKey: string,
+  defaultHidden: Set<string> = new Set(),
+  defaultPinned?: Set<string>,
+) {
   const [hidden, setHidden] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set(defaultHidden);
     try {
@@ -849,7 +890,18 @@ export function usePersistedColumnPrefs(storageKey: string, defaultHidden: Set<s
     } catch { /* ignore */ }
     return {};
   });
-  // Persist on change.
+  // Pinned set is optional — `undefined` means "fall through to the
+  // per-column pinLeft defaults". Once the user pins/unpins anything,
+  // we store a concrete set and from then on the user override wins.
+  const [pinned, setPinned] = useState<Set<string> | undefined>(() => {
+    if (typeof window === 'undefined') return defaultPinned ? new Set(defaultPinned) : undefined;
+    try {
+      const raw = window.localStorage.getItem(`${storageKey}.pinned`);
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch { /* ignore */ }
+    return defaultPinned ? new Set(defaultPinned) : undefined;
+  });
+
   useLayoutEffect(() => {
     try { window.localStorage.setItem(`${storageKey}.hidden`, JSON.stringify([...hidden])); } catch { /* ignore */ }
   }, [hidden, storageKey]);
@@ -859,6 +911,12 @@ export function usePersistedColumnPrefs(storageKey: string, defaultHidden: Set<s
   useLayoutEffect(() => {
     try { window.localStorage.setItem(`${storageKey}.widths`, JSON.stringify(widths)); } catch { /* ignore */ }
   }, [widths, storageKey]);
+  useLayoutEffect(() => {
+    try {
+      if (pinned == null) window.localStorage.removeItem(`${storageKey}.pinned`);
+      else window.localStorage.setItem(`${storageKey}.pinned`, JSON.stringify([...pinned]));
+    } catch { /* ignore */ }
+  }, [pinned, storageKey]);
 
-  return { hidden, setHidden, order, setOrder, widths, setWidths };
+  return { hidden, setHidden, order, setOrder, widths, setWidths, pinned, setPinned };
 }
