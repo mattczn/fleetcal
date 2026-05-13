@@ -208,7 +208,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           {event.confirmedAt && !isRelay && (
             <div style={{ position: 'absolute', bottom: 16, right: 4, pointerEvents: 'none' }}
               title="Confirmed by driver">
-              <CheckCircle2 size={11} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.4))' }} />
+              <CheckCircle2 size={28} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
             </div>
           )}
           {/* Relay overlay — top-right corner */}
