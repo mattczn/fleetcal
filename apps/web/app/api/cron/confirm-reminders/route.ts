@@ -3,22 +3,28 @@ import { getSupabase } from '@/lib/supabase';
 import { sendPushToDriver } from '@/lib/push';
 
 /**
- * Vercel Cron — runs every 30 minutes (see vercel.json). Implements the
- * three-rule confirm sweep system:
+ * Vercel Cron — runs every 30 minutes (see vercel.json). Implements two
+ * automatic confirm-reminder rules; the last-minute-assignment rule
+ * lives in the dispatcher store on driver assignment, not here.
  *
  *   1. Evening sweep        — between 7 PM and 8 PM driver-local
  *                             (currently org-wide MT since events.start
  *                             is stored as naive Mountain Time). One
  *                             push per driver covering ALL unconfirmed
- *                             scheduled loads in the next 18h.
- *                             Idempotent via driver_evening_sweeps
- *                             (org_id, driver_id, local_date).
+ *                             scheduled loads in the next 18h. Per
+ *                             load, also inserts a load_notifications
+ *                             row with kind='confirm' so the dispatcher
+ *                             timeline + driver pending-count surfaces
+ *                             it. Idempotent at the driver level via
+ *                             driver_evening_sweeps (org_id, driver_id,
+ *                             local_date).
  *   2. Six-hour-out sweep   — per-load: any unconfirmed event whose
- *                             pickup is 5.5–6.5h away (matched to the
- *                             30-min cron cadence) gets a one-shot push.
- *                             Idempotent via confirm_reminder_sent_at.
- *   3. Last-minute assign   — handled in the dispatcher store on driver
- *                             assignment, not here.
+ *                             pickup is 5.5–6.5h away gets a one-shot
+ *                             push + load_notifications row.
+ *                             Idempotent via "no confirm notification
+ *                             sent for this event in the last 24h" so
+ *                             evening-sweep coverage isn't re-pinged
+ *                             6h before pickup.
  *
  * Auth: Vercel Cron sends `Authorization: Bearer ${CRON_SECRET}`.
  */
@@ -63,14 +69,35 @@ interface PendingRow {
   id:        string;
   org_id:    string;
   driver_id: number;
+  load_id:   string | null;
   start:     string;
   load:      { load_num: string | null } | { load_num: string | null }[] | null;
+}
+
+// Best-effort insert into load_notifications. Failures are logged but
+// don't stop the sweep — the push has already gone out at this point.
+async function recordConfirmNudge(
+  db: ReturnType<typeof getSupabase>,
+  row: PendingRow,
+  sentByName: string,
+): Promise<void> {
+  const { error } = await db.from('load_notifications').insert({
+    org_id:       row.org_id,
+    event_id:     row.id,
+    load_id:      row.load_id,
+    driver_id:    row.driver_id,
+    kind:         'confirm',
+    sent_by_name: sentByName,
+  });
+  if (error) {
+    console.error('[load_notifications insert]', row.id, error);
+  }
 }
 
 // ── Rule 1: Evening sweep ──────────────────────────────────────────────
 // Fires once per driver per local-date when current MT hour ∈ [19, 20).
 // Aggregates all their unconfirmed scheduled loads in the next 18h into
-// one push. Idempotent via driver_evening_sweeps upsert.
+// one push. Per load, records a load_notifications row.
 
 async function runEveningSweep(db: ReturnType<typeof getSupabase>) {
   const nowMT = naiveMT(new Date());
@@ -79,11 +106,9 @@ async function runEveningSweep(db: ReturnType<typeof getSupabase>) {
   const nowStr   = naiveMTString(0);
   const cutoff18 = naiveMTString(18 * 60 * 60 * 1000);
 
-  // Pull every unconfirmed scheduled-ish load with a driver in the 18h
-  // window. Group client-side by driver_id.
   const { data, error } = await db
     .from('events')
-    .select('id, org_id, driver_id, start, load:loads(load_num)')
+    .select('id, org_id, driver_id, load_id, start, load:loads(load_num)')
     .in('status', ['scheduled', 'assigned', 'dispatched'])
     .is('deleted_at', null)
     .is('confirmed_at', null)
@@ -110,9 +135,8 @@ async function runEveningSweep(db: ReturnType<typeof getSupabase>) {
     const [orgId, driverIdStr] = key.split('|');
     const driverId = Number(driverIdStr);
 
-    // Idempotency check — has this driver already gotten today's
-    // evening sweep? Use an upsert with ignoreDuplicates to claim the
-    // (org_id, driver_id, local_date) slot atomically.
+    // Idempotency claim — atomically insert the (org, driver, date)
+    // row. 23505 = duplicate key = already sent today.
     const { error: upsertErr } = await db
       .from('driver_evening_sweeps')
       .insert({ org_id: orgId, driver_id: driverId, local_date: today, load_count: loads.length });
@@ -130,12 +154,13 @@ async function runEveningSweep(db: ReturnType<typeof getSupabase>) {
       await sendPushToDriver(orgId, driverId, {
         title: count === 1 ? 'Confirm tomorrow\'s load' : `Confirm ${count} upcoming loads`,
         body,
-        // Deep-link to the first load when there's only one; to the
-        // loads list when there are multiple.
         data: count === 1
-          ? { type: 'evening_sweep', eventId: loads[0].id, url: `/load/${loads[0].id}` }
-          : { type: 'evening_sweep', url: '/loads' },
+          ? { type: 'confirm', eventId: loads[0].id, url: `/load/${loads[0].id}` }
+          : { type: 'confirm', url: '/loads' },
       });
+      // Per-load timeline rows so each load's pending count + history
+      // reflect that the evening sweep covered it.
+      await Promise.all(loads.map(l => recordConfirmNudge(db, l, 'Auto: evening sweep')));
       sent++;
     } catch (err) {
       console.error('eveningSweep send:', orgId, driverId, err);
@@ -153,47 +178,61 @@ async function runEveningSweep(db: ReturnType<typeof getSupabase>) {
 // loads that were assigned more than 6h before pickup but whose pickup
 // time falls outside the evening-sweep's 18h window (e.g., 3 PM next-day
 // pickup assigned at 10 AM yesterday).
+//
+// Idempotency: skip events that already got a 'confirm' notification
+// (manual or evening sweep) in the last 24h. This unifies cron output
+// with the dispatcher-initiated nudges via load_notifications — no
+// more separate confirm_reminder_sent_at flag needed.
 
 async function runSixHourSweep(db: ReturnType<typeof getSupabase>) {
-  const fromStr = naiveMTString(5.5 * 60 * 60 * 1000); // pickup is 5.5h from now or later
-  const toStr   = naiveMTString(6.5 * 60 * 60 * 1000); // …and 6.5h from now or sooner
+  const fromStr = naiveMTString(5.5 * 60 * 60 * 1000);
+  const toStr   = naiveMTString(6.5 * 60 * 60 * 1000);
 
   const { data, error } = await db
     .from('events')
-    .select('id, org_id, driver_id, start, load:loads(load_num)')
+    .select('id, org_id, driver_id, load_id, start, load:loads(load_num)')
     .in('status', ['scheduled', 'assigned', 'dispatched'])
     .is('deleted_at', null)
     .is('confirmed_at', null)
-    .is('confirm_reminder_sent_at', null)
     .not('driver_id', 'is', null)
     .gte('start', fromStr)
     .lte('start', toStr);
   if (error) { console.error('sixHourSweep query:', error); return { sent: 0, error: error.message }; }
 
   const rows = (data ?? []) as PendingRow[];
-  let sent = 0; let failed = 0;
+  if (rows.length === 0) return { sent: 0, matched: 0 };
+
+  // Pull recent confirm notifications for any of these event_ids so we
+  // can skip ones already nudged in the last 24h.
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: recent } = await db
+    .from('load_notifications')
+    .select('event_id')
+    .in('event_id', rows.map(r => r.id))
+    .eq('kind', 'confirm')
+    .gte('sent_at', cutoff24h);
+  const recentlyNudged = new Set<string>(((recent ?? []) as { event_id: string }[]).map(r => r.event_id));
+
+  let sent = 0; let failed = 0; let skipped = 0;
 
   for (const row of rows) {
+    if (recentlyNudged.has(row.id)) { skipped++; continue; }
     try {
       const loadObj = Array.isArray(row.load) ? row.load[0] : row.load;
       const loadNum = loadObj?.load_num ?? null;
       await sendPushToDriver(row.org_id, row.driver_id, {
         title: loadNum ? `Confirm load #${loadNum}` : 'Confirm load',
         body:  `Pickup at ${fmtPickup(row.start)}. Tap to confirm.`,
-        data:  { type: 'six_hour_reminder', eventId: row.id, url: `/load/${row.id}` },
+        data:  { type: 'confirm', eventId: row.id, url: `/load/${row.id}` },
       });
-      const { error: stampErr } = await db
-        .from('events')
-        .update({ confirm_reminder_sent_at: new Date().toISOString() })
-        .eq('id', row.id);
-      if (stampErr) { console.error('sixHourSweep stamp:', row.id, stampErr); failed++; }
-      else sent++;
+      await recordConfirmNudge(db, row, 'Auto: 6h reminder');
+      sent++;
     } catch (err) {
       console.error('sixHourSweep send:', row.id, err); failed++;
     }
   }
 
-  return { sent, failed, matched: rows.length };
+  return { sent, failed, matched: rows.length, skipped };
 }
 
 // ── Entrypoint ─────────────────────────────────────────────────────────
