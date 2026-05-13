@@ -1247,6 +1247,7 @@ export default function EventModal() {
   const [nonRevenueType, setNonRevenueType] = useState<string>('Maintenance');
   const [confirmDel,           setConfirmDel]           = useState(false);
   const [cancelDialogOpen,     setCancelDialogOpen]    = useState(false);
+  const [removeDialogOpen,     setRemoveDialogOpen]    = useState(false);
   const [historyExpanded,      setHistoryExpanded]      = useState(false);
   const [auditLog,             setAuditLog]             = useState<LoadAuditEntry[]>([]);
   const [confirmRemoveRateCon, setConfirmRemoveRateCon] = useState(false);
@@ -2116,10 +2117,17 @@ export default function EventModal() {
   //                           the system (search, accounting, TONU).
   //   3. Delete Permanent  — full soft-delete (load + event → Trash).
   function buildCancelAuditEntry(mode: 'status' | 'remove-event' | 'permanent'): LoadAuditEntry {
+    // Snapshot rate + miles so a future Reinstate can restore them.
+    const prevLP = parseFloat(String(fieldValues['loadPrice'] ?? ''));
+    const prevLM = loadedMiles;
     return {
       changedAt: new Date().toISOString(),
       changedByName: currentUserName,
-      loadCancelled: { mode },
+      loadCancelled: {
+        mode,
+        ...(Number.isFinite(prevLP) && prevLP > 0 ? { prevLoadPrice: prevLP } : {}),
+        ...(prevLM != null && prevLM > 0 ? { prevLoadedMiles: prevLM } : {}),
+      },
       // Surface the status flip in the audit timeline for mode='status'.
       ...(mode === 'status' ? { prevStatus: status as EventStatus, newStatus: 'cancelled' as EventStatus } : {}),
       // Mirror loadDeleted on permanent so existing audit renderers
@@ -2188,6 +2196,48 @@ export default function EventModal() {
     }
     removeEvent(modalEventId, buildCancelAuditEntry('permanent'));
     setCancelDialogOpen(false);
+    closeModal();
+  };
+
+  // ── Reinstate ───────────────────────────────────────────────────────
+  // Flip a cancelled load back to its previous status. Pulls prev rate
+  // + miles from the most recent loadCancelled audit entry so a misclick
+  // is fully recoverable.
+  const handleReinstate = () => {
+    if (!modalEventId) return;
+    const lastCancel = [...(auditLog ?? [])].reverse().find(e => e.loadCancelled?.mode === 'status');
+    const prevStatus = (lastCancel?.prevStatus as EventStatus | undefined) ?? 'scheduled';
+    const prevLP = lastCancel?.loadCancelled?.prevLoadPrice;
+    const prevLM = lastCancel?.loadCancelled?.prevLoadedMiles;
+    const entry: LoadAuditEntry = {
+      changedAt: new Date().toISOString(),
+      changedByName: currentUserName,
+      loadReinstated: true,
+      prevStatus: 'cancelled' as EventStatus,
+      newStatus: prevStatus,
+      ...(prevLP != null ? { newLoadPrice: prevLP } : {}),
+    };
+    updateEvent(modalEventId, {
+      status: prevStatus,
+      ...(prevLP != null ? { loadPrice: prevLP } : {}),
+      ...(prevLM != null ? { loadedMiles: prevLM } : {}),
+      auditLog: appendAuditEntry(auditLog, entry),
+    });
+    if (relayGroupId && relayPartner) {
+      const partnerEntry: LoadAuditEntry = {
+        changedAt: new Date().toISOString(),
+        changedByName: currentUserName,
+        loadReinstated: true,
+        prevStatus: 'cancelled' as EventStatus,
+        newStatus: prevStatus,
+      };
+      updateEvent(relayPartner.id, {
+        status: prevStatus,
+        ...(prevLP != null ? { loadPrice: prevLP } : {}),
+        ...(prevLM != null ? { loadedMiles: prevLM } : {}),
+        auditLog: appendAuditEntry(relayPartner.auditLog ?? [], partnerEntry),
+      });
+    }
     closeModal();
   };
 
@@ -4305,7 +4355,26 @@ export default function EventModal() {
               <div className="flex items-center gap-1">
                 {isEdit && (
                   <>
-                    {eventKind === 'revenue' ? (
+                    {eventKind === 'revenue' && status === 'cancelled' ? (
+                      <>
+                        <button type="button" onClick={handleReinstate}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                          style={{ color: 'var(--gc-blue)', background: 'transparent' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <RefreshCw size={15} />
+                          Reinstate
+                        </button>
+                        <button type="button" onClick={() => setRemoveDialogOpen(true)}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                          style={{ color: '#d93025', background: 'transparent' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <Trash2 size={15} />
+                          Remove
+                        </button>
+                      </>
+                    ) : eventKind === 'revenue' ? (
                       <button type="button" onClick={() => setCancelDialogOpen(true)}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                         style={{ color: '#d93025', background: 'transparent' }}
@@ -4476,6 +4545,93 @@ export default function EventModal() {
           <div className="flex items-center justify-end gap-2 px-5 py-4 mt-2"
             style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
             <button type="button" onClick={() => setCancelDialogOpen(false)}
+              className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              Never mind
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Remove dialog — shown when a cancelled load needs to come off
+        the board. Two paths: keep the load record (event-only delete)
+        or send the whole thing to the Trash bin. */}
+    {removeDialogOpen && (
+      <div className="fixed inset-0 flex items-center justify-center px-4"
+        style={{ background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
+        onMouseDown={e => { if (e.target === e.currentTarget) setRemoveDialogOpen(false); }}>
+        <div className="rounded-2xl flex flex-col w-full"
+          style={{
+            maxWidth:   480,
+            background: 'var(--gc-surface)',
+            boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
+            border:     '1px solid var(--gc-border)',
+            overflow:   'hidden',
+          }}>
+          {/* Header */}
+          <div className="flex items-start gap-3 px-5 pt-5 pb-3">
+            <div className="flex items-center justify-center flex-shrink-0 rounded-full"
+              style={{ width: 36, height: 36, background: '#fce8e6', color: '#d93025' }}>
+              <Trash2 size={18} />
+            </div>
+            <div className="flex-1">
+              <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
+                Remove this load?
+              </div>
+              <div className="text-[13px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
+                Already cancelled — pick how to clear it off the calendar.
+              </div>
+            </div>
+          </div>
+
+          {/* Two action rows */}
+          <div className="flex flex-col gap-2 px-5 pb-2">
+            <button type="button" onClick={() => { handleCancelRemoveEvent(); setRemoveDialogOpen(false); }}
+              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
+              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
+                style={{ width: 28, height: 28, background: '#fef3c7', color: '#92400e' }}>
+                <Trash2 size={14} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                  Remove from calendar (keep load record)
+                </div>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Event disappears, but the load stays searchable in accounting / history.
+                </div>
+              </div>
+            </button>
+
+            <button type="button" onClick={() => { handleCancelPermanent(); setRemoveDialogOpen(false); }}
+              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
+              style={{ border: '1px solid #f4c7c3', background: '#fdecea' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#fadcd9')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#fdecea')}>
+              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
+                style={{ width: 28, height: 28, background: '#fce8e6', color: '#d93025' }}>
+                <AlertCircle size={14} />
+              </div>
+              <div className="flex-1">
+                <div className="text-[13px] font-bold" style={{ color: '#b1271b' }}>
+                  Move to Recently Deleted
+                </div>
+                <div className="text-[12px] mt-0.5" style={{ color: '#b1271b', opacity: 0.85 }}>
+                  Removes the event and the load record. Restorable from Trash for 30 days.
+                </div>
+              </div>
+            </button>
+          </div>
+
+          {/* Footer — exit only */}
+          <div className="flex items-center justify-end gap-2 px-5 py-4 mt-2"
+            style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+            <button type="button" onClick={() => setRemoveDialogOpen(false)}
               className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors"
               style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}

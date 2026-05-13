@@ -384,7 +384,16 @@ export interface LoadAuditEntry {
    *    'remove-event' — event removed, load preserved in system
    *    'permanent'    — full delete via removeEvent (mirrored by loadDeleted)
    */
-  loadCancelled?: { mode: 'status' | 'remove-event' | 'permanent'; reason?: string };
+  loadCancelled?: {
+    mode: 'status' | 'remove-event' | 'permanent';
+    reason?: string;
+    /** Snapshot of rate at the time of cancellation so a reinstate can restore it. */
+    prevLoadPrice?: number;
+    /** Snapshot of routed miles so a reinstate can restore them. */
+    prevLoadedMiles?: number;
+  };
+  /** Set when a dispatcher reinstates a previously-cancelled load. */
+  loadReinstated?: boolean;
   accessorialsChanged?: AccessorialChange[];
   prevStatus?: LoadStatus;
   newStatus?: LoadStatus;
