@@ -18,11 +18,4 @@ export type {
   Accessorial,
   AccessorialCategory,
   Customer,
-  MaintenanceReport,
-  MaintenanceReportStatus,
-  MaintenanceReportPhoto,
-  MaintenanceActionItem,
-  MaintenanceActionStatus,
-  MaintenancePriority,
-  MaintenanceCategory,
 } from "@fleetcal/types";

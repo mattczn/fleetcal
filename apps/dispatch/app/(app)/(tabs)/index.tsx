@@ -7,7 +7,7 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useOrganization, useUser } from "@clerk/clerk-expo";
 import {
-  Plus, Search, X, CalendarDays, Map as MapIcon, ChevronRight, User as UserIcon, Truck, Wrench,
+  Plus, Search, X, CalendarDays, Map as MapIcon, ChevronRight, User as UserIcon, Truck,
 } from "lucide-react-native";
 import { fetchAssets, searchLoads } from "@/lib/api";
 import { useDebounce } from "@/lib/useDebounce";
@@ -206,14 +206,6 @@ export default function HomeScreen() {
               onPress={() => setTrucksPickerOpen(true)}
               tint="#15803d"
               tintBg="#dcfce7"
-            />
-            <QuickLink
-              label="Maintenance"
-              hint="Reports & work"
-              Icon={Wrench}
-              onPress={() => router.push("/maintenance")}
-              tint="#9a3412"
-              tintBg="#fed7aa"
             />
           </View>
 

@@ -16,7 +16,6 @@ export default function AppLayout() {
       <Stack.Screen name="new-load" />
       <Stack.Screen name="load/[id]" />
       <Stack.Screen name="trash" />
-      <Stack.Screen name="maintenance" />
     </Stack>
   );
 }
