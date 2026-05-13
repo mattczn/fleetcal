@@ -14,7 +14,7 @@
 
 import { useEffect, useRef, useState, forwardRef } from 'react';
 import {
-  Check, Copy, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
+  Check, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
   User as UserIcon, Truck as TruckIcon,
   type LucideIcon,
 } from 'lucide-react';
@@ -177,10 +177,11 @@ export function CopyableCell({
           setTimeout(() => setCopied(false), 1500);
         } catch { /* clipboard blocked — silent */ }
       }}
-      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums"
+      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums w-full"
       style={{
         color:      copied ? '#15803d' : 'var(--gc-text-1)',
         background: copied ? '#dcfce7' : 'transparent',
+        justifyContent: 'flex-start',
       }}
       title={copied ? 'Copied!' : title}
       onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
@@ -188,7 +189,7 @@ export function CopyableCell({
       {displayValue}
       {copied
         ? <Check size={11} style={{ color: '#15803d' }} />
-        : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
+        : null}
     </button>
   );
 }

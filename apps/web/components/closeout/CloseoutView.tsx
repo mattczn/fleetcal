@@ -20,7 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Copy, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -895,11 +895,20 @@ export default function CloseoutView() {
       pinLeft: PIN_LEFT.has('docs'),
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
-        const hasRC = !!r.rateConPdf;
+        const hasRC = !!r.rateConPdf || (counts.rate_con ?? 0) > 0;
         return (
           <div>
             <div className="flex flex-wrap items-center gap-1">
-              {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+              {hasRC
+                ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.rateConPdf ? 1 : 0)} />
+                : (
+                  <span
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
+                    style={{ background: '#fee2e2', color: '#991b1b' }}
+                    title="No rate confirmation uploaded">
+                    <Flag size={9} /> Missing rate con
+                  </span>
+                )}
               {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
               {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
               {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
@@ -910,9 +919,6 @@ export default function CloseoutView() {
                 <DocBadge label="Invoice" count={Math.max(counts.invoice ?? 0, 1)} />
               )}
               {(counts.other        ?? 0) > 0 && <DocBadge label="Other"   count={counts.other} />}
-              {!hasRC && Object.keys(counts).length === 0 && (
-                <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
-              )}
             </div>
             {(() => {
               const reasons = computeFlagReasons(r, counts);
@@ -1359,10 +1365,11 @@ function CopyableCell({
           setTimeout(() => setCopied(false), 1500);
         } catch { /* clipboard API blocked — silent */ }
       }}
-      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums"
+      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums w-full"
       style={{
         color:      copied ? '#15803d' : 'var(--gc-text-1)',
         background: copied ? '#dcfce7' : 'transparent',
+        justifyContent: 'flex-start',
       }}
       title={copied ? 'Copied!' : title}
       onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
@@ -1370,7 +1377,7 @@ function CopyableCell({
       {displayValue}
       {copied
         ? <Check size={11} style={{ color: '#15803d' }} />
-        : <Copy  size={11} style={{ color: 'var(--gc-text-3)' }} />}
+        : null}
     </button>
   );
 }

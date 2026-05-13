@@ -683,16 +683,24 @@ export default function AccountingPage() {
         }; break;
         case 'docs': render = (r) => {
           const counts = docCounts[r.load.loadId ?? r.load.id] ?? {};
-          const hasRC = !!r.load.rateConPdf;
+          const hasRC = !!r.load.rateConPdf || (counts.rate_con ?? 0) > 0;
           return (
             <div className="flex flex-wrap gap-1">
-              {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+              {hasRC
+                ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0)} />
+                : (
+                  <span
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
+                    style={{ background: '#fee2e2', color: '#991b1b' }}
+                    title="No rate confirmation uploaded">
+                    Missing rate con
+                  </span>
+                )}
               {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
               {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
               {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
               {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
               {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
-              {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
             </div>
           );
         }; break;
