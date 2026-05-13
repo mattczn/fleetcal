@@ -906,7 +906,7 @@ export default function CloseoutView() {
                     className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
                     style={{ background: '#fee2e2', color: '#991b1b' }}
                     title="No rate confirmation uploaded">
-                    <Flag size={9} /> Missing rate con
+                    <Flag size={9} /> Missing RC
                   </span>
                 )}
               {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
@@ -942,35 +942,46 @@ export default function CloseoutView() {
       },
     });
 
-    // Actions — non-sortable, non-filterable, hardcoded sticky-RIGHT
-    // so Star / Notes / Review / Release / Flag stay accessible
-    // anchored to the right edge while the rest of the table scrolls
-    // horizontally. No label per spec; not togglable in the Columns
-    // dropdown. Push so it lands LAST in the visible column order —
-    // pin-right partition preserves input order from the right edge.
+    // Row utilities — Star + Notes pinned to the LEFT next to the
+    // select checkbox so persistent indicators stay visible regardless
+    // of horizontal scroll position. Narrow (~70px) so it doesn't eat
+    // space the data columns need on small viewports.
+    cols.unshift({
+      key: 'flags', label: '', width: 70, align: 'left',
+      pinLeft: true,
+      pinned: true,
+      render: r => (
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => void handleTogglePriority(r)}
+            className="rounded-full p-1 transition-colors"
+            title={r.priority ? 'Unmark priority' : 'Mark as priority'}
+            style={{
+              background: r.priority ? '#fef9c3' : 'transparent',
+              border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
+              color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
+            }}>
+            <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
+          </button>
+          <NotesButton load={r} onOpen={() => setNotesTarget(r)} />
+        </div>
+      ),
+    });
+
+    // Primary actions — Review / Release / Flag pinned to the RIGHT
+    // so they stay accessible. Star + Notes moved to the left-pinned
+    // `flags` column above so smaller viewports don't truncate the
+    // row utilities. Push so the column lands last in the visible
+    // order; pin-right preserves input order from the right edge.
     cols.push({
-      key: 'actions', label: '', width: 260, align: 'right',
+      key: 'actions', label: '', width: 220, align: 'right',
       pinRight: true,
       pinned: true,
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
         const rowFlagged = tab === 'flagged' || (tab === 'all' && computeFlagReasons(r, counts).length > 0);
         const rowIdx = rows.findIndex(x => x.id === r.id);
-        // Suppressing TS for the inline handlers - they pull from
-        // surrounding closure scope.
         return (
           <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => void handleTogglePriority(r)}
-              className="rounded-full p-1 transition-colors"
-              title={r.priority ? 'Unmark priority' : 'Mark as priority'}
-              style={{
-                background: r.priority ? '#fef9c3' : 'transparent',
-                border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
-                color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
-              }}>
-              <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
-            </button>
-            <NotesButton load={r} onOpen={() => setNotesTarget(r)} />
             <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
               className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
               style={{ background: '#15803d', color: '#fff' }}

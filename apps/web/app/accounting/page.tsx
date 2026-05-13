@@ -693,7 +693,7 @@ export default function AccountingPage() {
                     className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[10px] font-semibold"
                     style={{ background: '#fee2e2', color: '#991b1b' }}
                     title="No rate confirmation uploaded">
-                    Missing rate con
+                    Missing RC
                   </span>
                 )}
               {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
