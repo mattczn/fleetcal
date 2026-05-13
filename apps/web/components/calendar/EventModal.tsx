@@ -46,6 +46,16 @@ function timeAgoModal(iso: string): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
+// Short pickup-time formatter for push bodies: "Sat 5/16 14:00".
+// Reads the naive Mountain Time string straight from events.start.
+function formatModalAt(naive: string): string {
+  const m = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return naive;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const wd = d.toLocaleDateString('en-US', { weekday: 'short' });
+  return `${wd} ${Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}`;
+}
+
 const STATUSES: { value: EventStatus; label: string; color: string; bg: string }[] = [
   { value: 'scheduled',  label: 'Scheduled',  color: '#1a73e8', bg: '#e8f0fe' },
   { value: 'assigned',   label: 'Assigned',   color: '#5b21b6', bg: '#ede9fe' },
@@ -1401,6 +1411,9 @@ export default function EventModal() {
   const [showPdfViewer,  setShowPdfViewer]  = useState(false);
   const [showMapPanel,   setShowMapPanel]   = useState(false);
   const [showDriverSummary, setShowDriverSummary] = useState(false);
+  // Manual "Send confirm push" state. Pulses a "Sent ✓" label for 2s
+  // after the dispatcher nudges the driver so they don't double-tap.
+  const [confirmNudgeState, setConfirmNudgeState] = useState<'idle' | 'sending' | 'sent'>('idle');
   const [docsTab,        setDocsTab]        = useState<'rateCon' | 'uploaded'>('rateCon');
   const [loadDocuments,  setLoadDocuments]  = useState<import('@/lib/db').LoadDocument[]>([]);
   const [loadInvoices,   setLoadInvoices]   = useState<import('@fleetcal/types').Invoice[]>([]);
@@ -1650,7 +1663,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setConfirmNudgeState('idle'); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -3374,6 +3387,20 @@ export default function EventModal() {
                     ⇄ {isPickupLeg ? 'Pickup Leg' : 'Delivery Leg'}
                   </span>
                 )}
+                {/* Driver-confirmed pill — only on saved revenue loads
+                    where the driver has tapped Confirm in the driver app. */}
+                {isEdit && eventKind === 'revenue' && (() => {
+                  const ev = events.find(e => e.id === modalEventId);
+                  if (!ev?.confirmedAt) return null;
+                  return (
+                    <Tooltip content={`Driver confirmed ${timeAgoModal(ev.confirmedAt)}`}>
+                      <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg"
+                        style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
+                        <CheckCircle2 size={10} /> Confirmed
+                      </span>
+                    </Tooltip>
+                  );
+                })()}
               </div>
               <div className="flex items-center gap-2 flex-wrap text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                 <span>
@@ -3736,7 +3763,15 @@ export default function EventModal() {
                 {(() => {
                   const sel = driverName ? drivers.find(d => d.name === driverName) : null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
-                  if (!sel?.phone && !showSummaryBtn) return null;
+                  const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+                  // Only show the manual-nudge button on saved revenue
+                  // loads with a driver actually assigned and not yet
+                  // confirmed. No point pushing a confirm-prompt when
+                  // they've already confirmed or no driver is set.
+                  const showNudgeBtn =
+                    eventKind === 'revenue' && isEdit && !!sel?.id &&
+                    !currentEv?.confirmedAt;
+                  if (!sel?.phone && !showSummaryBtn && !showNudgeBtn) return null;
                   return (
                     <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
                       {sel?.phone && <DriverPhoneCopy phone={sel.phone} />}
@@ -3753,6 +3788,58 @@ export default function EventModal() {
                             onMouseLeave={e => (e.currentTarget.style.background = showDriverSummary ? `${headerColor}14` : 'transparent')}>
                             <Copy size={11} />
                             <span>Driver summary</span>
+                          </button>
+                        </Tooltip>
+                      )}
+                      {showNudgeBtn && sel && (
+                        <Tooltip content="Push a confirm-load prompt to the driver right now">
+                          <button type="button"
+                            disabled={confirmNudgeState !== 'idle'}
+                            onClick={() => {
+                              if (!modalEventId || !sel?.id) return;
+                              setConfirmNudgeState('sending');
+                              const ev = events.find(e => e.id === modalEventId);
+                              const loadLabel = ev?.loadNum ? `Load #${ev.loadNum}` : (ev?.title ?? 'your load');
+                              const pickup = ev?.start ? formatModalAt(ev.start) : '';
+                              void fetch('/api/driver-push', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  driverId: sel.id,
+                                  title:    'Confirm your load',
+                                  body:     pickup ? `${loadLabel} — pickup at ${pickup}. Tap to confirm.` : `${loadLabel}. Tap to confirm.`,
+                                  data:     { type: 'confirm_reminder', eventId: modalEventId, url: `/load/${modalEventId}` },
+                                }),
+                              })
+                                .then(() => {
+                                  // Append audit entry so the timeline records who nudged when.
+                                  const auditEntry: LoadAuditEntry = {
+                                    changedAt: new Date().toISOString(),
+                                    changedByName: currentUserName,
+                                    confirmPushSent: true,
+                                  };
+                                  updateEvent(modalEventId, { auditLog: appendAuditEntry(auditLog, auditEntry) });
+                                  setConfirmNudgeState('sent');
+                                  setTimeout(() => setConfirmNudgeState('idle'), 2000);
+                                })
+                                .catch(err => {
+                                  console.error('manual confirm nudge failed:', err);
+                                  setConfirmNudgeState('idle');
+                                });
+                            }}
+                            className="text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors disabled:opacity-70"
+                            style={{
+                              color: confirmNudgeState === 'sent' ? '#15803d' : 'var(--gc-text-3)',
+                              background: 'transparent', border: 'none', cursor: confirmNudgeState !== 'idle' ? 'default' : 'pointer',
+                            }}
+                            onMouseEnter={e => { if (confirmNudgeState === 'idle') e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                            {confirmNudgeState === 'sent' ? <CheckCircle2 size={11} /> : <Phone size={11} />}
+                            <span>
+                              {confirmNudgeState === 'sending' ? 'Sending…'
+                                : confirmNudgeState === 'sent' ? 'Sent'
+                                : 'Send confirm push'}
+                            </span>
                           </button>
                         </Tooltip>
                       )}

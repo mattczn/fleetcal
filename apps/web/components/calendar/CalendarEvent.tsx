@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Star } from 'lucide-react';
+import { Star, CheckCircle2 } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr } from '@/lib/time-utils';
@@ -201,6 +201,14 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           {event.priority && !isRelay && (
             <div style={{ position: 'absolute', top: 3, right: 4, pointerEvents: 'none' }}>
               <Star size={10} fill="#fbbf24" style={{ color: '#fbbf24', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.4))' }} />
+            </div>
+          )}
+          {/* Driver-confirmed checkmark — bottom-right corner. Tucked
+              far enough from the status overlay strip to avoid overlap. */}
+          {event.confirmedAt && !isRelay && (
+            <div style={{ position: 'absolute', bottom: 16, right: 4, pointerEvents: 'none' }}
+              title="Confirmed by driver">
+              <CheckCircle2 size={11} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.4))' }} />
             </div>
           )}
           {/* Relay overlay — top-right corner */}
