@@ -1031,57 +1031,68 @@ export function usePersistedColumnPrefs(
   defaultHidden: Set<string> = new Set(),
   defaultPinned?: Set<string>,
 ) {
-  const [hidden, setHidden] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set(defaultHidden);
-    try {
-      const raw = window.localStorage.getItem(`${storageKey}.hidden`);
-      if (raw) return new Set(JSON.parse(raw) as string[]);
-    } catch { /* ignore */ }
-    return new Set(defaultHidden);
-  });
-  const [order, setOrder] = useState<string[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const raw = window.localStorage.getItem(`${storageKey}.order`);
-      if (raw) return JSON.parse(raw) as string[];
-    } catch { /* ignore */ }
-    return [];
-  });
-  const [widths, setWidths] = useState<Record<string, number>>(() => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(`${storageKey}.widths`);
-      if (raw) return JSON.parse(raw) as Record<string, number>;
-    } catch { /* ignore */ }
-    return {};
-  });
-  // Pinned set is optional — `undefined` means "fall through to the
-  // per-column pinLeft defaults". Once the user pins/unpins anything,
-  // we store a concrete set and from then on the user override wins.
-  const [pinned, setPinned] = useState<Set<string> | undefined>(() => {
-    if (typeof window === 'undefined') return defaultPinned ? new Set(defaultPinned) : undefined;
-    try {
-      const raw = window.localStorage.getItem(`${storageKey}.pinned`);
-      if (raw) return new Set(JSON.parse(raw) as string[]);
-    } catch { /* ignore */ }
-    return defaultPinned ? new Set(defaultPinned) : undefined;
-  });
+  // First render uses defaults so SSR and the client agree on the
+  // initial tree. We hydrate from localStorage AFTER mount via the
+  // effect below — a brief flicker on first paint is the price of
+  // avoiding hydration mismatches.
+  const [hidden,  setHidden]  = useState<Set<string>>(() => new Set(defaultHidden));
+  const [order,   setOrder]   = useState<string[]>(() => []);
+  const [widths,  setWidths]  = useState<Record<string, number>>(() => ({}));
+  const [pinned,  setPinned]  = useState<Set<string> | undefined>(
+    () => defaultPinned ? new Set(defaultPinned) : undefined,
+  );
 
+  // Once we know we're on the client, we can:
+  //   1. Read from localStorage (state already matches defaults, so
+  //      the first paint matched SSR).
+  //   2. Flip a `hydrated` flag so the subsequent persist-on-change
+  //      effects don't overwrite localStorage with the default state
+  //      during the initial-render → hydration-from-localStorage
+  //      transition.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    try {
+      const rawH = window.localStorage.getItem(`${storageKey}.hidden`);
+      if (rawH) setHidden(new Set(JSON.parse(rawH) as string[]));
+    } catch { /* ignore */ }
+    try {
+      const rawO = window.localStorage.getItem(`${storageKey}.order`);
+      if (rawO) setOrder(JSON.parse(rawO) as string[]);
+    } catch { /* ignore */ }
+    try {
+      const rawW = window.localStorage.getItem(`${storageKey}.widths`);
+      if (rawW) setWidths(JSON.parse(rawW) as Record<string, number>);
+    } catch { /* ignore */ }
+    try {
+      const rawP = window.localStorage.getItem(`${storageKey}.pinned`);
+      if (rawP) setPinned(new Set(JSON.parse(rawP) as string[]));
+    } catch { /* ignore */ }
+    setHydrated(true);
+    // storageKey shouldn't change but listing it keeps the lint happy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
+
+  // Persist on user-driven changes. Gated on `hydrated` so we don't
+  // wipe the user's stored prefs during the mount-time defaults phase.
   useLayoutEffect(() => {
+    if (!hydrated) return;
     try { window.localStorage.setItem(`${storageKey}.hidden`, JSON.stringify([...hidden])); } catch { /* ignore */ }
-  }, [hidden, storageKey]);
+  }, [hidden, storageKey, hydrated]);
   useLayoutEffect(() => {
+    if (!hydrated) return;
     try { window.localStorage.setItem(`${storageKey}.order`, JSON.stringify(order)); } catch { /* ignore */ }
-  }, [order, storageKey]);
+  }, [order, storageKey, hydrated]);
   useLayoutEffect(() => {
+    if (!hydrated) return;
     try { window.localStorage.setItem(`${storageKey}.widths`, JSON.stringify(widths)); } catch { /* ignore */ }
-  }, [widths, storageKey]);
+  }, [widths, storageKey, hydrated]);
   useLayoutEffect(() => {
+    if (!hydrated) return;
     try {
       if (pinned == null) window.localStorage.removeItem(`${storageKey}.pinned`);
       else window.localStorage.setItem(`${storageKey}.pinned`, JSON.stringify([...pinned]));
     } catch { /* ignore */ }
-  }, [pinned, storageKey]);
+  }, [pinned, storageKey, hydrated]);
 
   return { hidden, setHidden, order, setOrder, widths, setWidths, pinned, setPinned };
 }
