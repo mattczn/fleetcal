@@ -862,7 +862,9 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   updateEvent: (id, updates) => {
-    const prevDriverId = get().events.find((e) => e.id === id)?.driverId;
+    const prevEvent      = get().events.find((e) => e.id === id);
+    const prevDriverId   = prevEvent?.driverId;
+    const prevConfirmedAt = prevEvent?.confirmedAt;
     // Tag the write so the realtime echo doesn't fire a conflict banner.
     markSelfWrite(id);
     set((state) => ({ events: state.events.map((e) => (e.id === id ? { ...e, ...updates } : e)) }));
@@ -917,13 +919,34 @@ export const useCalendarStore = create<CalendarStore>()(
     }
     Promise.all(promises)
       .then(() => {
-        if (resolved.driverId && resolved.driverId !== prevDriverId) {
+        const newDriverId = resolved.driverId;
+        if (newDriverId && newDriverId !== prevDriverId) {
+          // Last-minute heads-up: if pickup is <6h away, fire an
+          // urgent-flavor push since the driver missed both daily
+          // sweeps. Otherwise, the regular "Load assigned" message
+          // — driver will get the next evening sweep too.
+          const pickupMs   = ev.start ? Date.parse(ev.start.replace(' ', 'T')) : NaN;
+          const hoursOut   = isFinite(pickupMs) ? (pickupMs - Date.now()) / 3_600_000 : Infinity;
+          const lastMinute = hoursOut > 0 && hoursOut < 6;
           notifyDriver(
-            resolved.driverId,
-            'Load assigned to you',
+            newDriverId,
+            lastMinute ? 'Load assigned — pickup soon' : 'Load assigned to you',
             ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
-            { loadId: ev.loadId },
+            { type: lastMinute ? 'last_minute_assign' : 'assigned', loadId: ev.loadId, eventId: id, url: `/load/${id}` },
           );
+          // If the previous driver had confirmed, tell them their
+          // load is no longer theirs so they don't show up to a
+          // pickup that's been reshuffled.
+          if (prevDriverId && prevConfirmedAt) {
+            notifyDriver(
+              prevDriverId,
+              'Load reassigned',
+              ev.loadNum
+                ? `Load #${ev.loadNum} is no longer assigned to you.`
+                : `${ev.title} is no longer assigned to you.`,
+              { type: 'reassigned_away', loadId: ev.loadId, eventId: id },
+            );
+          }
         }
       })
       .catch((err) => console.error('updateEvent:', err));
@@ -963,6 +986,18 @@ export const useCalendarStore = create<CalendarStore>()(
     railway.cancelEventKeepLoad(id).catch((err) =>
       console.error('cancelEventKeepLoad:', err),
     );
+
+    // Notify the driver if they had already confirmed — otherwise they
+    // walk into a pickup that no longer exists. Don't bother for
+    // unconfirmed loads (driver hadn't accepted yet).
+    if (ev.driverId && ev.confirmedAt) {
+      notifyDriver(
+        ev.driverId,
+        'Load cancelled',
+        ev.loadNum ? `Load #${ev.loadNum} has been cancelled.` : `${ev.title} has been cancelled.`,
+        { type: 'load_cancelled', loadId: ev.loadId, eventId: id },
+      );
+    }
   },
 
   removeEvent: (id, auditEntry) => {
@@ -992,6 +1027,17 @@ export const useCalendarStore = create<CalendarStore>()(
 
     // Revenue + has loadId: DELETE /v1/loads/:loadId cascades to events.
     railway.deleteLoad(ev.loadId).catch((err) => console.error('removeEvent:', err));
+
+    // Notify the driver if they had already confirmed — same logic as
+    // cancelEventKeepLoad. They need to know the load is dead.
+    if (ev.driverId && ev.confirmedAt) {
+      notifyDriver(
+        ev.driverId,
+        'Load cancelled',
+        ev.loadNum ? `Load #${ev.loadNum} has been cancelled.` : `${ev.title} has been cancelled.`,
+        { type: 'load_cancelled', loadId: ev.loadId, eventId: id },
+      );
+    }
   },
 
   addEventFromRemote: (event) => {
