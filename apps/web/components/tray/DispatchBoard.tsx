@@ -60,10 +60,29 @@ const EXCEPTION_CHIPS: { key: EventStatus }[] = [{ key: 'tonu' }, { key: 'cancel
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+// Load.start/end are naive strings in the org's dispatch zone. Parsing
+// them with `new Date(...)` here would treat them as the browser's
+// local zone — so when the user's browser sits in a different zone
+// from the dispatch zone, the in-progress filter mis-buckets loads.
+// Compute "now" as a naive string in the dispatch zone instead so
+// the lexicographic comparison reflects the same wall clock.
+//
+// TODO: pull dispatch zone from org settings once that column exists.
+const DISPATCH_TZ = 'America/New_York';
+function nowInDispatchTz(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: DISPATCH_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const p = (t: string) => parts.find(x => x.type === t)?.value ?? '00';
+  return `${p('year')}-${p('month')}-${p('day')}T${p('hour')}:${p('minute')}`;
+}
+
 function derivedKey(ev: CalendarEvent): 'upcoming' | 'in_progress' | 'completed' {
-  const now = Date.now();
-  if (new Date(ev.start).getTime() > now) return 'upcoming';
-  if (new Date(ev.end).getTime() < now)   return 'completed';
+  const now = nowInDispatchTz();
+  if (ev.start > now) return 'upcoming';
+  if (ev.end   < now) return 'completed';
   return 'in_progress';
 }
 

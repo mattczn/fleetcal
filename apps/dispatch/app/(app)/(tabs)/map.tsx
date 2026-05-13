@@ -308,15 +308,31 @@ export default function MapScreen() {
   //   - Pickups soon:   now < start ≤ now + 4h
   //   - Just delivered: now − 4h ≤ end < now
   // Re-derive on every render so a load slides between buckets as time passes.
+  //
+  // Load.start/end are stored naive in the org's dispatch zone (see
+  // packages/types/domain.ts). The device may be in a different
+  // timezone; comparing against `new Date()` would mis-bucket loads
+  // when the device's wall-clock differs from the dispatch zone's.
+  // Format "now" in the dispatch zone instead so both sides of the
+  // string comparison are in the same zone.
   const { inTransitArr, pickupsSoonArr, justDeliveredArr } = useMemo(() => {
+    // TODO: pull dispatch timezone from org settings once that column
+    // exists. Hardcoded to ET — fits the current single-org install
+    // and matches where load times are entered.
+    const DISPATCH_TZ = "America/New_York";
+    const fmtInTz = (d: Date) => {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: DISPATCH_TZ,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      }).formatToParts(d);
+      const p = (t: string) => parts.find(x => x.type === t)?.value ?? "00";
+      return `${p("year")}-${p("month")}-${p("day")}T${p("hour")}:${p("minute")}`;
+    };
     const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-      `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    const nowNaive = fmt(now);
-    const fourFwd  = fmt(new Date(now.getTime() + 4 * 60 * 60 * 1000));
-    const fourBack = fmt(new Date(now.getTime() - 4 * 60 * 60 * 1000));
+    const nowNaive = fmtInTz(now);
+    const fourFwd  = fmtInTz(new Date(now.getTime() + 4 * 60 * 60 * 1000));
+    const fourBack = fmtInTz(new Date(now.getTime() - 4 * 60 * 60 * 1000));
 
     const inTransit:     Load[] = [];
     const pickupsSoon:   Load[] = [];
