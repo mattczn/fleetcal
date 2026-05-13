@@ -809,10 +809,14 @@ export default function CloseoutView() {
       },
     });
 
-    // actions — non-sortable, non-filterable, sits at the right
+    // Actions — non-sortable, non-filterable, hardcoded sticky-right
+    // at the far end so Star / Notes / Review / Release / Flag stay
+    // accessible while the rest of the table scrolls horizontally.
+    // No label per spec; not togglable in the Columns dropdown.
     cols.push({
-      key: 'actions', label: 'Actions', width: 260, align: 'right',
-      pinned: true, // not togglable in the dropdown
+      key: 'actions', label: '', width: 260, align: 'right',
+      pinRight: true,
+      pinned: true,
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
         const rowFlagged = tab === 'flagged' || (tab === 'all' && computeFlagReasons(r, counts).length > 0);

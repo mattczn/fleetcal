@@ -71,10 +71,13 @@ export interface QueueColumn<R> {
   /** When true, column is not togglable in the Columns panel. */
   pinned?: boolean;
   /** When true, the column is sticky-left during horizontal scroll.
-   *  Multiple pinLeft columns stack from the left edge. Selection
-   *  checkbox (when `selectable`) is implicitly pinned at the
-   *  leftmost position. */
+   *  Multiple pinLeft columns stack from the left edge. */
   pinLeft?: boolean;
+  /** When true, the column is sticky-right during horizontal scroll.
+   *  Multiple pinRight columns stack from the right edge. Selection
+   *  checkbox (when `selectable`) is rendered as the rightmost
+   *  pinned column. pinRight overrides pinLeft if both are set. */
+  pinRight?: boolean;
   /** Whether to hide the column by default. User can re-enable via
    *  the Columns panel. */
   hiddenByDefault?: boolean;
@@ -156,16 +159,19 @@ export function QueueTable<R>({
   isLoading, emptyMessage = 'No rows match.',
   footerExtra,
 }: QueueTableProps<R>) {
-  // A column is effectively pinned if the user has it in pinnedColumns
-  // OR (no user override exists and) the column declares pinLeft.
-  const isPinned = useCallback((c: QueueColumn<R>) => {
+  // A column is left-pinned via user override (pinnedColumns) or its
+  // own pinLeft default. pinRight is always static (no user override).
+  const isPinnedLeft = useCallback((c: QueueColumn<R>) => {
+    if (c.pinRight) return false; // right wins
     if (pinnedColumns) return pinnedColumns.has(c.key);
     return !!c.pinLeft;
   }, [pinnedColumns]);
+  const isPinnedRight = useCallback((c: QueueColumn<R>) => !!c.pinRight, []);
 
-  // Effective visible columns, in user-defined order. Pinned columns
-  // are pulled to the front (preserving their relative order) so the
-  // sticky-left rendering layers without gaps.
+  // Effective visible columns, in user-defined order:
+  //   [pinned-left] [free] [pinned-right]
+  // Pinned partitions preserve their internal order so sticky offsets
+  // layer cleanly from each edge.
   const visibleColumns = useMemo(() => {
     const colsByKey = new Map(columns.map(c => [c.key, c]));
     const ordered: QueueColumn<R>[] = [];
@@ -181,11 +187,16 @@ export function QueueTable<R>({
       if (hiddenColumns?.has(c.key)) continue;
       ordered.push(c);
     }
-    const pinned: QueueColumn<R>[] = [];
+    const left: QueueColumn<R>[] = [];
     const free: QueueColumn<R>[] = [];
-    for (const c of ordered) (isPinned(c) ? pinned : free).push(c);
-    return [...pinned, ...free];
-  }, [columns, columnOrder, hiddenColumns, isPinned]);
+    const right: QueueColumn<R>[] = [];
+    for (const c of ordered) {
+      if (isPinnedRight(c)) right.push(c);
+      else if (isPinnedLeft(c)) left.push(c);
+      else free.push(c);
+    }
+    return [...left, ...free, ...right];
+  }, [columns, columnOrder, hiddenColumns, isPinnedLeft, isPinnedRight]);
 
   // Click-to-sort cycler — asc → desc → off.
   const toggleSort = useCallback((key: string) => {
@@ -249,28 +260,45 @@ export function QueueTable<R>({
     onSelectionChange(next);
   };
 
-  // Compute cumulative left offsets for sticky-left columns. The
-  // selection column (when present) is implicitly the leftmost
-  // pinned column at offset 0.
-  const stickyOffsets = useMemo(() => {
-    const m = new Map<string, number>();
-    let acc = selectable ? 40 : 0;
+  // Sticky offsets:
+  //   leftOffsets — distance from left edge, accumulating across pinned-left columns
+  //   rightOffsets — distance from right edge, accumulating across pinned-right columns
+  //     The selection checkbox (when `selectable`) is implicitly the
+  //     RIGHTMOST pinned-right column at offset 0.
+  const { leftOffsets, rightOffsets } = useMemo(() => {
+    const left = new Map<string, number>();
+    const right = new Map<string, number>();
+    let accL = 0;
     for (const c of visibleColumns) {
-      if (!isPinned(c)) continue;
-      m.set(c.key, acc);
-      acc += widthOf(c);
+      if (!isPinnedLeft(c)) continue;
+      left.set(c.key, accL);
+      accL += widthOf(c);
     }
-    return m;
+    // Right offsets — iterate in REVERSE visible order so the
+    // rightmost column gets offset 0, the next 1's width, etc.
+    let accR = selectable ? 40 : 0;
+    for (let i = visibleColumns.length - 1; i >= 0; i--) {
+      const c = visibleColumns[i];
+      if (!isPinnedRight(c)) continue;
+      right.set(c.key, accR);
+      accR += widthOf(c);
+    }
+    return { leftOffsets: left, rightOffsets: right };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleColumns, selectable, columnWidths, isPinned]);
+  }, [visibleColumns, selectable, columnWidths, isPinnedLeft, isPinnedRight]);
 
-  // Set of currently-pinned column keys — used by lastPinnedShadow
-  // to find the rightmost pinned column for the seam shadow.
+  // Lookup helpers — return undefined when the column isn't pinned
+  // in the matching direction.
+  const stickyLeftPx = useCallback((c: QueueColumn<R>) => leftOffsets.get(c.key), [leftOffsets]);
+  const stickyRightPx = useCallback((c: QueueColumn<R>) => rightOffsets.get(c.key), [rightOffsets]);
+
+  // Set of currently-pinned column keys (either direction) — used by
+  // pin-edge shadow placement.
   const pinnedKeySet = useMemo(() => {
     const s = new Set<string>();
-    for (const c of visibleColumns) if (isPinned(c)) s.add(c.key);
+    for (const c of visibleColumns) if (isPinnedLeft(c) || isPinnedRight(c)) s.add(c.key);
     return s;
-  }, [visibleColumns, isPinned]);
+  }, [visibleColumns, isPinnedLeft, isPinnedRight]);
 
   return (
     <div className="flex flex-col min-h-0 min-w-0 rounded-lg shadow-sm overflow-hidden h-full w-full"
@@ -284,33 +312,22 @@ export function QueueTable<R>({
           borderSpacing: 0, width: totalWidth, minWidth: '100%',
         }}>
           <colgroup>
-            {selectable ? <col style={{ width: 40 }} /> : null}
             {visibleColumns.map(c => <col key={c.key} style={{ width: widthOf(c) }} />)}
+            {/* Select column goes at the END so it sticks to the right. */}
+            {selectable ? <col style={{ width: 40 }} /> : null}
           </colgroup>
 
           {/* Sticky header — two rows: titles, filters */}
           <thead>
             {/* Title row */}
             <tr>
-              {selectable ? (
-                <th style={{
-                  ...stHeaderCell,
-                  position: 'sticky', top: 0, left: 0, zIndex: 30,
-                  background: 'var(--gc-surface)',
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={!!allOnPageSelected}
-                    onChange={toggleAllOnPage}
-                    style={{ cursor: 'pointer' }}
-                  />
-                </th>
-              ) : null}
               {visibleColumns.map(c => {
                 const w = widthOf(c);
                 const active = sort.key === c.key;
                 const Indicator = active ? (sort.dir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
-                const pinnedLeft = isPinned(c) ? stickyOffsets.get(c.key) : undefined;
+                const lpx = stickyLeftPx(c);
+                const rpx = stickyRightPx(c);
+                const sticky = lpx != null || rpx != null;
                 return (
                   <th key={c.key}
                     onClick={() => c.sortable && toggleSort(c.key)}
@@ -319,10 +336,11 @@ export function QueueTable<R>({
                       textAlign: c.align ?? 'left',
                       cursor: c.sortable ? 'pointer' : 'default',
                       position: 'sticky', top: 0,
-                      left: pinnedLeft,
-                      zIndex: pinnedLeft != null ? 30 : 20,
+                      left: lpx,
+                      right: rpx,
+                      zIndex: sticky ? 30 : 20,
                       background: 'var(--gc-surface)',
-                      boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns, pinnedKeySet) : undefined,
+                      boxShadow: pinEdgeShadow(c, visibleColumns, pinnedKeySet, isPinnedLeft, isPinnedRight),
                     }}
                     className="select-none">
                     <div className="flex items-center gap-1.5"
@@ -351,27 +369,40 @@ export function QueueTable<R>({
                   </th>
                 );
               })}
+              {selectable ? (
+                <th style={{
+                  ...stHeaderCell,
+                  textAlign: 'center',
+                  position: 'sticky', top: 0, right: 0, zIndex: 30,
+                  background: 'var(--gc-surface)',
+                  boxShadow: '-2px 0 4px -2px rgba(0,0,0,0.08)',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={!!allOnPageSelected}
+                    onChange={toggleAllOnPage}
+                    style={{ cursor: 'pointer' }}
+                  />
+                </th>
+              ) : null}
             </tr>
             {/* Filter row — only if any column has a filter spec */}
             {visibleColumns.some(c => c.filter) || selectable ? (
               <tr>
-                {selectable ? (
-                  <th style={{
-                    ...stFilterCell, position: 'sticky', top: 36, left: 0, zIndex: 29,
-                    background: 'var(--gc-surface)',
-                  }} />
-                ) : null}
                 {visibleColumns.map(c => {
-                  const pinnedLeft = isPinned(c) ? stickyOffsets.get(c.key) : undefined;
+                  const lpx = stickyLeftPx(c);
+                  const rpx = stickyRightPx(c);
+                  const sticky = lpx != null || rpx != null;
                   return (
                     <th key={c.key}
                       style={{
                         ...stFilterCell,
                         position: 'sticky', top: 36,
-                        left: pinnedLeft,
-                        zIndex: pinnedLeft != null ? 29 : 19,
+                        left: lpx,
+                        right: rpx,
+                        zIndex: sticky ? 29 : 19,
                         background: 'var(--gc-surface)',
-                        boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns, pinnedKeySet) : undefined,
+                        boxShadow: pinEdgeShadow(c, visibleColumns, pinnedKeySet, isPinnedLeft, isPinnedRight),
                       }}>
                       {c.filter ? (
                         <FilterInput
@@ -388,6 +419,13 @@ export function QueueTable<R>({
                     </th>
                   );
                 })}
+                {selectable ? (
+                  <th style={{
+                    ...stFilterCell, position: 'sticky', top: 36, right: 0, zIndex: 29,
+                    background: 'var(--gc-surface)',
+                    boxShadow: '-2px 0 4px -2px rgba(0,0,0,0.08)',
+                  }} />
+                ) : null}
               </tr>
             ) : null}
           </thead>
@@ -416,11 +454,34 @@ export function QueueTable<R>({
                     style={{
                       cursor: onRowClick ? 'pointer' : 'default',
                     }}>
+                    {visibleColumns.map(c => {
+                      const lpx = stickyLeftPx(c);
+                      const rpx = stickyRightPx(c);
+                      const sticky = lpx != null || rpx != null;
+                      return (
+                        <td key={c.key}
+                          className={c.cellClassName ?? ''}
+                          style={{
+                            ...stBodyCell,
+                            textAlign: c.align ?? 'left',
+                            position: sticky ? 'sticky' : undefined,
+                            left: lpx,
+                            right: rpx,
+                            zIndex: sticky ? 5 : undefined,
+                            background: sticky ? (rowBg ?? 'inherit') : undefined,
+                            boxShadow: pinEdgeShadow(c, visibleColumns, pinnedKeySet, isPinnedLeft, isPinnedRight),
+                          }}>
+                          {c.render(r)}
+                        </td>
+                      );
+                    })}
                     {selectable ? (
                       <td style={{
                         ...stBodyCell,
-                        position: 'sticky', left: 0, zIndex: 5,
-                        background: 'inherit',
+                        textAlign: 'center',
+                        position: 'sticky', right: 0, zIndex: 5,
+                        background: rowBg ?? 'inherit',
+                        boxShadow: '-2px 0 4px -2px rgba(0,0,0,0.08)',
                       }} onClick={e => e.stopPropagation()}>
                         <input type="checkbox"
                           checked={!!selected?.has(id)}
@@ -428,24 +489,6 @@ export function QueueTable<R>({
                           style={{ cursor: 'pointer' }} />
                       </td>
                     ) : null}
-                    {visibleColumns.map(c => {
-                      const pinnedLeft = isPinned(c) ? stickyOffsets.get(c.key) : undefined;
-                      return (
-                        <td key={c.key}
-                          className={c.cellClassName ?? ''}
-                          style={{
-                            ...stBodyCell,
-                            textAlign: c.align ?? 'left',
-                            position: pinnedLeft != null ? 'sticky' : undefined,
-                            left: pinnedLeft,
-                            zIndex: pinnedLeft != null ? 5 : undefined,
-                            background: pinnedLeft != null ? (rowBg ?? 'inherit') : undefined,
-                            boxShadow: pinnedLeft != null ? lastPinnedShadow(c, visibleColumns, pinnedKeySet) : undefined,
-                          }}>
-                          {c.render(r)}
-                        </td>
-                      );
-                    })}
                   </tr>
                 );
               })
@@ -478,13 +521,25 @@ export function QueueTable<R>({
   );
 }
 
-/** Drop a subtle shadow on the right edge of the last pinned column
- *  so the scrolling content visually slides under it. */
-function lastPinnedShadow<R>(c: QueueColumn<R>, cols: QueueColumn<R>[], pinnedKeys: Set<string>): string | undefined {
+/** Soft shadow on the inside edge of the pinned column group so
+ *  scrolling content visually slides under the pinned columns. The
+ *  shadow falls off the LAST left-pinned column (right edge) and the
+ *  FIRST right-pinned column (left edge). */
+function pinEdgeShadow<R>(
+  c: QueueColumn<R>,
+  cols: QueueColumn<R>[],
+  pinnedKeys: Set<string>,
+  isLeft: (c: QueueColumn<R>) => boolean,
+  isRight: (c: QueueColumn<R>) => boolean,
+): string | undefined {
   if (!pinnedKeys.has(c.key)) return undefined;
-  const pinned = cols.filter(x => pinnedKeys.has(x.key));
-  if (pinned[pinned.length - 1]?.key === c.key) {
-    return '2px 0 4px -2px rgba(0,0,0,0.08)';
+  if (isLeft(c)) {
+    const left = cols.filter(isLeft);
+    if (left[left.length - 1]?.key === c.key) return '2px 0 4px -2px rgba(0,0,0,0.08)';
+  }
+  if (isRight(c)) {
+    const right = cols.filter(isRight);
+    if (right[0]?.key === c.key) return '-2px 0 4px -2px rgba(0,0,0,0.08)';
   }
   return undefined;
 }

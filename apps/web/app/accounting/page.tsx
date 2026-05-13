@@ -541,14 +541,21 @@ export default function AccountingPage() {
     // is the default starting set for accounting. Selection
     // checkbox sticks at left:0 implicitly when selectable.
     const PIN_LEFT: Set<string> = new Set(['invoiceNum', 'loadNum', 'customer', 'rate', 'docs']);
+    // Priority star + notes button column lives at the FAR right
+    // alongside the Select checkbox. Hardcoded; not user-configurable.
+    const PIN_RIGHT: Set<string> = new Set(['flags']);
     return COLUMNS.map<QueueColumn<Row>>((c) => {
       const base = {
         key: c.key,
-        label: c.label,
+        label: PIN_RIGHT.has(c.key) ? '' : c.label,
         width: DEFAULT_COL_WIDTHS[c.key],
         align: c.align,
         sortable: c.toggleable && c.key !== 'flags' && c.key !== 'view' && c.key !== 'docs',
         pinLeft: PIN_LEFT.has(c.key),
+        pinRight: PIN_RIGHT.has(c.key),
+        // Right-pinned utility columns aren't togglable in the
+        // Columns dropdown.
+        pinned: PIN_RIGHT.has(c.key) ? true : undefined,
       };
       const filter: QueueColumn<Row>['filter'] =
         c.key === 'customer' ? { kind: 'multi', options: customerOpts }
