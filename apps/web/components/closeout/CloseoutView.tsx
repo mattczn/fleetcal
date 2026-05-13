@@ -942,10 +942,10 @@ export default function CloseoutView() {
       },
     });
 
-    // Row utilities — Star + Notes pinned to the LEFT next to the
-    // select checkbox so persistent indicators stay visible regardless
-    // of horizontal scroll position. Narrow (~70px) so it doesn't eat
-    // space the data columns need on small viewports.
+    // Row utilities — Star + Notes pinned to the LEFT, immediately
+    // to the right of the select checkbox. unshift so it lands as
+    // the first user-defined column in the pinned-left partition
+    // (the select checkbox column is automatic and renders first).
     cols.unshift({
       key: 'flags', label: '', width: 70, align: 'left',
       pinLeft: true,
@@ -968,10 +968,10 @@ export default function CloseoutView() {
     });
 
     // Primary actions — Review / Release / Flag pinned to the RIGHT
-    // so they stay accessible. Star + Notes moved to the left-pinned
-    // `flags` column above so smaller viewports don't truncate the
-    // row utilities. Push so the column lands last in the visible
-    // order; pin-right preserves input order from the right edge.
+    // so they stay accessible at the right edge during horizontal
+    // scroll. Star + Notes live in the left-pinned `flags` column
+    // above. Push so this column lands last in the visible order;
+    // pin-right preserves input order from the right edge.
     cols.push({
       key: 'actions', label: '', width: 220, align: 'right',
       pinRight: true,
