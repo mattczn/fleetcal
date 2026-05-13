@@ -10,6 +10,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@clerk/nextjs';
 import { Fuel, Loader2, X, Search, MapPin as MapPinIcon } from 'lucide-react';
 import DataLoader from '@/components/DataLoader';
@@ -59,13 +60,20 @@ function fmtDateTime(iso: string): string {
 
 export default function FuelPage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const searchParams = useSearchParams();
   const drivers = useCalendarStore(s => s.drivers);
   const assets  = useCalendarStore(s => s.assets);
 
+  // Pre-seed the asset filter from ?asset=<name> in the URL so the
+  // asset profile panel can deep-link to a filtered view.
+  const initialAssetFilter = (() => {
+    const a = searchParams?.get('asset');
+    return a ? [a] : [];
+  })();
   const [period,        setPeriod]         = useState<string>('30');
   const [search,        setSearch]         = useState<string>('');
   const [driverFilter,  setDriverFilter]   = useState<string[]>([]);  // driver names
-  const [assetFilter,   setAssetFilter]    = useState<string[]>([]);  // asset names / units
+  const [assetFilter,   setAssetFilter]    = useState<string[]>(initialAssetFilter);
   const [page,          setPage]           = useState(0);
 
   const [reports,       setReports]        = useState<FuelReport[]>([]);

@@ -15,6 +15,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@clerk/nextjs';
 import {
   Wrench, AlertOctagon, ClipboardList, X, Loader2, Search, Plus, Truck, Container,
@@ -45,6 +46,7 @@ const ACTION_STATUSES: MaintenanceActionStatus[] = ['open', 'in_progress', 'done
 
 export default function MaintenancePage() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const searchParams = useSearchParams();
   const drivers  = useCalendarStore(s => s.drivers);
   const assets   = useCalendarStore(s => s.assets);
   const trailers = useCalendarStore(s => s.trailers);
@@ -70,7 +72,9 @@ export default function MaintenancePage() {
   const [openItem,       setOpenItem]       = useState<MaintenanceActionItem | null>(null);
   const [creatingItem,   setCreatingItem]   = useState(false);
 
-  const [search, setSearch] = useState('');
+  // Pre-fill the search box from ?asset=<name> in the URL so the asset
+  // profile panel can deep-link straight to a filtered view.
+  const [search, setSearch] = useState(() => searchParams?.get('asset') ?? '');
   const [error,  setError]  = useState<string | null>(null);
 
   // ── Lookups ───────────────────────────────────────────────────────────

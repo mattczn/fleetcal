@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { X, Truck, Clock, Plus, Check, Trash2 } from 'lucide-react';
+import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink } from 'lucide-react';
+import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
@@ -332,16 +333,18 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
           </PField>
         </div>
 
-        {/* Color */}
+        {/* Color — fixed 10-column grid so the 20 colors always render
+            as two even rows of 10, regardless of container width. */}
         <div className="mb-4">
           <PField label="Color">
-            <div className="flex flex-wrap gap-2 pt-1">
+            <div className="grid gap-2 pt-1"
+              style={{ gridTemplateColumns: 'repeat(10, minmax(0, 1fr))' }}>
               {PRESET_COLORS.map(c => (
                 <button
                   key={c}
                   type="button"
                   onClick={() => { setColor(c); save({ color: c }); }}
-                  className="w-7 h-7 rounded-full transition-all"
+                  className="w-7 h-7 rounded-full transition-all justify-self-center"
                   style={{
                     background: c,
                     outline: color === c ? `3px solid ${c}` : '3px solid transparent',
@@ -415,6 +418,44 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
             </div>
           )}
         </PField>
+      </div>
+
+      {/* Quick links to the asset-scoped views on the Fuel and
+          Maintenance pages. Each pre-fills its respective filter via
+          ?asset=<name> so the dispatcher lands on a filtered table. */}
+      <div className="grid grid-cols-2 gap-3 mb-8">
+        <Link
+          href={`/fuel?asset=${encodeURIComponent(asset.name)}`}
+          className="flex items-center gap-2 px-4 py-3 rounded-xl transition-colors"
+          style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)', textDecoration: 'none' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
+          <div className="flex items-center justify-center rounded-lg shrink-0"
+            style={{ width: 32, height: 32, background: 'var(--gc-blue-light)', color: 'var(--gc-blue)' }}>
+            <Fuel size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold" style={{ color: 'var(--gc-text-1)' }}>Fuel Reports</div>
+            <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>All fuel transactions</div>
+          </div>
+          <ExternalLink size={13} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+        </Link>
+        <Link
+          href={`/maintenance?asset=${encodeURIComponent(asset.name)}`}
+          className="flex items-center gap-2 px-4 py-3 rounded-xl transition-colors"
+          style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)', textDecoration: 'none' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
+          <div className="flex items-center justify-center rounded-lg shrink-0"
+            style={{ width: 32, height: 32, background: '#fef3e2', color: '#b85c00' }}>
+            <Wrench size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold" style={{ color: 'var(--gc-text-1)' }}>Maintenance</div>
+            <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>Reports & action items</div>
+          </div>
+          <ExternalLink size={13} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+        </Link>
       </div>
 
       {/* Recent loads — In Progress / Upcoming / Completed with search.
