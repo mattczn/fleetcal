@@ -440,7 +440,20 @@ export default function AccountingPage() {
         if (!matches) return false;
       }
       for (const [col, vals] of Object.entries(filters)) {
-        if (!vals || (Array.isArray(vals) ? vals.length === 0 : vals === '')) continue;
+        if (!vals) continue;
+        // Date-range filter — value is { from?, to? }.
+        if (typeof vals === 'object' && !Array.isArray(vals)) {
+          const range = vals as { from?: string; to?: string };
+          if (!range.from && !range.to) continue;
+          const proj = projectCol(r, col as ColKey);
+          const iso = String(proj.sortValue ?? '');
+          if (!iso) return false;
+          const day = iso.slice(0, 10);
+          if (range.from && day < range.from) return false;
+          if (range.to && day > range.to) return false;
+          continue;
+        }
+        if (Array.isArray(vals) ? vals.length === 0 : vals === '') continue;
         const proj = projectCol(r, col as ColKey);
         const cellVal = (proj.filterValue ?? String(proj.sortValue ?? '')).toLowerCase();
         if (Array.isArray(vals)) {
@@ -561,6 +574,8 @@ export default function AccountingPage() {
         c.key === 'customer' ? { kind: 'multi', options: customerOpts }
         : c.key === 'method' ? { kind: 'multi', options: methodOpts }
         : c.key === 'status' ? { kind: 'multi', options: statusOpts }
+        : c.key === 'released' || c.key === 'due' || c.key === 'issued'
+          ? { kind: 'date-range' }
         : c.key === 'loadNum' || c.key === 'invoiceNum' || c.key === 'title' || c.key === 'sendTo'
           ? { kind: 'text' } : undefined;
 
@@ -856,7 +871,13 @@ export default function AccountingPage() {
                 selected={selected}
                 onSelectionChange={setSelected}
                 rowClassName={(r) => r.load.priority ? 'bg-[#fefce8]' : ''}
-                emptyMessage={search.trim() !== '' || Object.values(filters).some(v => v && v.length > 0)
+                emptyMessage={search.trim() !== '' || Object.values(filters).some(v => {
+                  if (v == null) return false;
+                  if (Array.isArray(v)) return v.length > 0;
+                  if (typeof v === 'string') return v.trim() !== '';
+                  const r = v as { from?: string; to?: string };
+                  return !!r.from || !!r.to;
+                })
                   ? 'No rows match the current filters.'
                   : 'No loads in this bucket.'}
               />

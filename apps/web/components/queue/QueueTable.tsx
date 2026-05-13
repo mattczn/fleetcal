@@ -31,7 +31,7 @@ import React, {
 } from 'react';
 import {
   ArrowDown, ArrowUp, ArrowUpDown, Filter, X, Check, ChevronLeft, ChevronRight,
-  Search, GripVertical, Eye, EyeOff, Pin, PinOff,
+  Search, GripVertical, Eye, EyeOff, Pin, PinOff, Calendar as CalendarIcon,
 } from 'lucide-react';
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -42,14 +42,28 @@ export interface QueueSortState {
   dir: QueueSortDir;
 }
 
-/** Filter value for a column. Text filters store a single string. Multi-
- *  select filters store the chosen option values. */
-export type QueueFilterValue = string | string[];
+/** Filter value for a column.
+ *   - Text:        string
+ *   - Multi-select: string[]
+ *   - Date range:  { from?: string; to?: string }   (YYYY-MM-DD)
+ */
+export type QueueDateRange = { from?: string; to?: string };
+export type QueueFilterValue = string | string[] | QueueDateRange;
 export type QueueFilterState = Record<string, QueueFilterValue>;
 
 export type QueueColumnFilter =
   | { kind: 'text' }
-  | { kind: 'multi'; options: string[] };
+  | { kind: 'multi'; options: string[] }
+  | { kind: 'date-range' };
+
+/** True if a filter value is "empty" (nothing selected). */
+function isFilterEmpty(v: QueueFilterValue | undefined): boolean {
+  if (v == null) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (Array.isArray(v)) return v.length === 0;
+  // date range
+  return !v.from && !v.to;
+}
 
 export interface QueueColumn<R> {
   key: string;
@@ -410,7 +424,7 @@ export function QueueTable<R>({
                           value={filters[c.key] ?? ''}
                           onChange={(next) => {
                             const merged = { ...filters };
-                            if (Array.isArray(next) ? next.length === 0 : !next) delete merged[c.key];
+                            if (isFilterEmpty(next)) delete merged[c.key];
                             else merged[c.key] = next;
                             onFiltersChange(merged);
                           }}
@@ -596,6 +610,10 @@ function FilterInput<R>({ column, value, onChange }: {
       />
     );
   }
+  if (column.filter.kind === 'date-range') {
+    const range = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    return <DateRangeFilter value={range} onChange={onChange} />;
+  }
   // Text filter — debounced lightly via React's batching.
   return (
     <div className="flex items-center gap-1 rounded h-full px-1.5"
@@ -616,6 +634,94 @@ function FilterInput<R>({ column, value, onChange }: {
       ) : null}
     </div>
   );
+}
+
+// ─── Date range filter ──────────────────────────────────────────────────
+
+function DateRangeFilter({ value, onChange }: {
+  value: QueueDateRange;
+  onChange: (next: QueueFilterValue) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const hasRange = !!value.from || !!value.to;
+  const label = !hasRange
+    ? 'Any date'
+    : value.from && value.to
+      ? `${fmtShort(value.from)} – ${fmtShort(value.to)}`
+      : value.from
+        ? `≥ ${fmtShort(value.from)}`
+        : `≤ ${fmtShort(value.to!)}`;
+
+  return (
+    <div ref={rootRef} className="relative h-full">
+      <button type="button" onClick={() => setOpen(v => !v)}
+        className="w-full h-full flex items-center gap-1 rounded px-1.5 text-[11.5px]"
+        style={{
+          border: '1px solid var(--gc-border-light)',
+          background: 'var(--gc-bg)',
+          color: hasRange ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+        }}>
+        <CalendarIcon size={10} style={{ flexShrink: 0 }} />
+        <span className="truncate flex-1 text-left">{label}</span>
+      </button>
+      {open ? (
+        <div className="absolute top-full left-0 z-30 mt-1 min-w-[260px] rounded shadow-lg p-2.5"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
+          <div className="flex items-center gap-2">
+            <label className="flex-1">
+              <span className="block text-[10px] uppercase tracking-wider font-semibold mb-1"
+                style={{ color: 'var(--gc-text-3)' }}>From</span>
+              <input type="date"
+                value={value.from ?? ''}
+                onChange={e => onChange({ ...value, from: e.target.value || undefined })}
+                className="w-full text-[12px] px-2 py-1 rounded outline-none"
+                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+              />
+            </label>
+            <label className="flex-1">
+              <span className="block text-[10px] uppercase tracking-wider font-semibold mb-1"
+                style={{ color: 'var(--gc-text-3)' }}>To</span>
+              <input type="date"
+                value={value.to ?? ''}
+                onChange={e => onChange({ ...value, to: e.target.value || undefined })}
+                className="w-full text-[12px] px-2 py-1 rounded outline-none"
+                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+              />
+            </label>
+          </div>
+          <div className="mt-2 flex items-center justify-end gap-1">
+            {hasRange ? (
+              <button type="button" onClick={() => onChange({})}
+                className="text-[11px] px-2 py-1 rounded hover:bg-[var(--gc-hover)]"
+                style={{ color: 'var(--gc-text-2)' }}>Clear</button>
+            ) : null}
+            <button type="button" onClick={() => setOpen(false)}
+              className="text-[11px] font-semibold px-2 py-1 rounded"
+              style={{ background: '#1a73e8', color: '#fff' }}>Done</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Compact date label for the filter chip. Mon DD, accepts ISO date-only. */
+function fmtShort(iso: string): string {
+  // Treat YYYY-MM-DD as a calendar date (no timezone shift).
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function MultiFilter({ options, selected, onChange }: {
@@ -886,9 +992,7 @@ export function applyQueueSort<R>(
 export function applyQueueFilters<R>(
   rows: R[], columns: QueueColumn<R>[], filters: QueueFilterState,
 ): R[] {
-  const active = Object.entries(filters).filter(([, v]) =>
-    Array.isArray(v) ? v.length > 0 : typeof v === 'string' && v.trim().length > 0,
-  );
+  const active = Object.entries(filters).filter(([, v]) => !isFilterEmpty(v));
   if (active.length === 0) return rows;
   return rows.filter(r => {
     for (const [key, val] of active) {
@@ -904,10 +1008,19 @@ export function applyQueueFilters<R>(
             return '';
           })();
       if (col.filter.kind === 'text') {
-        if (!cellVal.toLowerCase().includes(String(val).toLowerCase())) return false;
-      } else {
-        // multi
-        if (!(val as string[]).includes(cellVal)) return false;
+        if (typeof val !== 'string') continue;
+        if (!cellVal.toLowerCase().includes(val.toLowerCase())) return false;
+      } else if (col.filter.kind === 'multi') {
+        if (!Array.isArray(val)) continue;
+        if (!val.includes(cellVal)) return false;
+      } else if (col.filter.kind === 'date-range') {
+        if (Array.isArray(val) || typeof val === 'string') continue;
+        const range = val as QueueDateRange;
+        if (!cellVal) return false;
+        // Compare yyyy-mm-dd prefix so timestamps and naive dates both work.
+        const day = cellVal.slice(0, 10);
+        if (range.from && day < range.from) return false;
+        if (range.to && day > range.to) return false;
       }
     }
     return true;

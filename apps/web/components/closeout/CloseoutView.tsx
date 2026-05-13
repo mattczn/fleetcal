@@ -65,7 +65,10 @@ interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
 // Each filterable column carries a list of selected values. An empty
 // or absent array means "no filter on this column"; otherwise a row
 // passes only if its formatted value matches one of the selections.
-type FilterState = Partial<Record<ColKey, string[]>>;
+// Per-column filter value: string[] for multi-select, string for text
+// search, or { from?, to? } for the date-range picker (delivered date).
+type FilterValue = string | string[] | { from?: string; to?: string };
+type FilterState = Partial<Record<ColKey, FilterValue>>;
 
 // Toggleable columns. "actions" + "docs" are always rendered (they're
 // where the user mutates state). The notes button lives inside actions
@@ -417,11 +420,34 @@ export default function CloseoutView() {
   // of the user's chosen sort.
   const visible = useMemo(() => {
     let out = dedup;
-    const activeFilters = (Object.entries(filters) as [ColKey, string[] | undefined][])
-      .filter(([, vs]) => vs && vs.length > 0) as [ColKey, string[]][];
-    if (activeFilters.length > 0) {
+    // Filters can be string[] (multi), string (text), or
+    // { from?, to? } (date-range). Apply each per-row.
+    const activeEntries = Object.entries(filters).filter(([, v]) => {
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      if (typeof v === 'string') return v.trim() !== '';
+      const r = v as { from?: string; to?: string };
+      return !!r.from || !!r.to;
+    });
+    if (activeEntries.length > 0) {
       out = out.filter(row => {
-        return activeFilters.every(([col, vals]) => vals.includes(formatRowForCol(row, col)));
+        for (const [col, val] of activeEntries) {
+          const colKey = col as ColKey;
+          if (Array.isArray(val)) {
+            if (!val.includes(formatRowForCol(row, colKey))) return false;
+          } else if (typeof val === 'string') {
+            if (!formatRowForCol(row, colKey).toLowerCase().includes(val.toLowerCase())) return false;
+          } else {
+            // date range
+            const range = val as { from?: string; to?: string };
+            const iso = String(projectRowForCol(row, colKey) ?? '');
+            if (!iso) return false;
+            const day = iso.slice(0, 10);
+            if (range.from && day < range.from) return false;
+            if (range.to && day > range.to) return false;
+          }
+        }
+        return true;
       });
     }
     if (sort.key) {
@@ -446,22 +472,16 @@ export default function CloseoutView() {
       return { key: null, dir: 'asc' }; // third click clears
     });
   };
-  // Toggle a single value in the column's selection list. Adds when
-  // missing, removes when present. Empty array → no filter on that col.
-  const toggleFilterValue = (key: ColKey, val: string) => {
-    setFilters(f => {
-      const current = f[key] ?? [];
-      const next = current.includes(val)
-        ? current.filter(v => v !== val)
-        : [...current, val];
-      return { ...f, [key]: next };
-    });
-  };
-  const clearColFilter = (key: ColKey) => setFilters(f => ({ ...f, [key]: [] }));
-  const setColFilterAll = (key: ColKey, options: string[]) =>
-    setFilters(f => ({ ...f, [key]: [...options] }));
+  // (toggleFilterValue / clearColFilter / setColFilterAll removed —
+  // QueueTable's header filter inputs own per-column filter state now.)
   const clearAllFilters = () => setFilters({});
-  const activeFilterCount = Object.values(filters).filter(v => v && v.length > 0).length;
+  const activeFilterCount = Object.values(filters).filter(v => {
+    if (v == null) return false;
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === 'string') return v.trim() !== '';
+    const r = v as { from?: string; to?: string };
+    return !!r.from || !!r.to;
+  }).length;
 
   // tabCount removed — the bucket tiles use the pre-fetched
   // bucketTotals instead, so the inactive tile shows a real number
@@ -634,7 +654,9 @@ export default function CloseoutView() {
     cols.push({
       key: 'delivered', label: 'Delivered', width: DEFAULT_COL_WIDTHS.delivered,
       sortable: true, pinLeft: PIN_LEFT.has('delivered'),
+      filter: { kind: 'date-range' },
       sortValue: r => sortVal('delivered', r),
+      filterValue: r => effectiveDeliveryEnd(r),
       render: r => fmtDate(effectiveDeliveryEnd(r)) || '—',
     });
 
@@ -1007,7 +1029,7 @@ export default function CloseoutView() {
                 rowKey={rowKey}
                 sort={sort as { key: string | null; dir: 'asc' | 'desc' }}
                 onSortChange={(next) => setSort(next as { key: ColKey | null; dir: 'asc' | 'desc' })}
-                filters={filters as Record<string, string | string[]>}
+                filters={filters as Record<string, FilterValue>}
                 onFiltersChange={(next) => setFilters(next as FilterState)}
                 page={page}
                 pageSize={tablePageSize}
