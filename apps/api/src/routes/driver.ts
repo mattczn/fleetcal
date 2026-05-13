@@ -649,6 +649,25 @@ async function recordDriverCheckCall(
   ts?:     string,
 ): Promise<void> {
   if (!loadId) return; // non-revenue events have no parent load
+
+  // Dedup guard: skip the insert if an identical entry (same load,
+  // same body, same author) was logged in the last 60 seconds. Catches
+  // accidental double-taps + any retry behavior that fires the same
+  // server call twice for one driver action. Keeps the check-calls
+  // timeline clean regardless of client-side cause.
+  const cutoff = new Date(Date.now() - 60_000).toISOString();
+  const { data: recent } = await supabase
+    .from("check_calls")
+    .select("id")
+    .eq("org_id",  orgId)
+    .eq("load_id", loadId)
+    .eq("body",    body)
+    .eq("by_name", byName)
+    .gte("ts",     cutoff)
+    .limit(1)
+    .maybeSingle();
+  if (recent) return;
+
   const { error } = await supabase
     .from("check_calls")
     .insert({
