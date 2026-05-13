@@ -41,7 +41,7 @@ import {
 } from '@/components/queue/QueueTablePrimitives';
 import type { QueueSortState, QueueFilterState } from '@/components/queue/QueueTable';
 import {
-  QueueTable, usePersistedColumnPrefs, type QueueColumn,
+  QueueTable, QueueColumnsButton, usePersistedColumnPrefs, type QueueColumn,
 } from '@/components/queue/QueueTable';
 import type {
   Invoice, InvoiceStatus, Customer, Load,
@@ -536,6 +536,11 @@ export default function AccountingPage() {
     const customerOpts = Array.from(new Set(customers.map(c => c.name).filter(Boolean))).sort();
     const methodOpts: string[] = ['Email', 'Portal'];
     const statusOpts: string[] = ['draft', 'sent', 'paid', 'void'];
+    // Columns that stick to the left during horizontal scroll. The
+    // user can change this set via `pinLeft` per column; this list
+    // is the default starting set for accounting. Selection
+    // checkbox sticks at left:0 implicitly when selectable.
+    const PIN_LEFT: Set<string> = new Set(['invoiceNum', 'loadNum', 'customer', 'rate', 'docs']);
     return COLUMNS.map<QueueColumn<Row>>((c) => {
       const base = {
         key: c.key,
@@ -543,6 +548,7 @@ export default function AccountingPage() {
         width: DEFAULT_COL_WIDTHS[c.key],
         align: c.align,
         sortable: c.toggleable && c.key !== 'flags' && c.key !== 'view' && c.key !== 'docs',
+        pinLeft: PIN_LEFT.has(c.key),
       };
       const filter: QueueColumn<Row>['filter'] =
         c.key === 'customer' ? { kind: 'multi', options: customerOpts }
@@ -794,6 +800,13 @@ export default function AccountingPage() {
                 Mark {selected.size} paid
               </button>
             )}
+            <QueueColumnsButton
+              columns={tableColumns}
+              hiddenColumns={hiddenCols}
+              onHiddenColumnsChange={setHiddenCols}
+              columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
+              onColumnOrderChange={setColOrder}
+            />
             <button onClick={() => void refresh()}
               className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
