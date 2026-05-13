@@ -40,7 +40,7 @@ export type EventStatus = LoadStatus;
 // ── Web-only types ──────────────────────────────────────────────────────
 
 import type { Customer as _Customer } from "@fleetcal/types";
-export type { Customer, Dispatcher, SavedLocation } from "@fleetcal/types";
+export type { Customer, CustomerContact, Dispatcher, SavedLocation } from "@fleetcal/types";
 
 export type CustomerMatchResult =
   | { status: "auto";    customer: _Customer; score: number }

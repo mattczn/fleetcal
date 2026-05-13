@@ -5,11 +5,11 @@ import {
   X, Building2, Phone, Mail, User, FileText, Hash,
   TrendingUp, Package, Clock, CheckCircle2, Search,
   ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft,
-  Truck, Calendar, DollarSign, ExternalLink,
+  Truck, Calendar, DollarSign, ExternalLink, Plus, Trash2,
 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { fetchBrokerLoads } from '@/lib/db';
-import type { Customer, CalendarEvent } from '@/lib/types';
+import type { Customer, CalendarEvent, CustomerContact } from '@/lib/types';
 
 const ACCENT = '#1a73e8';
 
@@ -382,9 +382,22 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
 
   const [shortName,           setShortName]           = useState(broker.shortName           ?? '');
   const [mcNum,               setMcNum]               = useState(broker.mcNum               ?? '');
-  const [contactName,         setContactName]         = useState(broker.contactName         ?? '');
-  const [contactEmail,        setContactEmail]        = useState(broker.contactEmail        ?? '');
-  const [contactPhone,        setContactPhone]        = useState(broker.contactPhone        ?? '');
+  // Contacts — list of named reps with phone + email. Falls back to
+  // legacy single-contact fields when the array is empty (older rows
+  // not yet touched by the migration's backfill).
+  const seedContacts = (b: Customer): CustomerContact[] => {
+    if (b.contacts && b.contacts.length > 0) return b.contacts;
+    if (b.contactName || b.contactEmail || b.contactPhone) {
+      return [{
+        id: crypto.randomUUID(),
+        name:  b.contactName  ?? undefined,
+        email: b.contactEmail ?? undefined,
+        phone: b.contactPhone ?? undefined,
+      }];
+    }
+    return [];
+  };
+  const [contacts, setContacts] = useState<CustomerContact[]>(() => seedContacts(broker));
   const [notes,               setNotes]               = useState(broker.notes               ?? '');
   const [parseHints,          setParseHints]          = useState(broker.parseHints          ?? '');
   const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>(broker.invoiceMethod ?? '');
@@ -401,9 +414,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   useEffect(() => {
     setShortName(broker.shortName ?? '');
     setMcNum(broker.mcNum ?? '');
-    setContactName(broker.contactName ?? '');
-    setContactEmail(broker.contactEmail ?? '');
-    setContactPhone(broker.contactPhone ?? '');
+    setContacts(seedContacts(broker));
     setNotes(broker.notes ?? '');
     setParseHints(broker.parseHints ?? '');
     setInvoiceMethod(broker.invoiceMethod ?? '');
@@ -415,12 +426,19 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setShowAllUpcoming(false);
   }, [broker.id]);
 
+  // Cheap structural compare for contacts — trims strings and drops
+  // empty fields before serializing so cosmetic whitespace doesn't
+  // mark the form dirty.
+  const normalizeContacts = (cs: CustomerContact[]) =>
+    JSON.stringify(cs.map(c => ({
+      name:  (c.name  ?? '').trim() || undefined,
+      email: (c.email ?? '').trim() || undefined,
+      phone: (c.phone ?? '').trim() || undefined,
+    })));
   const dirty =
     shortName.trim()           !== (broker.shortName           ?? '') ||
     mcNum.trim()               !== (broker.mcNum               ?? '') ||
-    contactName.trim()         !== (broker.contactName         ?? '') ||
-    contactEmail.trim()        !== (broker.contactEmail        ?? '') ||
-    contactPhone.trim()        !== (broker.contactPhone        ?? '') ||
+    normalizeContacts(contacts) !== normalizeContacts(seedContacts(broker)) ||
     notes.trim()               !== (broker.notes               ?? '') ||
     parseHints.trim()          !== (broker.parseHints          ?? '') ||
     invoiceMethod              !== (broker.invoiceMethod       ?? '') ||
@@ -435,9 +453,17 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     save: () => updateCustomer(broker.id, {
       shortName:           shortName.trim()           || undefined,
       mcNum:               mcNum.trim()               || undefined,
-      contactName:         contactName.trim()         || undefined,
-      contactEmail:        contactEmail.trim()        || undefined,
-      contactPhone:        contactPhone.trim()        || undefined,
+      // Strip empty contacts (all three fields blank) and trim each
+      // remaining field so persisted data isn't littered with
+      // half-finished entries.
+      contacts: contacts
+        .map(c => ({
+          id:    c.id,
+          name:  c.name?.trim()  || undefined,
+          email: c.email?.trim() || undefined,
+          phone: c.phone?.trim() || undefined,
+        }))
+        .filter(c => c.name || c.email || c.phone),
       notes:               notes.trim()               || undefined,
       parseHints:          parseHints.trim()          || undefined,
       invoiceMethod:       invoiceMethod || undefined,
@@ -450,9 +476,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     discard: () => {
       setShortName(broker.shortName ?? '');
       setMcNum(broker.mcNum ?? '');
-      setContactName(broker.contactName ?? '');
-      setContactEmail(broker.contactEmail ?? '');
-      setContactPhone(broker.contactPhone ?? '');
+      setContacts(seedContacts(broker));
       setNotes(broker.notes ?? '');
       setParseHints(broker.parseHints ?? '');
       setInvoiceMethod(broker.invoiceMethod ?? '');
@@ -460,7 +484,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setInvoicePortal(broker.invoicePortal ?? '');
       setInvoiceInstructions(broker.invoiceInstructions ?? '');
     },
-  }), [shortName, mcNum, contactName, contactEmail, contactPhone, notes, parseHints, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
+  }), [shortName, mcNum, contacts, notes, parseHints, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -535,24 +559,73 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
               onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
               onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
           </PField>
-          <PField label="Contact Name" icon={<User size={11} />}>
-            <input type="text" value={contactName} onChange={e => setContactName(e.target.value)}
-              placeholder="Full name…" style={P_INPUT}
-              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
-              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
-          </PField>
-          <PField label="Email" icon={<Mail size={11} />}>
-            <input type="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)}
-              placeholder="email@customer.com" style={P_INPUT}
-              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
-              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
-          </PField>
-          <PField label="Phone" icon={<Phone size={11} />}>
-            <input type="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)}
-              placeholder="(555) 555-5555" style={P_INPUT}
-              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
-              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
-          </PField>
+        </div>
+
+        {/* Contacts — grow / edit / remove per-rep. Renders a card per
+            entry so a broker with five reps reads as five obvious blocks
+            instead of a wall of repeated form fields. */}
+        <div className="mt-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-extrabold uppercase tracking-wider"
+              style={{ color: 'var(--gc-text-3)' }}>
+              Contacts
+            </span>
+            <button type="button"
+              onClick={() => setContacts(cs => [...cs, { id: crypto.randomUUID() }])}
+              className="text-[11px] font-bold flex items-center gap-1 px-2 py-1 rounded-md transition-colors"
+              style={{ color: ACCENT, background: 'transparent', border: `1px solid ${ACCENT}40`, cursor: 'pointer' }}
+              onMouseEnter={e => (e.currentTarget.style.background = `${ACCENT}10`)}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <Plus size={11} /> Add contact
+            </button>
+          </div>
+          {contacts.length === 0 ? (
+            <div className="text-[12px] px-3 py-3 rounded-md" style={{
+              color: 'var(--gc-text-3)',
+              background: 'var(--gc-bg)',
+              border: '1px dashed var(--gc-border)',
+            }}>
+              No contacts yet. Click <strong>Add contact</strong> to log a rep.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {contacts.map((c, idx) => (
+                <div key={c.id} className="rounded-md p-2.5"
+                  style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}>
+                  <div className="grid grid-cols-3 gap-2">
+                    <PField label="Name" icon={<User size={11} />}>
+                      <input type="text" value={c.name ?? ''} placeholder="Full name…" style={P_INPUT}
+                        onChange={e => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, name: e.target.value } : x))}
+                        onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                        onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
+                    </PField>
+                    <PField label="Email" icon={<Mail size={11} />}>
+                      <input type="email" value={c.email ?? ''} placeholder="email@customer.com" style={P_INPUT}
+                        onChange={e => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, email: e.target.value } : x))}
+                        onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                        onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
+                    </PField>
+                    <PField label="Phone" icon={<Phone size={11} />}>
+                      <div className="flex items-center gap-1">
+                        <input type="tel" value={c.phone ?? ''} placeholder="(555) 555-5555" style={P_INPUT}
+                          onChange={e => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, phone: e.target.value } : x))}
+                          onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+                          onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
+                        <button type="button" title="Remove contact"
+                          onClick={() => setContacts(cs => cs.filter((_, i) => i !== idx))}
+                          className="flex items-center justify-center rounded-md transition-colors"
+                          style={{ width: 28, height: 28, color: 'var(--gc-text-3)', background: 'transparent', border: '1px solid var(--gc-border)', cursor: 'pointer', flexShrink: 0 }}
+                          onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.color = '#b91c1c'; e.currentTarget.style.borderColor = '#fecaca'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; }}>
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </PField>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="mt-3">
           <PField label="Notes" icon={<FileText size={11} />}>
