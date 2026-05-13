@@ -20,7 +20,7 @@
  *   All       — every billable artifact (except voids)
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star,
@@ -36,12 +36,13 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
-  Th, Td, DocBadge, CopyableCell, CopyableLoadNum, PaginationFooter,
-  MenuTh, HeaderMenu, NotesButton,
-  CustomerFilterDropdown, useColumnOrder, useColumnWidths, ReorderableColumnsMenu,
+  Th, Td, DocBadge, CopyableCell, CopyableLoadNum, NotesButton,
   moneyFmt, fmtShortDate, daysSince,
-  type QueueSortState, type QueueFilterState,
 } from '@/components/queue/QueueTablePrimitives';
+import type { QueueSortState, QueueFilterState } from '@/components/queue/QueueTable';
+import {
+  QueueTable, usePersistedColumnPrefs, type QueueColumn,
+} from '@/components/queue/QueueTable';
 import type {
   Invoice, InvoiceStatus, Customer, Load,
   BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
@@ -193,6 +194,7 @@ export default function AccountingPage() {
   const [sort,     setSort]     = useState<QueueSortState>({ key: null, dir: 'asc' });
   const [filters,  setFilters]  = useState<QueueFilterState>({});
   const [page,     setPage]     = useState(0);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
 
   // Column visibility (persisted)
   const [visibleCols, setVisibleCols] = useState<Record<ColKey, boolean>>(() => {
@@ -208,25 +210,6 @@ export default function AccountingPage() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols));
   }, [visibleCols]);
-
-  // Header popover state
-  const [openHeaderCol, setOpenHeaderCol] = useState<ColKey | null>(null);
-  const headerRefs = useRef<Partial<Record<ColKey, HTMLTableCellElement | null>>>({});
-  const headerMenuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openHeaderCol) return;
-    function handler(e: MouseEvent) {
-      const anchor = headerRefs.current[openHeaderCol!];
-      if (
-        headerMenuRef.current && !headerMenuRef.current.contains(e.target as Node)
-        && anchor && !anchor.contains(e.target as Node)
-      ) {
-        setOpenHeaderCol(null);
-      }
-    }
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [openHeaderCol]);
 
   // Sibling modals
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
@@ -457,12 +440,14 @@ export default function AccountingPage() {
         if (!matches) return false;
       }
       for (const [col, vals] of Object.entries(filters)) {
-        if (!vals || vals.length === 0) continue;
-        const def = COL_BY_KEY[col as ColKey];
-        if (!def?.filterable) continue;
+        if (!vals || (Array.isArray(vals) ? vals.length === 0 : vals === '')) continue;
         const proj = projectCol(r, col as ColKey);
-        if (!proj.filterValue) return false;
-        if (!vals.includes(proj.filterValue)) return false;
+        const cellVal = (proj.filterValue ?? String(proj.sortValue ?? '')).toLowerCase();
+        if (Array.isArray(vals)) {
+          if (!vals.includes(proj.filterValue ?? String(proj.sortValue ?? ''))) return false;
+        } else {
+          if (!cellVal.includes(String(vals).toLowerCase())) return false;
+        }
       }
       return true;
     });
@@ -483,23 +468,9 @@ export default function AccountingPage() {
   }, [filteredRows, sort.key, sort.dir]);
 
   const total = sortedRows.length;
-  const paged = useMemo(() => sortedRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE), [sortedRows, page]);
+  const paged = useMemo(() => sortedRows.slice(page * pageSize, (page + 1) * pageSize), [sortedRows, page, pageSize]);
 
-  // ── Per-column filter options (computed from the unfiltered bucket) ─
-  const filterOptions = useMemo(() => {
-    const opts: Partial<Record<ColKey, string[]>> = {};
-    for (const def of COLUMNS) {
-      if (!def.filterable) continue;
-      const set = new Set<string>();
-      for (const r of rowsForBucket) {
-        const v = projectCol(r, def.key).filterValue;
-        if (v) set.add(v);
-      }
-      opts[def.key] = Array.from(set).sort();
-    }
-    return opts;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowsForBucket]);
+  // (filter options now computed inline in tableColumns where needed)
 
   // ── Visible columns for this bucket (intersect persisted + per-bucket hidden) ──
   const visibleColsForBucket = useMemo(() => {
@@ -509,42 +480,26 @@ export default function AccountingPage() {
     return out;
   }, [bucket, visibleCols]);
 
-  // User-reorderable column order — drag a header to move it. Persists
-  // per-user via localStorage; newly-added columns append to the end
-  // so code changes don't blow away preferences.
-  const DEFAULT_COL_ORDER = useMemo<ColKey[]>(() => COLUMNS.map(c => c.key), []);
-  const { order: colOrder, move: moveCol } =
-    useColumnOrder<ColKey>('accounting-cols-order-v1', DEFAULT_COL_ORDER);
-  // User-resizable column widths. Drag the right edge of a column header.
-  const { widths: colWidths, getResizeProps: getColResizeProps } =
-    useColumnWidths<ColKey>('accounting-cols-widths-v1');
+  // Persisted column prefs — hidden set, order, widths. One hook covers
+  // all three; QueueTable wires them in.
+  const {
+    hidden: hiddenCols, setHidden: setHiddenCols,
+    order: colOrder, setOrder: setColOrder,
+    widths: colWidths, setWidths: setColWidths,
+  } = usePersistedColumnPrefs('accounting-cols-v2');
 
-  const orderedVisibleColumns = useMemo(
-    () => colOrder
-      .filter(k => visibleColsForBucket[k])
-      .map(k => COL_BY_KEY[k])
-      .filter((c): c is ColumnDef => !!c),
-    [colOrder, visibleColsForBucket],
-  );
+  // Per-bucket hidden columns are ANDed with the user's hidden set.
+  const effectiveHidden = useMemo(() => {
+    const out = new Set(hiddenCols);
+    for (const k of COLS_HIDDEN_PER_BUCKET[bucket]) out.add(k);
+    return out;
+  }, [hiddenCols, bucket]);
 
-  // ── Selection (only on buckets where actions are available) ─────────
+
+  // QueueTable handles per-row checkbox toggling internally; we only
+  // tell it WHICH buckets allow selection.
   const canSelect = bucket === 'released' || bucket === 'queued' || bucket === 'invoiced';
-  const selectableIds = useMemo(() => {
-    if (!canSelect) return [];
-    return paged.map(r => bucket === 'released' ? (r.load.loadId ?? r.load.id) : r.invoice!.id);
-  }, [canSelect, paged, bucket]);
-  const allSelected  = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
   const someSelected = selected.size > 0;
-  function toggleId(id: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-  function toggleAll() {
-    setSelected(prev => allSelected ? new Set() : new Set([...prev, ...selectableIds]));
-  }
 
   const selectedLoads = useMemo(() =>
     bucket === 'released'
@@ -572,21 +527,173 @@ export default function AccountingPage() {
     }
   }
 
-  function toggleFilterValue(col: ColKey, val: string) {
-    setFilters(prev => {
-      const cur = prev[col] ?? [];
-      const next = cur.includes(val) ? cur.filter(v => v !== val) : [...cur, val];
-      return { ...prev, [col]: next };
-    });
-  }
-  function clearColFilter(col: ColKey) {
-    setFilters(prev => ({ ...prev, [col]: [] }));
-  }
-  function setColFilterAll(col: ColKey, options: string[]) {
-    setFilters(prev => ({ ...prev, [col]: [...options] }));
-  }
-
   const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
+
+  // ── QueueTable column config ────────────────────────────────────────
+  // One renderer per ColKey. Closures capture state setters above so
+  // each cell can wire its own action handlers without prop-drilling.
+  const tableColumns = useMemo<QueueColumn<Row>[]>(() => {
+    const customerOpts = Array.from(new Set(customers.map(c => c.name).filter(Boolean))).sort();
+    const methodOpts: string[] = ['Email', 'Portal'];
+    const statusOpts: string[] = ['draft', 'sent', 'paid', 'void'];
+    return COLUMNS.map<QueueColumn<Row>>((c) => {
+      const base = {
+        key: c.key,
+        label: c.label,
+        width: DEFAULT_COL_WIDTHS[c.key],
+        align: c.align,
+        sortable: c.toggleable && c.key !== 'flags' && c.key !== 'view' && c.key !== 'docs',
+      };
+      const filter: QueueColumn<Row>['filter'] =
+        c.key === 'customer' ? { kind: 'multi', options: customerOpts }
+        : c.key === 'method' ? { kind: 'multi', options: methodOpts }
+        : c.key === 'status' ? { kind: 'multi', options: statusOpts }
+        : c.key === 'loadNum' || c.key === 'invoiceNum' || c.key === 'title' || c.key === 'sendTo'
+          ? { kind: 'text' } : undefined;
+
+      const sortValue = (r: Row) => projectCol(r, c.key).sortValue;
+      const filterValue = (r: Row) => projectCol(r, c.key).filterValue ?? String(projectCol(r, c.key).sortValue ?? '');
+
+      let render: (r: Row) => React.ReactNode;
+      switch (c.key) {
+        case 'age': render = (r) => {
+          const key = r.load.loadId ?? r.load.id;
+          const deliveryEnd = deliveryEndByLoadId.get(key) ?? r.load.end;
+          const a = daysSince(deliveryEnd);
+          return (
+            <span style={{ background: ageBg(a), color: ageFg(a), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+              {a === 0 ? 'today' : a === 1 ? '1 day' : `${a}d`}
+            </span>
+          );
+        }; break;
+        case 'released': render = (r) => r.load.verifiedAt ? fmtShortDate(r.load.verifiedAt) : '—'; break;
+        case 'issued':   render = (r) => r.invoice?.issuedAt ? fmtShortDate(r.invoice.issuedAt) : '—'; break;
+        case 'due':      render = (r) => r.invoice?.dueAt ? fmtShortDate(r.invoice.dueAt) : '—'; break;
+        case 'invoiceNum': render = (r) => r.invoice
+          ? <CopyableCell value={r.invoice.invoiceNumber} displayValue={`#${r.invoice.invoiceNumber}`} title="Copy invoice #" />
+          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
+        case 'loadNum': render = (r) => r.load.loadNum
+          ? <CopyableLoadNum value={r.load.loadNum} />
+          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
+        case 'title': render = (r) => (
+          <button type="button"
+            onClick={(e) => { e.stopPropagation(); openEditModal(r.load.id); }}
+            className="text-left font-semibold hover:underline truncate"
+            style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+            title="Open load details">{r.load.title}</button>
+        ); break;
+        case 'customer': render = (r) => {
+          const cust = displayBrokerName(r.customer?.name ?? r.load.broker ?? '', customers);
+          const method = r.customer?.invoiceMethod ?? 'email';
+          const missingEmail = method === 'email' && !r.customer?.invoiceEmail && (bucket === 'released' || r.invoice?.status === 'draft');
+          return (
+            <div className="flex items-center gap-1.5">
+              {r.customer ? (
+                <button onClick={(e) => { e.stopPropagation(); setBrokerProfileId(r.customer!.id); }}
+                  className="text-left hover:underline truncate"
+                  style={{ color: 'var(--gc-blue)' }}>{cust}</button>
+              ) : (
+                <span className="truncate" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                  {cust || '—'}
+                </span>
+              )}
+              {missingEmail ? (
+                <button onClick={(e) => { e.stopPropagation(); r.customer && setBrokerProfileId(r.customer.id); }}
+                  className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                  style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+                  title="No invoice email set"><AlertCircle size={9} /> No email</button>
+              ) : null}
+            </div>
+          );
+        }; break;
+        case 'method': render = (r) => {
+          const m = r.customer?.invoiceMethod ?? 'email';
+          return (
+            <span className="text-[11px] font-semibold uppercase tracking-wider"
+              style={{ color: m === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
+              {m === 'portal' ? 'Portal' : 'Email'}
+            </span>
+          );
+        }; break;
+        case 'sendTo': render = (r) => {
+          const m = r.customer?.invoiceMethod ?? 'email';
+          if (m === 'portal') return <span className="text-[11.5px] italic" style={{ color: 'var(--gc-text-3)' }}>Portal — manual</span>;
+          if (!r.customer?.invoiceEmail) return (
+            <button onClick={(e) => { e.stopPropagation(); r.customer && setBrokerProfileId(r.customer.id); }}
+              className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+              style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+              title="No invoice email — click to fix"><AlertCircle size={10} /> No email</button>
+          );
+          return <span className="text-[12px] tabular-nums truncate inline-block"
+            style={{ color: 'var(--gc-text-1)', maxWidth: '100%' }}
+            title={r.customer.invoiceEmail}>{r.customer.invoiceEmail}</span>;
+        }; break;
+        case 'rate': render = (r) => (
+          <span className="font-semibold tabular-nums">
+            {r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice) : '—'}
+          </span>
+        ); break;
+        case 'accessorials': render = (r) => {
+          const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+          const accCount = (r.load.accessorials ?? []).length;
+          return accCount === 0
+            ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+            : <span className="tabular-nums" title={`${accCount} accessorial${accCount === 1 ? '' : 's'}`}>{moneyFmt.format(accSum)}</span>;
+        }; break;
+        case 'total': render = (r) => {
+          const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+          return (
+            <span className="font-bold tabular-nums">
+              {r.invoice ? moneyFmt.format(r.invoice.total)
+                : r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice + accSum)
+                : '—'}
+            </span>
+          );
+        }; break;
+        case 'docs': render = (r) => {
+          const counts = docCounts[r.load.loadId ?? r.load.id] ?? {};
+          const hasRC = !!r.load.rateConPdf;
+          return (
+            <div className="flex flex-wrap gap-1">
+              {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
+              {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
+              {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
+              {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
+              {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
+              {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
+              {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
+            </div>
+          );
+        }; break;
+        case 'status': render = (r) => r.invoice
+          ? <StatusPill status={r.invoice.status} />
+          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
+        case 'flags': render = (r) => {
+          const notesCount = (r.load.internalNotes ?? []).length;
+          return (
+            <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <PriorityToggle load={r.load} actorName={actorName} onAfter={() => void refresh()} />
+              <NotesButton count={notesCount} onOpen={() => setNotesTarget(r.load)} />
+            </div>
+          );
+        }; break;
+        case 'view': render = (r) => r.invoice ? (
+          <button onClick={(e) => { e.stopPropagation(); setInvoiceModalId(r.invoice!.id); }}
+            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
+            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+            title="View invoice — PDF + actions"><Eye size={11} /> View</button>
+        ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
+        default: render = () => '—';
+      }
+      return { ...base, render, sortValue, filterValue, filter };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customers, docCounts, deliveryEndByLoadId, bucket, actorName]);
+
+  // Row id for selection — bucket-specific (loadId on released, invoice.id elsewhere).
+  const rowKey = useCallback((r: Row) => {
+    return bucket === 'released' ? (r.load.loadId ?? r.load.id) : (r.invoice?.id ?? r.load.id);
+  }, [bucket]);
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
@@ -594,11 +701,11 @@ export default function AccountingPage() {
       <DataLoader />
       <ManagementHeader title="Accounting" icon={Receipt} />
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden py-6">
-        {/* 95vw inner container, centered. Bucket cards, toolbar, and
-            table all share this width. Beyond 95vw the table scrolls
-            horizontally inside its own wrapper. */}
-        <div className="mx-auto space-y-4" style={{ width: '95vw' }}>
+      {/* The content area is a fixed-height flex column so the table
+          can claim the remaining space and scroll INSIDE its own box.
+          Outer page padding lives here; the table itself has no margin. */}
+      <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
+        <div className="mx-auto w-full min-h-0 flex-1 flex flex-col gap-4" style={{ maxWidth: 1800 }}>
 
           {/* Purpose hint */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -687,20 +794,6 @@ export default function AccountingPage() {
                 Mark {selected.size} paid
               </button>
             )}
-            <CustomerFilterDropdown
-              options={customers.map(c => c.name).sort()}
-              selected={filters.customer ?? []}
-              onChange={(next) => setFilters(p => ({ ...p, customer: next }))} />
-            <ReorderableColumnsMenu
-              columns={colOrder
-                .filter(k => {
-                  const def = COL_BY_KEY[k];
-                  return def?.toggleable && !COLS_HIDDEN_PER_BUCKET[bucket].has(k);
-                })
-                .map(k => ({ key: k, label: COL_BY_KEY[k]?.label ?? k }))}
-              visible={visibleCols as Record<string, boolean>}
-              onToggle={(k) => setVisibleCols(v => ({ ...v, [k as ColKey]: !v[k as ColKey] }))}
-              onReorder={(from, to) => moveCol(from as ColKey, to as ColKey)} />
             <button onClick={() => void refresh()}
               className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -708,291 +801,45 @@ export default function AccountingPage() {
             </button>
           </div>
 
-          {/* Table */}
-          {loading ? (
-            <div className="flex items-center justify-center py-24" style={{ color: 'var(--gc-text-3)' }}>
-              <Loader2 size={20} className="animate-spin" />
-            </div>
-          ) : error ? (
+          {/* Table fills remaining vertical space — its internal viewport
+              scrolls in both axes, page chrome stays put. */}
+          {error ? (
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
               {error}
             </div>
-          ) : total === 0 ? (
-            <BucketEmpty bucket={bucket} hasFilters={search.trim() !== '' || Object.values(filters).some(v => v && v.length > 0)} />
           ) : (
-            // Table container: pinned to parent (95vw), horizontally
-            // scrollable, table inside fills it.
-            <div className="rounded-2xl overflow-x-auto"
-              style={{
-                border: '1px solid var(--gc-border-light)',
-                background: 'var(--gc-surface)',
-              }}>
-              <table className="text-[12.5px]"
-                style={{
-                  borderCollapse: 'collapse',
-                  // Each column is its exact pixel width (table-layout:
-                  // fixed). Table is sum-of-columns. NO `minWidth: 100%`
-                  // here — that forces the table to fill the wrapper,
-                  // which makes the browser scale columns up proportionally
-                  // to fit, defeating user-resize.
-                  tableLayout: 'fixed',
-                  width:       'max-content',
-                }}>
-                <thead>
-                  <tr style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {canSelect && (
-                      <th className="px-2.5 py-2 whitespace-nowrap"
-                        style={{ textAlign: 'left', width: SELECT_COL_WIDTH }}>
-                        <input type="checkbox" checked={allSelected} onChange={toggleAll}
-                          style={{ accentColor: '#1a73e8' }} />
-                      </th>
-                    )}
-                    {orderedVisibleColumns.map(c => (
-                      <MenuTh key={c.key}
-                        col={c.key}
-                        label={c.label}
-                        align={c.align}
-                        sort={sort}
-                        selectedCount={(filters[c.key] ?? []).length}
-                        setHeaderRef={el => { headerRefs.current[c.key] = el; }}
-                        onClick={() => setOpenHeaderCol(p => p === c.key ? null : c.key)}
-                        width={colWidths[c.key] ?? DEFAULT_COL_WIDTHS[c.key]}
-                        onResizeStart={getColResizeProps(c.key)} />
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {paged.map((r) => {
-                    const load = r.load;
-                    const inv  = r.invoice;
-                    const id   = bucket === 'released' ? (load.loadId ?? load.id) : (inv?.id ?? load.id);
-                    const customer = r.customer;
-                    const cust = displayBrokerName(customer?.name ?? load.broker ?? '', customers);
-                    const method = customer?.invoiceMethod ?? 'email';
-                    const missingEmail = method === 'email' && !customer?.invoiceEmail && (bucket === 'released' || inv?.status === 'draft');
-                    const counts = docCounts[load.loadId ?? load.id] ?? {};
-                    const hasRC = !!load.rateConPdf;
-                    const accSum = (load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-                    const accCount = (load.accessorials ?? []).length;
-                    const notesCount = (load.internalNotes ?? []).length;
-                    // Age = days since delivery (delivery-leg end for relays).
-                    const deliveryEnd = deliveryEndByLoadId.get(load.loadId ?? load.id) ?? load.end;
-                    const age = daysSince(deliveryEnd);
-                    return (
-                      <tr key={id}
-                        style={{
-                          borderBottom: '1px solid var(--gc-border-light)',
-                          background: load.priority ? '#fefce8' : undefined,
-                          borderLeft: load.priority ? '3px solid #eab308' : '3px solid transparent',
-                        }}
-                        className="hover:bg-[var(--gc-hover)]">
-                        {canSelect && (
-                          <Td>
-                            <input type="checkbox" checked={selected.has(id)} onChange={() => toggleId(id)}
-                              style={{ accentColor: '#1a73e8' }} />
-                          </Td>
-                        )}
-                        {orderedVisibleColumns.map(c => {
-                          switch (c.key) {
-                            case 'age':
-                              return <Td key={c.key}>
-                                <span style={{ background: ageBg(age), color: ageFg(age), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                                  {age === 0 ? 'today' : age === 1 ? '1 day' : `${age}d`}
-                                </span>
-                              </Td>;
-                            case 'released':
-                              return <Td key={c.key}>{load.verifiedAt ? fmtShortDate(load.verifiedAt) : '—'}</Td>;
-                            case 'issued':
-                              return <Td key={c.key}>{inv?.issuedAt ? fmtShortDate(inv.issuedAt) : '—'}</Td>;
-                            case 'due':
-                              return <Td key={c.key}>{inv?.dueAt ? fmtShortDate(inv.dueAt) : '—'}</Td>;
-                            case 'invoiceNum':
-                              // Click-to-copy, same pattern as Load #.
-                              // To inspect the invoice (PDF + actions),
-                              // use the View button on this row.
-                              return <Td key={c.key}>
-                                {inv
-                                  ? <CopyableCell value={inv.invoiceNumber} displayValue={`#${inv.invoiceNumber}`} title="Copy invoice #" />
-                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                              </Td>;
-                            case 'loadNum':
-                              return <Td key={c.key}>
-                                {load.loadNum
-                                  ? <CopyableLoadNum value={load.loadNum} />
-                                  : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                              </Td>;
-                            case 'title':
-                              return <Td key={c.key}>
-                                <button type="button"
-                                  onClick={e => { e.stopPropagation(); openEditModal(load.id); }}
-                                  className="text-left font-semibold hover:underline truncate max-w-[220px]"
-                                  style={{ color: 'var(--gc-blue)' }}
-                                  title="Open load details">
-                                  {load.title}
-                                </button>
-                              </Td>;
-                            case 'customer':
-                              return <Td key={c.key}>
-                                <div className="flex items-center gap-1.5">
-                                  {customer ? (
-                                    <button onClick={e => { e.stopPropagation(); setBrokerProfileId(customer.id); }}
-                                      className="text-left hover:underline truncate max-w-[180px]"
-                                      style={{ color: 'var(--gc-blue)' }}>
-                                      {cust}
-                                    </button>
-                                  ) : (
-                                    <span className="truncate max-w-[180px]" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-                                      {cust || '—'}
-                                    </span>
-                                  )}
-                                  {missingEmail && (
-                                    <button onClick={e => { e.stopPropagation(); customer && setBrokerProfileId(customer.id); }}
-                                      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-                                      title="No invoice email set">
-                                      <AlertCircle size={9} /> No email
-                                    </button>
-                                  )}
-                                </div>
-                              </Td>;
-                            case 'method':
-                              return <Td key={c.key}>
-                                <span className="text-[11px] font-semibold uppercase tracking-wider"
-                                  style={{ color: method === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
-                                  {method === 'portal' ? 'Portal' : 'Email'}
-                                </span>
-                              </Td>;
-                            case 'sendTo': {
-                              // Portal brokers: no email, surface that.
-                              // Email brokers with no saved address get a
-                              // clickable warning chip; otherwise show
-                              // the email itself.
-                              if (method === 'portal') {
-                                return <Td key={c.key}>
-                                  <span className="text-[11.5px] italic" style={{ color: 'var(--gc-text-3)' }}>
-                                    Portal — manual
-                                  </span>
-                                </Td>;
-                              }
-                              if (!customer?.invoiceEmail) {
-                                return <Td key={c.key} onClick={e => e.stopPropagation()}>
-                                  <button onClick={() => customer && setBrokerProfileId(customer.id)}
-                                    className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                                    style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-                                    title="No invoice email — click to fix">
-                                    <AlertCircle size={10} /> No email
-                                  </button>
-                                </Td>;
-                              }
-                              return <Td key={c.key}>
-                                <span className="text-[12px] tabular-nums truncate inline-block max-w-[220px]"
-                                  style={{ color: 'var(--gc-text-1)' }}
-                                  title={customer.invoiceEmail}>
-                                  {customer.invoiceEmail}
-                                </span>
-                              </Td>;
-                            }
-                            case 'view':
-                              // Opens the combined modal — PDF packet
-                              // on one side, Actions sidebar on the
-                              // other. Single canonical "look at this
-                              // invoice" surface.
-                              return <Td key={c.key} onClick={e => e.stopPropagation()}>
-                                {inv ? (
-                                  <button onClick={() => setInvoiceModalId(inv.id)}
-                                    className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
-                                    style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-                                    title="View invoice — PDF + actions">
-                                    <Eye size={11} /> View
-                                  </button>
-                                ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                              </Td>;
-                            case 'rate':
-                              return <Td key={c.key} align="right" className="font-semibold tabular-nums">
-                                {load.loadPrice != null ? moneyFmt.format(load.loadPrice) : '—'}
-                              </Td>;
-                            case 'accessorials':
-                              return <Td key={c.key} align="right" className="tabular-nums">
-                                {accCount === 0
-                                  ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-                                  : <span title={`${accCount} accessorial${accCount === 1 ? '' : 's'}`}>{moneyFmt.format(accSum)}</span>
-                                }
-                              </Td>;
-                            case 'total':
-                              return <Td key={c.key} align="right" className="font-bold tabular-nums">
-                                {inv ? moneyFmt.format(inv.total)
-                                     : load.loadPrice != null ? moneyFmt.format(load.loadPrice + accSum)
-                                     : '—'}
-                              </Td>;
-                            case 'docs':
-                              return <Td key={c.key}>
-                                <div className="flex flex-wrap gap-1">
-                                  {(hasRC || (counts.rate_con ?? 0) > 0) && <DocBadge label="RC"      count={Math.max(counts.rate_con ?? 0, hasRC ? 1 : 0)} />}
-                                  {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
-                                  {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
-                                  {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
-                                  {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
-                                  {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
-                                  {(!hasRC && Object.keys(counts).length === 0) && <span className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                                </div>
-                              </Td>;
-                            case 'flags':
-                              // Inline icon group — priority toggle +
-                              // notes button. Same look closeout has
-                              // in its actions cell.
-                              return <Td key={c.key} onClick={e => e.stopPropagation()}>
-                                <div className="inline-flex items-center gap-1">
-                                  <PriorityToggle
-                                    load={load}
-                                    actorName={actorName}
-                                    onAfter={() => void refresh()}
-                                  />
-                                  <NotesButton count={notesCount} onOpen={() => setNotesTarget(load)} />
-                                </div>
-                              </Td>;
-                            case 'status':
-                              return <Td key={c.key}>
-                                {inv ? <StatusPill status={inv.status} />
-                                     : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
-                              </Td>;
-                            default:
-                              return <Td key={c.key}>—</Td>;
-                          }
-                        })}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {total > PAGE_SIZE && (
-                <PaginationFooter page={page} pageSize={PAGE_SIZE} total={total}
-                  onPrev={() => setPage(Math.max(0, page - 1))}
-                  onNext={() => setPage(page + 1)} />
-              )}
+            <div className="flex-1 min-h-0 min-w-0 flex">
+              <QueueTable<Row>
+                rows={paged}
+                columns={tableColumns}
+                rowKey={rowKey}
+                sort={sort}
+                onSortChange={setSort}
+                filters={filters}
+                onFiltersChange={(next) => { setFilters(next); setPage(0); }}
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onPageChange={setPage}
+                onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
+                hiddenColumns={effectiveHidden}
+                onHiddenColumnsChange={setHiddenCols}
+                columnOrder={colOrder}
+                onColumnOrderChange={setColOrder}
+                columnWidths={colWidths}
+                onColumnWidthsChange={setColWidths}
+                selectable={canSelect}
+                selected={selected}
+                onSelectionChange={setSelected}
+                rowClassName={(r) => r.load.priority ? 'bg-[#fefce8]' : ''}
+                emptyMessage={search.trim() !== '' || Object.values(filters).some(v => v && v.length > 0)
+                  ? 'No rows match the current filters.'
+                  : 'No loads in this bucket.'}
+              />
             </div>
           )}
         </div>
       </div>
-
-      {/* Column header popover */}
-      {openHeaderCol && (
-        <HeaderMenu
-          ref={headerMenuRef}
-          col={openHeaderCol}
-          anchorEl={headerRefs.current[openHeaderCol] ?? null}
-          sort={sort}
-          filterable={COL_BY_KEY[openHeaderCol].filterable}
-          selected={filters[openHeaderCol] ?? []}
-          options={filterOptions[openHeaderCol] ?? []}
-          onSort={(dir) => {
-            if (dir === null) setSort({ key: null, dir: 'asc' });
-            else setSort({ key: openHeaderCol, dir });
-          }}
-          onToggleValue={(val) => toggleFilterValue(openHeaderCol, val)}
-          onClearFilter={() => clearColFilter(openHeaderCol)}
-          onSelectAll={() => setColFilterAll(openHeaderCol, filterOptions[openHeaderCol] ?? [])}
-          onClose={() => setOpenHeaderCol(null)} />
-      )}
 
       {/* Sibling modals */}
       <EventModal />
