@@ -398,6 +398,15 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     return [];
   };
   const [contacts, setContacts] = useState<CustomerContact[]>(() => seedContacts(broker));
+  // Two-tap confirmation for delete: first click on a contact's trash
+  // sets the id here and morphs the button into a red "Confirm?". Auto
+  // resets after 3s of inactivity (and on contact-list changes).
+  const [confirmDeleteContactId, setConfirmDeleteContactId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!confirmDeleteContactId) return;
+    const t = setTimeout(() => setConfirmDeleteContactId(null), 3000);
+    return () => clearTimeout(t);
+  }, [confirmDeleteContactId]);
   const [notes,               setNotes]               = useState(broker.notes               ?? '');
   const [parseHints,          setParseHints]          = useState(broker.parseHints          ?? '');
   const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>(broker.invoiceMethod ?? '');
@@ -611,14 +620,45 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
                           onChange={e => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, phone: e.target.value } : x))}
                           onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
                           onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
-                        <button type="button" title="Remove contact"
-                          onClick={() => setContacts(cs => cs.filter((_, i) => i !== idx))}
-                          className="flex items-center justify-center rounded-md transition-colors"
-                          style={{ width: 28, height: 28, color: 'var(--gc-text-3)', background: 'transparent', border: '1px solid var(--gc-border)', cursor: 'pointer', flexShrink: 0 }}
-                          onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.color = '#b91c1c'; e.currentTarget.style.borderColor = '#fecaca'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.borderColor = 'var(--gc-border)'; }}>
-                          <Trash2 size={13} />
-                        </button>
+                        {(() => {
+                          const confirming = confirmDeleteContactId === c.id;
+                          return (
+                            <button type="button"
+                              title={confirming ? 'Click again to confirm' : 'Remove contact'}
+                              onClick={() => {
+                                if (confirming) {
+                                  setContacts(cs => cs.filter((_, i) => i !== idx));
+                                  setConfirmDeleteContactId(null);
+                                } else {
+                                  setConfirmDeleteContactId(c.id);
+                                }
+                              }}
+                              className="flex items-center justify-center rounded-md transition-colors px-2"
+                              style={{
+                                minWidth: 28, height: 28,
+                                color: confirming ? '#fff' : 'var(--gc-text-3)',
+                                background: confirming ? '#b91c1c' : 'transparent',
+                                border: `1px solid ${confirming ? '#b91c1c' : 'var(--gc-border)'}`,
+                                cursor: 'pointer', flexShrink: 0,
+                                fontSize: 11, fontWeight: 800,
+                                whiteSpace: 'nowrap',
+                              }}
+                              onMouseEnter={e => {
+                                if (confirming) return;
+                                e.currentTarget.style.background = '#fee2e2';
+                                e.currentTarget.style.color = '#b91c1c';
+                                e.currentTarget.style.borderColor = '#fecaca';
+                              }}
+                              onMouseLeave={e => {
+                                if (confirming) return;
+                                e.currentTarget.style.background = 'transparent';
+                                e.currentTarget.style.color = 'var(--gc-text-3)';
+                                e.currentTarget.style.borderColor = 'var(--gc-border)';
+                              }}>
+                              {confirming ? 'Confirm?' : <Trash2 size={13} />}
+                            </button>
+                          );
+                        })()}
                       </div>
                     </PField>
                   </div>
