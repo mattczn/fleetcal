@@ -12,8 +12,48 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Copy, X } from 'lucide-react';
+import { Copy, Loader2, X } from 'lucide-react';
 import type { CalendarEvent, Stop, RefNum, Asset, Trailer } from '@/lib/types';
+
+// ── URL shortening ──────────────────────────────────────────────────
+// Driver group chats wrap on full Google Maps URLs and look noisy. We
+// run the long URL through TinyURL on Copy and cache the result in
+// localStorage so repeat copies are instant. TinyURL has a free no-auth
+// GET endpoint, no rate-limit drama for this volume.
+const SHORTLINK_CACHE_KEY = 'driver-summary-shortlinks-v1';
+type ShortlinkMap = Record<string, string>;
+
+function readCache(): ShortlinkMap {
+  if (typeof window === 'undefined') return {};
+  try { return JSON.parse(window.localStorage.getItem(SHORTLINK_CACHE_KEY) ?? '{}') as ShortlinkMap; }
+  catch { return {}; }
+}
+function writeCache(map: ShortlinkMap): void {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(SHORTLINK_CACHE_KEY, JSON.stringify(map)); } catch { /* quota / private mode */ }
+}
+async function shortenOne(longUrl: string, cache: ShortlinkMap): Promise<string> {
+  if (cache[longUrl]) return cache[longUrl];
+  try {
+    const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
+    if (!res.ok) return longUrl;
+    const short = (await res.text()).trim();
+    if (!short.startsWith('http')) return longUrl;
+    cache[longUrl] = short;
+    return short;
+  } catch {
+    return longUrl;
+  }
+}
+async function shortenAll(longUrls: string[]): Promise<Map<string, string>> {
+  const cache = readCache();
+  const unique = [...new Set(longUrls.filter(Boolean))];
+  const results = await Promise.all(unique.map(u => shortenOne(u, cache)));
+  writeCache(cache);
+  const out = new Map<string, string>();
+  unique.forEach((u, i) => out.set(u, results[i]));
+  return out;
+}
 
 interface Props {
   event: Partial<CalendarEvent> & { stops?: Stop[]; refNums?: RefNum[]; trailerType?: string };
@@ -103,6 +143,8 @@ function buildPlainText(args: {
   trailerName?: string;
   stops: Stop[];
   loadNotes?: string;
+  /** Optional override (long URL → short URL). Used by Copy after shortening. */
+  urlOverride?: Map<string, string>;
 }): string {
   const lines: string[] = [];
 
@@ -134,9 +176,10 @@ function buildPlainText(args: {
       lines.push(head);
       const addr = fullAddress(s);
       if (addr) {
-        const url = googleMapsUrl(s);
-        // Single line: "address — maps.google.com/?q=…". Keeps the
-        // copy compact in chats; the URL is still tappable.
+        const longUrl = googleMapsUrl(s);
+        const url = longUrl ? (args.urlOverride?.get(longUrl) ?? longUrl) : '';
+        // Single line: "address — tinyurl.com/abc". Keeps the copy
+        // compact in chats; the URL is still tappable.
         lines.push(url ? `   ${addr} — ${url}` : `   ${addr}`);
       }
       const appt = fmtAppointment(s);
@@ -156,7 +199,21 @@ function buildPlainText(args: {
 // ── Component ───────────────────────────────────────────────────────
 
 export default function DriverSummaryPanel({ event, asset, trailer, driverName, onClose }: Props) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied]   = useState(false);
+  const [copying, setCopying] = useState(false);
+  // Holds long→short URL pairs we've successfully fetched. Used both
+  // for the rendered preview and the copied payload.
+  const [shortMap, setShortMap] = useState<Map<string, string>>(() => {
+    if (typeof window === 'undefined') return new Map();
+    const cache = readCache();
+    return new Map(Object.entries(cache));
+  });
+
+  const stops = event.stops ?? [];
+  const longUrls = useMemo(
+    () => stops.map(s => googleMapsUrl(s)).filter(Boolean),
+    [stops],
+  );
 
   const plain = useMemo(() => buildPlainText({
     title:        event.title ?? '',
@@ -168,19 +225,47 @@ export default function DriverSummaryPanel({ event, asset, trailer, driverName, 
     refNums:      event.refNums,
     trailerType:  event.trailerType,
     trailerName:  trailer?.name,
-    stops:        event.stops ?? [],
+    stops,
     loadNotes:    event.notes ?? event.specialInstructions ?? undefined,
-  }), [event, asset, trailer, driverName]);
+    urlOverride:  shortMap,
+  }), [event, asset, trailer, driverName, stops, shortMap]);
 
-  const onCopy = () => {
+  const onCopy = async () => {
     if (!navigator.clipboard?.writeText) return;
-    void navigator.clipboard.writeText(plain).then(() => {
+    setCopying(true);
+    try {
+      // Shorten anything we don't already have cached.
+      const missing = longUrls.filter(u => !shortMap.has(u));
+      let mergedMap = shortMap;
+      if (missing.length > 0) {
+        const fresh = await shortenAll(missing);
+        mergedMap = new Map(shortMap);
+        fresh.forEach((v, k) => mergedMap.set(k, v));
+        setShortMap(mergedMap);
+      }
+      // Rebuild the payload with the shortened map so the user gets
+      // tinyurls in the clipboard, not the long ?q= form.
+      const finalText = buildPlainText({
+        title:        event.title ?? '',
+        start:        event.start,
+        end:          event.end,
+        assetName:    asset?.name,
+        driverName,
+        loadNum:      event.loadNum,
+        refNums:      event.refNums,
+        trailerType:  event.trailerType,
+        trailerName:  trailer?.name,
+        stops,
+        loadNotes:    event.notes ?? event.specialInstructions ?? undefined,
+        urlOverride:  mergedMap,
+      });
+      await navigator.clipboard.writeText(finalText);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
-    });
+    } finally {
+      setCopying(false);
+    }
   };
-
-  const stops = event.stops ?? [];
 
   return (
     <div className="flex flex-col shrink-0"
@@ -192,13 +277,14 @@ export default function DriverSummaryPanel({ event, asset, trailer, driverName, 
           Driver summary
         </div>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={onCopy}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors"
+          <button type="button" onClick={() => { void onCopy(); }}
+            disabled={copying}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors disabled:opacity-70"
             style={copied
               ? { background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }
               : { background: 'var(--gc-blue)', color: '#fff', border: '1px solid var(--gc-blue)' }}>
-            <Copy size={12} />
-            {copied ? 'Copied!' : 'Copy'}
+            {copying ? <Loader2 size={12} className="animate-spin" /> : <Copy size={12} />}
+            {copying ? 'Shortening…' : copied ? 'Copied!' : 'Copy'}
           </button>
           <button type="button" onClick={onClose}
             className="p-1.5 rounded-lg transition-colors"
