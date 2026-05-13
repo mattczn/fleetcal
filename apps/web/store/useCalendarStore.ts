@@ -15,6 +15,34 @@ import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
 import { localDateStr } from '@/lib/time-utils';
 
+// ─── Self-echo suppression ──────────────────────────────────────────────
+//
+// When this client writes to an event, Supabase realtime echoes the
+// change back to every subscribed client INCLUDING ourselves. Without
+// dedup, the realtime callback would treat our own write as a foreign
+// update and pop the "another dispatcher updated this load" banner.
+//
+// We tag each local write with a timestamp; a matching realtime event
+// arriving within SELF_ECHO_WINDOW_MS is treated as a self-echo and
+// applies the data without flagging the modal as conflicted.
+//
+// Module-local Map (not in Zustand state) — purely transient and
+// doesn't need serialization or React reactivity.
+const SELF_ECHO_WINDOW_MS = 5_000;
+const selfWriteAt = new Map<string, number>();
+function markSelfWrite(id: string) {
+  selfWriteAt.set(id, Date.now());
+}
+function consumeSelfWrite(id: string): boolean {
+  const t = selfWriteAt.get(id);
+  if (t == null) return false;
+  if (Date.now() - t > SELF_ECHO_WINDOW_MS) {
+    selfWriteAt.delete(id);
+    return false;
+  }
+  return true;
+}
+
 export interface DragState {
   eventId: string;
   targetAssetId: number;
@@ -830,6 +858,8 @@ export const useCalendarStore = create<CalendarStore>()(
 
   updateEvent: (id, updates) => {
     const prevDriverId = get().events.find((e) => e.id === id)?.driverId;
+    // Tag the write so the realtime echo doesn't fire a conflict banner.
+    markSelfWrite(id);
     set((state) => ({ events: state.events.map((e) => (e.id === id ? { ...e, ...updates } : e)) }));
     if (get().isDemo) return;
     const { orgId } = get();
@@ -898,6 +928,7 @@ export const useCalendarStore = create<CalendarStore>()(
     if (get().isDemo) return;
     const ev = get().events.find((e) => e.id === id);
     if (!ev) return;
+    markSelfWrite(id);
     const deletedAt = new Date().toISOString();
     const newAuditLog = auditEntry ? [...(ev.auditLog ?? []), auditEntry] : ev.auditLog;
     const updated = { ...ev, auditLog: newAuditLog };
@@ -930,21 +961,28 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   updateEventFromRemote: (event) => {
+    // If we just wrote this event locally, the realtime payload is
+    // our own echo bouncing back — apply the data but don't pop the
+    // "another dispatcher updated" banner.
+    const isSelfEcho = consumeSelfWrite(event.id);
     set((state) => ({
       events: state.events.map(e => e.id === event.id
         // Realtime payload never includes stops (not a column) — preserve existing stops
         ? { ...e, ...event, stops: e.stops }
         : e),
-      // Flag conflict if this event is currently open in the modal
-      modalConflict: state.modalOpen && state.modalEventId === event.id ? 'updated' : state.modalConflict,
+      modalConflict: !isSelfEcho && state.modalOpen && state.modalEventId === event.id
+        ? 'updated'
+        : state.modalConflict,
     }));
   },
 
   removeEventFromRemote: (id) => {
+    const isSelfEcho = consumeSelfWrite(id);
     set((state) => ({
       events: state.events.filter(e => e.id !== id),
-      // Flag conflict if this event is currently open in the modal
-      modalConflict: state.modalOpen && state.modalEventId === id ? 'deleted' : state.modalConflict,
+      modalConflict: !isSelfEcho && state.modalOpen && state.modalEventId === id
+        ? 'deleted'
+        : state.modalConflict,
     }));
   },
 
