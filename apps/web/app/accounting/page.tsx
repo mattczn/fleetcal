@@ -89,28 +89,28 @@ interface ColumnDef {
 // Priority isn't a column — priority loads get a soft yellow row
 // band + left border instead (same treatment as /closeout).
 const COLUMNS: ColumnDef[] = [
+  // Inline icons (priority star + notes button). Pinned left next to
+  // the Select checkbox. No header label, no sort, no filter, no
+  // toggle — it's a row-utility column.
+  { key: 'flags',        label: '',              align: 'left',  filterable: false, toggleable: false },
+  { key: 'invoiceNum',   label: 'Invoice #',     align: 'left',  filterable: false, toggleable: true },
+  { key: 'loadNum',      label: 'Load #',        align: 'left',  filterable: false, toggleable: true },
+  { key: 'customer',     label: 'Customer',      align: 'left',  filterable: true,  toggleable: true },
+  { key: 'rate',         label: 'Rate',          align: 'right', filterable: false, toggleable: true },
+  { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
   { key: 'age',          label: 'Age',           align: 'left',  filterable: false, toggleable: true },
   { key: 'released',     label: 'Released',      align: 'left',  filterable: false, toggleable: true },
   { key: 'issued',       label: 'Issued',        align: 'left',  filterable: false, toggleable: true },
   { key: 'due',          label: 'Due',           align: 'left',  filterable: false, toggleable: true },
-  { key: 'invoiceNum',   label: 'Invoice #',     align: 'left',  filterable: false, toggleable: true },
-  { key: 'loadNum',      label: 'Load #',        align: 'left',  filterable: false, toggleable: true },
   { key: 'title',        label: 'Title',         align: 'left',  filterable: false, toggleable: true },
-  { key: 'customer',     label: 'Customer',      align: 'left',  filterable: true,  toggleable: true },
   { key: 'method',       label: 'Method',        align: 'left',  filterable: true,  toggleable: true },
   // Send-to surfaces the actual email + missing-email state so the
   // user can verify before clicking Send. Hidden on Invoiced / Paid
   // (the send already happened) and on All (mixed bag).
   { key: 'sendTo',       label: 'Send to',       align: 'left',  filterable: false, toggleable: true },
-  { key: 'rate',         label: 'Rate',          align: 'right', filterable: false, toggleable: true },
   { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
   { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
-  { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
   { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
-  // Inline icons (priority star + notes button). Not a real column —
-  // no header label, no sort, no filter, no toggle. Lives next to
-  // View for the same "row meta" feel /closeout has.
-  { key: 'flags',        label: '',              align: 'left',  filterable: false, toggleable: false },
   // View opens the combined PDF + actions modal. Hidden on Released
   // — no invoice exists yet there.
   { key: 'view',         label: '',              align: 'left',  filterable: false, toggleable: false },
@@ -499,7 +499,7 @@ export default function AccountingPage() {
     order: colOrder, setOrder: setColOrder,
     widths: colWidths, setWidths: setColWidths,
     pinned: pinnedCols, setPinned: setPinnedCols,
-  } = usePersistedColumnPrefs('accounting-cols-v2');
+  } = usePersistedColumnPrefs('accounting-cols-v3');
 
   // Per-bucket hidden columns are ANDed with the user's hidden set.
   const effectiveHidden = useMemo(() => {
@@ -553,22 +553,25 @@ export default function AccountingPage() {
     // user can change this set via `pinLeft` per column; this list
     // is the default starting set for accounting. Selection
     // checkbox sticks at left:0 implicitly when selectable.
-    const PIN_LEFT: Set<string> = new Set(['invoiceNum', 'loadNum', 'customer', 'rate', 'docs']);
-    // Priority star + notes button column lives at the FAR right
-    // alongside the Select checkbox. Hardcoded; not user-configurable.
-    const PIN_RIGHT: Set<string> = new Set(['flags']);
+    // Utility columns (priority star + notes button) sit at the far
+    // LEFT alongside the Select checkbox. Hardcoded; not user-
+    // configurable. The rest of the user-pinnable data columns
+    // (Invoice #, Load #, Customer, Rate, Docs) follow.
+    const PIN_LEFT_HARD: Set<string> = new Set(['flags']);
+    const PIN_LEFT: Set<string> = new Set([
+      ...PIN_LEFT_HARD,
+      'invoiceNum', 'loadNum', 'customer', 'rate', 'docs',
+    ]);
     return COLUMNS.map<QueueColumn<Row>>((c) => {
       const base = {
         key: c.key,
-        label: PIN_RIGHT.has(c.key) ? '' : c.label,
+        label: PIN_LEFT_HARD.has(c.key) ? '' : c.label,
         width: DEFAULT_COL_WIDTHS[c.key],
         align: c.align,
         sortable: c.toggleable && c.key !== 'flags' && c.key !== 'view' && c.key !== 'docs',
         pinLeft: PIN_LEFT.has(c.key),
-        pinRight: PIN_RIGHT.has(c.key),
-        // Right-pinned utility columns aren't togglable in the
-        // Columns dropdown.
-        pinned: PIN_RIGHT.has(c.key) ? true : undefined,
+        // Hardcoded utility columns aren't togglable in the Columns dropdown.
+        pinned: PIN_LEFT_HARD.has(c.key) ? true : undefined,
       };
       const filter: QueueColumn<Row>['filter'] =
         c.key === 'customer' ? { kind: 'multi', options: customerOpts }

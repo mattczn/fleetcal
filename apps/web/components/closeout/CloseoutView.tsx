@@ -600,7 +600,7 @@ export default function CloseoutView() {
     order: colOrder, setOrder: setColOrder,
     widths: colWidths, setWidths: setColWidths,
     pinned: pinnedCols, setPinned: setPinnedCols,
-  } = usePersistedColumnPrefs('closeout-cols-v2',
+  } = usePersistedColumnPrefs('closeout-cols-v3',
     new Set(Object.entries(visibleCols).filter(([, v]) => !v).map(([k]) => k)),
   );
   const [tablePageSize, setTablePageSize] = useState(PAGE_SIZE);
@@ -633,6 +633,15 @@ export default function CloseoutView() {
     )).sort();
 
     const cols: QueueColumn<QueueRow>[] = [];
+
+    // Actions FIRST — hardcoded sticky-left utility column so Star /
+    // Notes / Review / Release / Flag stay anchored as the rest of
+    // the table scrolls horizontally. (Render function is defined
+    // below alongside the other columns; we push the row order
+    // explicitly here.)
+    // (The actual push call lives further down; see the actions
+    //  branch at the end. We mark a placeholder here so the column
+    //  ends up first in the pin-left partition.)
 
     // age
     cols.push({
@@ -831,13 +840,15 @@ export default function CloseoutView() {
       },
     });
 
-    // Actions — non-sortable, non-filterable, hardcoded sticky-right
-    // at the far end so Star / Notes / Review / Release / Flag stay
+    // Actions — non-sortable, non-filterable, hardcoded sticky-LEFT
+    // at the far start so Star / Notes / Review / Release / Flag stay
     // accessible while the rest of the table scrolls horizontally.
     // No label per spec; not togglable in the Columns dropdown.
-    cols.push({
-      key: 'actions', label: '', width: 260, align: 'right',
-      pinRight: true,
+    // unshift instead of push so it lands FIRST in the visible column
+    // order — pin-left partition preserves input order.
+    cols.unshift({
+      key: 'actions', label: '', width: 260, align: 'left',
+      pinLeft: true,
       pinned: true,
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};

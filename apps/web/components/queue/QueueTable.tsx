@@ -275,22 +275,22 @@ export function QueueTable<R>({
   };
 
   // Sticky offsets:
-  //   leftOffsets — distance from left edge, accumulating across pinned-left columns
-  //   rightOffsets — distance from right edge, accumulating across pinned-right columns
-  //     The selection checkbox (when `selectable`) is implicitly the
-  //     RIGHTMOST pinned-right column at offset 0.
+  //   leftOffsets — distance from left edge, accumulating across
+  //     pinned-left columns. The selection checkbox (when
+  //     `selectable`) is implicitly the LEFTMOST pinned column at
+  //     offset 0; user pin-left columns start at offset 40.
+  //   rightOffsets — distance from right edge, accumulating across
+  //     pinned-right columns.
   const { leftOffsets, rightOffsets } = useMemo(() => {
     const left = new Map<string, number>();
     const right = new Map<string, number>();
-    let accL = 0;
+    let accL = selectable ? 40 : 0;
     for (const c of visibleColumns) {
       if (!isPinnedLeft(c)) continue;
       left.set(c.key, accL);
       accL += widthOf(c);
     }
-    // Right offsets — iterate in REVERSE visible order so the
-    // rightmost column gets offset 0, the next 1's width, etc.
-    let accR = selectable ? 40 : 0;
+    let accR = 0;
     for (let i = visibleColumns.length - 1; i >= 0; i--) {
       const c = visibleColumns[i];
       if (!isPinnedRight(c)) continue;
@@ -326,15 +326,30 @@ export function QueueTable<R>({
           borderSpacing: 0, width: totalWidth, minWidth: '100%',
         }}>
           <colgroup>
-            {visibleColumns.map(c => <col key={c.key} style={{ width: widthOf(c) }} />)}
-            {/* Select column goes at the END so it sticks to the right. */}
+            {/* Select column is the leftmost pinned-left column when present. */}
             {selectable ? <col style={{ width: 40 }} /> : null}
+            {visibleColumns.map(c => <col key={c.key} style={{ width: widthOf(c) }} />)}
           </colgroup>
 
           {/* Sticky header — two rows: titles, filters */}
           <thead>
             {/* Title row */}
             <tr>
+              {selectable ? (
+                <th style={{
+                  ...stHeaderCell,
+                  textAlign: 'center',
+                  position: 'sticky', top: 0, left: 0, zIndex: 30,
+                  background: 'var(--gc-surface)',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={!!allOnPageSelected}
+                    onChange={toggleAllOnPage}
+                    style={{ cursor: 'pointer' }}
+                  />
+                </th>
+              ) : null}
               {visibleColumns.map(c => {
                 const w = widthOf(c);
                 const active = sort.key === c.key;
@@ -383,26 +398,16 @@ export function QueueTable<R>({
                   </th>
                 );
               })}
-              {selectable ? (
-                <th style={{
-                  ...stHeaderCell,
-                  textAlign: 'center',
-                  position: 'sticky', top: 0, right: 0, zIndex: 30,
-                  background: 'var(--gc-surface)',
-                  boxShadow: '-2px 0 4px -2px rgba(0,0,0,0.08)',
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={!!allOnPageSelected}
-                    onChange={toggleAllOnPage}
-                    style={{ cursor: 'pointer' }}
-                  />
-                </th>
-              ) : null}
             </tr>
             {/* Filter row — only if any column has a filter spec */}
             {visibleColumns.some(c => c.filter) || selectable ? (
               <tr>
+                {selectable ? (
+                  <th style={{
+                    ...stFilterCell, position: 'sticky', top: 36, left: 0, zIndex: 29,
+                    background: 'var(--gc-surface)',
+                  }} />
+                ) : null}
                 {visibleColumns.map(c => {
                   const lpx = stickyLeftPx(c);
                   const rpx = stickyRightPx(c);
@@ -433,13 +438,6 @@ export function QueueTable<R>({
                     </th>
                   );
                 })}
-                {selectable ? (
-                  <th style={{
-                    ...stFilterCell, position: 'sticky', top: 36, right: 0, zIndex: 29,
-                    background: 'var(--gc-surface)',
-                    boxShadow: '-2px 0 4px -2px rgba(0,0,0,0.08)',
-                  }} />
-                ) : null}
               </tr>
             ) : null}
           </thead>
@@ -468,6 +466,19 @@ export function QueueTable<R>({
                     style={{
                       cursor: onRowClick ? 'pointer' : 'default',
                     }}>
+                    {selectable ? (
+                      <td style={{
+                        ...stBodyCell,
+                        textAlign: 'center',
+                        position: 'sticky', left: 0, zIndex: 5,
+                        background: rowBg ?? 'inherit',
+                      }} onClick={e => e.stopPropagation()}>
+                        <input type="checkbox"
+                          checked={!!selected?.has(id)}
+                          onChange={() => toggleOne(id)}
+                          style={{ cursor: 'pointer' }} />
+                      </td>
+                    ) : null}
                     {visibleColumns.map(c => {
                       const lpx = stickyLeftPx(c);
                       const rpx = stickyRightPx(c);
@@ -489,20 +500,6 @@ export function QueueTable<R>({
                         </td>
                       );
                     })}
-                    {selectable ? (
-                      <td style={{
-                        ...stBodyCell,
-                        textAlign: 'center',
-                        position: 'sticky', right: 0, zIndex: 5,
-                        background: rowBg ?? 'inherit',
-                        boxShadow: '-2px 0 4px -2px rgba(0,0,0,0.08)',
-                      }} onClick={e => e.stopPropagation()}>
-                        <input type="checkbox"
-                          checked={!!selected?.has(id)}
-                          onChange={() => toggleOne(id)}
-                          style={{ cursor: 'pointer' }} />
-                      </td>
-                    ) : null}
                   </tr>
                 );
               })
