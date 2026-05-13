@@ -142,12 +142,15 @@ interface CalendarStore extends ModalState {
   removeAssetCategory: (name: string) => void;
   reorderAssetCategories: (fromIdx: number, toIdx: number) => void;
 
-  addAsset: (asset: Omit<Asset, 'id'>) => void;
+  addAsset: (asset: Omit<Asset, 'id'>) => Promise<number>;
   updateAsset: (id: number, updates: Partial<Omit<Asset, 'id'>>) => void;
   removeAsset: (id: number) => void;
   reorderAssets: (fromId: number, toId: number) => void;
 
-  addDriver: (name: string) => void;
+  /** Create a driver. Accepts either a bare name (legacy) or a full
+   *  Partial<Driver> with every profile field populated. Returns the
+   *  server-assigned id once the row lands. */
+  addDriver: (input: string | Partial<Omit<Driver, 'id'>>) => Promise<number>;
   updateDriver: (id: number, updates: Partial<Omit<Driver, 'id'>>) => void;
   removeDriver: (id: number) => void;
   setDriverPref: (assetId: number, driverId: number | null) => void;
@@ -690,27 +693,34 @@ export const useCalendarStore = create<CalendarStore>()(
     }),
 
   // ── Assets ────────────────────────────────────────────────────────────────
-  addAsset: (asset) => {
-    if (get().isDemo) return;
+  addAsset: async (asset) => {
+    if (get().isDemo) return -1;
     const tempId = -Date.now();
     set((state) => ({ assets: [...state.assets, { ...asset, id: tempId }] }));
     const { orgId } = get();
-    if (!orgId) return;
-    railway.createAsset({
-      name:            asset.name,
-      color:           asset.color,
-      type:            asset.type,
-      unit:            asset.unit             ?? null,
-      truck:           asset.truck            ?? null,
-      notes:           asset.notes            ?? null,
-      hidden:          asset.hidden           ?? false,
-      motiveVehicleId: asset.motiveVehicleId  ?? null,
-      sortOrder:       get().assets.length - 1,
-    }).then(({ asset: created }) => {
+    if (!orgId) return tempId;
+    try {
+      const { asset: created } = await railway.createAsset({
+        name:            asset.name,
+        color:           asset.color,
+        type:            asset.type,
+        unit:            asset.unit             ?? null,
+        truck:           asset.truck            ?? null,
+        notes:           asset.notes            ?? null,
+        hidden:          asset.hidden           ?? false,
+        motiveVehicleId: asset.motiveVehicleId  ?? null,
+        sortOrder:       get().assets.length - 1,
+      });
       set((state) => ({
         assets: state.assets.map((a) => a.id === tempId ? { ...created } : a),
       }));
-    }).catch((err) => console.error('addAsset:', err));
+      return created.id;
+    } catch (err) {
+      console.error('addAsset:', err);
+      // Roll back the optimistic insert if the server call failed.
+      set((state) => ({ assets: state.assets.filter((a) => a.id !== tempId) }));
+      throw err;
+    }
   },
 
   updateAsset: (id, updates) => {
@@ -773,17 +783,58 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   // ── Drivers ───────────────────────────────────────────────────────────────
-  addDriver: (name) => {
-    if (get().isDemo) return;
+  addDriver: async (input) => {
+    if (get().isDemo) return -1;
+    // Normalize bare-name (legacy) calls into the full shape.
+    const payload: Partial<Omit<Driver, 'id'>> = typeof input === 'string'
+      ? { name: input }
+      : input;
     const tempId = -Date.now();
-    set((state) => ({ drivers: [...state.drivers, { id: tempId, name }] }));
-    railway.createDriver({ name })
-      .then(({ driver }) => {
+    // Optimistic insert so the UI sees the row instantly. Real id
+    // arrives a tick later from the server.
+    const draftDriver: Driver = {
+      id:   tempId,
+      name: payload.name ?? '',
+      ...(payload.firstName      != null ? { firstName:      payload.firstName      } : {}),
+      ...(payload.lastName       != null ? { lastName:       payload.lastName       } : {}),
+      ...(payload.phone          != null ? { phone:          payload.phone          } : {}),
+      ...(payload.email          != null ? { email:          payload.email          } : {}),
+      ...(payload.address        != null ? { address:        payload.address        } : {}),
+      ...(payload.notes          != null ? { notes:          payload.notes          } : {}),
+      ...(payload.licenseNumber  != null ? { licenseNumber:  payload.licenseNumber  } : {}),
+      ...(payload.licenseState   != null ? { licenseState:   payload.licenseState   } : {}),
+      ...(payload.licenseExp     != null ? { licenseExp:     payload.licenseExp     } : {}),
+      ...(payload.medicalCardExp != null ? { medicalCardExp: payload.medicalCardExp } : {}),
+      ...(payload.dob            != null ? { dob:            payload.dob            } : {}),
+    };
+    set((state) => ({ drivers: [...state.drivers, draftDriver] }));
+    try {
+      const { driver } = await railway.createDriver(payload as { name: string });
+      // Replace temp with real row. If the create succeeded but
+      // payload included optional fields, follow up with an update
+      // so they hit the DB (createDriver only persists name today).
+      const realId = driver.id;
+      set((state) => ({
+        drivers: state.drivers.map((d) => d.id === tempId ? { ...driver } : d),
+      }));
+      // Persist the rest of the fields via updateDriver so the server
+      // catches up. addDriver in the store already accepts the same
+      // Partial<Driver> shape on the wire.
+      const rest: Partial<Omit<Driver, 'id'>> = { ...payload };
+      delete (rest as { name?: string }).name;
+      if (Object.keys(rest).length > 0) {
+        await railway.updateDriver(realId, rest);
         set((state) => ({
-          drivers: state.drivers.map((d) => d.id === tempId ? { ...driver } : d),
+          drivers: state.drivers.map((d) => d.id === realId ? { ...d, ...rest } : d),
         }));
-      })
-      .catch((err) => console.error('addDriver:', err));
+      }
+      return realId;
+    } catch (err) {
+      console.error('addDriver:', err);
+      // Roll back the optimistic insert.
+      set((state) => ({ drivers: state.drivers.filter((d) => d.id !== tempId) }));
+      throw err;
+    }
   },
 
   updateDriver: (id, updates) => {

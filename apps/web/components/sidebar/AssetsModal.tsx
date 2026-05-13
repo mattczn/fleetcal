@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { X, Truck, Clock, Plus, Check, Trash2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { PRESET_COLORS } from '@/lib/asset-colors';
+import LoadHistorySection from './LoadHistorySection';
 import type { Asset, CalendarEvent, Driver } from '@/lib/types';
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
@@ -40,24 +41,29 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
       ? initialAssetId
       : (assets.length > 0 ? assets[0].id : -1)
   );
-  const [showAdd,  setShowAdd]  = useState(false);
-  const [addName,  setAddName]  = useState('');
+  const [adding, setAdding] = useState(false);
 
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    const name = addName.trim();
-    if (!name) return;
-    const newId = Math.max(0, ...assets.map(a => a.id)) + 1;
-    addAsset({
-      name,
-      color: PRESET_COLORS[assets.length % PRESET_COLORS.length],
-      type: assetCategories[0] ?? 'OTR',
-      hidden: false,
-      sortOrder: 0,
-    });
-    setSelected(newId);
-    setAddName('');
-    setShowAdd(false);
+  // Click + Add Asset → create a placeholder asset server-side and
+  // select it. AssetProfilePanel opens with empty fields; user fills
+  // them in and they auto-save on blur. To discard, click Delete at
+  // the bottom of the profile panel.
+  const handleAdd = async () => {
+    if (adding) return;
+    setAdding(true);
+    try {
+      const newId = await addAsset({
+        name:  '',
+        color: PRESET_COLORS[assets.length % PRESET_COLORS.length],
+        type:  assetCategories[0] ?? 'OTR',
+        hidden: false,
+        sortOrder: 0,
+      });
+      setSelected(newId);
+    } catch (err) {
+      console.error('add asset failed:', err);
+    } finally {
+      setAdding(false);
+    }
   };
 
   const selectedAsset = assets.find(a => a.id === selected) ?? null;
@@ -108,7 +114,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
-              {assets.length === 0 && !showAdd && (
+              {assets.length === 0 && (
                 <p className="text-xs px-2 py-2" style={{ color: 'var(--gc-text-3)' }}>
                   No assets yet.
                 </p>
@@ -122,46 +128,16 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
                 />
               ))}
 
-              {showAdd ? (
-                <form onSubmit={handleAdd} className="flex items-center gap-1 mt-1 px-2 py-1">
-                  <input
-                    autoFocus
-                    type="text"
-                    value={addName}
-                    onChange={e => setAddName(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Escape') { setShowAdd(false); setAddName(''); } }}
-                    placeholder="Asset name…"
-                    className="flex-1 text-sm outline-none rounded-md px-2 py-1.5"
-                    style={{
-                      border: '1px solid var(--gc-blue)',
-                      color: 'var(--gc-text-1)',
-                      background: 'var(--gc-surface)',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                  <button type="submit" disabled={!addName.trim()}
-                    className="p-1.5 rounded-md disabled:opacity-40"
-                    style={{ color: 'white', background: 'var(--gc-blue)' }}>
-                    <Check size={13} />
-                  </button>
-                  <button type="button" onClick={() => { setShowAdd(false); setAddName(''); }}
-                    className="p-1.5 rounded-md transition-colors" style={{ color: 'var(--gc-text-3)' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                    <X size={13} />
-                  </button>
-                </form>
-              ) : (
-                <button
-                  onClick={() => setShowAdd(true)}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold mt-1 transition-colors"
-                  style={{ color: 'var(--gc-blue)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <Plus size={13} />
-                  Add Asset
-                </button>
-              )}
+              <button
+                onClick={() => void handleAdd()}
+                disabled={adding}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold mt-1 transition-colors disabled:opacity-50"
+                style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
+                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                <Plus size={13} />
+                {adding ? 'Adding…' : 'Add Asset'}
+              </button>
             </div>
           </div>
 
@@ -277,10 +253,9 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
   const blurBorder  = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     (e.currentTarget.style.borderColor = 'var(--gc-border)');
 
-  const recentLoads = events
-    .filter(ev => ev.assetId === asset.id)
-    .sort((a, b) => b.start.localeCompare(a.start))
-    .slice(0, 10);
+  // Loads attached to this asset. LoadHistorySection handles
+  // sort/group/clip; pass the full unsliced list.
+  const assetLoads = events.filter(ev => ev.assetId === asset.id);
 
   return (
     <div className="px-8 py-7">
@@ -442,62 +417,15 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         </PField>
       </div>
 
-      {/* Recent loads */}
-      <div>
-        <div className="text-[10px] font-bold uppercase tracking-widest mb-3"
-          style={{ color: 'var(--gc-text-3)' }}>
-          Recent Loads
-        </div>
-
-        {recentLoads.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-8 rounded-xl"
-            style={{ border: '1px dashed var(--gc-border-light)' }}>
-            <Clock size={22} style={{ color: 'var(--gc-text-3)', opacity: 0.45 }} />
-            <span className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No loads found for this asset</span>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {recentLoads.map(ev => {
-              const [y, m, d] = ev.start.split('T')[0].split('-').map(Number);
-              const dateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', {
-                month: 'short', day: 'numeric', year: 'numeric',
-              });
-              const sm = STATUS_META[ev.status ?? 'scheduled'] ?? STATUS_META.scheduled;
-              const driver = ev.driverName
-                ? drivers.find(dr => dr.name === ev.driverName)
-                : null;
-              const driverLabel = driver
-                ? (`${driver.firstName ?? ''} ${driver.lastName ?? ''}`.trim() || driver.name)
-                : ev.driverName;
-              return (
-                <div key={ev.id}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl transition-colors"
-                  style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)', cursor: 'pointer' }}
-                  onClick={() => openEditModal(ev.id)}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
-                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset.color }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                      {ev.title}
-                    </div>
-                    <div className="text-xs mt-0.5 flex items-center gap-2"
-                      style={{ color: 'var(--gc-text-3)' }}>
-                      <span>{dateStr}</span>
-                      {driverLabel && <span>· {driverLabel}</span>}
-                      {ev.loadNum && <span>· #{ev.loadNum}</span>}
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg shrink-0"
-                    style={{ color: sm.color, background: sm.bg }}>
-                    {sm.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* Recent loads — In Progress / Upcoming / Completed with search.
+          Same structure as BrokerProfileModal's load history surface. */}
+      <LoadHistorySection
+        loads={assetLoads}
+        assets={[asset]}
+        onSelect={openEditModal}
+        heading="Loads"
+        emptyLabel="No loads found for this asset"
+      />
 
       {/* Delete */}
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>

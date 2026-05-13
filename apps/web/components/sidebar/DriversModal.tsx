@@ -9,6 +9,7 @@ import {
   type PayrollRecord,
 } from '@/lib/db';
 import { printPayroll, fmtDate } from '@/lib/payrollPdf';
+import LoadHistorySection from './LoadHistorySection';
 import type { Driver, CalendarEvent, Asset } from '@/lib/types';
 
 const ACCENT = '#1a73e8';
@@ -96,18 +97,24 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
   const [selected, setSelected] = useState<number | 'asset-prefs'>(
     initialDriverId ?? (drivers.length > 0 ? drivers[0].id : 'asset-prefs')
   );
-  const [addName, setAddName] = useState('');
-  const [showAdd, setShowAdd] = useState(false);
+  const [adding, setAdding] = useState(false);
 
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    const name = addName.trim();
-    if (!name) return;
-    const newId = Math.max(0, ...drivers.map(d => d.id)) + 1;
-    addDriver(name);
-    setSelected(newId);
-    setAddName('');
-    setShowAdd(false);
+  // Click + Add Driver → create an empty driver server-side, then
+  // select it so the existing DriverProfilePanel opens with blank
+  // fields. The user fills everything in and the fields auto-save on
+  // blur. To discard a draft, click the Delete button at the bottom
+  // of the profile panel (it removes the row).
+  const handleAdd = async () => {
+    if (adding) return;
+    setAdding(true);
+    try {
+      const newId = await addDriver({});
+      setSelected(newId);
+    } catch (err) {
+      console.error('add driver failed:', err);
+    } finally {
+      setAdding(false);
+    }
   };
 
   const handleRemove = (id: number) => {
@@ -166,7 +173,7 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
-              {drivers.length === 0 && !showAdd && (
+              {drivers.length === 0 && (
                 <p className="text-xs px-2 py-2" style={{ color: 'var(--gc-text-3)' }}>
                   No drivers yet.
                 </p>
@@ -181,46 +188,16 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
                 />
               ))}
 
-              {showAdd ? (
-                <form onSubmit={handleAdd} className="flex items-center gap-1 mt-1 px-2 py-1">
-                  <input
-                    autoFocus
-                    type="text"
-                    value={addName}
-                    onChange={e => setAddName(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Escape') { setShowAdd(false); setAddName(''); } }}
-                    placeholder="Full name…"
-                    className="flex-1 text-sm outline-none rounded-md px-2 py-1.5"
-                    style={{
-                      border: `1px solid ${ACCENT}`,
-                      color: 'var(--gc-text-1)',
-                      background: 'var(--gc-surface)',
-                      boxSizing: 'border-box',
-                    }}
-                  />
-                  <button type="submit" disabled={!addName.trim()}
-                    className="p-1.5 rounded-md disabled:opacity-40"
-                    style={{ color: 'white', background: ACCENT }}>
-                    <Check size={13} />
-                  </button>
-                  <button type="button" onClick={() => { setShowAdd(false); setAddName(''); }}
-                    className="p-1.5 rounded-md transition-colors" style={{ color: 'var(--gc-text-3)' }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                    <X size={13} />
-                  </button>
-                </form>
-              ) : (
-                <button
-                  onClick={() => setShowAdd(true)}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold mt-1 transition-colors"
-                  style={{ color: ACCENT }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <Plus size={13} />
-                  Add Driver
-                </button>
-              )}
+              <button
+                onClick={() => void handleAdd()}
+                disabled={adding}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold mt-1 transition-colors disabled:opacity-50"
+                style={{ color: ACCENT, background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
+                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                <Plus size={13} />
+                {adding ? 'Adding…' : 'Add Driver'}
+              </button>
             </div>
 
             {/* Asset Preferences nav item */}
@@ -395,10 +372,9 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
     updateDriver(driver.id, { [field]: value || undefined, ...(computed ? { name: computed } : {}) });
   };
 
-  const recentLoads = events
-    .filter(ev => ev.driverName === driver.name)
-    .sort((a, b) => b.start.localeCompare(a.start))
-    .slice(0, 10);
+  // Loads attached to this driver. The LoadHistorySection handles the
+  // sort/group/clip behavior so we pass the full unsliced list.
+  const driverLoads = events.filter(ev => ev.driverName === driver.name);
 
   // ── Documents ──
   // Load once per driver (the component remounts via `key` on driver
@@ -750,58 +726,15 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
         )}
       </div>
 
-      {/* Recent loads */}
-      <div>
-        <div className="text-[10px] font-bold uppercase tracking-widest mb-3"
-          style={{ color: 'var(--gc-text-3)' }}>
-          Recent Loads
-        </div>
-
-        {recentLoads.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-8 rounded-xl"
-            style={{ border: '1px dashed var(--gc-border-light)' }}>
-            <Clock size={22} style={{ color: 'var(--gc-text-3)', opacity: 0.45 }} />
-            <span className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No loads found for this driver</span>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {recentLoads.map(ev => {
-              const asset = assets.find(a => a.id === ev.assetId);
-              const [y, m, d] = ev.start.split('T')[0].split('-').map(Number);
-              const dateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', {
-                month: 'short', day: 'numeric', year: 'numeric',
-              });
-              const sm = STATUS_META[ev.status ?? 'scheduled'] ?? STATUS_META.scheduled;
-              return (
-                <div key={ev.id}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl transition-colors"
-                  style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)', cursor: 'pointer' }}
-                  onClick={() => openEditModal(ev.id)}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
-                  <div className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ background: asset?.color ?? '#9aa0a6' }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                      {ev.title}
-                    </div>
-                    <div className="text-xs mt-0.5 flex items-center gap-2"
-                      style={{ color: 'var(--gc-text-3)' }}>
-                      <span>{dateStr}</span>
-                      {asset && <span>· {asset.name}</span>}
-                      {ev.loadNum && <span>· #{ev.loadNum}</span>}
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg shrink-0"
-                    style={{ color: sm.color, background: sm.bg }}>
-                    {sm.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* Recent loads — In Progress / Upcoming / Completed with search.
+          Same structure as BrokerProfileModal's load history surface. */}
+      <LoadHistorySection
+        loads={driverLoads}
+        assets={assets}
+        onSelect={openEditModal}
+        heading="Loads"
+        emptyLabel="No loads found for this driver"
+      />
 
       {/* Pay History */}
       <div className="mt-8">
