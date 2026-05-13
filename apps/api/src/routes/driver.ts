@@ -35,7 +35,8 @@ const STOP_COLS =
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
-  "trailer_type,deleted_at,load_id,created_at,updated_at";
+  "trailer_type,deleted_at,load_id,created_at,updated_at," +
+  "confirmed_at,confirmed_by,confirm_reminder_sent_at";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
@@ -569,6 +570,8 @@ interface AuditEntry {
   documentDeleted?:  { fileName: string; kind: string };
   stopCheckedIn?:    { stopFacility?: string; stopType?: string; distanceMi?: number };
   stopCheckInUndone?: { stopFacility?: string; stopType?: string };
+  /** Driver tapped Confirm in the driver app — see POST /loads/:id/confirm. */
+  loadConfirmed?:    boolean;
 }
 
 async function appendAudit(
@@ -666,6 +669,52 @@ driver.patch("/loads/:id", async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+// POST /v1/driver/loads/:id/confirm — driver confirms an assigned load.
+// Sets events.confirmed_at = now() and events.confirmed_by = driver_id.
+// Idempotent: re-confirming the same load just returns ok with the
+// existing timestamp (we don't bump it; UI shows "Confirmed 2h ago"
+// type relative times against the first stamp).
+driver.post("/loads/:id/confirm", async (c) => {
+  const driverId   = c.get("driverId");
+  const orgId      = c.get("orgId");
+  const driverName = c.get("driverName");
+  const id         = c.req.param("id");
+
+  const found = await loadDriverEvent(id, driverId, orgId);
+  if (!found) return c.json({ error: "not_found" }, 404);
+  if (found.row === null) return c.json({ error: "forbidden", reason: found.reason }, 403);
+
+  // Fetch current confirmed_at so we can no-op idempotently.
+  const { data: stateRow } = await supabase
+    .from("events")
+    .select("confirmed_at")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const existing = (stateRow as { confirmed_at: string | null } | null)?.confirmed_at ?? null;
+  if (existing) {
+    return c.json({ ok: true, confirmedAt: existing });
+  }
+
+  const nowIso = new Date().toISOString();
+  const { error } = await supabase
+    .from("events")
+    .update({ confirmed_at: nowIso, confirmed_by: driverId } as never)
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (error) {
+    console.error("[POST /v1/driver/loads/:id/confirm] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message }, 500);
+  }
+
+  await appendAudit(id, orgId, {
+    changedAt: nowIso,
+    changedByName: driverName,
+    loadConfirmed: true,
+  });
+  return c.json({ ok: true, confirmedAt: nowIso });
 });
 
 // POST /v1/driver/stops/:id/check-in — record arrival at a stop. Body:

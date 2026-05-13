@@ -394,6 +394,12 @@ export interface LoadAuditEntry {
   };
   /** Set when a dispatcher reinstates a previously-cancelled load. */
   loadReinstated?: boolean;
+  /** Set when the driver taps "Confirm" in the driver app. The
+   *  `changedByName` field carries the driver's display name. */
+  loadConfirmed?: boolean;
+  /** Set when a manual "Send confirm push" was triggered from the load
+   *  modal — dispatcher-initiated nudge. */
+  confirmPushSent?: boolean;
   accessorialsChanged?: AccessorialChange[];
   prevStatus?: LoadStatus;
   newStatus?: LoadStatus;
@@ -542,6 +548,18 @@ export interface Load {
   /** events.deleted_at — set on soft-deleted events; populated by reads
    *  that include deleted rows (trash UI). */
   deletedAt?: string;
+
+  // ── Driver confirmation ────────────────────────────────────────────
+  /** events.confirmed_at — set when the driver taps "Confirm" in the
+   *  driver app. Cleared on reassignment so the new driver re-confirms. */
+  confirmedAt?: string;
+  /** events.confirmed_by — driver_id who confirmed. Survives until the
+   *  load is reassigned. */
+  confirmedBy?: number;
+  /** events.confirm_reminder_sent_at — stamped by the cron sweep when a
+   *  reminder push goes out. UI doesn't read this; cron uses it for
+   *  idempotency between sweep ticks. */
+  confirmReminderSentAt?: string;
 
   // ── Billing / POD verification workflow ─────────────────────────────
   /**

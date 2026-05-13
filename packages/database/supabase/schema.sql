@@ -134,6 +134,10 @@ CREATE TABLE events (
 
   -- 12h-before-start confirmation push reminder (sent once)
   confirm_reminder_sent_at timestamptz,
+  -- Driver-side confirmation (set by POST /v1/events/:id/confirm in the
+  -- driver app; cleared on reassignment).
+  confirmed_at         timestamptz,
+  confirmed_by         bigint REFERENCES drivers(id) ON DELETE SET NULL,
 
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now()
@@ -199,6 +203,21 @@ CREATE INDEX idx_events_org_driver  ON events(org_id, driver_id) WHERE driver_id
 CREATE INDEX idx_events_pending_confirm_reminder ON events(start)
   WHERE status = 'scheduled' AND deleted_at IS NULL
     AND driver_id IS NOT NULL AND confirm_reminder_sent_at IS NULL;
+CREATE INDEX idx_events_unconfirmed_by_start ON events(start)
+  WHERE confirmed_at IS NULL AND deleted_at IS NULL
+    AND driver_id IS NOT NULL
+    AND status IN ('scheduled', 'assigned', 'dispatched');
+
+-- Idempotency table for the 7 PM driver-local evening sweep. See
+-- migration 20260513_events_confirmed_at.sql for the full doc.
+CREATE TABLE driver_evening_sweeps (
+  org_id     text   NOT NULL,
+  driver_id  bigint NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+  local_date date   NOT NULL,
+  sent_at    timestamptz NOT NULL DEFAULT now(),
+  load_count int    NOT NULL DEFAULT 0,
+  PRIMARY KEY (org_id, driver_id, local_date)
+);
 
 -- ── Row Level Security ────────────────────────────────────
 -- Enable after setting up Clerk JWT template in Supabase.

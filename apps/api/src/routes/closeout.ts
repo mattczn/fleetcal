@@ -27,7 +27,8 @@ const closeout = new Hono<{ Variables: AuthVariables }>();
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
-  "trailer_type,deleted_at,load_id,created_at,updated_at";
+  "trailer_type,deleted_at,load_id,created_at,updated_at," +
+  "confirmed_at,confirmed_by,confirm_reminder_sent_at";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +

@@ -90,6 +90,9 @@ export function joinEventLoadToApp(
     createdAt:      (e.created_at as string | null) ?? undefined,
     deletedAt:      (e.deleted_at as string | null) ?? undefined,
     auditLog:       (e.audit_log as LoadAuditEntry[] | null | undefined) ?? undefined,
+    confirmedAt:           (e.confirmed_at as string | null) ?? undefined,
+    confirmedBy:           (e.confirmed_by as number | null) ?? undefined,
+    confirmReminderSentAt: (e.confirm_reminder_sent_at as string | null) ?? undefined,
 
     // ── Load-level (from loads row when revenue, else undefined) ────────
     loadId:         (l?.id as string | undefined) ?? undefined,

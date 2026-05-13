@@ -371,6 +371,9 @@ export type Database = {
           asset_id: number
           audit_log: Json | null
           broker: string | null
+          confirm_reminder_sent_at: string | null
+          confirmed_at: string | null
+          confirmed_by: number | null
           created_at: string
           created_by_name: string | null
           deleted_at: string | null
@@ -407,6 +410,9 @@ export type Database = {
           asset_id: number
           audit_log?: Json | null
           broker?: string | null
+          confirm_reminder_sent_at?: string | null
+          confirmed_at?: string | null
+          confirmed_by?: number | null
           created_at?: string
           created_by_name?: string | null
           deleted_at?: string | null
@@ -443,6 +449,9 @@ export type Database = {
           asset_id?: number
           audit_log?: Json | null
           broker?: string | null
+          confirm_reminder_sent_at?: string | null
+          confirmed_at?: string | null
+          confirmed_by?: number | null
           created_at?: string
           created_by_name?: string | null
           deleted_at?: string | null
