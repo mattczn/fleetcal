@@ -177,8 +177,12 @@ export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): P
       contactName:         c.contactName         ?? null,
       contactEmail:        c.contactEmail        ?? null,
       contactPhone:        c.contactPhone        ?? null,
+      contacts:            c.contacts            ?? [],
       notes:               c.notes               ?? null,
       parseHints:          c.parseHints          ?? null,
+      invoiceMethod:       c.invoiceMethod       ?? null,
+      invoiceEmail:        c.invoiceEmail        ?? null,
+      invoicePortal:       c.invoicePortal       ?? null,
       invoiceInstructions: c.invoiceInstructions ?? null,
     });
     return customer;
@@ -186,6 +190,12 @@ export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): P
 }
 
 export async function updateCustomer(id: string, updates: Partial<Omit<Customer, 'id'>>): Promise<void> {
+  // Whitelist of fields to forward. Every field that BrokerProfileModal
+  // (and other call sites) writes must be listed here — anything left
+  // out gets silently dropped before reaching the API, which has been
+  // the cause of "I saved this and it disappeared on refresh" bugs:
+  // local optimistic state shows the new value, the DB still holds the
+  // old one, and the next fetchCustomers wipes the change.
   const body = {
     ...(updates.name !== undefined         ? { name: updates.name } : {}),
     ...(updates.aliases !== undefined      ? { aliases: updates.aliases } : {}),
@@ -194,8 +204,12 @@ export async function updateCustomer(id: string, updates: Partial<Omit<Customer,
     ...(updates.contactName !== undefined  ? { contactName: updates.contactName ?? null } : {}),
     ...(updates.contactEmail !== undefined ? { contactEmail: updates.contactEmail ?? null } : {}),
     ...(updates.contactPhone !== undefined ? { contactPhone: updates.contactPhone ?? null } : {}),
+    ...(updates.contacts !== undefined            ? { contacts: updates.contacts ?? [] } : {}),
     ...(updates.notes !== undefined               ? { notes: updates.notes ?? null } : {}),
     ...(updates.parseHints !== undefined          ? { parseHints: updates.parseHints ?? null } : {}),
+    ...(updates.invoiceMethod !== undefined       ? { invoiceMethod: updates.invoiceMethod ?? null } : {}),
+    ...(updates.invoiceEmail !== undefined        ? { invoiceEmail: updates.invoiceEmail ?? null } : {}),
+    ...(updates.invoicePortal !== undefined       ? { invoicePortal: updates.invoicePortal ?? null } : {}),
     ...(updates.invoiceInstructions !== undefined ? { invoiceInstructions: updates.invoiceInstructions ?? null } : {}),
   };
   if (Object.keys(body).length === 0) return;
