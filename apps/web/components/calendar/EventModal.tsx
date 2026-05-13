@@ -2130,13 +2130,23 @@ export default function EventModal() {
   const handleCancelMarkStatus = () => {
     if (!modalEventId) return;
     const entry = buildCancelAuditEntry('status');
+    // Zero out rate + miles + driver pay so accounting and reports
+    // don't keep counting revenue for a load that never moved. The
+    // load record stays for search/history; the financial side reads
+    // as a true cancellation.
     updateEvent(modalEventId, {
       status: 'cancelled',
+      loadPrice: 0,
+      loadedMiles: 0,
+      driverPay: 0,
       auditLog: appendAuditEntry(auditLog, entry),
     });
     if (relayGroupId && relayPartner) {
       updateEvent(relayPartner.id, {
         status: 'cancelled',
+        loadPrice: 0,
+        loadedMiles: 0,
+        driverPay: 0,
         auditLog: appendAuditEntry(relayPartner.auditLog ?? [], entry),
       });
     }
@@ -2147,9 +2157,28 @@ export default function EventModal() {
     if (!modalEventId) return;
     if (relayGroupId && relayPartner) {
       // Drop the relay link on the partner first so it doesn't end
-      // up half-orphaned. Partner stays on the calendar as a normal
-      // single-leg load.
-      updateEvent(relayPartner.id, { ...relayPartner, relayGroupId: undefined, relayRole: undefined });
+      // up half-orphaned, and zero its financials too — the whole
+      // load is being cancelled.
+      updateEvent(relayPartner.id, {
+        ...relayPartner,
+        relayGroupId: undefined,
+        relayRole: undefined,
+        loadPrice: 0,
+        loadedMiles: 0,
+        driverPay: 0,
+      });
+    } else {
+      // Single-leg load: zero rate on the load record before the
+      // event row is deleted so the preserved load reads as cancelled.
+      const evNow = events.find(e => e.id === modalEventId);
+      if (evNow?.loadId) {
+        const loadId = evNow.loadId;
+        import('@/lib/railway').then(({ railway }) =>
+          railway.updateLoad(loadId, { loadPrice: 0 }),
+        ).catch((err) =>
+          console.error('handleCancelRemoveEvent: zero loadPrice failed', err),
+        );
+      }
     }
     cancelEventKeepLoad(modalEventId, buildCancelAuditEntry('remove-event'));
     setCancelDialogOpen(false);
