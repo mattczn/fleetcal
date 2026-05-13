@@ -39,7 +39,10 @@ import { fetchLoad, updateLoadStatus, updateLoadTrailer, checkInStop, undoCheckI
 import { railway } from "@/lib/railway";
 import { fetchDocuments } from "@/lib/api/documents";
 import { fetchOrgSettings } from "@/lib/api/orgSettings";
-import { needsConfirmation } from "@/lib/loadStatus";
+// needsConfirmation was the legacy 12h-out gate for the "Accept Load"
+// CTA. No longer used — Start Trip is always shown and Confirm replaces
+// the Accept step. The helper itself still lives in lib/loadStatus for
+// any other callers (e.g., schedule view's "needs action" badge).
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
 import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/RelayHandoffPhotos";
@@ -60,15 +63,20 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
+// "Accept Load" is gone — confirming the load IS accepting it. Both
+// scheduled and dispatched now jump directly to en_route on Start Trip.
+// The server stamps confirmed_at automatically when status advances
+// past 'scheduled' so the skip-confirm-and-go-straight-to-Start-Trip
+// path still records the acknowledgment.
 const STATUS_TRANSITIONS: Partial<Record<LoadStatus, LoadStatus>> = {
-  scheduled:  "dispatched",
+  scheduled:  "en_route",
   dispatched: "en_route",
   en_route:   "picked_up",
   picked_up:  "delivered",
 };
 
 const STATUS_CTA: Partial<Record<LoadStatus, string>> = {
-  scheduled:  "Accept Load",
+  scheduled:  "Start Trip",
   dispatched: "Start Trip",
   en_route:   "Mark Picked Up",
   picked_up:  "Mark Delivered",
@@ -785,11 +793,12 @@ export default function LoadDetailScreen() {
     );
   }
 
-  const needsAction = needsConfirmation(load);
-  // For scheduled loads, only show Accept Load CTA inside the 12h confirmation window.
-  const ctaActive   = load.status !== "scheduled" || needsAction;
-  const nextStatus  = ctaActive ? STATUS_TRANSITIONS[load.status] : undefined;
-  const ctaLabel    = ctaActive ? STATUS_CTA[load.status]         : undefined;
+  // Start Trip is always available — even on scheduled loads — so a
+  // driver who skipped the green Confirm banner can still launch the
+  // trip. The server stamps confirmed_at automatically on the status
+  // advance, so dispatch sees the acknowledgment either way.
+  const nextStatus  = STATUS_TRANSITIONS[load.status];
+  const ctaLabel    = STATUS_CTA[load.status];
 
   // First geocoded pickup stop — used to auto-fire picked_up on its check-in.
   const firstPickupStopId = load.stops.find((s) => s.type === "pickup")?.id;

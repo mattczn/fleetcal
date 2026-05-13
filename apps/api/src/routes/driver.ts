@@ -602,11 +602,14 @@ async function appendAudit(
 async function loadDriverEvent(eventId: string, driverId: number, orgId: string) {
   const { data, error } = await supabase
     .from("events")
-    .select("id, driver_id, org_id, status, trailer_id, deleted_at")
+    .select("id, driver_id, org_id, status, trailer_id, deleted_at, confirmed_at")
     .eq("id", eventId)
     .maybeSingle();
   if (error || !data) return null;
-  const row = data as { id: string; driver_id: number | null; org_id: string; status: string; trailer_id: number | null; deleted_at: string | null };
+  const row = data as {
+    id: string; driver_id: number | null; org_id: string; status: string;
+    trailer_id: number | null; deleted_at: string | null; confirmed_at: string | null;
+  };
   if (row.org_id !== orgId)        return { row: null, reason: "wrong_org"   as const };
   if (row.driver_id !== driverId)  return { row: null, reason: "not_driver"  as const };
   if (row.deleted_at)              return { row: null, reason: "deleted"     as const };
@@ -638,6 +641,18 @@ driver.patch("/loads/:id", async (c) => {
     return c.json({ error: "validation_failed", errors: ["nothing to update"] }, 400);
   }
 
+  // Auto-stamp confirmed_at when status advances past 'scheduled' and
+  // the driver never explicitly confirmed. Covers the "skip the green
+  // banner and just tap Start Trip" path. The two actions (Confirm
+  // and Start Trip) are now equivalent acknowledgments.
+  const POST_SCHEDULED = new Set(["dispatched", "en_route", "picked_up", "delivered"]);
+  const advancingPastScheduled =
+    body.status !== undefined && POST_SCHEDULED.has(body.status) && !prev.confirmed_at;
+  if (advancingPastScheduled) {
+    update.confirmed_at = new Date().toISOString();
+    update.confirmed_by = driverId;
+  }
+
   const { error } = await supabase
     .from("events")
     .update(update as never)
@@ -655,6 +670,10 @@ driver.patch("/loads/:id", async (c) => {
       changedByName: driverName,
       prevStatus:   prev.status,
       newStatus:    body.status,
+      // Note in the audit that this transition also stamped the
+      // confirmation (so the timeline doesn't make it look like two
+      // separate driver actions).
+      ...(advancingPastScheduled ? { loadConfirmed: true } : {}),
     });
   }
   if (body.trailerId !== undefined && body.trailerId !== prev.trailer_id) {
@@ -673,6 +692,10 @@ driver.patch("/loads/:id", async (c) => {
 
 // POST /v1/driver/loads/:id/confirm — driver confirms an assigned load.
 // Sets events.confirmed_at = now() and events.confirmed_by = driver_id.
+// Also advances status from 'scheduled' to 'dispatched' since Confirm
+// replaces the legacy "Accept Load" CTA — they're the same conceptual
+// action (driver acknowledges they're taking the load).
+//
 // Idempotent: re-confirming the same load just returns ok with the
 // existing timestamp (we don't bump it; UI shows "Confirmed 2h ago"
 // type relative times against the first stamp).
@@ -686,22 +709,33 @@ driver.post("/loads/:id/confirm", async (c) => {
   if (!found) return c.json({ error: "not_found" }, 404);
   if (found.row === null) return c.json({ error: "forbidden", reason: found.reason }, 403);
 
-  // Fetch current confirmed_at so we can no-op idempotently.
+  // Fetch current state so we can no-op idempotently AND know whether
+  // we still need to bump status (driver might tap Confirm after
+  // already starting the trip in some edge case).
   const { data: stateRow } = await supabase
     .from("events")
-    .select("confirmed_at")
+    .select("confirmed_at, status")
     .eq("id", id)
     .eq("org_id", orgId)
     .maybeSingle();
-  const existing = (stateRow as { confirmed_at: string | null } | null)?.confirmed_at ?? null;
-  if (existing) {
-    return c.json({ ok: true, confirmedAt: existing });
+  const existing = (stateRow as { confirmed_at: string | null; status: string } | null);
+  if (existing?.confirmed_at) {
+    return c.json({ ok: true, confirmedAt: existing.confirmed_at });
   }
 
   const nowIso = new Date().toISOString();
+  // Only advance status if it's still 'scheduled'. If the driver is
+  // already at en_route/picked_up/etc., leave it alone.
+  const willBumpStatus = existing?.status === "scheduled";
+  const update: Record<string, unknown> = {
+    confirmed_at: nowIso,
+    confirmed_by: driverId,
+  };
+  if (willBumpStatus) update.status = "dispatched";
+
   const { error } = await supabase
     .from("events")
-    .update({ confirmed_at: nowIso, confirmed_by: driverId } as never)
+    .update(update as never)
     .eq("id", id)
     .eq("org_id", orgId);
   if (error) {
@@ -713,6 +747,7 @@ driver.post("/loads/:id/confirm", async (c) => {
     changedAt: nowIso,
     changedByName: driverName,
     loadConfirmed: true,
+    ...(willBumpStatus ? { prevStatus: "scheduled", newStatus: "dispatched" } : {}),
   });
   return c.json({ ok: true, confirmedAt: nowIso });
 });
