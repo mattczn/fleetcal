@@ -282,21 +282,21 @@ export default function NotifyDriverPopover({
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                      <span className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                         {action.label}
                       </span>
                       {ack && (
-                        <span className="text-[10px] font-bold" style={{ color: '#15803d' }}>
+                        <span className="text-[10px] font-extrabold" style={{ color: '#15803d' }}>
                           · done
                         </span>
                       )}
                       {!ack && isPending && (
-                        <span className="text-[10px] font-bold" style={{ color: '#92400e' }}>
+                        <span className="text-[10px] font-extrabold" style={{ color: '#92400e' }}>
                           · pending
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] leading-tight mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                    <div className="text-[11px] leading-tight mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
                       {action.description}
                     </div>
                   </div>
@@ -329,17 +329,17 @@ export default function NotifyDriverPopover({
 
           {/* History */}
           <div style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-            <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider"
-              style={{ color: 'var(--gc-text-3)' }}>
+            <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider"
+              style={{ color: 'var(--gc-text-1)' }}>
               Recent nudges
             </div>
             <div className="max-h-48 overflow-auto px-1 pb-2">
               {loading && !notifs ? (
                 <div className="flex items-center justify-center py-3">
-                  <Loader2 size={14} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
+                  <Loader2 size={14} className="animate-spin" style={{ color: 'var(--gc-text-1)' }} />
                 </div>
               ) : (notifs ?? []).length === 0 ? (
-                <div className="px-3 py-2 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                <div className="px-3 py-2 text-[11px]" style={{ color: 'var(--gc-text-1)' }}>
                   None sent yet.
                 </div>
               ) : (
@@ -352,16 +352,16 @@ export default function NotifyDriverPopover({
                       <Icon size={12} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span style={{ fontWeight: 700, color: 'var(--gc-text-1)' }}>
+                          <span style={{ fontWeight: 800, color: 'var(--gc-text-1)' }}>
                             {action?.label ?? n.kind}
                           </span>
                           {n.acknowledgedAt ? (
-                            <span style={{ color: '#15803d', fontWeight: 700 }}>· acknowledged</span>
+                            <span style={{ color: '#15803d', fontWeight: 800 }}>· acknowledged</span>
                           ) : (
-                            <span style={{ color: '#92400e', fontWeight: 700 }}>· pending</span>
+                            <span style={{ color: '#92400e', fontWeight: 800 }}>· pending</span>
                           )}
                         </div>
-                        <div style={{ color: 'var(--gc-text-3)' }}>
+                        <div style={{ color: 'var(--gc-text-1)' }}>
                           {relTime(n.sentAt)} · {n.sentByName}
                           {n.acknowledgedAt ? ` · acked ${relTime(n.acknowledgedAt)}` : ''}
                         </div>

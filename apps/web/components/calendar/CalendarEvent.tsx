@@ -204,13 +204,18 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             </div>
           )}
           {/* Driver-confirmed checkmark — bottom-right corner. Tucked
-              far enough from the status overlay strip to avoid overlap. */}
-          {event.confirmedAt && !isRelay && (
-            <div style={{ position: 'absolute', bottom: 16, right: 4, pointerEvents: 'none' }}
-              title="Confirmed by driver">
-              <CheckCircle2 size={28} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
-            </div>
-          )}
+              far enough from the status overlay strip to avoid overlap.
+              Scales with the card height so a tall multi-hour load gets
+              a chunky badge while a short 30-min load stays subtle. */}
+          {event.confirmedAt && !isRelay && (() => {
+            const checkSize = Math.min(22, Math.max(11, Math.round(height / 7)));
+            return (
+              <div style={{ position: 'absolute', bottom: 16, right: 4, pointerEvents: 'none' }}
+                title="Confirmed by driver">
+                <CheckCircle2 size={checkSize} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
+              </div>
+            );
+          })()}
           {/* Relay overlay — top-right corner */}
           {isRelay && (
             <div style={{
