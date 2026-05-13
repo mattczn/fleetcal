@@ -872,7 +872,7 @@ export default function CloseoutView() {
   const rowKey = useCallback((r: QueueRow) => r.id, []);
 
   return (
-    <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
+    <div className="flex-1 flex flex-col h-full min-w-0" style={{ background: 'var(--gc-bg)' }}>
       <ManagementHeader title="Closeout" icon={FileCheck2} />
       {/* Fixed-height content area — table claims the remaining space
           and scrolls inside its own viewport. Outer padding lives here. */}
