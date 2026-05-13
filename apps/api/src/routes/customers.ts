@@ -28,12 +28,27 @@ interface DbCustomerRow {
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
+  contacts: unknown;
   notes: string | null;
   parse_hints: string | null;
   invoice_method: string | null;
   invoice_email: string | null;
   invoice_portal: string | null;
   invoice_instructions: string | null;
+}
+
+import type { CustomerContact } from "@fleetcal/types";
+
+function parseContacts(raw: unknown): CustomerContact[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    .map((c) => ({
+      id:    typeof c.id === "string" ? c.id : crypto.randomUUID(),
+      name:  typeof c.name  === "string" ? c.name  : undefined,
+      email: typeof c.email === "string" ? c.email : undefined,
+      phone: typeof c.phone === "string" ? c.phone : undefined,
+    }));
 }
 
 function rowToCustomer(r: DbCustomerRow): Customer {
@@ -46,6 +61,7 @@ function rowToCustomer(r: DbCustomerRow): Customer {
     shortName:           r.short_name           ?? undefined,
     aliases:             r.aliases              ?? [],
     mcNum:               r.mc_num               ?? undefined,
+    contacts:            parseContacts(r.contacts),
     contactName:         r.contact_name         ?? undefined,
     contactEmail:        r.contact_email        ?? undefined,
     contactPhone:        r.contact_phone        ?? undefined,
@@ -58,7 +74,7 @@ function rowToCustomer(r: DbCustomerRow): Customer {
   };
 }
 
-const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions";
+const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,contacts,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions";
 
 customers.get("/", async (c) => {
   const orgId = c.get("orgId");
@@ -90,6 +106,7 @@ customers.post("/", async (c) => {
     contact_name:  body.contactName  ?? null,
     contact_email: body.contactEmail ?? null,
     contact_phone: body.contactPhone ?? null,
+    contacts:      body.contacts     ?? [],
     notes:                body.notes               ?? null,
     parse_hints:          body.parseHints          ?? null,
     // Default invoice_method to 'email' when the caller didn't pick
@@ -127,6 +144,7 @@ customers.patch("/:id", async (c) => {
   if ("contactName"  in body) update.contact_name  = body.contactName  ?? null;
   if ("contactEmail" in body) update.contact_email = body.contactEmail ?? null;
   if ("contactPhone" in body) update.contact_phone = body.contactPhone ?? null;
+  if ("contacts"     in body) update.contacts      = body.contacts     ?? [];
   if ("notes"               in body) update.notes                = body.notes               ?? null;
   if ("parseHints"          in body) update.parse_hints          = body.parseHints          ?? null;
   if ("invoiceMethod"       in body) update.invoice_method       = body.invoiceMethod       ?? null;

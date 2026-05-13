@@ -291,14 +291,32 @@ export interface OrgSettings {
 
 // ── Customer ────────────────────────────────────────────────────────────
 
+/** A single rep at a broker. Customers can have many of these — dispatchers
+ *  route different loads through different contacts and want all of them on
+ *  file. Phone-extension etc. lives in the phone string for now. */
+export interface CustomerContact {
+  /** Client-generated uuid. Stable list key for edit/delete UIs. */
+  id:    string;
+  name?: string;
+  email?: string;
+  phone?: string;
+}
+
 export interface Customer {
   id: string;
   name: string;          // canonical display name
   shortName?: string;    // abbreviated name used in auto-generated load titles
   aliases: string[];     // alternative names the AI may extract from rate-cons
   mcNum?: string;
+  /** Multi-contact list. Empty array for new customers; legacy
+   *  contactName/Email/Phone are backfilled into the first entry by
+   *  migration 20260513_customers_contacts.sql. */
+  contacts: CustomerContact[];
+  /** @deprecated kept for read compat — new writes go to contacts[]. */
   contactName?: string;
+  /** @deprecated kept for read compat — new writes go to contacts[]. */
   contactEmail?: string;
+  /** @deprecated kept for read compat — new writes go to contacts[]. */
   contactPhone?: string;
   notes?: string;
   /**

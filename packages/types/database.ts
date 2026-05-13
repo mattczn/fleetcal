@@ -112,6 +112,7 @@ export type Database = {
           contact_email: string | null
           contact_name: string | null
           contact_phone: string | null
+          contacts: Json
           created_at: string | null
           id: string
           mc_num: string | null
@@ -130,6 +131,7 @@ export type Database = {
           contact_email?: string | null
           contact_name?: string | null
           contact_phone?: string | null
+          contacts?: Json
           created_at?: string | null
           id?: string
           mc_num?: string | null
@@ -148,6 +150,7 @@ export type Database = {
           contact_email?: string | null
           contact_name?: string | null
           contact_phone?: string | null
+          contacts?: Json
           created_at?: string | null
           id?: string
           mc_num?: string | null

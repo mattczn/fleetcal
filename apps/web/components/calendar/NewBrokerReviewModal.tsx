@@ -58,6 +58,7 @@ export function NewBrokerReviewModal({
       await onConfirm({
         name:                trimmedName,
         aliases:             [],
+        contacts:            [],
         shortName:           shortName.trim()            || undefined,
         contactName:         contactName.trim()          || undefined,
         contactEmail:        contactEmail.trim()         || undefined,

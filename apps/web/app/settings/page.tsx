@@ -2451,7 +2451,7 @@ function CustomersPanel() {
   async function handleAdd() {
     if (!form.name.trim()) return;
     setSaving(true);
-    await addCustomer({ name: form.name.trim(), aliases: [], mcNum: form.mcNum || undefined, contactName: form.contactName || undefined, contactEmail: form.contactEmail || undefined, contactPhone: form.contactPhone || undefined, notes: form.notes || undefined });
+    await addCustomer({ name: form.name.trim(), aliases: [], contacts: [], mcNum: form.mcNum || undefined, contactName: form.contactName || undefined, contactEmail: form.contactEmail || undefined, contactPhone: form.contactPhone || undefined, notes: form.notes || undefined });
     setForm(emptyForm); setAdding(false); setSaving(false);
   }
 

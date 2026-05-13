@@ -11,7 +11,7 @@
  */
 
 import type {
-  Accessorial, Asset, CheckCall, Customer, Dispatcher, Driver,
+  Accessorial, Asset, CheckCall, Customer, CustomerContact, Dispatcher, Driver,
   FuelReport, FuelReportMatchStatus,
   InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry,
   MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
@@ -497,6 +497,7 @@ export interface CreateCustomerRequest {
   contactName?:         string | null;
   contactEmail?:        string | null;
   contactPhone?:        string | null;
+  contacts?:            CustomerContact[];
   notes?:               string | null;
   parseHints?:          string | null;
   invoiceMethod?:       'email' | 'portal' | null;
@@ -513,6 +514,7 @@ export interface UpdateCustomerRequest {
   contactName?:         string | null;
   contactEmail?:        string | null;
   contactPhone?:        string | null;
+  contacts?:            CustomerContact[];
   notes?:               string | null;
   parseHints?:          string | null;
   invoiceMethod?:       'email' | 'portal' | null;
