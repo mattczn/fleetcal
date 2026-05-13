@@ -93,6 +93,34 @@ function CopyLabelBtn({ value }: { value: string }) {
   );
 }
 
+// Driver phone row under the driver picker. Click to copy. Brief
+// "Copied!" feedback for 1.5s; falls back to silent no-op if clipboard
+// API isn't available (very old Safari, etc.).
+function DriverPhoneCopy({ phone }: { phone: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = () => {
+    if (!navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(phone).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button type="button" onClick={onClick}
+      title="Click to copy"
+      className="mt-1.5 text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
+      style={{ color: copied ? '#15803d' : 'var(--gc-text-3)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+      <Phone size={11} />
+      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{phone}</span>
+      <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 4 }}>
+        {copied ? '✓ Copied' : 'Copy'}
+      </span>
+    </button>
+  );
+}
+
 const BLOCKED_REF_LABELS = new Set(['mc', 'dot', 'mc number', 'dot number', 'mc#', 'dot#', 'mc no', 'dot no']);
 const BLANK_REF_VALUES   = new Set(['', 'n/a', 'na', 'none', '-', '--', 'unknown', 'tbd', 'n/a.', 'not available']);
 
@@ -3703,12 +3731,7 @@ export default function EventModal() {
                 </StyledSelect>
                 {(() => {
                   const sel = driverName ? drivers.find(d => d.name === driverName) : null;
-                  return sel?.phone ? (
-                    <div className="mt-1.5 text-xs flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
-                      <Phone size={11} />
-                      <span>{sel.phone}</span>
-                    </div>
-                  ) : null;
+                  return sel?.phone ? <DriverPhoneCopy phone={sel.phone} /> : null;
                 })()}
               </Field>
             </div>
