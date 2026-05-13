@@ -4,15 +4,17 @@
  * Mirrors the web pattern: one small button slotted next to the
  * relay info. State is binary:
  *   - No photos yet → "Upload Handoff Photo" (purple-filled,
- *     opens the camera/library prompt and uploads as relay_handoff).
+ *     opens a file picker and uploads as relay_handoff). Uses
+ *     expo-document-picker (no native camera) since ops mostly
+ *     uploads photos a driver phoned in, not photos they take.
  *   - 1+ photos    → "View Handoff Photos (N)" (purple-outlined,
  *     calls onViewDocuments so the parent can switch tabs to the
  *     existing Documents viewer).
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, TouchableOpacity, Text } from "react-native";
-import { Camera, Image as ImageIcon } from "lucide-react-native";
-import * as ImagePicker from "expo-image-picker";
+import { Upload, Image as ImageIcon } from "lucide-react-native";
+import * as DocumentPicker from "expo-document-picker";
 import { railway } from "@/lib/railway";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -48,28 +50,20 @@ export function HandoffPhotosButton({ loadId, onViewDocuments }: Props) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  async function uploadFrom(source: "camera" | "library") {
+  async function uploadFile() {
     setBusy(true);
     try {
-      const perm = source === "camera"
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert("Permission needed", "Enable access in Settings.");
-        return;
-      }
-      const res = source === "camera"
-        ? await ImagePicker.launchCameraAsync({ quality: 0.85 })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            quality: 0.85, allowsMultipleSelection: false,
-          });
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ["image/*"],
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
       if (res.canceled) return;
-      const a = res.assets[0];
-      if (!a) return;
+      const asset = res.assets?.[0];
+      if (!asset) return;
       const form = new FormData();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      form.append("file", { uri: a.uri, name: a.fileName ?? `relay-${Date.now()}.jpg`, type: a.mimeType ?? "image/jpeg" } as any);
+      form.append("file", { uri: asset.uri, name: asset.name ?? `relay-${Date.now()}.jpg`, type: asset.mimeType ?? "image/jpeg" } as any);
       form.append("kind", "relay_handoff");
       await railway.uploadLoadDocument(loadId, form);
       await refresh();
@@ -80,24 +74,11 @@ export function HandoffPhotosButton({ loadId, onViewDocuments }: Props) {
     }
   }
 
-  function promptUpload() {
-    Alert.alert(
-      "Add Relay Handoff Photo",
-      "Trailer location, paperwork — leave it for the relay drivers.",
-      [
-        { text: "Take Photo",          onPress: () => void uploadFrom("camera") },
-        { text: "Choose from Library", onPress: () => void uploadFrom("library") },
-        { text: "Cancel", style: "cancel" },
-      ],
-      { cancelable: true },
-    );
-  }
-
   const hasPhotos = (count ?? 0) > 0;
 
   return (
     <TouchableOpacity
-      onPress={hasPhotos && onViewDocuments ? onViewDocuments : promptUpload}
+      onPress={hasPhotos && onViewDocuments ? onViewDocuments : uploadFile}
       activeOpacity={0.8}
       disabled={busy || count === null}
       style={{
@@ -119,7 +100,7 @@ export function HandoffPhotosButton({ loadId, onViewDocuments }: Props) {
       ) : hasPhotos ? (
         <ImageIcon size={14} color="#6b21a8" strokeWidth={2.4} />
       ) : (
-        <Camera size={14} color="#fff" strokeWidth={2.4} />
+        <Upload size={14} color="#fff" strokeWidth={2.4} />
       )}
       <Text style={[txt(700), { fontSize: 13, color: hasPhotos ? "#6b21a8" : "#fff", letterSpacing: 0.2 }]}>
         {busy
@@ -133,4 +114,3 @@ export function HandoffPhotosButton({ loadId, onViewDocuments }: Props) {
     </TouchableOpacity>
   );
 }
-
