@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
-import { MapPin, Truck, ChevronRight, Container, AlertTriangle } from "lucide-react-native";
+import { MapPin, Truck, ChevronRight, Container, AlertTriangle, Bell } from "lucide-react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { Load, Stop } from "@/lib/types";
 import { needsConfirmation } from "@/lib/loadStatus";
@@ -69,6 +69,10 @@ export function LoadCard({ load }: Props) {
   const isRelayDelivery = load.relayRole === "delivery";
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
+  // Pending dispatcher nudges — populated by the loads list endpoint
+  // from load_notifications WHERE acknowledged_at IS NULL.
+  const pendingNudges = load.pendingNotificationKinds ?? [];
+  const pendingCount  = pendingNudges.length;
   // "Delivered without paperwork" warning. POD is the canonical
   // billing doc; we surface a chip on the card so the driver sees it
   // before opening the load. Skip:
@@ -108,16 +112,28 @@ export function LoadCard({ load }: Props) {
       }}
     >
       <View style={{ flexDirection: "row" }}>
-        <View style={{ width: 4, backgroundColor: missingPaperwork ? "#d97706" : needsAction ? "#dc2626" : "#1a73e8" }} />
+        <View style={{ width: 4, backgroundColor: pendingCount > 0 ? "#dc2626" : missingPaperwork ? "#d97706" : needsAction ? "#dc2626" : "#1a73e8" }} />
 
         <View style={{ flex: 1, padding: 14 }}>
           {isNonRev ? <DiagonalStripes /> : null}
 
-          {/* Title row — title + relay/non-rev chips */}
+          {/* Title row — title + relay/non-rev chips + pending nudges */}
           <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
             <Text style={[txt(800), { fontSize: 15, color: "#202124", flex: 1, lineHeight: 20 }]} numberOfLines={2}>
               {load.title}
             </Text>
+            {pendingCount > 0 ? (
+              <View style={{
+                flexDirection: "row", alignItems: "center", gap: 4,
+                paddingHorizontal: 8, paddingVertical: 3,
+                borderRadius: 999, backgroundColor: "#dc2626",
+              }}>
+                <Bell size={11} color="#ffffff" strokeWidth={2.6} />
+                <Text style={[txt(800), { fontSize: 11, color: "#ffffff" }]}>
+                  {pendingCount}
+                </Text>
+              </View>
+            ) : null}
             {isNonRev ? <NonRevChip size="small" /> : null}
             {load.relayRole ? <RelayChip role={load.relayRole} size="small" /> : null}
           </View>

@@ -974,6 +974,42 @@ export default function LoadDetailScreen() {
       >
       {/* Stops tab — route map + timeline */}
       <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
+        {/* Pending dispatcher nudges — surfaces every kind the dispatcher
+            has asked for that's still unacknowledged. Driver sees a
+            clear list of what's needed without having to remember the
+            push. Pulls from load_notifications via the loads endpoint. */}
+        {(() => {
+          const pending = load.pendingNotificationKinds ?? [];
+          // The Confirm banner below already prompts for confirm kind,
+          // so suppress it from this summary to avoid duplication.
+          const remaining = pending.filter(k => k !== "confirm");
+          if (remaining.length === 0) return null;
+          const KIND_LABEL: Record<string, string> = {
+            mark_pickup:    "Check in at pickup",
+            mark_delivery:  "Check in at delivery + upload POD",
+            upload_pod:     "Upload POD",
+            report_trailer: "Report trailer",
+          };
+          return (
+            <View style={{
+              backgroundColor: "#fff7ed",
+              borderRadius: 12,
+              borderWidth: 1, borderColor: "#fdba74",
+              paddingVertical: 12, paddingHorizontal: 14,
+              marginBottom: 14,
+            }}>
+              <Text style={[txt(800), { fontSize: 13, color: "#9a3412", marginBottom: 4 }]}>
+                Dispatcher asked you to:
+              </Text>
+              {remaining.map((k) => (
+                <Text key={k} style={[txt(600), { fontSize: 13, color: "#9a3412", lineHeight: 18 }]}>
+                  • {KIND_LABEL[k] ?? k}
+                </Text>
+              ))}
+            </View>
+          );
+        })()}
+
         {/* Confirm banner — only shown for unconfirmed assigned loads.
             Lets the driver acknowledge an upcoming load without yet
             advancing the status (e.g., the 7 PM evening sweep prompts

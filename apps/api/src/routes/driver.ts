@@ -311,11 +311,30 @@ driver.get("/loads", async (c) => {
     }
   }
 
+  // Pending dispatcher nudges per event, used for the driver-app badge.
+  // Single batched query for the visible page.
+  const pendingByEvent = new Map<string, string[]>();
+  if (eventIds.length > 0) {
+    const { data: notifs } = await supabase
+      .from("load_notifications")
+      .select("event_id, kind")
+      .in("event_id", eventIds)
+      .is("acknowledged_at", null);
+    for (const n of (notifs ?? []) as Array<{ event_id: string; kind: string }>) {
+      const arr = pendingByEvent.get(n.event_id) ?? [];
+      arr.push(n.kind);
+      pendingByEvent.set(n.event_id, arr);
+    }
+  }
+
   const loads = buildLoads(rows, stopsByEvent, assetsById, trailersById);
   for (const l of loads) {
-    if (!l.loadId) continue;
-    const counts = countsByLoad.get(l.loadId);
-    if (counts) l.documentCounts = counts;
+    if (l.loadId) {
+      const counts = countsByLoad.get(l.loadId);
+      if (counts) l.documentCounts = counts;
+    }
+    const pending = pendingByEvent.get(l.id);
+    if (pending && pending.length > 0) l.pendingNotificationKinds = pending;
   }
   return c.json({ loads });
 });
@@ -416,6 +435,17 @@ driver.get("/loads/:id", async (c) => {
       }
       load.documentCounts = counts;
     }
+  }
+
+  // Pending dispatcher nudges — drives the load-detail banner.
+  const { data: pending } = await supabase
+    .from("load_notifications")
+    .select("kind")
+    .eq("event_id", id)
+    .eq("org_id", orgId)
+    .is("acknowledged_at", null);
+  if (pending && pending.length > 0) {
+    load.pendingNotificationKinds = (pending as Array<{ kind: string }>).map(p => p.kind);
   }
 
   return c.json({ load });

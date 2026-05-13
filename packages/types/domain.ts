@@ -560,6 +560,10 @@ export interface Load {
    *  reminder push goes out. UI doesn't read this; cron uses it for
    *  idempotency between sweep ticks. */
   confirmReminderSentAt?: string;
+  /** Unacknowledged dispatcher nudges currently pending for this event.
+   *  Populated by the driver-side loads list endpoint and used to badge
+   *  the load card. Array of kinds — count is the array length. */
+  pendingNotificationKinds?: string[];
 
   // ── Billing / POD verification workflow ─────────────────────────────
   /**
