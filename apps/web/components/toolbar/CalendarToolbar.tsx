@@ -785,7 +785,7 @@ export default function CalendarToolbar() {
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
-              className="px-3 py-1 rounded-lg text-[13px] font-medium transition-all capitalize"
+              className="px-3 py-1 rounded-full text-[13px] font-medium transition-all capitalize"
               style={{
                 background: viewMode === mode ? 'var(--gc-surface)' : 'transparent',
                 color:      viewMode === mode ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
