@@ -756,18 +756,25 @@ driver.patch("/loads/:id", async (c) => {
   }
 
   // Audit each kind of change separately so the timeline reads cleanly.
-  if (body.status !== undefined && body.status !== prev.status) {
+  // Driver-side picked_up / delivered transitions are logged to
+  // check_calls instead (see recordDriverCheckCall below), so we skip
+  // those here to keep the history panel focused on dispatcher-only
+  // edits + trailer / document changes. en_route + dispatched still
+  // log so the history shows when the trip kicked off.
+  const logToAudit =
+    body.status !== undefined &&
+    body.status !== prev.status &&
+    body.status !== "picked_up" &&
+    body.status !== "delivered";
+  if (logToAudit) {
     await appendAudit(id, orgId, {
       changedAt:    new Date().toISOString(),
       changedByName: driverName,
       prevStatus:   prev.status,
       newStatus:    body.status,
-      // Note in the audit that this transition also stamped the
-      // confirmation (so the timeline doesn't make it look like two
-      // separate driver actions).
-      ...(advancingPastScheduled ? { loadConfirmed: true } : {}),
     });
-
+  }
+  if (body.status !== undefined && body.status !== prev.status) {
     // Auto-acknowledge any pending load_notifications that this status
     // transition satisfies. e.g., reaching picked_up acks both
     // 'mark_pickup' and any 'confirm' nudges (since picked_up implies
@@ -865,12 +872,10 @@ driver.post("/loads/:id/confirm", async (c) => {
     return c.json({ error: "update_failed", detail: error.message }, 500);
   }
 
-  await appendAudit(id, orgId, {
-    changedAt: nowIso,
-    changedByName: driverName,
-    loadConfirmed: true,
-    ...(willBumpStatus ? { prevStatus: "scheduled", newStatus: "dispatched" } : {}),
-  });
+  // Confirmation is logged to check_calls (see recordDriverCheckCall
+  // below), not the audit history. Dispatchers track in-flight driver
+  // actions in the check-calls panel; the history view is reserved
+  // for dispatcher-side edits + trailer / document changes.
 
   // Driver explicitly confirmed — ack any pending 'confirm' nudges
   // for this event so the dispatcher's pending-count drops to zero.
@@ -933,19 +938,11 @@ driver.post("/stops/:id/check-in", async (c) => {
     return c.json({ error: "update_failed", detail: writeErr.message }, 500);
   }
 
-  await appendAudit(stop.event_id, orgId, {
-    changedAt:    new Date().toISOString(),
-    changedByName: driverName,
-    stopCheckedIn: {
-      stopFacility: stop.facility_name ?? undefined,
-      stopType:     stop.type,
-      distanceMi:   body.distanceMi,
-    },
-  });
+  // Stop check-in is logged to check_calls only (see below) — it's a
+  // driver-on-the-road action, not a record-keeping edit.
 
   // Surface the check-in to the dispatcher's check-calls panel as
-  // well as the audit log — dispatchers actively monitor the calls
-  // panel for in-flight loads.
+  // well as the load_notifications timeline.
   const { data: evRow } = await supabase
     .from("events")
     .select("load_id")
@@ -995,14 +992,20 @@ driver.post("/stops/:id/check-out", async (c) => {
     return c.json({ error: "update_failed", detail: writeErr.message }, 500);
   }
 
-  await appendAudit(stop.event_id, orgId, {
-    changedAt:    new Date().toISOString(),
-    changedByName: driverName,
-    stopCheckInUndone: {
-      stopFacility: stop.facility_name ?? undefined,
-      stopType:     stop.type,
-    },
-  });
+  // Check-out (undo check-in) — logged to check_calls instead of the
+  // audit history to keep the on-road timeline in one place.
+  const { data: evRow } = await supabase
+    .from("events")
+    .select("load_id")
+    .eq("id", stop.event_id)
+    .maybeSingle();
+  const loadId = (evRow as { load_id: string | null } | null)?.load_id ?? null;
+  const stopLabel = STOP_TYPE_LABEL[stop.type as keyof typeof STOP_TYPE_LABEL] ?? stop.type.toUpperCase();
+  const facility  = stop.facility_name ? ` — ${stop.facility_name}` : "";
+  await recordDriverCheckCall(
+    loadId, orgId, driverName,
+    `Undid check-in at ${stopLabel}${facility}`,
+  );
 
   return c.json({ ok: true });
 });
