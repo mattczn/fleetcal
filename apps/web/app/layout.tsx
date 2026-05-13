@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Script from 'next/script';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
@@ -55,7 +56,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <ClerkProvider>
       <html lang="en" className={`${font.variable} h-full`} suppressHydrationWarning>
         <head>
-          <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+          {/* Theme init runs before paint to set data-theme from
+              localStorage so the page renders in the right palette
+              without a flash. next/script with beforeInteractive is
+              the React 19 / Next.js 16-friendly equivalent of a raw
+              <script> tag in <head>. */}
+          <Script id="theme-init" strategy="beforeInteractive">
+            {themeScript}
+          </Script>
           <style dangerouslySetInnerHTML={{ __html: darkModeCSS }} />
         </head>
         <body className="h-full overflow-hidden antialiased" style={{ fontFamily: 'var(--font-jakarta), sans-serif' }}>
