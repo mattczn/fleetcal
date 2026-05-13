@@ -46,6 +46,35 @@ function billableAccessorials(load: CalendarEvent): number {
   return (load.accessorials ?? []).reduce((sum, a) => sum + (a.billable ? (a.amount ?? 0) : 0), 0);
 }
 
+/** Total revenue billable to the broker for this load: rate-con price plus
+ *  every accessorial marked as billable. NOT a sum of all accessorials —
+ *  internal ones (driver per-diem, lumper reimbursements, etc.) are
+ *  excluded by design. */
+function billableTotal(load: CalendarEvent): number {
+  return (load.loadPrice ?? 0) + billableAccessorials(load);
+}
+
+/** Build an ISO timestamp at the start of a calendar day in the user's
+ *  local timezone, so date filters compare correctly against UTC-stored
+ *  events (an event picked up at 8pm local on May 8 has a UTC start of
+ *  May 9 — if we sent the raw "2026-05-09" string without tz, the API
+ *  would treat it as UTC midnight and INCLUDE that event). */
+function localStartOfDayIso(yyyymmdd: string): string {
+  return new Date(`${yyyymmdd}T00:00:00`).toISOString();
+}
+function localEndOfDayIso(yyyymmdd: string): string {
+  return new Date(`${yyyymmdd}T23:59:59.999`).toISOString();
+}
+
+/** YYYY-MM-DD in the user's local timezone. We use this for comparisons
+ *  against the date strings the user picked in the date pickers — date
+ *  math on raw ISO timestamps would shift across timezones. */
+function localDateOf(iso: string): string {
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return iso.slice(0, 10);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
 function refStr(load: CalendarEvent): string {
   return (load.refNums ?? []).map(r => r.label ? `${r.label}: ${r.value}` : r.value).join(' | ');
 }
@@ -82,14 +111,15 @@ const COLUMNS: ColumnDef[] = [
   { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
   { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
   { id: 'loadPrice',    label: 'Load Price', align: 'right',   get: (l) => l.loadPrice ?? '' },
-  { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.driverPay ?? '' },
   { id: 'accessorials', label: 'Accessorials', align: 'right', get: (l) => billableAccessorials(l) || '' },
+  { id: 'total',        label: 'Total',       align: 'right',  get: (l) => billableTotal(l) || '' },
+  { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.driverPay ?? '' },
   { id: 'refNums',      label: 'References',  get: (l) => refStr(l) },
   { id: 'dispatcher',   label: 'Dispatcher',  get: (l) => l.dispatcher ?? '' },
   { id: 'notes',        label: 'Notes',       get: (l) => l.notes ?? '' },
 ];
 
-const DEFAULT_VISIBLE = ['pickupDate', 'loadNum', 'customer', 'driver', 'asset', 'status', 'loadPrice', 'driverPay'];
+const DEFAULT_VISIBLE = ['pickupDate', 'loadNum', 'customer', 'driver', 'asset', 'status', 'loadPrice', 'accessorials', 'total', 'driverPay'];
 
 // ── Multi-select dropdown ─────────────────────────────────────────────────────
 
@@ -370,9 +400,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     setError(null);
     setLoading(true);
     try {
+      // Send ISO timestamps in the user's local timezone. Without the
+      // offset, the backend treats "2026-05-09T00:00" as UTC midnight,
+      // which is 5pm May 8 in MT — so MT-evening pickups bled into the
+      // next day's report. ISO-with-offset closes that gap.
       const { loads: fetched } = await railway.listLoads({
-        from: `${from}T00:00`,
-        to:   `${to}T23:59`,
+        from: localStartOfDayIso(from),
+        to:   localEndOfDayIso(to),
       });
       setLoads(fetched);
     } catch (err) {
@@ -407,9 +441,55 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     return names;
   }, [selectedCustomers, customers]);
 
-  const topRows = useMemo(() => {
+  // Collapse relay legs into ONE row per load. The API returns one event
+  // per leg, and a relay has two events sharing a loadId — without this
+  // dedupe step every metric in the report doubled for relays (load
+  // price summed twice, accessorials summed twice, etc.).
+  //
+  // The PICKUP leg represents the load: it carries the real pickup date,
+  // the pickup-side stops, and the originating driver. The delivery leg
+  // is discarded for reporting purposes; its data still lives on the
+  // load itself (which the API echoes onto both legs identically).
+  const dedupedLoads = useMemo(() => {
     if (!loads) return [];
-    return loads.filter(load => {
+    const byLoad = new Map<string, CalendarEvent>();
+    for (const ev of loads) {
+      // Group by loadId when available; fall back to event id for
+      // legacy rows missing the join.
+      const key = ev.loadId ?? ev.id;
+      const existing = byLoad.get(key);
+      if (!existing) {
+        byLoad.set(key, ev);
+        continue;
+      }
+      // Prefer pickup leg. relayRole 'pickup' wins; absence of
+      // relayRole (single-leg load) also wins over a 'delivery' leg
+      // for safety.
+      const evIsPickup       = ev.relayRole === 'pickup' || !ev.relayRole;
+      const existingIsPickup = existing.relayRole === 'pickup' || !existing.relayRole;
+      if (evIsPickup && !existingIsPickup) {
+        byLoad.set(key, ev);
+      }
+    }
+    return [...byLoad.values()];
+  }, [loads]);
+
+  // Apply the user-selected pickup-date range in their LOCAL timezone.
+  // The API filter is intentionally "overlap" (so the calendar view
+  // sees in-progress loads), but the report wants strictly "picked up
+  // between from and to". Filtering on the deduped pickup leg's start,
+  // converted to a local YYYY-MM-DD string, prevents tz drift and
+  // satisfies the "May 9 means May 9 my time" expectation.
+  const pickupRangeLoads = useMemo(() => {
+    if (!from || !to) return dedupedLoads;
+    return dedupedLoads.filter(ev => {
+      const localDate = localDateOf(ev.start);
+      return localDate >= from && localDate <= to;
+    });
+  }, [dedupedLoads, from, to]);
+
+  const topRows = useMemo(() => {
+    return pickupRangeLoads.filter(load => {
       if (selectedCustomers.size > 0) {
         const fkMatch   = !!load.customerId && selectedCustomers.has(load.customerId);
         const nameMatch = !!load.broker     && selectedCustomerNames.has(load.broker);
@@ -419,7 +499,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
       if (selectedAssets.size  > 0 && !selectedAssets.has(String(load.assetId))) return false;
       return true;
     });
-  }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
+  }, [pickupRangeLoads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
 
   // Columns in user's chosen order (drag-and-drop in the picker).
   const orderedColumns = useMemo(
@@ -505,11 +585,21 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const safePage = Math.min(page, totalPages - 1);
   const pagedRows = sortedRows.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
-  // Totals (numeric columns only) — based on the filtered rows
+  // Totals (numeric columns only) — based on the filtered rows.
+  // Each row is now one load (post-dedupe), so summing loadPrice gives
+  // a true revenue total instead of double-counting relays. The "total"
+  // column sums loadPrice + billable accessorials and is the headline
+  // billable number to compare against accounting.
   const totals = useMemo(() => {
     const sums: Record<string, number> = {};
     for (const col of visibleColumns) {
-      if (col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials' || col.id === 'weight') {
+      if (
+        col.id === 'loadPrice' ||
+        col.id === 'driverPay' ||
+        col.id === 'accessorials' ||
+        col.id === 'total' ||
+        col.id === 'weight'
+      ) {
         sums[col.id] = rows.reduce((acc, r) => acc + (Number(col.get(r, ctx)) || 0), 0);
       }
     }
@@ -730,8 +820,9 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
               <strong style={{ color: 'var(--gc-text-1)' }}>{rows.length}</strong>
               {' load'}{rows.length === 1 ? '' : 's'}
               {totals.loadPrice ? <> · Revenue <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.loadPrice)}</strong></> : null}
-              {totals.driverPay ? <> · Driver Pay <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.driverPay)}</strong></> : null}
               {totals.accessorials ? <> · Accessorials <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.accessorials)}</strong></> : null}
+              {totals.total ? <> · Total <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.total)}</strong></> : null}
+              {totals.driverPay ? <> · Driver Pay <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.driverPay)}</strong></> : null}
             </div>
             <div style={{ display: 'flex', gap: 6, position: 'relative' }}>
               <button
