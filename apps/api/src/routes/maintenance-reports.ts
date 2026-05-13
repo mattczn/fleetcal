@@ -24,8 +24,11 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const maintenanceReports = new Hono<{ Variables: AuthVariables }>();
+
+maintenanceReports.use("*", requireCapability("maintenance.access"));
 
 // ── Row types + converters ──────────────────────────────────────────────
 
@@ -259,7 +262,7 @@ maintenanceReports.get("/:id", async (c) => {
 
 // ── PATCH /v1/maintenance-reports/:id — status change ───────────────────
 
-maintenanceReports.patch("/:id", async (c) => {
+maintenanceReports.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
   let body: UpdateMaintenanceReportRequest;
@@ -304,7 +307,7 @@ maintenanceReports.patch("/:id", async (c) => {
 
 // ── POST /v1/maintenance-reports/:id/convert ────────────────────────────
 
-maintenanceReports.post("/:id/convert", async (c) => {
+maintenanceReports.post("/:id/convert", requireCapability("maintenance.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const id     = c.req.param("id");
@@ -407,7 +410,7 @@ maintenanceReports.post("/:id/convert", async (c) => {
 
 // ── DELETE /v1/maintenance-reports/:id ──────────────────────────────────
 
-maintenanceReports.delete("/:id", async (c) => {
+maintenanceReports.delete("/:id", requireCapability("maintenance.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
   // Photos cascade via ON DELETE CASCADE on the photo table FK.

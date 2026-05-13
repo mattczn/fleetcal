@@ -21,6 +21,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const orgSettings = new Hono<{ Variables: AuthVariables }>();
 
@@ -50,7 +51,7 @@ orgSettings.get("/", async (c) => {
   return c.json(res);
 });
 
-orgSettings.patch("/", async (c) => {
+orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<UpdateOrgSettingsRequest>();
   // At least one allowed key must be present.

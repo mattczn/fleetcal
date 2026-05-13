@@ -55,8 +55,17 @@ import {
 import { supabase } from "../lib/supabase.js";
 import { getOrgIdentity } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const invoices = new Hono<{ Variables: AuthVariables }>();
+
+// All invoice endpoints — listing, reading PDFs, sending, marking
+// paid, voiding — require accounting.access. Dispatcher and
+// Maintenance never see this section. The send/batch-send endpoints
+// additionally need accounting.send_invoice (currently the same
+// allow-list but kept separate so we can add a "view only" role
+// later without rewriting every route).
+invoices.use("*", requireCapability("accounting.access"));
 
 // ─────────────────────────────────────────────────────────────────────────
 // Row shape (snake_case from Postgres)
@@ -730,7 +739,7 @@ invoices.patch("/:id", async (c) => {
 // POST /v1/invoices/:id/send — draft → sent
 // ─────────────────────────────────────────────────────────────────────────
 
-invoices.post("/:id/send", async (c) => {
+invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const id     = c.req.param("id");
@@ -1170,7 +1179,7 @@ invoices.post("/batch-generate", async (c) => {
 // invoices in draft so the user can retry just that one. Groups that
 // succeed independently flip to sent and persist their packets.
 
-invoices.post("/batch-send", async (c) => {
+invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const body   = await c.req.json<BatchSendInvoicesRequest>();

@@ -16,6 +16,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const customers = new Hono<{ Variables: AuthVariables }>();
 
@@ -91,7 +92,7 @@ customers.get("/", async (c) => {
   return c.json(res);
 });
 
-customers.post("/", async (c) => {
+customers.post("/", requireCapability("customers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateCustomerRequest>();
   if (!body.name) {
@@ -131,7 +132,7 @@ customers.post("/", async (c) => {
   return c.json(res, 201);
 });
 
-customers.patch("/:id", async (c) => {
+customers.patch("/:id", requireCapability("customers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const body = await c.req.json<UpdateCustomerRequest>();
@@ -170,7 +171,7 @@ customers.patch("/:id", async (c) => {
   return c.json(res);
 });
 
-customers.delete("/:id", async (c) => {
+customers.delete("/:id", requireCapability("customers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase

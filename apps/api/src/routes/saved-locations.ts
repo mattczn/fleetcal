@@ -15,6 +15,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const savedLocations = new Hono<{ Variables: AuthVariables }>();
 
@@ -55,7 +56,7 @@ savedLocations.get("/", async (c) => {
   return c.json(res);
 });
 
-savedLocations.post("/", async (c) => {
+savedLocations.post("/", requireCapability("savedLocations.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateSavedLocationRequest>();
   if (!body.name) {
@@ -81,7 +82,7 @@ savedLocations.post("/", async (c) => {
   return c.json(res, 201);
 });
 
-savedLocations.patch("/:id", async (c) => {
+savedLocations.patch("/:id", requireCapability("savedLocations.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const body = await c.req.json<UpdateSavedLocationRequest>();
@@ -109,7 +110,7 @@ savedLocations.patch("/:id", async (c) => {
   return c.json(res);
 });
 
-savedLocations.delete("/:id", async (c) => {
+savedLocations.delete("/:id", requireCapability("savedLocations.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase

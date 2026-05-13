@@ -15,6 +15,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const drivers = new Hono<{ Variables: AuthVariables }>();
 
@@ -79,7 +80,7 @@ drivers.get("/", async (c) => {
   return c.json(res);
 });
 
-drivers.post("/", async (c) => {
+drivers.post("/", requireCapability("drivers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateDriverRequest>();
   if (!body.name) {
@@ -106,7 +107,7 @@ drivers.post("/", async (c) => {
   return c.json(res, 201);
 });
 
-drivers.patch("/:id", async (c) => {
+drivers.patch("/:id", requireCapability("drivers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
@@ -145,7 +146,7 @@ drivers.patch("/:id", async (c) => {
   return c.json(res);
 });
 
-drivers.delete("/:id", async (c) => {
+drivers.delete("/:id", requireCapability("drivers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
@@ -252,7 +253,7 @@ drivers.get("/:id/documents", async (c) => {
 });
 
 // POST /v1/drivers/:id/documents — multipart upload
-drivers.post("/:id/documents", async (c) => {
+drivers.post("/:id/documents", requireCapability("drivers.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const id     = Number(c.req.param("id"));

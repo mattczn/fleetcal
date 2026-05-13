@@ -103,11 +103,16 @@ export type Capability =
   | "drivers.view"
   | "drivers.edit"
   | "drivers.delete"
+  | "assets.view"
+  | "assets.edit"
+  | "assets.delete"
   | "trailers.view"
   | "trailers.edit"
   | "trailers.delete"
   | "savedLocations.edit"
+  | "savedLocations.delete"
   | "dispatchers.edit"
+  | "dispatchers.delete"
 
   // Closeout — POD verification + flagging. Dispatcher gets it; Maintenance does not.
   | "closeout.access"
@@ -142,8 +147,10 @@ const ALL_CAPS: Capability[] = [
   "loads.view", "loads.create", "loads.edit", "loads.delete", "loads.view_driver_pay",
   "customers.view", "customers.edit", "customers.delete",
   "drivers.view", "drivers.edit", "drivers.delete",
+  "assets.view", "assets.edit", "assets.delete",
   "trailers.view", "trailers.edit", "trailers.delete",
-  "savedLocations.edit", "dispatchers.edit",
+  "savedLocations.edit", "savedLocations.delete",
+  "dispatchers.edit", "dispatchers.delete",
   "closeout.access", "closeout.release", "closeout.flag",
   "accounting.access", "accounting.send_invoice",
   "payroll.access", "payroll.adjust", "payroll.finalize",
@@ -164,6 +171,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "loads.view", "loads.create", "loads.edit",
     "customers.view", "customers.edit",
     "drivers.view", "drivers.edit",
+    "assets.view", "assets.edit",
     "trailers.view", "trailers.edit",
     "savedLocations.edit", "dispatchers.edit",
     "closeout.access", "closeout.release", "closeout.flag",
@@ -176,7 +184,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // touch anything there; full access to Maintenance + Fuel.
   maintenance: new Set<Capability>([
     "loads.view",
-    "customers.view", "drivers.view", "trailers.view",
+    "customers.view", "drivers.view", "trailers.view", "assets.view",
     "maintenance.access", "maintenance.edit",
     "fuel.access", "fuel.edit",
   ]),

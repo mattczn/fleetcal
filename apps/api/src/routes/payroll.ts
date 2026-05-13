@@ -25,8 +25,16 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const payroll = new Hono<{ Variables: AuthVariables }>();
+
+// Every payroll endpoint requires payroll.access at minimum (Owner /
+// Admin only). Mutating endpoints additionally pin to .adjust or
+// .finalize. Read endpoints below the line stay open to anyone with
+// payroll.access — currently the same set of users, but keeps the
+// option to give Accountant role read-only access later.
+payroll.use("*", requireCapability("payroll.access"));
 
 interface AdjRow {
   id: string;
@@ -98,7 +106,7 @@ payroll.get("/adjustments", async (c) => {
   return c.json(res);
 });
 
-payroll.post("/adjustments", async (c) => {
+payroll.post("/adjustments", requireCapability("payroll.adjust"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreatePayrollAdjustmentRequest>();
   if (!body.driverName || !body.weekStart || !body.category || typeof body.amount !== "number") {
@@ -127,7 +135,7 @@ payroll.post("/adjustments", async (c) => {
   return c.json(res, 201);
 });
 
-payroll.delete("/adjustments/:id", async (c) => {
+payroll.delete("/adjustments/:id", requireCapability("payroll.adjust"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase
@@ -172,7 +180,7 @@ payroll.get("/records", async (c) => {
   return c.json(res);
 });
 
-payroll.post("/records", async (c) => {
+payroll.post("/records", requireCapability("payroll.finalize"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<UpsertPayrollRecordRequest>();
   if (!body.driverName || !body.weekStart || typeof body.totalPay !== "number") {
@@ -201,7 +209,7 @@ payroll.post("/records", async (c) => {
   return c.json(res);
 });
 
-payroll.delete("/records/:id", async (c) => {
+payroll.delete("/records/:id", requireCapability("payroll.finalize"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase

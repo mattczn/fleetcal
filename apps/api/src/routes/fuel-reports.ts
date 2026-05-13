@@ -23,8 +23,15 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const fuelReports = new Hono<{ Variables: AuthVariables }>();
+
+// Reads are allowed for anyone with fuel.access (Owner/Admin,
+// Dispatcher, Maintenance). Writes require fuel.edit which all of
+// those roles have today, but keeps the two scopes separable for
+// future view-only roles.
+fuelReports.use("*", requireCapability("fuel.access"));
 
 const RECEIPT_BUCKET = "fuel-receipts";
 
@@ -143,7 +150,7 @@ function clampLimit(raw: string | undefined): number {
 // the driver called in a fuel-up). The driver path lives under
 // /v1/driver/fuel-reports and forces driver_id from the auth context.
 
-fuelReports.post("/", async (c) => {
+fuelReports.post("/", requireCapability("fuel.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
 
@@ -246,7 +253,7 @@ fuelReports.get("/", async (c) => {
 
 // ── PATCH /v1/fuel-reports/:id — edit ───────────────────────────────────
 
-fuelReports.patch("/:id", async (c) => {
+fuelReports.patch("/:id", requireCapability("fuel.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
 
@@ -300,7 +307,7 @@ fuelReports.patch("/:id", async (c) => {
 
 // ── DELETE /v1/fuel-reports/:id — remove ────────────────────────────────
 
-fuelReports.delete("/:id", async (c) => {
+fuelReports.delete("/:id", requireCapability("fuel.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
 

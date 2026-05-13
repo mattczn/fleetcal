@@ -24,6 +24,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 interface CheckCallRow {
   id:            string;
@@ -81,7 +82,7 @@ checkCallsScopedRouter.get("/", async (c) => {
   return c.json(res);
 });
 
-checkCallsScopedRouter.post("/", async (c) => {
+checkCallsScopedRouter.post("/", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("loadId") ?? "";
   if (!loadId) return c.json({ error: "missing_load_id" } satisfies ApiErrorResponse, 400);
@@ -130,7 +131,7 @@ checkCallsScopedRouter.post("/", async (c) => {
 
 const checkCallsRouter = new Hono<{ Variables: AuthVariables }>();
 
-checkCallsRouter.delete("/:id", async (c) => {
+checkCallsRouter.delete("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase

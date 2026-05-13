@@ -51,6 +51,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 import { checkCallsScopedRouter } from "./check-calls.js";
 
 const loads = new Hono<{ Variables: AuthVariables }>();
@@ -200,7 +201,7 @@ function badRequest(c: AnyHonoContext, errors: string[]) {
 // POST /v1/loads — create a load (1 or 2 events)
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.post("/", async (c) => {
+loads.post("/", requireCapability("loads.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateLoadRequest>();
 
@@ -603,7 +604,7 @@ loads.get("/:id/documents", async (c) => {
 
 const DOC_BUCKET = "load-documents";
 
-loads.post("/:id/documents", async (c) => {
+loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const loadId = c.req.param("id");
 
@@ -850,7 +851,7 @@ loads.get("/:id", async (c) => {
 // PATCH /v1/loads/:id — update load-level fields
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.patch("/:id", async (c) => {
+loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const body = await c.req.json<UpdateLoadRequest>();
@@ -896,7 +897,7 @@ loads.patch("/:id", async (c) => {
 // PATCH /v1/loads/:id/events/:eventId — update event-level fields
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.patch("/:id/events/:eventId", async (c) => {
+loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const eventId = c.req.param("eventId");
@@ -973,7 +974,7 @@ loads.patch("/:id/events/:eventId", async (c) => {
 // POST /v1/loads/:id/split-relay — convert single → relay
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.post("/:id/split-relay", async (c) => {
+loads.post("/:id/split-relay", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const body = await c.req.json<SplitRelayRequest>();
@@ -1107,7 +1108,7 @@ loads.post("/:id/split-relay", async (c) => {
 // DELETE /v1/loads/:id — soft-delete the load and its events
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.delete("/:id", async (c) => {
+loads.delete("/:id", requireCapability("loads.delete"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const now = new Date().toISOString();
@@ -1151,7 +1152,7 @@ loads.delete("/:id", async (c) => {
 // POST /v1/loads/:id/restore — undelete a soft-deleted load + its events
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.post("/:id/restore", async (c) => {
+loads.post("/:id/restore", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
 
@@ -1188,7 +1189,7 @@ loads.post("/:id/restore", async (c) => {
 // POST /v1/loads/:id/unsplit-relay — collapse 2-event relay back to single
 // ─────────────────────────────────────────────────────────────────────────
 
-loads.post("/:id/unsplit-relay", async (c) => {
+loads.post("/:id/unsplit-relay", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const loadId = c.req.param("id");
   const body = await c.req.json<UnsplitRelayRequest>();

@@ -18,6 +18,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const dispatchers = new Hono<{ Variables: AuthVariables }>();
 
@@ -46,7 +47,7 @@ dispatchers.get("/", async (c) => {
   return c.json(res);
 });
 
-dispatchers.post("/", async (c) => {
+dispatchers.post("/", requireCapability("dispatchers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateDispatcherRequest>();
   if (!body.name) {
@@ -68,7 +69,7 @@ dispatchers.post("/", async (c) => {
   return c.json(res, 201);
 });
 
-dispatchers.patch("/:id", async (c) => {
+dispatchers.patch("/:id", requireCapability("dispatchers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const body = await c.req.json<UpdateDispatcherRequest>();
@@ -96,7 +97,7 @@ dispatchers.patch("/:id", async (c) => {
   return c.json(res);
 });
 
-dispatchers.delete("/:id", async (c) => {
+dispatchers.delete("/:id", requireCapability("dispatchers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
   const { error } = await supabase

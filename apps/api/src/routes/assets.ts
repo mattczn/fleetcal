@@ -23,6 +23,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const assets = new Hono<{ Variables: AuthVariables }>();
 
@@ -69,7 +70,7 @@ assets.get("/", async (c) => {
   return c.json(res);
 });
 
-assets.post("/", async (c) => {
+assets.post("/", requireCapability("assets.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateAssetRequest>();
   if (!body.name || !body.color || !body.type) {
@@ -110,7 +111,7 @@ assets.post("/", async (c) => {
   return c.json(res, 201);
 });
 
-assets.patch("/:id", async (c) => {
+assets.patch("/:id", requireCapability("assets.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
@@ -147,7 +148,7 @@ assets.patch("/:id", async (c) => {
   return c.json(res);
 });
 
-assets.delete("/:id", async (c) => {
+assets.delete("/:id", requireCapability("assets.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
@@ -165,7 +166,7 @@ assets.delete("/:id", async (c) => {
   return c.body(null, 204);
 });
 
-assets.post("/reorder", async (c) => {
+assets.post("/reorder", requireCapability("assets.edit"), async (c) => {
   const orgId = c.get("orgId");
   const { ids } = await c.req.json<ReorderAssetsRequest>();
   if (!Array.isArray(ids) || ids.some((n) => !Number.isFinite(n))) {

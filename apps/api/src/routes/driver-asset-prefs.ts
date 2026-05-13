@@ -19,6 +19,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const prefs = new Hono<{ Variables: AuthVariables }>();
 
@@ -41,7 +42,7 @@ prefs.get("/", async (c) => {
   return c.json(res);
 });
 
-prefs.put("/:assetId", async (c) => {
+prefs.put("/:assetId", requireCapability("drivers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const assetId = Number(c.req.param("assetId"));
   if (!Number.isFinite(assetId)) {
@@ -65,7 +66,7 @@ prefs.put("/:assetId", async (c) => {
   return c.json(res);
 });
 
-prefs.delete("/:assetId", async (c) => {
+prefs.delete("/:assetId", requireCapability("drivers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const assetId = Number(c.req.param("assetId"));
   if (!Number.isFinite(assetId)) {

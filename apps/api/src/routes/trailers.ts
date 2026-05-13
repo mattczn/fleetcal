@@ -16,6 +16,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const trailers = new Hono<{ Variables: AuthVariables }>();
 
@@ -58,7 +59,7 @@ trailers.get("/", async (c) => {
   return c.json(res);
 });
 
-trailers.post("/", async (c) => {
+trailers.post("/", requireCapability("trailers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateTrailerRequest>();
   if (!body.name || !body.category) {
@@ -91,7 +92,7 @@ trailers.post("/", async (c) => {
   return c.json(res, 201);
 });
 
-trailers.patch("/:id", async (c) => {
+trailers.patch("/:id", requireCapability("trailers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
@@ -122,7 +123,7 @@ trailers.patch("/:id", async (c) => {
   return c.json(res);
 });
 
-trailers.delete("/:id", async (c) => {
+trailers.delete("/:id", requireCapability("trailers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {

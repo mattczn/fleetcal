@@ -19,6 +19,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const documents = new Hono<{ Variables: AuthVariables }>();
 
@@ -54,7 +55,7 @@ documents.get("/:id/url", async (c) => {
 // rewrites would need cascading effects on the closeout checklist
 // (e.g. flipping a doc from BOL → POD changes what counts toward the
 // release gate); leaving that out until there's a user need.
-documents.patch("/:id", async (c) => {
+documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
   const body = await c.req.json<{ fileName?: string }>();
@@ -83,7 +84,7 @@ documents.patch("/:id", async (c) => {
 // DELETE /v1/documents/:id — remove the row + storage object. Orphan
 // blobs are cleaner than half-deleted rows, so we tolerate (and log) a
 // storage-remove failure rather than rolling back the row delete.
-documents.delete("/:id", async (c) => {
+documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
 

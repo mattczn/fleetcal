@@ -24,6 +24,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 import {
   rowToActionItem,
   ACTION_ITEM_COLS,
@@ -31,6 +32,8 @@ import {
 } from "./maintenance-reports.js";
 
 const actionItems = new Hono<{ Variables: AuthVariables }>();
+
+actionItems.use("*", requireCapability("maintenance.access"));
 
 function clampLimit(raw: string | undefined, fallback = 100): number {
   const n = Number(raw ?? String(fallback));
@@ -49,7 +52,7 @@ function validateAssetOrTrailer(body: { assetId?: number; trailerId?: number }):
 
 // ── POST /v1/maintenance-action-items — create ad-hoc ──────────────────
 
-actionItems.post("/", async (c) => {
+actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
 
@@ -167,7 +170,7 @@ actionItems.get("/:id", async (c) => {
 
 // ── PATCH /v1/maintenance-action-items/:id ──────────────────────────────
 
-actionItems.patch("/:id", async (c) => {
+actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   const orgId  = c.get("orgId");
   const userId = c.get("userId");
   const id     = c.req.param("id");
@@ -238,7 +241,7 @@ actionItems.patch("/:id", async (c) => {
 
 // ── DELETE /v1/maintenance-action-items/:id ─────────────────────────────
 
-actionItems.delete("/:id", async (c) => {
+actionItems.delete("/:id", requireCapability("maintenance.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
   const { error } = await supabase

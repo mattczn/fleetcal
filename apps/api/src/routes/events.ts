@@ -40,6 +40,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 
 const events = new Hono<{ Variables: AuthVariables }>();
 
@@ -212,7 +213,7 @@ events.get("/:id", async (c) => {
 // POST /v1/events — create a non-revenue event
 // ─────────────────────────────────────────────────────────────────────────
 
-events.post("/", async (c) => {
+events.post("/", requireCapability("loads.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateEventRequest>();
 
@@ -288,7 +289,7 @@ events.post("/", async (c) => {
 // PATCH /v1/events/:id — update any event by id
 // ─────────────────────────────────────────────────────────────────────────
 
-events.patch("/:id", async (c) => {
+events.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const eventId = c.req.param("id");
   const body = await c.req.json<UpdateEventByIdRequest>();
@@ -342,7 +343,7 @@ events.patch("/:id", async (c) => {
 //     calendar / dispatch board.
 // ─────────────────────────────────────────────────────────────────────────
 
-events.delete("/:id", async (c) => {
+events.delete("/:id", requireCapability("loads.delete"), async (c) => {
   const orgId = c.get("orgId");
   const eventId = c.req.param("id");
   const keepLoad = c.req.query("keepLoad") === "true";
@@ -382,7 +383,7 @@ events.delete("/:id", async (c) => {
 // PUT /v1/events/:id/stops — replace stops for an event
 // ─────────────────────────────────────────────────────────────────────────
 
-events.put("/:id/stops", async (c) => {
+events.put("/:id/stops", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const eventId = c.req.param("id");
   const body = await c.req.json<ReplaceStopsRequest>();
@@ -551,7 +552,7 @@ events.get("/:id/notifications", async (c) => {
 //
 // (Cron sweeps will call this endpoint server-to-server with a synthetic
 // sentByName like 'Auto: evening sweep'.)
-events.post("/:id/notify", async (c) => {
+events.post("/:id/notify", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const eventId = c.req.param("id");
   const body = await c.req.json<{ kind: string; sentByName: string; force?: boolean }>();
