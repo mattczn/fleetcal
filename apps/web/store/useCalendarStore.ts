@@ -944,7 +944,9 @@ export const useCalendarStore = create<CalendarStore>()(
               ev.loadNum
                 ? `Load #${ev.loadNum} is no longer assigned to you.`
                 : `${ev.title} is no longer assigned to you.`,
-              { type: 'reassigned_away', loadId: ev.loadId, eventId: id },
+              // Deep-link to home — the load isn't theirs anymore, no
+              // point routing to the load detail.
+              { type: 'reassigned_away', loadId: ev.loadId, eventId: id, url: '/' },
             );
           }
         }
@@ -995,7 +997,8 @@ export const useCalendarStore = create<CalendarStore>()(
         ev.driverId,
         'Load cancelled',
         ev.loadNum ? `Load #${ev.loadNum} has been cancelled.` : `${ev.title} has been cancelled.`,
-        { type: 'load_cancelled', loadId: ev.loadId, eventId: id },
+        // Deep-link to home — the load is gone, no detail to route to.
+        { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
       );
     }
   },
@@ -1035,7 +1038,8 @@ export const useCalendarStore = create<CalendarStore>()(
         ev.driverId,
         'Load cancelled',
         ev.loadNum ? `Load #${ev.loadNum} has been cancelled.` : `${ev.title} has been cancelled.`,
-        { type: 'load_cancelled', loadId: ev.loadId, eventId: id },
+        // Deep-link to home — the load is gone, no detail to route to.
+        { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
       );
     }
   },

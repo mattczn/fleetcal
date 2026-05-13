@@ -46,6 +46,17 @@ function timeAgoModal(iso: string): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
+// Compact local-time formatter for the confirmed pill — "May 13, 1:17 PM".
+// Reads events.confirmed_at, which is a real ISO timestamp (server-stamped).
+function formatConfirmedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-US', {
+    month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
 // Short pickup-time formatter for push bodies: "Sat 5/16 14:00".
 // Reads the naive Mountain Time string straight from events.start.
 function formatModalAt(naive: string): string {
@@ -3387,20 +3398,9 @@ export default function EventModal() {
                     ⇄ {isPickupLeg ? 'Pickup Leg' : 'Delivery Leg'}
                   </span>
                 )}
-                {/* Driver-confirmed pill — only on saved revenue loads
-                    where the driver has tapped Confirm in the driver app. */}
-                {isEdit && eventKind === 'revenue' && (() => {
-                  const ev = events.find(e => e.id === modalEventId);
-                  if (!ev?.confirmedAt) return null;
-                  return (
-                    <Tooltip content={`Driver confirmed ${timeAgoModal(ev.confirmedAt)}`}>
-                      <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg"
-                        style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
-                        <CheckCircle2 size={10} /> Confirmed
-                      </span>
-                    </Tooltip>
-                  );
-                })()}
+                {/* Confirmation visibility lives in the driver row
+                    (next to the phone-copy / Driver Summary buttons),
+                    not in this header, so we don't double up. */}
               </div>
               <div className="flex items-center gap-2 flex-wrap text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                 <span>
@@ -3764,14 +3764,16 @@ export default function EventModal() {
                   const sel = driverName ? drivers.find(d => d.name === driverName) : null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
                   const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
-                  // Only show the manual-nudge button on saved revenue
-                  // loads with a driver actually assigned and not yet
-                  // confirmed. No point pushing a confirm-prompt when
-                  // they've already confirmed or no driver is set.
+                  const confirmedAt = currentEv?.confirmedAt;
+                  // Show the manual-nudge button on saved revenue loads
+                  // with a driver assigned and not yet confirmed. Once
+                  // confirmed, the button slot is replaced with a
+                  // "Confirmed [time]" pill in the same location.
                   const showNudgeBtn =
-                    eventKind === 'revenue' && isEdit && !!sel?.id &&
-                    !currentEv?.confirmedAt;
-                  if (!sel?.phone && !showSummaryBtn && !showNudgeBtn) return null;
+                    eventKind === 'revenue' && isEdit && !!sel?.id && !confirmedAt;
+                  const showConfirmedPill =
+                    eventKind === 'revenue' && isEdit && !!sel?.id && !!confirmedAt;
+                  if (!sel?.phone && !showSummaryBtn && !showNudgeBtn && !showConfirmedPill) return null;
                   return (
                     <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
                       {sel?.phone && <DriverPhoneCopy phone={sel.phone} />}
@@ -3841,6 +3843,18 @@ export default function EventModal() {
                                 : 'Send confirm push'}
                             </span>
                           </button>
+                        </Tooltip>
+                      )}
+                      {showConfirmedPill && confirmedAt && (
+                        <Tooltip content={`Driver confirmed at ${new Date(confirmedAt).toLocaleString()}`}>
+                          <span className="text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5"
+                            style={{ color: '#15803d', background: '#dcfce7', border: '1px solid #86efac' }}>
+                            <CheckCircle2 size={11} />
+                            <span style={{ fontWeight: 700 }}>Confirmed</span>
+                            <span style={{ fontWeight: 500, color: '#166534', opacity: 0.85 }}>
+                              · {formatConfirmedAt(confirmedAt)}
+                            </span>
+                          </span>
                         </Tooltip>
                       )}
                     </div>

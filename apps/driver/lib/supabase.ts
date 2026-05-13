@@ -1,4 +1,7 @@
-import "react-native-url-polyfill/auto";
+// react-native-url-polyfill was needed on pre-0.72 React Native. RN 0.83
+// (this app) ships URL + URLSearchParams natively, so the polyfill is dead
+// weight that pulled in a broken transitive-dep chain (buffer / punycode /
+// webidl-conversions / whatwg-url-without-unicode). Don't add it back.
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
 
