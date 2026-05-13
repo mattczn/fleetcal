@@ -58,7 +58,8 @@ type ColKey =
   | 'customer'
   | 'driver'
   | 'rate'
-  | 'accessorials';
+  | 'accessorials'
+  | 'total';
 
 interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
 
@@ -83,6 +84,7 @@ type ToggleableCol =
   | 'driver'
   | 'rate'
   | 'accessorials'
+  | 'total'
   | 'docs';
 
 const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
@@ -95,6 +97,7 @@ const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
   { key: 'driver',       label: 'Driver(s)'    },
   { key: 'rate',         label: 'Rate'         },
   { key: 'accessorials', label: 'Accessorials' },
+  { key: 'total',        label: 'Total'        },
   { key: 'docs',         label: 'Docs'         },
 ];
 
@@ -111,6 +114,7 @@ const DEFAULT_COL_WIDTHS: Record<ToggleableCol, number> = {
   driver:       130,
   rate:         100,
   accessorials: 120,
+  total:        110,
   docs:         220,
 };
 const ACTIONS_COL_WIDTH = 240;
@@ -201,6 +205,16 @@ export default function CloseoutView() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewStartIndex, setReviewStartIndex] = useState(0);
   const [flagTarget, setFlagTarget] = useState<Load | null>(null);
+  // Bulk-action selection — keyed by event id (matches rowKey). The
+  // set is cleared when the active tab changes so a Release queued
+  // up on Pending can't accidentally fire on a Flagged row the user
+  // switched to.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  // Bulk-flag modal target — when truthy, applies the chosen reason
+  // to every selected row.
+  const [bulkFlagOpen, setBulkFlagOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState<null | 'release' | 'flag'>(null);
+  useEffect(() => { setSelectedIds(new Set()); }, [tab, searchQuery]);
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const openEditModal = useCalendarStore(s => s.openEditModal);
 
@@ -364,6 +378,8 @@ export default function CloseoutView() {
       case 'rate':       return row.loadPrice ?? 0;
       case 'accessorials':
         return (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+      case 'total':
+        return (row.loadPrice ?? 0) + (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
     }
   };
 
@@ -387,6 +403,10 @@ export default function CloseoutView() {
       // are unused but kept exhaustive for future-proofing.
       case 'rate':         return row.loadPrice != null ? moneyFmt.format(row.loadPrice) : '';
       case 'accessorials': return moneyFmt.format((row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0));
+      case 'total': {
+        const accSum = (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        return moneyFmt.format((row.loadPrice ?? 0) + accSum);
+      }
     }
   };
 
@@ -510,6 +530,63 @@ export default function CloseoutView() {
     await refresh();
   }
 
+  // ── Bulk actions ───────────────────────────────────────────────────
+  // The selection set holds event ids (matches rowKey), but the
+  // closeout endpoint keys off the parent load id — resolve through
+  // the rows list before sending. Dedup so a relay's pickup +
+  // delivery legs don't double-fire the action against the same
+  // load row in the DB.
+  function selectedTargetLoadIds(): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const id of selectedIds) {
+      const row = rows.find(r => r.id === id);
+      if (!row) continue;
+      const target = row.loadId ?? row.id;
+      if (seen.has(target)) continue;
+      seen.add(target);
+      out.push(target);
+    }
+    return out;
+  }
+
+  async function handleBulkRelease() {
+    const targets = selectedTargetLoadIds();
+    if (targets.length === 0) return;
+    const ok = window.confirm(`Release ${targets.length} load${targets.length === 1 ? '' : 's'} for billing?`);
+    if (!ok) return;
+    setBulkBusy('release');
+    const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
+    try {
+      // Serial — keeps the API gentle and lets one failure surface
+      // before the rest fire (vs Promise.all hiding partial errors).
+      for (const id of targets) {
+        await railway.updateLoadCloseout(id, { action: 'verify', actorName });
+      }
+      setSelectedIds(new Set());
+      await refresh();
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
+  async function confirmBulkFlag(reason: FlagReason, note: string) {
+    const targets = selectedTargetLoadIds();
+    if (targets.length === 0) { setBulkFlagOpen(false); return; }
+    setBulkBusy('flag');
+    const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
+    try {
+      for (const id of targets) {
+        await railway.updateLoadCloseout(id, { action: 'flag', flagReason: reason, flagNote: note, actorName });
+      }
+      setSelectedIds(new Set());
+      setBulkFlagOpen(false);
+      await refresh();
+    } finally {
+      setBulkBusy(null);
+    }
+  }
+
   // Invoice viewing lives on /accounting now — closeout only handles
   // pre-release work (POD verification + flagging).
 
@@ -625,6 +702,7 @@ export default function CloseoutView() {
         case 'driver':       return r.driverName ?? '';
         case 'rate':         return r.loadPrice ?? 0;
         case 'accessorials': return (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        case 'total':        return (r.loadPrice ?? 0) + (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
       }
     };
 
@@ -793,6 +871,24 @@ export default function CloseoutView() {
       },
     });
 
+    // total — rate + accessorials, matches the column shown on
+    // /accounting so dispatchers see the same number in both queues.
+    cols.push({
+      key: 'total', label: 'Total', width: DEFAULT_COL_WIDTHS.total,
+      align: 'right', sortable: true, pinLeft: PIN_LEFT.has('total'),
+      sortValue: r => sortVal('total', r),
+      render: r => {
+        const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        const tot = (r.loadPrice ?? 0) + accSum;
+        if (r.loadPrice == null && accSum === 0) {
+          return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        }
+        return (
+          <span className="font-bold tabular-nums">{moneyFmt.format(tot)}</span>
+        );
+      },
+    });
+
     // docs (+ flag chips)
     cols.push({
       key: 'docs', label: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
@@ -840,15 +936,15 @@ export default function CloseoutView() {
       },
     });
 
-    // Actions — non-sortable, non-filterable, hardcoded sticky-LEFT
-    // at the far start so Star / Notes / Review / Release / Flag stay
-    // accessible while the rest of the table scrolls horizontally.
-    // No label per spec; not togglable in the Columns dropdown.
-    // unshift instead of push so it lands FIRST in the visible column
-    // order — pin-left partition preserves input order.
-    cols.unshift({
-      key: 'actions', label: '', width: 260, align: 'left',
-      pinLeft: true,
+    // Actions — non-sortable, non-filterable, hardcoded sticky-RIGHT
+    // so Star / Notes / Review / Release / Flag stay accessible
+    // anchored to the right edge while the rest of the table scrolls
+    // horizontally. No label per spec; not togglable in the Columns
+    // dropdown. Push so it lands LAST in the visible column order —
+    // pin-right partition preserves input order from the right edge.
+    cols.push({
+      key: 'actions', label: '', width: 260, align: 'right',
+      pinRight: true,
       pinned: true,
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
@@ -1055,9 +1151,55 @@ export default function CloseoutView() {
                 onColumnWidthsChange={setColWidths}
                 pinnedColumns={pinnedCols}
                 onPinnedColumnsChange={setPinnedCols}
+                selectable
+                selected={selectedIds}
+                onSelectionChange={setSelectedIds}
                 rowClassName={(r) => r.priority ? 'bg-[#fefce8]' : ''}
                 isLoading={loading}
                 emptyMessage={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
+                footerExtra={selectedIds.size > 0 ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                      {selectedIds.size} selected
+                    </span>
+                    <button type="button"
+                      onClick={() => setSelectedIds(new Set())}
+                      className="text-[11px] px-2 py-1 rounded hover:bg-[var(--gc-hover)]"
+                      style={{ color: 'var(--gc-text-2)' }}>
+                      Clear
+                    </button>
+                    <button type="button"
+                      onClick={() => void handleBulkRelease()}
+                      disabled={bulkBusy !== null}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
+                      style={{
+                        background: '#dcfce7', color: '#15803d',
+                        border: '1px solid #86efac',
+                        opacity: bulkBusy !== null ? 0.6 : 1,
+                        cursor: bulkBusy !== null ? 'default' : 'pointer',
+                      }}>
+                      {bulkBusy === 'release'
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <CheckCircle2 size={11} />}
+                      Release selected
+                    </button>
+                    <button type="button"
+                      onClick={() => setBulkFlagOpen(true)}
+                      disabled={bulkBusy !== null}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
+                      style={{
+                        background: '#fef3c7', color: '#92400e',
+                        border: '1px solid #fde68a',
+                        opacity: bulkBusy !== null ? 0.6 : 1,
+                        cursor: bulkBusy !== null ? 'default' : 'pointer',
+                      }}>
+                      {bulkBusy === 'flag'
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <Flag size={11} />}
+                      Flag selected
+                    </button>
+                  </div>
+                ) : null}
               />
             </div>
           )}
@@ -1092,6 +1234,16 @@ export default function CloseoutView() {
           loadLabel={`${flagTarget.title}${flagTarget.loadNum ? ` · #${flagTarget.loadNum}` : ''}`}
           onCancel={() => setFlagTarget(null)}
           onConfirm={confirmFlag}
+        />
+      )}
+
+      {/* Bulk flag modal — same reasons + note, applied across every
+          selected row in one pass. */}
+      {bulkFlagOpen && (
+        <FlagModal
+          loadLabel={`${selectedIds.size} selected load${selectedIds.size === 1 ? '' : 's'}`}
+          onCancel={() => setBulkFlagOpen(false)}
+          onConfirm={confirmBulkFlag}
         />
       )}
 
