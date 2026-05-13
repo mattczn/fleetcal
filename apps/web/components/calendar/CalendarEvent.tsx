@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Star, CheckCircle2 } from 'lucide-react';
+import { Star, CheckCircle2, FileCheck2 } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr } from '@/lib/time-utils';
@@ -37,7 +37,11 @@ function driverDisplayName(d: Driver): string {
 }
 
 export default function CalendarEvent({ event, asset, colIdx, totalCols, compact = false, overrideTop, overrideHeight, onSmartAssign }: Props) {
-  const { events, currentDate, dragState, setDragState, rowHeight, showStatusOverlay, drivers, openEditModal, cardFields, customers } = useCalendarStore();
+  const {
+    events, currentDate, dragState, setDragState, rowHeight,
+    showStatusOverlay, showConfirmedOverlay, showPodOverlay, showBillingOverlay,
+    drivers, openEditModal, cardFields, customers,
+  } = useCalendarStore();
   const matchedDriver = event.driverName ? drivers.find(d => d.name === event.driverName) ?? null : null;
   const driverLabel = matchedDriver ? driverDisplayName(matchedDriver) : (event.driverName ?? null);
   const driverPhone = matchedDriver?.phone ?? null;
@@ -203,16 +207,59 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               <Star size={10} fill="#fbbf24" style={{ color: '#fbbf24', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.4))' }} />
             </div>
           )}
-          {/* Driver-confirmed checkmark — bottom-right corner. Fixed
-              size; the card itself scales with row-height + column
-              count, so the icon's relative weight on the card stays
-              roughly consistent without per-icon resize listeners. */}
-          {event.confirmedAt && !isRelay && (
-            <div style={{ position: 'absolute', bottom: 16, right: 4, pointerEvents: 'none' }}
-              title="Confirmed by driver">
-              <CheckCircle2 size={18} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
-            </div>
-          )}
+          {/* Layer overlays in the bottom-right corner. Stacked side-by-side
+              when both apply so a confirmed + POD'd load shows both icons.
+              Each gated on its toolbar toggle. */}
+          {(() => {
+            const podCount      = event.documentCounts?.pod ?? 0;
+            const showCheck     = !isRelay && event.confirmedAt && showConfirmedOverlay;
+            const showPod       = !isRelay && podCount > 0      && showPodOverlay;
+            if (!showCheck && !showPod) return null;
+            return (
+              <div style={{
+                position: 'absolute', bottom: 16, right: 4,
+                display: 'flex', alignItems: 'center', gap: 3,
+                pointerEvents: 'none',
+              }}>
+                {showPod && (
+                  <span title="POD uploaded">
+                    <FileCheck2 size={18} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
+                  </span>
+                )}
+                {showCheck && (
+                  <span title="Confirmed by driver">
+                    <CheckCircle2 size={18} fill="#0f9d58" style={{ color: '#fff', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.45))' }} />
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+          {/* Billing-status pill — top-left corner. Shows the closeout
+              workflow state on the card so dispatchers can spot
+              flagged / invoiced / paid loads at a glance. */}
+          {!isRelay && showBillingOverlay && event.billingStatus && event.billingStatus !== 'pending' && (() => {
+            const billingPalette: Record<NonNullable<EventType['billingStatus']>, { bg: string; fg: string; label: string }> = {
+              pending:   { bg: 'rgba(255,255,255,0.35)', fg: '#1f2937', label: '·' },
+              verified:  { bg: '#dbeafe',                fg: '#1e40af', label: 'V' },
+              invoiced:  { bg: '#dcfce7',                fg: '#15803d', label: 'I' },
+              paid:      { bg: '#d1fae5',                fg: '#065f46', label: 'P' },
+              on_hold:   { bg: '#fee2e2',                fg: '#991b1b', label: '!' },
+            };
+            const p = billingPalette[event.billingStatus];
+            return (
+              <span title={`Billing: ${event.billingStatus.replace('_', ' ')}`}
+                style={{
+                  position: 'absolute', top: 3, left: 3,
+                  fontSize: 9, fontWeight: 900,
+                  width: 14, height: 14, lineHeight: '14px', textAlign: 'center',
+                  borderRadius: 999, background: p.bg, color: p.fg,
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                  pointerEvents: 'none',
+                }}>
+                {p.label}
+              </span>
+            );
+          })()}
           {/* Relay overlay — top-right corner */}
           {isRelay && (
             <div style={{

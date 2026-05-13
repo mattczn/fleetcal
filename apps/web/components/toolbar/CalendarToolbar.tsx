@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -58,6 +58,10 @@ export default function CalendarToolbar() {
     viewMode, setViewMode,
     batchParseProgress, batchParseTotal, batchMinimized, batchItems, modalOpen, clearBatch, requestBatchCancel,
     calendarTimezone,
+    showStatusOverlay,    setShowStatusOverlay,
+    showConfirmedOverlay, setShowConfirmedOverlay,
+    showPodOverlay,       setShowPodOverlay,
+    showBillingOverlay,   setShowBillingOverlay,
   } = useCalendarStore();
 
   const { user } = useUser();
@@ -71,12 +75,14 @@ export default function CalendarToolbar() {
   const [confirmClearTrash,  setConfirmClearTrash]  = useState(false);
   const [moreOpen,           setMoreOpen]           = useState(false);
   const [viewOpen,           setViewOpen]           = useState(false);
+  const [layersOpen,         setLayersOpen]         = useState(false);
   const [confirmCancelBatch, setConfirmCancelBatch] = useState(false);
   const searchInputRef  = useRef<HTMLInputElement>(null);
   const searchContainer = useRef<HTMLDivElement>(null);
   const trashContainer  = useRef<HTMLDivElement>(null);
   const moreContainer   = useRef<HTMLDivElement>(null);
   const viewContainer   = useRef<HTMLDivElement>(null);
+  const layersContainer = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
@@ -88,7 +94,7 @@ export default function CalendarToolbar() {
   }, [batchVisible]);
 
   useEffect(() => {
-    if (!searchOpen && !trashOpen && !moreOpen && !viewOpen) return;
+    if (!searchOpen && !trashOpen && !moreOpen && !viewOpen && !layersOpen) return;
     const handler = (e: MouseEvent) => {
       if (searchOpen && searchContainer.current && !searchContainer.current.contains(e.target as Node)) {
         setSearchOpen(false); setQuery('');
@@ -102,10 +108,13 @@ export default function CalendarToolbar() {
       if (viewOpen && viewContainer.current && !viewContainer.current.contains(e.target as Node)) {
         setViewOpen(false);
       }
+      if (layersOpen && layersContainer.current && !layersContainer.current.contains(e.target as Node)) {
+        setLayersOpen(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [searchOpen, trashOpen, moreOpen, viewOpen]);
+  }, [searchOpen, trashOpen, moreOpen, viewOpen, layersOpen]);
 
   function daysUntilPurge(deletedAt: string): number {
     const age = Date.now() - new Date(deletedAt).getTime();
@@ -663,6 +672,69 @@ export default function CalendarToolbar() {
 
         {/* Learning Center */}
         <LearningCenter />
+
+        {/* Layers popover — toggle which info overlays render on the
+            calendar event cards (status, confirmed, POD, billing). */}
+        <div ref={layersContainer} style={{ position: 'relative' }}>
+          <Tooltip content="Layers" placement="bottom">
+            <button
+              onClick={() => setLayersOpen(o => !o)}
+              className="flex items-center justify-center w-9 h-9 rounded-full transition-colors"
+              style={{ color: layersOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)', background: layersOpen ? 'var(--gc-blue-light)' : 'transparent' }}
+              onMouseOver={e => { if (!layersOpen) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseOut={e => { if (!layersOpen) e.currentTarget.style.background = 'transparent'; }}
+            >
+              <Eye size={16} />
+            </button>
+          </Tooltip>
+          {layersOpen && (
+            <div className="absolute right-0 flex flex-col"
+              style={{
+                top: 'calc(100% + 6px)', width: 240, borderRadius: 10,
+                boxShadow: 'var(--shadow-3)', border: '1px solid var(--gc-border-light)',
+                background: 'var(--gc-surface)', zIndex: 100, padding: 6,
+              }}>
+              <div className="px-2.5 py-1.5 text-[10px] font-extrabold uppercase tracking-wider"
+                style={{ color: 'var(--gc-text-1)' }}>
+                Show on calendar
+              </div>
+              {([
+                { key: 'status',    label: 'Load status pill',   value: showStatusOverlay,    set: setShowStatusOverlay    },
+                { key: 'confirmed', label: 'Driver confirmed',   value: showConfirmedOverlay, set: setShowConfirmedOverlay },
+                { key: 'pod',       label: 'POD uploaded',       value: showPodOverlay,       set: setShowPodOverlay       },
+                { key: 'billing',   label: 'Billing status',     value: showBillingOverlay,   set: setShowBillingOverlay   },
+              ] as const).map(row => (
+                <label key={row.key}
+                  className="flex items-center justify-between gap-3 px-2.5 py-2 rounded cursor-pointer transition-colors"
+                  style={{ background: 'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <span className="text-[13px]" style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+                    {row.label}
+                  </span>
+                  {/* Tiny custom toggle — switch-like, ~30×16 */}
+                  <span
+                    role="switch"
+                    aria-checked={row.value}
+                    onClick={(e) => { e.preventDefault(); row.set(!row.value); }}
+                    style={{
+                      width: 30, height: 16, borderRadius: 999,
+                      background: row.value ? 'var(--gc-blue)' : 'var(--gc-border)',
+                      position: 'relative', flexShrink: 0,
+                      transition: 'background 150ms',
+                    }}>
+                    <span style={{
+                      position: 'absolute', top: 2, left: row.value ? 16 : 2,
+                      width: 12, height: 12, borderRadius: 999, background: '#fff',
+                      transition: 'left 150ms',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                    }} />
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* View sliders popover */}
         <div ref={viewContainer} style={{ position: 'relative' }}>

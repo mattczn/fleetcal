@@ -210,6 +210,15 @@ interface CalendarStore extends ModalState {
 
   showStatusOverlay: boolean;
   setShowStatusOverlay: (v: boolean) => void;
+  /** Show the green check overlay when the driver has confirmed the load. */
+  showConfirmedOverlay: boolean;
+  setShowConfirmedOverlay: (v: boolean) => void;
+  /** Show the green document overlay when a POD has been uploaded. */
+  showPodOverlay: boolean;
+  setShowPodOverlay: (v: boolean) => void;
+  /** Show the billing-status indicator (verified / invoiced / paid / on-hold). */
+  showBillingOverlay: boolean;
+  setShowBillingOverlay: (v: boolean) => void;
 
   calendarTimezone: string;
   setCalendarTimezone: (tz: string) => void;
@@ -456,6 +465,12 @@ export const useCalendarStore = create<CalendarStore>()(
 
   showStatusOverlay: true,
   setShowStatusOverlay: (v) => set({ showStatusOverlay: v }),
+  showConfirmedOverlay: true,
+  setShowConfirmedOverlay: (v) => set({ showConfirmedOverlay: v }),
+  showPodOverlay: true,
+  setShowPodOverlay: (v) => set({ showPodOverlay: v }),
+  showBillingOverlay: true,
+  setShowBillingOverlay: (v) => set({ showBillingOverlay: v }),
 
   calendarTimezone: 'America/Denver',
   setCalendarTimezone: (tz) => set({ calendarTimezone: tz }),
@@ -1558,7 +1573,10 @@ export const useCalendarStore = create<CalendarStore>()(
         driverPayPct:       state.driverPayPct,
         theme:              state.theme,
         assetCategories:    state.assetCategories,
-        showStatusOverlay:  state.showStatusOverlay,
+        showStatusOverlay:   state.showStatusOverlay,
+        showConfirmedOverlay: state.showConfirmedOverlay,
+        showPodOverlay:      state.showPodOverlay,
+        showBillingOverlay:  state.showBillingOverlay,
         showUnassigned:     state.showUnassigned,
         calendarTimezone:   state.calendarTimezone,
         cardFields:         state.cardFields,
