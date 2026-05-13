@@ -2164,7 +2164,7 @@ function TrailersPanel() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ maxWidth: 600 }}>
       <div>
         <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Trailers</div>
         <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
@@ -2320,7 +2320,7 @@ function DispatchersPanel() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ maxWidth: 600 }}>
       <div>
         <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Dispatchers</div>
         <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
@@ -2484,7 +2484,7 @@ function CustomersPanel() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ maxWidth: 600 }}>
       <div>
         <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Customers</div>
         <div className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
