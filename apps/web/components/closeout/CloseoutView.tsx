@@ -1102,6 +1102,50 @@ export default function CloseoutView() {
               )}
             </div>
             <div className="flex-1" />
+            {selectedIds.size > 0 && (
+              <div className="flex items-center gap-2 pr-1 mr-1"
+                style={{ borderRight: '1px solid var(--gc-border)' }}>
+                <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  {selectedIds.size} selected
+                </span>
+                <button type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  className="text-[11px] px-2 py-1 rounded hover:bg-[var(--gc-hover)]"
+                  style={{ color: 'var(--gc-text-2)' }}>
+                  Clear
+                </button>
+                <button type="button"
+                  onClick={() => void handleBulkRelease()}
+                  disabled={bulkBusy !== null}
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
+                  style={{
+                    background: '#dcfce7', color: '#15803d',
+                    border: '1px solid #86efac',
+                    opacity: bulkBusy !== null ? 0.6 : 1,
+                    cursor: bulkBusy !== null ? 'default' : 'pointer',
+                  }}>
+                  {bulkBusy === 'release'
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <CheckCircle2 size={11} />}
+                  Release selected
+                </button>
+                <button type="button"
+                  onClick={() => setBulkFlagOpen(true)}
+                  disabled={bulkBusy !== null}
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
+                  style={{
+                    background: '#fef3c7', color: '#92400e',
+                    border: '1px solid #fde68a',
+                    opacity: bulkBusy !== null ? 0.6 : 1,
+                    cursor: bulkBusy !== null ? 'default' : 'pointer',
+                  }}>
+                  {bulkBusy === 'flag'
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <Flag size={11} />}
+                  Flag selected
+                </button>
+              </div>
+            )}
             {visible.length > 0 && (
               <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
                 className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-lg text-white transition-colors"
@@ -1174,49 +1218,6 @@ export default function CloseoutView() {
                 rowClassName={(r) => r.priority ? 'bg-[#fefce8]' : ''}
                 isLoading={loading}
                 emptyMessage={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
-                footerExtra={selectedIds.size > 0 ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                      {selectedIds.size} selected
-                    </span>
-                    <button type="button"
-                      onClick={() => setSelectedIds(new Set())}
-                      className="text-[11px] px-2 py-1 rounded hover:bg-[var(--gc-hover)]"
-                      style={{ color: 'var(--gc-text-2)' }}>
-                      Clear
-                    </button>
-                    <button type="button"
-                      onClick={() => void handleBulkRelease()}
-                      disabled={bulkBusy !== null}
-                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
-                      style={{
-                        background: '#dcfce7', color: '#15803d',
-                        border: '1px solid #86efac',
-                        opacity: bulkBusy !== null ? 0.6 : 1,
-                        cursor: bulkBusy !== null ? 'default' : 'pointer',
-                      }}>
-                      {bulkBusy === 'release'
-                        ? <Loader2 size={11} className="animate-spin" />
-                        : <CheckCircle2 size={11} />}
-                      Release selected
-                    </button>
-                    <button type="button"
-                      onClick={() => setBulkFlagOpen(true)}
-                      disabled={bulkBusy !== null}
-                      className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
-                      style={{
-                        background: '#fef3c7', color: '#92400e',
-                        border: '1px solid #fde68a',
-                        opacity: bulkBusy !== null ? 0.6 : 1,
-                        cursor: bulkBusy !== null ? 'default' : 'pointer',
-                      }}>
-                      {bulkBusy === 'flag'
-                        ? <Loader2 size={11} className="animate-spin" />
-                        : <Flag size={11} />}
-                      Flag selected
-                    </button>
-                  </div>
-                ) : null}
               />
             </div>
           )}
