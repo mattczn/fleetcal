@@ -20,6 +20,10 @@ import type {
 } from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
 
+/** Billing-status enum used by /v1/closeout + /v1/reports. Mirrors
+ *  the union on Load.billingStatus in domain.ts. */
+export type BillingStatus = "pending" | "verified" | "invoiced" | "paid" | "on_hold";
+
 // ── /v1/health ──────────────────────────────────────────────────────────
 
 export interface HealthResponse {
@@ -1037,6 +1041,157 @@ export type {
   MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
   MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
 };
+
+// ── /v1/reports/loads — load-shaped report endpoint ────────────────────
+//
+// Distinct from /v1/loads (which is actually events-flavored — one row per
+// event/leg, with the parent load joined onto each row). The report
+// endpoint queries the loads table directly and returns ONE row per load,
+// with the pickup leg's fields elevated as the load's representative
+// fields for single-column displays. Designed for dashboards, accounting
+// exports, and any consumer that thinks "one row per load."
+//
+// A relay load shows up exactly once, with the pickup leg in the headline
+// fields and both legs in `legs[]`.
+
+/** One leg of a load. A non-relay load has exactly one leg with
+ *  relayRole=undefined. A relay load has two legs (pickup, delivery). */
+export interface LegSummary {
+  eventId:     string;
+  relayRole?:  "pickup" | "delivery";
+  /** ISO timestamp of this leg's start (= pickup time for the pickup leg). */
+  start:       string;
+  /** ISO timestamp of this leg's end. */
+  end:         string;
+  status:      LoadStatus;
+  priority?:   boolean;
+  assetId:     number;
+  driverId?:   number;
+  driverName?: string;
+  driverPay?:  number;
+  /** Routed road miles for this leg (cached server-side). */
+  loadedMiles?: number;
+  trailerId?:  number;
+  /** Stops belonging to this leg, ordered by sequence. */
+  stops:       Stop[];
+}
+
+/** Load-shaped summary — one entry per load_id. */
+export interface LoadSummary {
+  // Identity
+  loadId:           string;
+  internalLoadId:   number;
+  loadNum?:         string;
+  /** True iff this load has two legs (relayGroupId set on the events). */
+  isRelay:          boolean;
+
+  // Customer / dispatch
+  broker?:          string;
+  customerId?:      string;
+  dispatcher?:      string;
+  createdByName?:   string;
+
+  // Money
+  loadPrice?:       number;
+  /** Load-level accessorials. Per-leg accessorials are a future split. */
+  accessorials?:    Accessorial[];
+
+  // Equipment & content (load-level summary)
+  commodity?:       string;
+  weight?:          number;
+  trailerType?:     string;
+  refNums?:         RefNum[];
+  rateConPdf?:      string | null;
+
+  // Notes
+  notes?:           string;
+  internalNotes?:   InternalNote[];
+
+  // Billing / closeout state
+  billingStatus?:   BillingStatus;
+  flaggedReason?:   string;
+  flaggedNote?:     string;
+  flaggedAt?:       string;
+  flaggedBy?:       string;
+  verifiedAt?:      string;
+  verifiedBy?:      string;
+  invoiceDocIds?:   string[];
+
+  // Audit
+  auditLog?:        LoadAuditEntry[];
+
+  // ── Elevated leg-level fields — for single-column displays.
+  //    Always reflect the PICKUP leg (or the only leg, if single).
+  //    Delivery-side counterparts are exposed below for relay tables.
+  pickupAt:         string;
+  pickupAssetId:    number;
+  pickupDriverId?:  number;
+  pickupDriverName?: string;
+  pickupDriverPay?: number;
+  pickupStatus:     LoadStatus;
+  pickupPriority?:  boolean;
+  pickupLoadedMiles?: number;
+
+  // ── Delivery-side fields. For single-leg loads these equal the
+  //    pickup-side fields — the delivery IS the pickup leg's end.
+  deliveryAt:        string;
+  deliveryAssetId:   number;
+  deliveryDriverId?: number;
+  deliveryDriverName?: string;
+  deliveryDriverPay?: number;
+  deliveryStatus:    LoadStatus;
+  deliveryLoadedMiles?: number;
+
+  // ── Convenience aggregates
+  /** Sum of loadedMiles across all legs. undefined when any leg lacks miles. */
+  totalLoadedMiles?: number;
+  /** Sum of driverPay across all legs. undefined when no leg has driver pay. */
+  totalDriverPay?:  number;
+
+  // ── Full stop list, ordered pickup → delivery (no duplicates).
+  //    Convenient for any consumer that wants "the stops" without
+  //    dealing with leg structure. Per-leg stops live in `legs[].stops`.
+  stops:            Stop[];
+
+  // ── Per-leg breakdown for detail views.
+  legs:             LegSummary[];
+
+  // Lifecycle
+  deletedAt?:       string;
+  createdAt?:       string;
+  updatedAt?:       string;
+}
+
+export interface ListLoadSummariesQuery {
+  /** YYYY-MM-DD or full ISO timestamp. Filters loads whose PICKUP leg's
+   *  start falls on/after this. */
+  pickupFrom?:    string;
+  /** Filters loads whose PICKUP leg's start falls on/before this. */
+  pickupTo?:      string;
+  /** YYYY-MM-DD or full ISO. Filters by DELIVERY leg's end (the load's
+   *  final delivery). Combined with pickup filters as AND. */
+  deliveryFrom?:  string;
+  deliveryTo?:    string;
+  /** Comma-separated broker names. Matches `loads.broker` case-insensitive. */
+  brokers?:       string;
+  /** Comma-separated customer uuids. */
+  customerIds?:   string;
+  /** Comma-separated load statuses. Matched against the PICKUP leg's status. */
+  status?:        string;
+  /** Comma-separated billing statuses (released, invoiced, paid, etc.). */
+  billingStatus?: string;
+  /** When 'true', includes soft-deleted loads. */
+  includeDeleted?: string;
+  /** Hard limit. Default 1000; reports rarely need more. */
+  limit?:         string;
+  offset?:        string;
+}
+
+export interface ListLoadSummariesResponse {
+  loads: LoadSummary[];
+  /** Total matching loads BEFORE limit/offset — used for pagination UI. */
+  total: number;
+}
 
 // ── Errors (shared envelope) ────────────────────────────────────────────
 

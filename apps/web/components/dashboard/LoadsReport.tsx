@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
-import type { CalendarEvent } from '@/lib/types';
+import type { LoadSummary } from '@fleetcal/types';
 import DatePicker from '@/components/calendar/DatePicker';
 import CopyChip from '@/components/ui/CopyChip';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
@@ -18,7 +18,7 @@ interface ColumnDef {
   id:    string;
   label: string;
   /** Raw value — used for sorting, column-filter distinct values, and export. */
-  get:   (load: CalendarEvent, ctx: ColumnCtx) => string | number;
+  get:   (load: LoadSummary, ctx: ColumnCtx) => string | number;
   align?: 'right';
   /** Skip thousands-separator formatting (e.g. ID columns). */
   noFormat?: boolean;
@@ -42,7 +42,7 @@ function fmtDate(iso: string | undefined): string {
   return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function billableAccessorials(load: CalendarEvent): number {
+function billableAccessorials(load: LoadSummary): number {
   return (load.accessorials ?? []).reduce((sum, a) => sum + (a.billable ? (a.amount ?? 0) : 0), 0);
 }
 
@@ -50,7 +50,7 @@ function billableAccessorials(load: CalendarEvent): number {
  *  every accessorial marked as billable. NOT a sum of all accessorials —
  *  internal ones (driver per-diem, lumper reimbursements, etc.) are
  *  excluded by design. */
-function billableTotal(load: CalendarEvent): number {
+function billableTotal(load: LoadSummary): number {
   return (load.loadPrice ?? 0) + billableAccessorials(load);
 }
 
@@ -66,20 +66,12 @@ function localEndOfDayIso(yyyymmdd: string): string {
   return new Date(`${yyyymmdd}T23:59:59.999`).toISOString();
 }
 
-/** YYYY-MM-DD in the user's local timezone. We use this for comparisons
- *  against the date strings the user picked in the date pickers — date
- *  math on raw ISO timestamps would shift across timezones. */
-function localDateOf(iso: string): string {
-  const dt = new Date(iso);
-  if (isNaN(dt.getTime())) return iso.slice(0, 10);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-}
 
-function refStr(load: CalendarEvent): string {
+function refStr(load: LoadSummary): string {
   return (load.refNums ?? []).map(r => r.label ? `${r.label}: ${r.value}` : r.value).join(' | ');
 }
 
-function firstStop(load: CalendarEvent, type: 'pickup' | 'delivery'): string {
+function firstStop(load: LoadSummary, type: 'pickup' | 'delivery'): string {
   const stops = load.stops ?? [];
   const stop = type === 'pickup'
     ? (stops.find(s => s.type === 'pickup') ?? stops[0])
@@ -89,7 +81,8 @@ function firstStop(load: CalendarEvent, type: 'pickup' | 'delivery'): string {
 }
 
 const COLUMNS: ColumnDef[] = [
-  { id: 'pickupDate',   label: 'Pickup Date', get: (l) => fmtDate(l.start) },
+  { id: 'pickupDate',   label: 'Pickup Date', get: (l) => fmtDate(l.pickupAt) },
+  { id: 'deliveryDate', label: 'Delivery Date', get: (l) => fmtDate(l.deliveryAt) },
   { id: 'loadNum',      label: 'Load #',      get: (l) => l.loadNum ?? '' },
   { id: 'internalId',   label: 'Internal ID', get: (l) => l.internalLoadId ?? '', noFormat: true },
   { id: 'customer',     label: 'Customer',    get: (l, ctx) => {
@@ -97,25 +90,47 @@ const COLUMNS: ColumnDef[] = [
            ?? (l.broker ? ctx.customers.find(c => c.name === l.broker || c.aliases.includes(l.broker!)) : undefined);
     return (c?.shortName?.trim() || c?.name) ?? l.broker ?? '';
   } },
-  { id: 'title',        label: 'Title',       get: (l) => l.title ?? '' },
-  { id: 'driver',       label: 'Driver',      get: (l) => l.driverName ?? '' },
+  // Title is derived from pickup → delivery cities. A load doesn't have
+  // a single "title" — historically the event title was a leg name like
+  // "Pickup at XYZ", which doesn't make sense at the load level.
+  { id: 'title',        label: 'Title',       get: (l) => {
+    const pickup = l.stops.find(s => s.type === 'pickup') ?? l.stops[0];
+    const delivery = [...l.stops].reverse().find(s => s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook') ?? l.stops[l.stops.length - 1];
+    const a = pickup?.city ?? pickup?.facilityName ?? '';
+    const b = delivery?.city ?? delivery?.facilityName ?? '';
+    return a && b ? `${a} → ${b}` : (a || b || '');
+  } },
+  { id: 'driver',       label: 'Driver',      get: (l) => {
+    // Pickup leg's driver is the headline name. For relays, both legs'
+    // drivers are exposed below as separate columns.
+    if (!l.isRelay) return l.pickupDriverName ?? '';
+    const a = l.pickupDriverName ?? '';
+    const b = l.deliveryDriverName ?? '';
+    return a && b && a !== b ? `${a} → ${b}` : a || b;
+  } },
+  { id: 'pickupDriver', label: 'Pickup Driver', get: (l) => l.pickupDriverName ?? '' },
+  { id: 'deliveryDriver', label: 'Delivery Driver', get: (l) => l.deliveryDriverName ?? '' },
   { id: 'asset',        label: 'Asset',       get: (l, ctx) => {
-    const a = ctx.assets.find(x => x.id === l.assetId);
+    const a = ctx.assets.find(x => x.id === l.pickupAssetId);
     return a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
   }},
   { id: 'trailerType',  label: 'Trailer Type', get: (l) => l.trailerType ?? '' },
-  { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.status ?? 'scheduled'] ?? l.status ?? '' },
-  { id: 'priority',     label: 'Priority',    get: (l) => l.priority ? 'Yes' : '' },
+  { id: 'isRelay',      label: 'Relay',       get: (l) => l.isRelay ? 'Yes' : '' },
+  { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.pickupStatus ?? 'scheduled'] ?? l.pickupStatus ?? '' },
+  { id: 'deliveryStatus', label: 'Delivery Status', get: (l) => STATUS_LABEL[l.deliveryStatus ?? 'scheduled'] ?? l.deliveryStatus ?? '' },
+  { id: 'priority',     label: 'Priority',    get: (l) => l.pickupPriority ? 'Yes' : '' },
   { id: 'pickup',       label: 'Pickup',      get: (l) => firstStop(l, 'pickup') },
   { id: 'delivery',     label: 'Delivery',    get: (l) => firstStop(l, 'delivery') },
   { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
   { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
+  { id: 'miles',        label: 'Miles', align: 'right',        get: (l) => l.totalLoadedMiles ?? '' },
   { id: 'loadPrice',    label: 'Load Price', align: 'right',   get: (l) => l.loadPrice ?? '' },
   { id: 'accessorials', label: 'Accessorials', align: 'right', get: (l) => billableAccessorials(l) || '' },
   { id: 'total',        label: 'Total',       align: 'right',  get: (l) => billableTotal(l) || '' },
-  { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.driverPay ?? '' },
+  { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.totalDriverPay ?? '' },
   { id: 'refNums',      label: 'References',  get: (l) => refStr(l) },
   { id: 'dispatcher',   label: 'Dispatcher',  get: (l) => l.dispatcher ?? '' },
+  { id: 'billingStatus', label: 'Billing',    get: (l) => l.billingStatus ?? '' },
   { id: 'notes',        label: 'Notes',       get: (l) => l.notes ?? '' },
 ];
 
@@ -319,8 +334,10 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const [selectedDrivers,   setSelectedDrivers]   = useState<Set<string>>(new Set());
   const [selectedAssets,    setSelectedAssets]    = useState<Set<string>>(new Set());
 
-  // Results
-  const [loads,     setLoads]     = useState<CalendarEvent[] | null>(null);
+  // Results — LoadSummary[], one row per load. The server collapses
+  // relay legs into a single row with pickup-side fields elevated, so
+  // there's no client-side dedupe needed anymore.
+  const [loads,     setLoads]     = useState<LoadSummary[] | null>(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
 
@@ -400,13 +417,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     setError(null);
     setLoading(true);
     try {
-      // Send ISO timestamps in the user's local timezone. Without the
-      // offset, the backend treats "2026-05-09T00:00" as UTC midnight,
-      // which is 5pm May 8 in MT — so MT-evening pickups bled into the
-      // next day's report. ISO-with-offset closes that gap.
-      const { loads: fetched } = await railway.listLoads({
-        from: localStartOfDayIso(from),
-        to:   localEndOfDayIso(to),
+      // Hit the load-shaped report endpoint. One row per load, relays
+      // already collapsed server-side, pickup-date filter applied
+      // server-side. Local-tz ISO so "May 9" means May 9 in the user's
+      // wall-clock time, not UTC.
+      const { loads: fetched } = await railway.listLoadSummaries({
+        pickupFrom: localStartOfDayIso(from),
+        pickupTo:   localEndOfDayIso(to),
       });
       setLoads(fetched);
     } catch (err) {
@@ -441,65 +458,33 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     return names;
   }, [selectedCustomers, customers]);
 
-  // Collapse relay legs into ONE row per load. The API returns one event
-  // per leg, and a relay has two events sharing a loadId — without this
-  // dedupe step every metric in the report doubled for relays (load
-  // price summed twice, accessorials summed twice, etc.).
-  //
-  // The PICKUP leg represents the load: it carries the real pickup date,
-  // the pickup-side stops, and the originating driver. The delivery leg
-  // is discarded for reporting purposes; its data still lives on the
-  // load itself (which the API echoes onto both legs identically).
-  const dedupedLoads = useMemo(() => {
-    if (!loads) return [];
-    const byLoad = new Map<string, CalendarEvent>();
-    for (const ev of loads) {
-      // Group by loadId when available; fall back to event id for
-      // legacy rows missing the join.
-      const key = ev.loadId ?? ev.id;
-      const existing = byLoad.get(key);
-      if (!existing) {
-        byLoad.set(key, ev);
-        continue;
-      }
-      // Prefer pickup leg. relayRole 'pickup' wins; absence of
-      // relayRole (single-leg load) also wins over a 'delivery' leg
-      // for safety.
-      const evIsPickup       = ev.relayRole === 'pickup' || !ev.relayRole;
-      const existingIsPickup = existing.relayRole === 'pickup' || !existing.relayRole;
-      if (evIsPickup && !existingIsPickup) {
-        byLoad.set(key, ev);
-      }
-    }
-    return [...byLoad.values()];
-  }, [loads]);
-
-  // Apply the user-selected pickup-date range in their LOCAL timezone.
-  // The API filter is intentionally "overlap" (so the calendar view
-  // sees in-progress loads), but the report wants strictly "picked up
-  // between from and to". Filtering on the deduped pickup leg's start,
-  // converted to a local YYYY-MM-DD string, prevents tz drift and
-  // satisfies the "May 9 means May 9 my time" expectation.
-  const pickupRangeLoads = useMemo(() => {
-    if (!from || !to) return dedupedLoads;
-    return dedupedLoads.filter(ev => {
-      const localDate = localDateOf(ev.start);
-      return localDate >= from && localDate <= to;
-    });
-  }, [dedupedLoads, from, to]);
-
+  // Top-level dropdown filters layered on top of the server's
+  // pickup-date filter. Server already returns one row per load with
+  // pickup-side fields elevated, so we just filter against
+  // pickup-side / load-level fields here. Driver matches against
+  // EITHER the pickup or delivery driver so a relay still surfaces
+  // when either of its drivers is selected.
   const topRows = useMemo(() => {
-    return pickupRangeLoads.filter(load => {
+    if (!loads) return [];
+    return loads.filter(load => {
       if (selectedCustomers.size > 0) {
         const fkMatch   = !!load.customerId && selectedCustomers.has(load.customerId);
         const nameMatch = !!load.broker     && selectedCustomerNames.has(load.broker);
         if (!fkMatch && !nameMatch) return false;
       }
-      if (selectedDrivers.size > 0 && !selectedDrivers.has(load.driverName ?? '')) return false;
-      if (selectedAssets.size  > 0 && !selectedAssets.has(String(load.assetId))) return false;
+      if (selectedDrivers.size > 0) {
+        const pickupHit   = !!load.pickupDriverName   && selectedDrivers.has(load.pickupDriverName);
+        const deliveryHit = !!load.deliveryDriverName && selectedDrivers.has(load.deliveryDriverName);
+        if (!pickupHit && !deliveryHit) return false;
+      }
+      if (selectedAssets.size > 0) {
+        const pickupAsset   = String(load.pickupAssetId);
+        const deliveryAsset = String(load.deliveryAssetId);
+        if (!selectedAssets.has(pickupAsset) && !selectedAssets.has(deliveryAsset)) return false;
+      }
       return true;
     });
-  }, [pickupRangeLoads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
+  }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
 
   // Columns in user's chosen order (drag-and-drop in the picker).
   const orderedColumns = useMemo(
@@ -524,12 +509,12 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   // Display value for a cell — same formatting the table renders, used for
   // both the visible table and the column-filter distinct-value list.
   const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const cellDisplay = (col: ColumnDef, load: CalendarEvent): string => {
+  const cellDisplay = (col: ColumnDef, load: LoadSummary): string => {
     const v = col.get(load, ctx);
     if (v === '' || v == null) return '';
     if (typeof v === 'number') {
       if (col.noFormat) return String(v);
-      const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials';
+      const isMoney = col.id === 'loadPrice' || col.id === 'driverPay' || col.id === 'accessorials' || col.id === 'total';
       return isMoney && v > 0 ? fmt$(v) : v.toLocaleString();
     }
     return String(v);
@@ -1028,12 +1013,16 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                     const customer =
                       customers.find(c => c.id === load.customerId) ??
                       (load.broker ? customers.find(c => c.name === load.broker || c.aliases.includes(load.broker!)) : undefined);
+                    // openEditModal expects an event id, not a load id. Use
+                    // the pickup leg's event id so a click opens the
+                    // canonical event for the load.
+                    const eventId = load.legs[0]?.eventId ?? load.loadId;
                     return (
-                      <tr key={load.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                      <tr key={load.loadId} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
                         <td style={{ padding: '10px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>
                           <button
                             type="button"
-                            onClick={() => openEditModal(load.id)}
+                            onClick={() => openEditModal(eventId)}
                             title="Open load"
                             style={{
                               fontSize: 11, fontWeight: 600, padding: '4px 12px', borderRadius: 5,
@@ -1067,15 +1056,16 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                               </button>
                             );
                           } else if (col.id === 'driver') {
-                            // Match by driver_id FK first so renames don't break the link;
-                            // fall back to name match for legacy rows missing the id.
+                            // Resolve the pickup driver by ID first so renames flow through;
+                            // fall back to a name match for legacy rows missing the FK.
                             const driverRec =
-                              (load.driverId != null ? drivers.find(d => d.id === load.driverId) : undefined) ??
-                              (load.driverName ? drivers.find(d => d.name === load.driverName) : undefined);
+                              (load.pickupDriverId != null ? drivers.find(d => d.id === load.pickupDriverId) : undefined) ??
+                              (load.pickupDriverName ? drivers.find(d => d.name === load.pickupDriverName) : undefined);
                             if (driverRec) {
-                              // Always render the CURRENT driver name — if the dispatcher
-                              // updates first/last on the record, the report reflects it.
+                              // Render the CURRENT driver name so an in-place rename surfaces.
                               const fullName = `${driverRec.firstName ?? ''} ${driverRec.lastName ?? ''}`.trim() || driverRec.name;
+                              const relaySuffix = load.isRelay && load.deliveryDriverName && load.deliveryDriverName !== fullName
+                                ? ` → ${load.deliveryDriverName}` : '';
                               inner = (
                                 <button
                                   type="button"
@@ -1083,17 +1073,16 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                                   style={{ background: 'none', border: 'none', padding: 0, color: 'var(--gc-blue)', cursor: 'pointer', textAlign: 'left', fontSize: 12 }}
                                   onMouseEnter={e => (e.currentTarget.style.textDecoration = 'underline')}
                                   onMouseLeave={e => (e.currentTarget.style.textDecoration = 'none')}
+                                  title={load.isRelay ? `Relay — pickup: ${fullName}${load.deliveryDriverName ? `, delivery: ${load.deliveryDriverName}` : ''}` : undefined}
                                 >
-                                  {fullName}
+                                  {fullName}{relaySuffix}
                                 </button>
                               );
-                            } else if (load.driverName) {
-                              // No matching record — still show the stored name so the
-                              // cell isn't blank.
-                              inner = load.driverName;
+                            } else if (load.pickupDriverName) {
+                              inner = load.pickupDriverName;
                             }
                           } else if (col.id === 'asset') {
-                            const a = assets.find(x => x.id === load.assetId);
+                            const a = assets.find(x => x.id === load.pickupAssetId);
                             if (a) {
                               inner = (
                                 <button

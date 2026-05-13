@@ -15,6 +15,7 @@
 import type {
   CreateLoadRequest, CreateLoadResponse,
   ListLoadsResponse, GetLoadResponse,
+  ListLoadSummariesResponse,
   SearchLoadsResponse,
   UpdateLoadRequest, UpdateLoadResponse,
   UpdateEventRequest, UpdateEventResponse,
@@ -135,6 +136,13 @@ class RailwayClient {
     return this.req<ListLoadsResponse>('GET', `/v1/loads${qs ? `?${qs}` : ''}`);
   }
   getLoad(id: string)                 { return this.req<GetLoadResponse>('GET',      `/v1/loads/${id}`); }
+
+  /** Load-shaped report endpoint — one row per load (relays collapse).
+   *  See packages/types/api.ts LoadSummary for the response shape. */
+  listLoadSummaries(query: Record<string, string>) {
+    const qs = new URLSearchParams(query).toString();
+    return this.req<ListLoadSummariesResponse>('GET', `/v1/reports/loads${qs ? `?${qs}` : ''}`);
+  }
   // ── Closeout / POD verification queue ─────────────────────────────────
   listCloseoutQueue(
     tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' = 'pending',
