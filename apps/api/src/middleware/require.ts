@@ -64,6 +64,22 @@ export function invalidateRoleOverrides(orgId: string): void {
   overrideCache.delete(orgId);
 }
 
+/** Inline capability check for handlers that need to choose between
+ *  caps based on request body content (e.g. POST /v1/events branching
+ *  on event_kind to decide between loads.create vs
+ *  nonRevenueEvents.create). Async because it goes through the same
+ *  override loader as requireCapability, so the check stays consistent
+ *  with middleware-level enforcement. */
+export async function effectiveCanForOrg(
+  role: OrgRole | undefined,
+  cap: Capability,
+  orgId: string | undefined,
+): Promise<boolean> {
+  if (!orgId) return false;
+  const overrides = await loadOverrides(orgId);
+  return effectiveCan(role, cap, overrides);
+}
+
 // ── Middlewares ─────────────────────────────────────────────────────────
 
 export function requireCapability(

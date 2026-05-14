@@ -40,7 +40,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, effectiveCanForOrg } from "../middleware/require.js";
 
 const events = new Hono<{ Variables: AuthVariables }>();
 
@@ -213,7 +213,12 @@ events.get("/:id", async (c) => {
 // POST /v1/events — create a non-revenue event
 // ─────────────────────────────────────────────────────────────────────────
 
-events.post("/", requireCapability("loads.create"), async (c) => {
+// POST /v1/events creates a non-revenue event (the handler hardcodes
+// event_kind: "non_revenue"). Revenue loads go through POST /v1/loads
+// instead. Gated on nonRevenueEvents.create so a Maintenance role
+// can add maintenance / repair blocks without unlocking revenue-load
+// creation.
+events.post("/", requireCapability("nonRevenueEvents.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateEventRequest>();
 
@@ -289,8 +294,9 @@ events.post("/", requireCapability("loads.create"), async (c) => {
 // PATCH /v1/events/:id — update any event by id
 // ─────────────────────────────────────────────────────────────────────────
 
-events.patch("/:id", requireCapability("loads.edit"), async (c) => {
+events.patch("/:id", async (c) => {
   const orgId = c.get("orgId");
+  const role  = c.get("orgRole");
   const eventId = c.req.param("id");
   const body = await c.req.json<UpdateEventByIdRequest>();
 
@@ -299,6 +305,35 @@ events.patch("/:id", requireCapability("loads.edit"), async (c) => {
   }
   if (body.start && body.end && body.start > body.end) {
     return badRequest(c, ["start must be <= end"]);
+  }
+
+  // Permission check is event-kind-dependent: revenue events require
+  // loads.edit (full revenue-load editing); non-revenue events accept
+  // either loads.edit OR nonRevenueEvents.edit so a Maintenance role
+  // can fix up their own blocks without touching revenue loads.
+  const { data: kindRow } = await supabase
+    .from("events")
+    .select("event_kind,load_id")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!kindRow) {
+    return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  }
+  const kr = kindRow as { event_kind: string; load_id: string | null };
+  const isRevenue = kr.event_kind === "revenue" || kr.load_id !== null;
+  const required = isRevenue ? "loads.edit" : "nonRevenueEvents.edit";
+  if (!(await effectiveCanForOrg(role, required, orgId))) {
+    // For non-revenue, fall back to loads.edit just in case (Admin
+    // who has loads.edit but the nonRevenueEvents.* override revoked).
+    if (isRevenue || !(await effectiveCanForOrg(role, "loads.edit", orgId))) {
+      return c.json({
+        error: "forbidden",
+        reason: "missing_capability",
+        capability: required,
+        role: role ?? null,
+      }, 403);
+    }
   }
 
   const update: Record<string, unknown> = {};
@@ -343,8 +378,9 @@ events.patch("/:id", requireCapability("loads.edit"), async (c) => {
 //     calendar / dispatch board.
 // ─────────────────────────────────────────────────────────────────────────
 
-events.delete("/:id", requireCapability("loads.delete"), async (c) => {
+events.delete("/:id", async (c) => {
   const orgId = c.get("orgId");
+  const role  = c.get("orgRole");
   const eventId = c.req.param("id");
   const keepLoad = c.req.query("keepLoad") === "true";
 
@@ -362,6 +398,23 @@ events.delete("/:id", requireCapability("loads.delete"), async (c) => {
   }
   const evRow = ev as { event_kind: string; load_id: string | null };
   const isRevenue = evRow.event_kind === "revenue" || evRow.load_id !== null;
+
+  // Event-kind-aware permission check: revenue events require
+  // loads.delete; non-revenue events accept loads.delete OR
+  // nonRevenueEvents.delete (so a Maintenance role can clear out
+  // their own blocks).
+  const requiredDeleteCap = isRevenue ? "loads.delete" : "nonRevenueEvents.delete";
+  if (!(await effectiveCanForOrg(role, requiredDeleteCap, orgId))) {
+    if (isRevenue || !(await effectiveCanForOrg(role, "loads.delete", orgId))) {
+      return c.json({
+        error: "forbidden",
+        reason: "missing_capability",
+        capability: requiredDeleteCap,
+        role: role ?? null,
+      }, 403);
+    }
+  }
+
   if (isRevenue && !keepLoad) {
     return badRequest(c, ["cannot delete a revenue event directly; pass keepLoad=true to drop the event but keep the load, or DELETE /v1/loads/:id to delete both"]);
   }

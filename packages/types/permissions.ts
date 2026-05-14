@@ -93,6 +93,15 @@ export type Capability =
   // Owner/Admin have it; Dispatcher + Maintenance don't, unless the
   // org explicitly opts in (Phase 3 setting).
   | "loads.view_driver_pay"
+  // Non-revenue calendar events — maintenance/repair blocks, asset
+  // out-of-service holds, etc. Distinct from loads.* so a Maintenance
+  // role can manage their own events without being able to touch
+  // revenue loads. The API checks event_kind on POST/PATCH/DELETE
+  // and applies either loads.* OR nonRevenueEvents.* based on the
+  // event's kind.
+  | "nonRevenueEvents.create"
+  | "nonRevenueEvents.edit"
+  | "nonRevenueEvents.delete"
 
   // Customers / brokers
   | "customers.view"
@@ -151,6 +160,7 @@ export type Capability =
 const ALL_CAPS: Capability[] = [
   "org.settings.edit", "org.members.manage",
   "loads.view", "loads.create", "loads.edit", "loads.delete", "loads.view_driver_pay",
+  "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
   "customers.view", "customers.create", "customers.edit", "customers.delete",
   "drivers.view", "drivers.create", "drivers.edit", "drivers.delete",
   "assets.view", "assets.create", "assets.edit", "assets.delete",
@@ -177,6 +187,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // driver pay is hidden.
   dispatcher: new Set<Capability>([
     "loads.view", "loads.create", "loads.edit",
+    "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
     "customers.view", "customers.create", "customers.edit",
     "drivers.view", "drivers.create", "drivers.edit",
     "assets.view", "assets.create", "assets.edit",
@@ -189,10 +200,13 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "reports.access",
   ]),
 
-  // Maintenance: stripped-down nav. Sees the calendar but can't
-  // touch anything there; full access to Maintenance + Fuel.
+  // Maintenance: stripped-down nav. Sees the calendar, can't touch
+  // revenue loads, but CAN create / edit / delete non-revenue events
+  // (maintenance blocks, repair holds, asset out-of-service windows).
+  // Plus full access to Maintenance + Fuel modules.
   maintenance: new Set<Capability>([
     "loads.view",
+    "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
     "customers.view", "drivers.view", "trailers.view", "assets.view",
     "maintenance.access", "maintenance.edit",
     "fuel.access", "fuel.edit",
@@ -282,6 +296,8 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   // (or vice versa). The API enforces each separately.
   { cap: "loads.create",          label: "Create loads",          group: "Create / Edit" },
   { cap: "loads.edit",            label: "Edit loads",            group: "Create / Edit" },
+  { cap: "nonRevenueEvents.create", label: "Create non-revenue events", group: "Create / Edit", hint: "Maintenance blocks, repair holds, asset out-of-service windows — anything on the calendar that isn't a paying load." },
+  { cap: "nonRevenueEvents.edit",   label: "Edit non-revenue events",   group: "Create / Edit" },
   { cap: "customers.create",      label: "Create customers",      group: "Create / Edit" },
   { cap: "customers.edit",        label: "Edit customers",        group: "Create / Edit" },
   { cap: "drivers.create",        label: "Create drivers",        group: "Create / Edit" },
@@ -296,7 +312,8 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "dispatchers.edit",      label: "Edit dispatchers",      group: "Create / Edit" },
 
   // Delete — destructive.
-  { cap: "loads.delete",          label: "Delete loads",          group: "Delete" },
+  { cap: "loads.delete",            label: "Delete loads",          group: "Delete" },
+  { cap: "nonRevenueEvents.delete", label: "Delete non-revenue events", group: "Delete" },
   { cap: "customers.delete",      label: "Delete customers",      group: "Delete" },
   { cap: "drivers.delete",        label: "Delete drivers",        group: "Delete" },
   { cap: "assets.delete",         label: "Delete assets",         group: "Delete" },
