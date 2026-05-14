@@ -456,7 +456,7 @@ function AppearancePanel() {
  */
 function MembersPanel() {
   return (
-    <div className="max-w-4xl mx-auto">
+    <div>
       <div className="mb-6">
         <h1 className="text-2xl font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
           Members &amp; Roles
@@ -466,20 +466,26 @@ function MembersPanel() {
           and remove access. Role changes take effect on the user&apos;s next page load.
         </p>
       </div>
-      <OrganizationProfile
-        routing="hash"
-        appearance={{
-          elements: {
-            // Strip the card chrome — we already render inside a
-            // styled settings panel.
-            rootBox:  { width: '100%' },
-            cardBox:  { boxShadow: 'none', borderRadius: 0, width: '100%' },
-            card:     { boxShadow: 'none', borderRadius: 0, padding: 0, border: 'none' },
-            navbar:   { display: 'none' },
-            scrollBox:{ padding: 0 },
-          },
-        }}
-      />
+      {/* Render Clerk's OrganizationProfile at its native width — we
+          tried hiding its navbar + clipping the card chrome to fit
+          our settings panel, but Clerk's General / Members /
+          Invitations tabs all live inside that navbar, so hiding it
+          meant the user could only ever see the General tab. The
+          appearance prop now only widens the root box so it can
+          take advantage of the room available in the settings main
+          column. */}
+      <div style={{ minWidth: 0 }}>
+        <OrganizationProfile
+          routing="hash"
+          appearance={{
+            elements: {
+              rootBox:  { width: '100%' },
+              cardBox:  { width: '100%', maxWidth: 'none' },
+              card:     { width: '100%', maxWidth: 'none' },
+            },
+          }}
+        />
+      </div>
     </div>
   );
 }
