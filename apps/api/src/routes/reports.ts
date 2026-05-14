@@ -387,32 +387,51 @@ reports.get("/loads", async (c) => {
   }
 
   // ── Stage 2: fetch every event whose load_id is in our load set ───
+  //
+  // PostgREST encodes `.in("col", [ids])` into the request URL. With
+  // ~400+ loads (typical for a one-month report), the URL pushes past
+  // Node's 16KB header limit and the underlying TLS socket throws
+  // HeadersOverflowError. Batch the IN-list so each request stays
+  // well under the cap — 200 UUIDs ≈ 7.5KB which leaves room for
+  // auth headers, the SELECT clause, and other params.
   const loadIds = allLoads.map(l => l.id);
-  const { data: eventRows, error: evErr } = await supabase
-    .from("events")
-    .select(EVENT_COLS)
-    .eq("org_id", orgId)
-    .in("load_id", loadIds);
-  if (evErr) {
-    console.error("[GET /v1/reports/loads] events query failed:", evErr);
-    return c.json({ error: "list_failed", detail: evErr.message } satisfies ApiErrorResponse, 500);
+  const BATCH = 200;
+  const eventRows: EventRow[] = [];
+  for (let i = 0; i < loadIds.length; i += BATCH) {
+    const slice = loadIds.slice(i, i + BATCH);
+    const { data, error: evErr } = await supabase
+      .from("events")
+      .select(EVENT_COLS)
+      .eq("org_id", orgId)
+      .in("load_id", slice);
+    if (evErr) {
+      console.error("[GET /v1/reports/loads] events query failed:", evErr);
+      return c.json({ error: "list_failed", detail: evErr.message } satisfies ApiErrorResponse, 500);
+    }
+    for (const e of (data ?? []) as unknown as EventRow[]) eventRows.push(e);
   }
   const eventsByLoad = new Map<string, EventRow[]>();
-  for (const e of (eventRows ?? []) as unknown as EventRow[]) {
+  for (const e of eventRows) {
     if (!e.load_id) continue;
     const arr = eventsByLoad.get(e.load_id) ?? [];
     arr.push(e);
     eventsByLoad.set(e.load_id, arr);
   }
 
-  // ── Stage 3: stops in one batched query ────────────────────────────
-  const eventIds = ((eventRows ?? []) as unknown as EventRow[]).map(e => e.id);
+  // ── Stage 3: stops in batched queries (same header-limit reason) ───
+  const eventIds = eventRows.map(e => e.id);
   const stopsByEvent = new Map<string, Stop[]>();
-  if (eventIds.length) {
-    const { data: stopRows } = await supabase
+  for (let i = 0; i < eventIds.length; i += BATCH) {
+    const slice = eventIds.slice(i, i + BATCH);
+    if (slice.length === 0) continue;
+    const { data: stopRows, error: stopErr } = await supabase
       .from("stops")
       .select(STOP_COLS)
-      .in("event_id", eventIds);
+      .in("event_id", slice);
+    if (stopErr) {
+      console.error("[GET /v1/reports/loads] stops query failed:", stopErr);
+      return c.json({ error: "list_failed", detail: stopErr.message } satisfies ApiErrorResponse, 500);
+    }
     for (const s of (stopRows ?? []) as unknown as StopRow[]) {
       const arr = stopsByEvent.get(s.event_id) ?? [];
       arr.push(rowToStop(s));
