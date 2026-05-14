@@ -329,9 +329,19 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
+        // pEnd from getPeriodRange is at MIDNIGHT local on the last
+        // day (e.g. Friday 00:00 local for a Sat→Fri week). Sending
+        // that as pickupTo would exclude every load picked up after
+        // midnight on the closing day — i.e. all of Friday. Extend
+        // to end-of-day local so the filter includes the entire
+        // closing day, same shape LoadsReport uses.
+        const fromIso = pStart.toISOString();
+        const endOfDay = new Date(pEnd);
+        endOfDay.setHours(23, 59, 59, 999);
+        const toIso = endOfDay.toISOString();
         const { loads } = await railway.listLoadSummaries({
-          pickupFrom: pStart.toISOString(),
-          pickupTo:   pEnd.toISOString(),
+          pickupFrom: fromIso,
+          pickupTo:   toIso,
         });
         if (!cancelled) setLoadSummaries(loads);
       } catch (err) {
