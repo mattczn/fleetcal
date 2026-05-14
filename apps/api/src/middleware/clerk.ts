@@ -47,13 +47,19 @@ export const clerkAuth: MiddlewareHandler<{ Variables: AuthVariables }> =
       const claimsRec = claims as Record<string, unknown>;
       const orgClaim = claimsRec.o as { id?: string; rol?: string } | undefined;
       const orgId = (claimsRec.org_id as string | undefined) ?? orgClaim?.id;
-      // Role slug — Clerk passes `org:owner` / `org:admin` / etc. We
-      // accept either the long-form `org_role` claim (custom template)
-      // or the short `o.rol` from Clerk's default session shape.
-      const roleSlug =
-        (claimsRec.org_role as string | undefined) ??
-        orgClaim?.rol ??
-        undefined;
+      // Role slug — Clerk passes `org:owner` / `org:admin` / etc.
+      // Prefer the long-form `org_role` claim when present, fall back
+      // to the compact `o.rol` Clerk includes in the default session
+      // token. If the dashboard's Sessions-claim customizer was
+      // configured with a template variable Clerk doesn't recognize
+      // (e.g. `{{org_membership.role}}` in some versions), the value
+      // is passed through verbatim — strip those "{{...}}" literals
+      // so the o.rol fallback activates instead of locking everyone
+      // out under a bogus role name.
+      const rawOrgRole = claimsRec.org_role as string | undefined;
+      const orgRoleClean =
+        rawOrgRole && !rawOrgRole.startsWith("{{") ? rawOrgRole : undefined;
+      const roleSlug = orgRoleClean ?? orgClaim?.rol ?? undefined;
 
       if (!userId) {
         return c.json({ error: "unauthorized", reason: "no_subject" }, 401);
