@@ -19,6 +19,7 @@ import { LOAD_ACCENT } from '@/lib/loadAccent';
 import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
 import type { LoadSummary } from '@fleetcal/types';
+import { usePermissions } from '@/lib/usePermissions';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -284,6 +285,10 @@ function KpiCard({
 export default function DashboardView() {
   const { events, assets, loadedStart, loadedEnd, dbReady, extendLoadedRange, unassignedAssetId, customers, openEditModal } = useCalendarStore();
   const { organization } = useOrganization();
+  // Driver-pay visibility — gates the export's Driver Pay column.
+  // Dispatcher and Maintenance never see what we paid drivers.
+  const { can } = usePermissions();
+  const canViewDriverPay = can('loads.view_driver_pay');
   const [period, setPeriod] = useState<Period>('month');
   const [fetching, setFetching] = useState(false);
   const [weekSort, setWeekSort] = useState<{ field: WeekSortField; dir: 'asc' | 'desc' }>({ field: 'pickupDate', dir: 'asc' });
@@ -535,7 +540,13 @@ export default function DashboardView() {
       picked_up: 'Picked Up', delivered: 'Delivered', cancelled: 'Cancelled',
       tonu: 'TONU', problem: 'Problem',
     };
-    const headers = ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Driver Pay', 'Accessorials'];
+    // Driver Pay column is excluded from the export when the caller
+    // lacks loads.view_driver_pay — same gating that hides the field
+    // in the load modal applies here so the export doesn't smuggle
+    // the data back out for a Dispatcher/Maintenance user.
+    const headers = canViewDriverPay
+      ? ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Driver Pay', 'Accessorials']
+      : ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Accessorials'];
 
     const rows = weekLoads.map(load => {
       const partner = load.relayGroupId && load.relayRole
@@ -546,7 +557,7 @@ export default function DashboardView() {
       const status = load.status ? (STATUS_LABELS[load.status] ?? load.status) : 'Scheduled';
       const drivers = [load.driverName, partner?.driverName].filter(Boolean).join(' / ');
       const totalDriverPay = (load.driverPay ?? 0) + (partner?.driverPay ?? 0);
-      return [
+      const base: (string | number)[] = [
         date,
         load.loadNum   ?? '',
         load.broker    ?? '',
@@ -555,9 +566,10 @@ export default function DashboardView() {
         asset?.name    ?? '',
         status,
         load.loadPrice ?? 0,
-        totalDriverPay || '',
-        billableAcc(load) || '',
-      ] as (string | number)[];
+      ];
+      if (canViewDriverPay) base.push(totalDriverPay || '');
+      base.push(billableAcc(load) || '');
+      return base;
     });
 
     const weekStr = [

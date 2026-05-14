@@ -5,6 +5,7 @@ import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, A
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useUser } from '@clerk/nextjs';
+import { usePermissions } from '@/lib/usePermissions';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
@@ -1255,6 +1256,12 @@ export default function EventModal() {
 
   const { user } = useUser();
   const currentUserName = user?.fullName ?? user?.firstName ?? 'Unknown';
+  // Driver-pay visibility — Dispatcher and Maintenance roles don't
+  // get to see what we're paying drivers. The input is removed from
+  // the financial section's field list (and from the relay per-leg
+  // pay block) when this is false.
+  const { can: canDo } = usePermissions();
+  const canViewDriverPay = canDo('loads.view_driver_pay');
 
   const isEdit  = modalMode === 'edit';
   const isBatch = batchItems.length > 0;
@@ -4211,6 +4218,13 @@ export default function EventModal() {
               if (section === 'financial' && eventKind === 'non_revenue') {
                 fields = fields.filter(f => f.id === 'driverPay');
               }
+              // Strip driverPay from the field list for users without
+              // loads.view_driver_pay (Dispatcher, Maintenance). The
+              // per-leg pickup/delivery driver-pay inputs in the
+              // relay block below are gated separately.
+              if (section === 'financial' && !canViewDriverPay) {
+                fields = fields.filter(f => f.id !== 'driverPay');
+              }
               // In relay context the driverPay slot becomes a read-only
               // "Total Driver Pay" tile (rendered via override + noLabel).
               // The editable per-leg inputs live in a separate block below.
@@ -4241,8 +4255,11 @@ export default function EventModal() {
                     noLabelFields={isRelayContext && section === 'financial' ? new Set(['driverPay']) : new Set()}
                   />
                   {/* Dual driver-pay inputs for relay loads — Total + chip
-                      lives next to Load Price via the override above. */}
-                  {section === 'financial' && isRelayContext && (() => {
+                      lives next to Load Price via the override above.
+                      Gated on loads.view_driver_pay so Dispatcher /
+                      Maintenance never see what either leg's driver
+                      was paid. */}
+                  {section === 'financial' && isRelayContext && canViewDriverPay && (() => {
                     const pctOf = (n: number) => (relayLp > 0 && n > 0 ? Math.round((n / relayLp) * 1000) / 10 : null);
                     const pickupPct   = pctOf(relayPickupNum);
                     const deliveryPct = pctOf(relayDeliveryNum);

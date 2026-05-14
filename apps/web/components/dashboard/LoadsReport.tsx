@@ -6,6 +6,7 @@ import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, F
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import type { LoadSummary } from '@fleetcal/types';
+import { usePermissions } from '@/lib/usePermissions';
 import DatePicker from '@/components/calendar/DatePicker';
 import CopyChip from '@/components/ui/CopyChip';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
@@ -311,6 +312,12 @@ interface Props {
 
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
+  const { can } = usePermissions();
+  // Hide the Driver Pay column entirely for users without
+  // loads.view_driver_pay. The role matrix excludes Dispatcher and
+  // Maintenance from this cap, so they never see what we paid
+  // drivers in this report.
+  const canViewDriverPay = can('loads.view_driver_pay');
   const [brokerProfileId,  setBrokerProfileId]  = useState<string | null>(null);
   const [driverModalId,    setDriverModalId]    = useState<number | null>(null);
   const [assetModalId,     setAssetModalId]     = useState<number | null>(null);
@@ -507,11 +514,21 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   }, [loads, selectedCustomers, selectedCustomerNames, selectedDrivers, selectedAssets]);
 
   // Columns in user's chosen order (drag-and-drop in the picker).
-  const orderedColumns = useMemo(
-    () => columnOrder.map(id => COLUMNS.find(c => c.id === id)).filter((c): c is ColumnDef => !!c),
-    [columnOrder],
+  // Users without loads.view_driver_pay never see the Driver Pay
+  // column — it's stripped from both the column picker and the
+  // render path so they can't even toggle it on.
+  const availableColumns = useMemo(
+    () => canViewDriverPay ? COLUMNS : COLUMNS.filter(c => c.id !== 'driverPay'),
+    [canViewDriverPay],
   );
-  const visibleColumns = orderedColumns.filter(c => visible.has(c.id));
+  const availableIds = useMemo(() => new Set(availableColumns.map(c => c.id)), [availableColumns]);
+  const orderedColumns = useMemo(
+    () => columnOrder
+      .map(id => availableColumns.find(c => c.id === id))
+      .filter((c): c is ColumnDef => !!c),
+    [columnOrder, availableColumns],
+  );
+  const visibleColumns = orderedColumns.filter(c => visible.has(c.id) && availableIds.has(c.id));
 
   const moveColumn = (fromId: string, toId: string) => {
     if (fromId === toId) return;
@@ -974,7 +991,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                   <div style={{ display: 'flex', gap: 6, padding: 8, borderTop: '1px solid var(--gc-border-light)' }}>
                     <button
                       type="button"
-                      onClick={() => setVisible(new Set(COLUMNS.map(c => c.id)))}
+                      onClick={() => setVisible(new Set(availableColumns.map(c => c.id)))}
                       style={{ flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 5, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
                       All
                     </button>
