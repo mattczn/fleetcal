@@ -52,8 +52,12 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
     if (adding) return;
     setAdding(true);
     try {
+      // The API requires non-empty name, color, and type. Seed with a
+      // placeholder "New asset N" so creation always validates;
+      // dispatcher renames it in the profile panel that opens next.
+      const placeholder = `New asset ${assets.length + 1}`;
       const newId = await addAsset({
-        name:  '',
+        name:  placeholder,
         color: PRESET_COLORS[assets.length % PRESET_COLORS.length],
         type:  assetCategories[0] ?? 'OTR',
         hidden: false,

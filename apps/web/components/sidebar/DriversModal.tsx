@@ -108,7 +108,11 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
     if (adding) return;
     setAdding(true);
     try {
-      const newId = await addDriver({});
+      // API requires name on create; seed with a placeholder so the
+      // call validates, then the dispatcher renames via the profile
+      // panel that opens next.
+      const placeholder = `New driver ${drivers.length + 1}`;
+      const newId = await addDriver({ name: placeholder });
       setSelected(newId);
     } catch (err) {
       console.error('add driver failed:', err);
