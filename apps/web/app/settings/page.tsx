@@ -586,30 +586,31 @@ function RolePermissionsPanel() {
         boxShadow: SETTINGS_SHADOW.card,
         overflow: 'hidden',
       }}>
-        {/* Header row */}
+        {/* Header row — white background, bold black labels */}
         <div className="grid items-stretch" style={{
           gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
-          background: '#f3f4f6', borderBottom: '2px solid #d1d5db',
+          background: '#fff',
+          borderBottom: `2px solid ${SETTINGS_COLORS.text}`,
         }}>
-          <div className="px-4 py-3 text-[13px] font-bold" style={{ color: '#111827' }}>
+          <div className="px-5 py-4 text-[14px] font-extrabold" style={{ color: SETTINGS_COLORS.text }}>
             Capability
           </div>
           {ORG_ROLES.map(role => (
-            <div key={role} className="px-3 py-3 text-center"
-              style={{ borderLeft: '1px solid #d1d5db' }}>
-              <div className="text-[13px] font-bold" style={{ color: '#111827' }}>
+            <div key={role} className="px-3 py-4 text-center"
+              style={{ borderLeft: `1px solid ${SETTINGS_COLORS.border}` }}>
+              <div className="text-[15px] font-extrabold" style={{ color: SETTINGS_COLORS.text }}>
                 {ORG_ROLE_LABEL[role]}
               </div>
               {role !== 'owner' && (
                 <button type="button" onClick={() => resetRole(role)}
                   disabled={!draft[role]}
                   title="Reset this role to defaults"
-                  className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded"
+                  className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-bold px-2 py-0.5 rounded transition-colors"
                   style={{
-                    color: draft[role] ? '#1d4ed8' : '#9ca3af',
+                    color: draft[role] ? SETTINGS_COLORS.blue : SETTINGS_COLORS.textPlaceholder,
                     cursor: draft[role] ? 'pointer' : 'default',
                   }}>
-                  <RotateCcw size={10} /> Reset
+                  <RotateCcw size={11} /> Reset
                 </button>
               )}
             </div>
@@ -619,25 +620,25 @@ function RolePermissionsPanel() {
         {/* Body — grouped capability rows */}
         {(Object.keys(grouped) as CapabilityGroup[]).map(groupName => (
           <div key={groupName}>
-            <div className="px-4 py-2 text-[12px] font-extrabold uppercase tracking-wider"
+            <div className="px-5 py-3 text-[13px] font-extrabold uppercase tracking-wider"
               style={{
-                color: '#111827',
-                background: '#e5e7eb',
-                borderTop: '1px solid #d1d5db',
-                borderBottom: '1px solid #d1d5db',
+                color: SETTINGS_COLORS.text,
+                background: '#fff',
+                borderTop: `1px solid ${SETTINGS_COLORS.text}`,
+                borderBottom: `1px solid ${SETTINGS_COLORS.border}`,
               }}>
                 {groupName}
             </div>
             {grouped[groupName].map(item => (
               <div key={item.cap} className="grid items-center" style={{
                 gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
-                borderTop: '1px solid #e5e7eb',
+                borderTop: `1px solid ${SETTINGS_COLORS.border}`,
                 background: '#fff',
               }}>
-                <div className="px-4 py-2.5" title={item.hint}>
-                  <div className="text-[13.5px] font-semibold" style={{ color: '#111827' }}>{item.label}</div>
+                <div className="px-5 py-3" title={item.hint}>
+                  <div className="text-[14px] font-bold" style={{ color: SETTINGS_COLORS.text }}>{item.label}</div>
                   {item.hint && (
-                    <div className="text-[11.5px] mt-0.5" style={{ color: '#6b7280' }}>{item.hint}</div>
+                    <div className="text-[12.5px] mt-1" style={{ color: SETTINGS_COLORS.textBody }}>{item.hint}</div>
                   )}
                 </div>
                 {ORG_ROLES.map(role => {
@@ -693,24 +694,24 @@ function RolePermissionsPanel() {
         ))}
       </div>
 
-      <div className="mt-4 text-[12px] flex items-center gap-5 flex-wrap" style={{ color: '#374151' }}>
+      <div className="mt-5 text-[13px] font-semibold flex items-center gap-6 flex-wrap" style={{ color: SETTINGS_COLORS.text }}>
         <span className="inline-flex items-center gap-2">
-          <span className="inline-block rounded" style={{ width: 14, height: 14, background: '#16a34a', border: '1.5px solid #15803d' }} />
+          <span className="inline-block rounded" style={{ width: 16, height: 16, background: '#16a34a', border: '1.5px solid #15803d' }} />
           Granted
         </span>
         <span className="inline-flex items-center gap-2">
-          <span className="inline-block rounded" style={{ width: 14, height: 14, background: '#dc2626', border: '1.5px solid #b91c1c' }} />
+          <span className="inline-block rounded" style={{ width: 16, height: 16, background: '#dc2626', border: '1.5px solid #b91c1c' }} />
           Revoked (override)
         </span>
         <span className="inline-flex items-center gap-2">
-          <span className="inline-block rounded" style={{ width: 14, height: 14, background: '#fff', border: '1.5px solid #9ca3af' }} />
+          <span className="inline-block rounded" style={{ width: 16, height: 16, background: '#fff', border: '1.5px solid #6b7280' }} />
           Denied by default
         </span>
         <span className="inline-flex items-center gap-2">
-          <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: '#1d4ed8', border: '1.5px solid #fff', boxShadow: '0 0 0 1px #1d4ed8' }} />
+          <span className="inline-block rounded-full" style={{ width: 9, height: 9, background: '#1d4ed8', border: '1.5px solid #fff', boxShadow: '0 0 0 1px #1d4ed8' }} />
           Overridden from default
         </span>
-        <span style={{ color: SETTINGS_COLORS.textMuted }}>Owner is read-only.</span>
+        <span style={{ color: SETTINGS_COLORS.textBody }}>Owner is read-only.</span>
       </div>
     </SettingsPanel>
   );
@@ -3068,21 +3069,21 @@ export default function SettingsPage() {
           <div className="flex-1">
             {visibleNav.map(group => (
               <div key={group.section} className="mb-5">
-                <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.textMuted }}>
+                <div className="px-3 pb-2 text-[12px] font-extrabold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.text }}>
                   {group.section}
                 </div>
                 {group.items.map(item => {
                   const isActive = active === item.id;
                   return (
                     <button key={item.id} onClick={() => setActive(item.id)}
-                      className="w-full flex items-center gap-3 text-[14px] font-medium transition-colors"
+                      className="w-full flex items-center gap-3 text-[14px] transition-colors"
                       style={{
                         padding: '9px 14px',
                         marginBottom: 2,
                         borderRadius: 999,
-                        color:      isActive ? SETTINGS_COLORS.blue : SETTINGS_COLORS.textBody,
+                        color:      isActive ? SETTINGS_COLORS.blue : SETTINGS_COLORS.text,
                         background: isActive ? SETTINGS_COLORS.blueLight : 'transparent',
-                        fontWeight: isActive ? 600 : 500,
+                        fontWeight: isActive ? 700 : 600,
                       }}
                       onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = SETTINGS_COLORS.sectionBandBg; }}
                       onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}>
@@ -3097,7 +3098,7 @@ export default function SettingsPage() {
 
           {/* Dev tools */}
           <div style={{ borderTop: `1px solid ${SETTINGS_COLORS.border}`, paddingTop: 14, marginTop: 12 }}>
-            <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.textMuted }}>
+            <div className="px-3 pb-2 text-[12px] font-extrabold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.text }}>
               Developer
             </div>
             <ResetDemoButton />
