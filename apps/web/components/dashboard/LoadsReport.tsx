@@ -322,6 +322,23 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
   const [from, setFrom] = useState(() => defaultFrom ?? fmtDateInput(monthAgo));
   const [to,   setTo]   = useState(() => defaultTo   ?? fmtDateInput(today));
 
+  // Which date column drives the range filter. Pickup is the ops view;
+  // delivery is what accounting cares about (e.g. invoices issued after
+  // the load delivered). Persisted in localStorage so the user's
+  // preferred mode sticks across visits.
+  type DateMode = 'pickup' | 'delivery';
+  const [dateMode, setDateMode] = useState<DateMode>('pickup');
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('loads-report-date-mode');
+      if (stored === 'pickup' || stored === 'delivery') setDateMode(stored);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    try { window.localStorage.setItem('loads-report-date-mode', dateMode); }
+    catch { /* ignore */ }
+  }, [dateMode]);
+
   // When the dashboard period changes, re-seed the date range. Manual edits
   // by the user are preserved until the parent prop changes again.
   useEffect(() => {
@@ -418,13 +435,16 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     setLoading(true);
     try {
       // Hit the load-shaped report endpoint. One row per load, relays
-      // already collapsed server-side, pickup-date filter applied
-      // server-side. Local-tz ISO so "May 9" means May 9 in the user's
-      // wall-clock time, not UTC.
-      const { loads: fetched } = await railway.listLoadSummaries({
-        pickupFrom: localStartOfDayIso(from),
-        pickupTo:   localEndOfDayIso(to),
-      });
+      // collapsed server-side, date filter applied server-side. Local-tz
+      // ISO so "May 9" means May 9 in the user's wall-clock time, not
+      // UTC. The user picks which date column drives the filter via the
+      // Filter-by toggle; the backend supports both shapes.
+      const fromIso = localStartOfDayIso(from);
+      const toIso   = localEndOfDayIso(to);
+      const query: Record<string, string> = dateMode === 'delivery'
+        ? { deliveryFrom: fromIso, deliveryTo: toIso }
+        : { pickupFrom:   fromIso, pickupTo:   toIso };
+      const { loads: fetched } = await railway.listLoadSummaries(query);
       setLoads(fetched);
     } catch (err) {
       console.error('LoadsReport.run:', err);
@@ -444,7 +464,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     if (!from || !to || from > to) return;
     void run();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, dbReady]);
+  }, [from, to, dbReady, dateMode]);
 
   // Apply client-side multi-select filters.
   // For customers: match on customerId FK first, then fall back to broker
@@ -726,12 +746,52 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
 
       {/* Filter row */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, padding: '20px 28px', alignItems: 'flex-end', background: 'var(--gc-bg)' }}>
+        {/* Filter-by toggle — picks which date column drives the range.
+            Pickup is the ops view; delivery is what accounting wants when
+            asking "what hit the books this week?" */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>Pickup From</label>
+          <label style={labelStyle}>Filter By</label>
+          <div role="radiogroup" style={{
+            display: 'inline-flex',
+            border: '1px solid var(--gc-border)',
+            borderRadius: 8,
+            overflow: 'hidden',
+            height: 34,
+            background: 'var(--gc-surface)',
+          }}>
+            {(['pickup', 'delivery'] as const).map(mode => {
+              const active = dateMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setDateMode(mode)}
+                  style={{
+                    padding: '0 14px',
+                    fontSize: 13, fontWeight: 600,
+                    background: active ? '#1a73e8' : 'transparent',
+                    color: active ? '#fff' : 'var(--gc-text-2)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'background-color 80ms ease',
+                  }}
+                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {mode === 'pickup' ? 'Pickup' : 'Delivery'}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={labelStyle}>{dateMode === 'pickup' ? 'Pickup From' : 'Delivery From'}</label>
           <DatePicker value={from} onChange={setFrom} headerColor="#1a73e8" />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>Pickup To</label>
+          <label style={labelStyle}>{dateMode === 'pickup' ? 'Pickup To' : 'Delivery To'}</label>
           <DatePicker value={to} onChange={setTo} headerColor="#1a73e8" min={from} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
