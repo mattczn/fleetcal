@@ -1813,6 +1813,11 @@ export default function EventModal() {
     });
     // load.notes is the canonical column for the consolidated notes field
     if (vals['specialInstructions'] === undefined && ev.notes) vals['specialInstructions'] = ev.notes;
+    // customerId isn't in ALL_FIELDS (internal FK, not a UI field) but
+    // the broker→customerId sync effect compares against it on open.
+    // Seed it from the loaded event so the effect doesn't see a phantom
+    // mismatch and flag the form as dirty before the user touches it.
+    if (ev.customerId) vals['customerId'] = ev.customerId;
     setFieldValues(vals);
     setRateConPdf(ev.rateConPdf ?? undefined);
     setAccessorials(ev.accessorials ?? []);
@@ -2095,6 +2100,13 @@ export default function EventModal() {
     if (eventKind !== 'revenue') return;
     const brokerVal = String(fieldValues['broker'] ?? '').trim();
     const currentId = fieldValues['customerId'] as string | undefined;
+    // setFieldValues directly (NOT setField) — this is an internal
+    // correction, not a user edit, so it must not call markDirty.
+    // Without that guard, every modal open for an existing load would
+    // flag the form as dirty (the sync runs on init when fieldValues
+    // is still being populated) and trigger a "save changes?" prompt
+    // on close even when the user did nothing.
+    const setCustomerId = (id: string) => setFieldValues(prev => ({ ...prev, customerId: id }));
     const clearCustomerId = () => setFieldValues(prev => {
       if (!('customerId' in prev)) return prev;
       const next = { ...prev };
@@ -2108,7 +2120,7 @@ export default function EventModal() {
     if (customers.length === 0) return;
     const match = matchCustomer(brokerVal, customers);
     if (match.status === 'auto') {
-      if (currentId !== match.customer.id) setField('customerId', match.customer.id);
+      if (currentId !== match.customer.id) setCustomerId(match.customer.id);
     } else if (currentId) {
       // Broker text no longer points at a known customer (typo, deletion,
       // or pending banner confirmation). Clear the stale FK so we don't
