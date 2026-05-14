@@ -1,8 +1,9 @@
 'use client';
 
 import { useRef, useState, useEffect } from 'react';
-import { useOrganization } from '@clerk/nextjs';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles } from 'lucide-react';
+import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog } from 'lucide-react';
+import { usePermissions } from '@/lib/usePermissions';
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -16,7 +17,7 @@ import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'members';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -433,6 +434,52 @@ function AppearancePanel() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * MembersPanel — invite teammates, assign roles, remove members.
+ *
+ * Embeds Clerk's <OrganizationProfile /> component, which provides a
+ * batteries-included Members + Invitations + Settings UI matching the
+ * Clerk dashboard. We use it instead of a custom UI so role changes
+ * stay in sync with Clerk's own enforcement, and because the heavy
+ * lifting (sending email invites, accepting invitations, removing
+ * members) is already done. The capability gate on the nav item (see
+ * NAV_CAPABILITY above) means only Owner / Admin reach this panel.
+ *
+ * routing="hash" keeps Clerk's internal navigation inside the URL
+ * fragment so the parent page route stays at /settings. The
+ * alternative ("path") would require a dedicated route and a catch-
+ * all dynamic segment.
+ */
+function MembersPanel() {
+  return (
+    <div className="max-w-4xl mx-auto">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
+          Members &amp; Roles
+        </h1>
+        <p className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
+          Invite teammates, set their role (Owner / Admin / Dispatcher / Maintenance),
+          and remove access. Role changes take effect on the user&apos;s next page load.
+        </p>
+      </div>
+      <OrganizationProfile
+        routing="hash"
+        appearance={{
+          elements: {
+            // Strip the card chrome — we already render inside a
+            // styled settings panel.
+            rootBox:  { width: '100%' },
+            cardBox:  { boxShadow: 'none', borderRadius: 0, width: '100%' },
+            card:     { boxShadow: 'none', borderRadius: 0, padding: 0, border: 'none' },
+            navbar:   { display: 'none' },
+            scrollBox:{ padding: 0 },
+          },
+        }}
+      />
     </div>
   );
 }
@@ -2607,6 +2654,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
   {
     section: 'Workspace',
     items: [
+      { id: 'members',          label: 'Members',          icon: <UserCog size={15} /> },
       { id: 'assets',           label: 'Assets',           icon: <Truck size={15} /> },
       { id: 'trailers',         label: 'Trailers',         icon: <Truck size={15} /> },
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
@@ -2621,6 +2669,15 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
     ],
   },
 ];
+
+// Per-nav-item capability gates. Entries in this map are hidden when
+// the active user lacks the listed capability. Missing entries are
+// visible to everyone. Currently only Members requires a gate —
+// the rest are visible to all org members (the API still enforces
+// destructive actions inside each panel).
+const NAV_CAPABILITY: Partial<Record<NavItem, 'org.members.manage'>> = {
+  members: 'org.members.manage',
+};
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -2663,6 +2720,31 @@ function ResetDemoButton() {
 
 export default function SettingsPage() {
   const [active, setActive] = useState<NavItem>('appearance');
+  const { can, isLoading: permsLoading } = usePermissions();
+
+  // Filter the nav by the active user's capabilities. While Clerk is
+  // still hydrating the membership, render everything so we don't
+  // flicker — gated items disappear as soon as perms resolve.
+  const visibleNav = NAV.map(group => ({
+    ...group,
+    items: group.items.filter(item => {
+      const cap = NAV_CAPABILITY[item.id];
+      if (!cap) return true;
+      if (permsLoading) return true;
+      return can(cap);
+    }),
+  })).filter(group => group.items.length > 0);
+
+  // If the active section disappears (e.g. perms resolved and the user
+  // lacks the cap for it), jump to the first visible item so the body
+  // doesn't render a blank panel.
+  useEffect(() => {
+    if (permsLoading) return;
+    const allVisible = visibleNav.flatMap(g => g.items.map(i => i.id));
+    if (!allVisible.includes(active)) {
+      setActive(allVisible[0] ?? 'appearance');
+    }
+  }, [permsLoading, visibleNav, active]);
 
   return (
     <div className="flex flex-col" style={{ height: '100vh', background: 'var(--gc-bg)' }}>
@@ -2684,7 +2766,7 @@ export default function SettingsPage() {
         {/* Left nav */}
         <nav className="shrink-0 flex flex-col py-4 px-3 overflow-y-auto" style={{ width: 320, borderRight: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
           <div className="flex-1">
-            {NAV.map(group => (
+            {visibleNav.map(group => (
               <div key={group.section} className="mb-4">
                 <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
                   {group.section}
@@ -2730,6 +2812,7 @@ export default function SettingsPage() {
           {active === 'customers'       && <CustomersPanel />}
           {active === 'trailers'        && <TrailersPanel />}
           {active === 'driver-app'      && <DriverAppPanel />}
+          {active === 'members'         && <MembersPanel />}
         </main>
       </div>
     </div>
