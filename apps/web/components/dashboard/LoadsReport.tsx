@@ -753,10 +753,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           <label style={labelStyle}>Filter By</label>
           <div role="radiogroup" style={{
             display: 'inline-flex',
+            alignItems: 'stretch',
             border: '1px solid var(--gc-border)',
             borderRadius: 8,
             overflow: 'hidden',
-            height: 34,
+            // Match DatePicker's computed height: padding '10px 13px' on
+            // fontSize 15 (~38px content) + 1px border each side.
+            height: 40,
             background: 'var(--gc-surface)',
           }}>
             {(['pickup', 'delivery'] as const).map(mode => {
@@ -769,8 +772,8 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                   aria-checked={active}
                   onClick={() => setDateMode(mode)}
                   style={{
-                    padding: '0 14px',
-                    fontSize: 13, fontWeight: 600,
+                    padding: '0 16px',
+                    fontSize: 14, fontWeight: 600,
                     background: active ? '#1a73e8' : 'transparent',
                     color: active ? '#fff' : 'var(--gc-text-2)',
                     border: 'none',
