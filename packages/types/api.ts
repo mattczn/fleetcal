@@ -626,6 +626,9 @@ export interface UpdateOrgSettingsRequest {
   showDriverPay?:    boolean;
   rateConSettings?:  import("./domain").RateConSettings | null;
   invoiceSettings?:  import("./domain").InvoiceSettings | null;
+  /** Replaces the entire role-overrides map. Use {} to clear all
+   *  overrides; omit to leave unchanged. */
+  roleOverrides?:    import("./domain").RoleOverrides;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 

@@ -204,6 +204,12 @@ interface CalendarStore extends ModalState {
   hasHydratedOrgSettings: boolean;
   hydrateRateConSettings: (settings: import('@fleetcal/types').RateConSettings | undefined) => void;
 
+  /** Per-org role → capability override map. Empty / unset means every
+   *  role uses the hardcoded defaults from @fleetcal/types/permissions.
+   *  Hydrated from /v1/org-settings on app boot. */
+  roleOverrides: import('@fleetcal/types').RoleOverrides;
+  hydrateRoleOverrides: (overrides: import('@fleetcal/types').RoleOverrides | undefined) => void;
+
   theme: 'light' | 'dark' | 'system';
   setTheme: (t: 'light' | 'dark' | 'system') => void;
 
@@ -415,6 +421,10 @@ export const useCalendarStore = create<CalendarStore>()(
           : state.fieldSettings,
       hasHydratedOrgSettings: true,
     })),
+
+  roleOverrides: {},
+  hydrateRoleOverrides: (overrides) =>
+    set({ roleOverrides: overrides ?? {} }),
 
   theme: 'light',
   setTheme: (t) => {

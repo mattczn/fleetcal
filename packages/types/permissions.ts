@@ -195,13 +195,122 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
 // ── Check API ────────────────────────────────────────────────────────────
 
 /**
- * Returns true iff the role has the capability. `undefined` role
- * always returns false — treat absence as denial.
+ * Returns true iff the role has the capability per the HARDCODED
+ * defaults. `undefined` role always returns false — treat absence as
+ * denial.
+ *
+ * Most callers should use `effectiveCan(role, cap, overrides)`
+ * instead — it factors in per-org overrides from org_settings. This
+ * default-only `can()` is still exposed for places that explicitly
+ * want the unconfigurable baseline (e.g. tests, internal jobs).
  */
 export function can(role: OrgRole | undefined, cap: Capability): boolean {
   if (!role) return false;
   return ROLE_CAPABILITIES[role]?.has(cap) ?? false;
 }
+
+/**
+ * Same shape as `can`, plus a per-org override map. The override
+ * lookup goes:
+ *   overrides[role][cap] === true   → granted
+ *   overrides[role][cap] === false  → revoked
+ *   key absent                      → fall back to the hardcoded default
+ *
+ * Admins use this to take a capability away from a role (or grant a
+ * normally-restricted cap to a role) without a code deploy. Storage
+ * for the override map is `org_settings.role_overrides` jsonb.
+ */
+export function effectiveCan(
+  role: OrgRole | undefined,
+  cap: Capability,
+  overrides?: Partial<Record<string, Record<string, boolean>>> | null,
+): boolean {
+  if (!role) return false;
+  const override = overrides?.[role]?.[cap];
+  if (override === true)  return true;
+  if (override === false) return false;
+  return ROLE_CAPABILITIES[role]?.has(cap) ?? false;
+}
+
+// ── Presentation metadata for the admin matrix UI ────────────────────────
+//
+// Drives the "Role Permissions" settings panel. Each capability gets a
+// human-readable label and a group; groups render as section headers
+// in the matrix. Owner is always read-only; Admin should also be in
+// practice but we let the UI display them so the consequences are
+// visible.
+
+export type CapabilityGroup =
+  | "Module access"
+  | "Create / Edit"
+  | "Delete"
+  | "Closeout actions"
+  | "Billing actions"
+  | "Payroll actions"
+  | "Maintenance / Fuel"
+  | "Sensitive fields"
+  | "Org admin";
+
+export interface CapabilityInfo {
+  cap:   Capability;
+  label: string;
+  group: CapabilityGroup;
+  /** Short, plain-English description shown as a tooltip in the
+   *  matrix UI. Optional — many capabilities are self-explanatory. */
+  hint?: string;
+}
+
+export const CAPABILITY_CATALOG: CapabilityInfo[] = [
+  // Module access — top-nav visibility.
+  { cap: "dashboard.access",  label: "Dashboard",     group: "Module access", hint: "Top-line KPIs, revenue + driver pay totals." },
+  { cap: "closeout.access",   label: "Closeout",      group: "Module access", hint: "POD verification + flag queue." },
+  { cap: "accounting.access", label: "Accounting",    group: "Module access", hint: "Invoice list, send/void, payment status." },
+  { cap: "payroll.access",    label: "Payroll",       group: "Module access", hint: "Per-driver weekly pay + adjustments." },
+  { cap: "fuel.access",       label: "Fuel",          group: "Module access" },
+  { cap: "maintenance.access", label: "Maintenance",  group: "Module access" },
+  { cap: "reports.access",    label: "Reports",       group: "Module access", hint: "LoadsReport + future custom-report endpoints." },
+
+  // Create / Edit — day-to-day ops.
+  { cap: "loads.create",        label: "Create loads",         group: "Create / Edit" },
+  { cap: "loads.edit",          label: "Edit loads",           group: "Create / Edit" },
+  { cap: "customers.edit",      label: "Edit customers",       group: "Create / Edit" },
+  { cap: "drivers.edit",        label: "Edit drivers",         group: "Create / Edit" },
+  { cap: "assets.edit",         label: "Edit assets",          group: "Create / Edit" },
+  { cap: "trailers.edit",       label: "Edit trailers",        group: "Create / Edit" },
+  { cap: "savedLocations.edit", label: "Edit saved locations", group: "Create / Edit" },
+  { cap: "dispatchers.edit",    label: "Edit dispatchers",     group: "Create / Edit" },
+
+  // Delete — destructive.
+  { cap: "loads.delete",          label: "Delete loads",          group: "Delete" },
+  { cap: "customers.delete",      label: "Delete customers",      group: "Delete" },
+  { cap: "drivers.delete",        label: "Delete drivers",        group: "Delete" },
+  { cap: "assets.delete",         label: "Delete assets",         group: "Delete" },
+  { cap: "trailers.delete",       label: "Delete trailers",       group: "Delete" },
+  { cap: "savedLocations.delete", label: "Delete saved locations", group: "Delete" },
+  { cap: "dispatchers.delete",    label: "Delete dispatchers",    group: "Delete" },
+
+  // Closeout actions.
+  { cap: "closeout.release", label: "Release loads", group: "Closeout actions", hint: "Mark POD verified, move to accounting." },
+  { cap: "closeout.flag",    label: "Flag loads",    group: "Closeout actions" },
+
+  // Billing.
+  { cap: "accounting.send_invoice", label: "Send invoices", group: "Billing actions" },
+
+  // Payroll.
+  { cap: "payroll.adjust",   label: "Add / remove payroll adjustments", group: "Payroll actions" },
+  { cap: "payroll.finalize", label: "Finalize + un-finalize payroll",   group: "Payroll actions" },
+
+  // Maintenance / Fuel.
+  { cap: "maintenance.edit", label: "Edit maintenance records", group: "Maintenance / Fuel" },
+  { cap: "fuel.edit",        label: "Edit fuel reports",        group: "Maintenance / Fuel" },
+
+  // Sensitive fields.
+  { cap: "loads.view_driver_pay", label: "View driver pay", group: "Sensitive fields", hint: "Hides the Driver Pay column / field across reports, modals, and exports." },
+
+  // Org admin.
+  { cap: "org.settings.edit",  label: "Edit org settings",    group: "Org admin" },
+  { cap: "org.members.manage", label: "Manage members + roles", group: "Org admin" },
+];
 
 /**
  * Maps the raw Clerk role slug ("org:dispatcher") to our typed role

@@ -1,9 +1,20 @@
 'use client';
 
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog } from 'lucide-react';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
+import {
+  CAPABILITY_CATALOG,
+  ORG_ROLES,
+  ORG_ROLE_LABEL,
+  ROLE_CAPABILITIES,
+  type Capability,
+  type CapabilityGroup,
+  type OrgRole,
+  type RoleOverrides,
+} from '@fleetcal/types';
+import { railway } from '@/lib/railway';
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -17,7 +28,7 @@ import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'members';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'members' | 'role-permissions';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -433,6 +444,245 @@ function AppearancePanel() {
             <Toggle checked={showUnassigned} disabled={false} onChange={() => setShowUnassigned(!showUnassigned)} />
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * RolePermissionsPanel — admin matrix for tweaking each role's
+ * capability set per-org.
+ *
+ * Rows are capabilities grouped by domain (Module access, Delete,
+ * Sensitive fields, …); columns are the four roles. Each cell is a
+ * toggle. The hardcoded default in @fleetcal/types/permissions is the
+ * starting point; toggling a cell creates an explicit override that
+ * persists in org_settings.role_overrides.
+ *
+ * Owner column is read-only (and visually muted) — granting/revoking
+ * Owner caps doesn't make sense for the highest tier. Admin is also
+ * fully populated by default; we let it toggle in case an org wants
+ * a narrower Admin tier.
+ *
+ * "Reset to defaults" per role clears all overrides for that role.
+ */
+function RolePermissionsPanel() {
+  const storedOverrides = useCalendarStore(s => s.roleOverrides);
+  const hydrateRoleOverrides = useCalendarStore(s => s.hydrateRoleOverrides);
+  // Local edit buffer — mirrors store on mount, diverges as the user
+  // toggles cells, snaps back on save (via re-hydration from API).
+  const [draft, setDraft] = useState<RoleOverrides>(storedOverrides);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // Re-seed when store hydrates from API (initial load).
+  useEffect(() => { setDraft(storedOverrides); }, [storedOverrides]);
+
+  /** Resolve the effective cell value for a role × cap, reading
+   *  the draft override first, then the hardcoded default. */
+  const cellValue = (role: OrgRole, cap: Capability): boolean => {
+    const override = draft[role]?.[cap];
+    if (override === true)  return true;
+    if (override === false) return false;
+    return ROLE_CAPABILITIES[role].has(cap);
+  };
+
+  /** True iff the cell has an explicit override (vs falling back to
+   *  the default). Drives the "modified" dot in the UI. */
+  const isOverridden = (role: OrgRole, cap: Capability): boolean => {
+    return draft[role]?.[cap] !== undefined;
+  };
+
+  const toggle = (role: OrgRole, cap: Capability) => {
+    if (role === 'owner') return; // owner column is read-only
+    const current = cellValue(role, cap);
+    setDraft(prev => {
+      const next: RoleOverrides = { ...prev };
+      const roleMap = { ...(next[role] ?? {}) };
+      const defaultValue = ROLE_CAPABILITIES[role].has(cap);
+      // If toggling back to the default, REMOVE the override entirely
+      // so the row clears. Otherwise persist the explicit override.
+      if (!current === defaultValue) {
+        delete roleMap[cap];
+      } else {
+        roleMap[cap] = !current;
+      }
+      if (Object.keys(roleMap).length === 0) {
+        delete next[role];
+      } else {
+        next[role] = roleMap;
+      }
+      return next;
+    });
+  };
+
+  const resetRole = (role: OrgRole) => {
+    setDraft(prev => {
+      const next: RoleOverrides = { ...prev };
+      delete next[role];
+      return next;
+    });
+  };
+
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(storedOverrides);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { settings } = await railway.updateOrgSettings({ roleOverrides: draft });
+      hydrateRoleOverrides(settings.roleOverrides);
+      setSavedAt(Date.now());
+    } catch (err) {
+      console.error('[RolePermissionsPanel] save failed:', err);
+      alert('Failed to save role permissions. Check the network tab for details.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revert = () => setDraft(storedOverrides);
+
+  // Group capabilities for display.
+  const grouped: Record<CapabilityGroup, typeof CAPABILITY_CATALOG> = useMemo(() => {
+    const out = {} as Record<CapabilityGroup, typeof CAPABILITY_CATALOG>;
+    for (const item of CAPABILITY_CATALOG) {
+      (out[item.group] ??= []).push(item);
+    }
+    return out;
+  }, []);
+
+  return (
+    <div>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
+            Role Permissions
+          </h1>
+          <p className="text-sm max-w-2xl" style={{ color: 'var(--gc-text-3)' }}>
+            Override the default capability set per role. Owner and Admin start with everything; Dispatcher and Maintenance ship with sensible defaults you can tune for your team. Changes apply within ~60s of save.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {isDirty && (
+            <button type="button" onClick={revert}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border"
+              style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
+              Revert
+            </button>
+          )}
+          <button type="button" onClick={save} disabled={!isDirty || saving}
+            className="text-xs font-bold px-4 py-1.5 rounded-lg inline-flex items-center gap-1.5"
+            style={{
+              background: isDirty ? '#1a73e8' : 'var(--gc-border-light)',
+              color: isDirty ? '#fff' : 'var(--gc-text-3)',
+              cursor: isDirty && !saving ? 'pointer' : 'default',
+              opacity: saving ? 0.7 : 1,
+            }}>
+            {saving ? <Loader2 size={12} className="animate-spin" /> : null}
+            {saving ? 'Saving…' : isDirty ? 'Save changes' : (savedAt ? 'Saved' : 'No changes')}
+          </button>
+        </div>
+      </div>
+
+      {/* Matrix */}
+      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
+        {/* Header row */}
+        <div className="grid items-stretch" style={{
+          gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
+          background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border)',
+        }}>
+          <div className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Capability
+          </div>
+          {ORG_ROLES.map(role => (
+            <div key={role} className="px-3 py-3 text-center"
+              style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
+              <div className="text-[12px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>
+                {ORG_ROLE_LABEL[role]}
+              </div>
+              {role !== 'owner' && (
+                <button type="button" onClick={() => resetRole(role)}
+                  disabled={!draft[role]}
+                  title="Reset this role to defaults"
+                  className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                  style={{
+                    color: draft[role] ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                    cursor: draft[role] ? 'pointer' : 'default',
+                    opacity: draft[role] ? 1 : 0.4,
+                  }}>
+                  <RotateCcw size={9} /> Reset
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Body — grouped capability rows */}
+        {(Object.keys(grouped) as CapabilityGroup[]).map(groupName => (
+          <div key={groupName}>
+            <div className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider"
+              style={{
+                color: 'var(--gc-text-3)',
+                background: 'var(--gc-bg)',
+                borderTop: '1px solid var(--gc-border-light)',
+                borderBottom: '1px solid var(--gc-border-light)',
+              }}>
+              {groupName}
+            </div>
+            {grouped[groupName].map(item => (
+              <div key={item.cap} className="grid items-center" style={{
+                gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
+                borderTop: '1px solid var(--gc-border-light)',
+              }}>
+                <div className="px-4 py-2.5" title={item.hint}>
+                  <div className="text-[13px] font-medium" style={{ color: 'var(--gc-text-1)' }}>{item.label}</div>
+                  {item.hint && (
+                    <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{item.hint}</div>
+                  )}
+                </div>
+                {ORG_ROLES.map(role => {
+                  const value     = cellValue(role, item.cap);
+                  const overridden = isOverridden(role, item.cap);
+                  const isOwner   = role === 'owner';
+                  return (
+                    <div key={role} className="flex items-center justify-center py-2.5"
+                      style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
+                      <button type="button"
+                        onClick={() => toggle(role, item.cap)}
+                        disabled={isOwner}
+                        title={overridden ? 'Overridden — click to revert to default' : 'Click to override'}
+                        className="relative inline-flex items-center justify-center rounded transition-colors"
+                        style={{
+                          width: 22, height: 22, borderRadius: 6,
+                          border: `1px solid ${value ? (overridden ? '#1a73e8' : '#86efac') : (overridden ? '#1a73e8' : 'var(--gc-border)')}`,
+                          background: value ? (overridden ? '#1a73e8' : '#dcfce7') : (overridden ? '#fee2e2' : 'transparent'),
+                          cursor: isOwner ? 'not-allowed' : 'pointer',
+                          opacity: isOwner ? 0.6 : 1,
+                        }}>
+                        {value
+                          ? <Check size={12} style={{ color: overridden ? '#fff' : '#15803d' }} strokeWidth={3} />
+                          : (overridden ? <X size={12} style={{ color: '#991b1b' }} strokeWidth={3} /> : null)}
+                        {overridden && (
+                          <span className="absolute -top-1 -right-1 rounded-full"
+                            title="Overridden — different from default"
+                            style={{ width: 6, height: 6, background: '#1a73e8' }} />
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+        <span className="inline-flex items-center gap-1.5 mr-4">
+          <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: '#1a73e8' }} />
+          Overridden from default
+        </span>
+        <span>Owner is read-only — always has everything.</span>
       </div>
     </div>
   );
@@ -2661,6 +2911,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
     section: 'Workspace',
     items: [
       { id: 'members',          label: 'Members',          icon: <UserCog size={15} /> },
+      { id: 'role-permissions', label: 'Role Permissions', icon: <Shield size={15} /> },
       { id: 'assets',           label: 'Assets',           icon: <Truck size={15} /> },
       { id: 'trailers',         label: 'Trailers',         icon: <Truck size={15} /> },
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
@@ -2678,11 +2929,10 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
 
 // Per-nav-item capability gates. Entries in this map are hidden when
 // the active user lacks the listed capability. Missing entries are
-// visible to everyone. Currently only Members requires a gate —
-// the rest are visible to all org members (the API still enforces
-// destructive actions inside each panel).
-const NAV_CAPABILITY: Partial<Record<NavItem, 'org.members.manage'>> = {
-  members: 'org.members.manage',
+// visible to everyone.
+const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
+  members:            'org.members.manage',
+  'role-permissions': 'org.settings.edit',
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -2817,8 +3067,9 @@ export default function SettingsPage() {
           {active === 'dispatchers'     && <DispatchersPanel />}
           {active === 'customers'       && <CustomersPanel />}
           {active === 'trailers'        && <TrailersPanel />}
-          {active === 'driver-app'      && <DriverAppPanel />}
-          {active === 'members'         && <MembersPanel />}
+          {active === 'driver-app'        && <DriverAppPanel />}
+          {active === 'members'           && <MembersPanel />}
+          {active === 'role-permissions'  && <RolePermissionsPanel />}
         </main>
       </div>
     </div>

@@ -287,7 +287,18 @@ export interface OrgSettings {
   rateConSettings?: RateConSettings;
   /** Per-org invoice template + identity config. See InvoiceSettings. */
   invoiceSettings?: InvoiceSettings;
+  /** Per-role capability overrides. Defaults live in
+   *  @fleetcal/types/permissions ROLE_CAPABILITIES. A capability key
+   *  present here for a role overrides the default — true grants,
+   *  false revokes. Keys absent from the override map fall back to
+   *  the hardcoded default. */
+  roleOverrides?: RoleOverrides;
 }
+
+/** Per-role capability override map. Outer key is the role; inner
+ *  key is the capability string (matches the Capability union in
+ *  @fleetcal/types/permissions). */
+export type RoleOverrides = Partial<Record<string, Record<string, boolean>>>;
 
 // ── Customer ────────────────────────────────────────────────────────────
 
