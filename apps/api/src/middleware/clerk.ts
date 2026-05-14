@@ -71,24 +71,19 @@ export const clerkAuth: MiddlewareHandler<{ Variables: AuthVariables }> =
         );
       }
 
-      // Resolve the user's role. If the JWT lacks the org_role claim
-      // (Clerk dashboard not yet updated to expose it) AND we don't
-      // have the compact o.rol either, we'd otherwise lock the user
-      // out of every gated endpoint. Fall back to "admin" with a
-      // server-side warning so the app keeps working. Once the JWT
-      // template is verified to carry the role, the warning stops
-      // and real enforcement begins.
-      //
-      // TODO(permissions): tighten this back to undefined once the
-      // Clerk session JWT is confirmed to include the role claim for
-      // every active user.
-      let orgRole = parseClerkRole(roleSlug);
+      // Resolve the user's role from the JWT. Returns undefined when
+      // the slug is missing or unrecognized — in that state we set
+      // the context's orgRole to undefined and let requireCapability
+      // 403 every gated endpoint. A warning is logged so we notice
+      // any user whose token isn't carrying a recognizable role
+      // (typically a stale token mid-deploy or a custom Clerk role
+      // we haven't added to ORG_ROLES yet).
+      const orgRole = parseClerkRole(roleSlug);
       if (!orgRole) {
         console.warn(
-          "[clerkAuth] no recognized role in JWT — falling back to admin.",
+          "[clerkAuth] no recognized role in JWT — denying gated endpoints for this request.",
           { orgId, userId, roleSlug },
         );
-        orgRole = "admin";
       }
 
       c.set("userId",  userId);
