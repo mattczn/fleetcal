@@ -951,6 +951,13 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
   const [showCompiled, setShowCompiled] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const { can } = usePermissions();
+  // Read-only for users without org.settings.edit (Dispatcher,
+  // Maintenance). They can still see which fields the AI extracts
+  // + the current formatting variables, but the controls are dimmed
+  // and unclickable. Sync effects above guard on the disabled state
+  // so we don't blast PATCH calls that would 403 anyway.
+  const canEdit = can('org.settings.edit');
 
   const enabledFieldIds = Object.keys(fieldSettings).filter(k => fieldSettings[k]);
   const previewVars = editing
@@ -960,16 +967,19 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
 
   // Debounced sync of promptInstructions (freeform textarea) to the server.
   // Skip the first render after hydration so we don't echo back the value
-  // we just received.
+  // we just received. Also short-circuit when the user lacks edit
+  // permission — the API would 403 the PATCH and we'd noise the
+  // console on every keystroke.
   useEffect(() => {
     if (!hasHydratedOrgSettings) return;
+    if (!canEdit) return;
     const t = setTimeout(() => {
       void import('@/lib/railway').then(({ railway }) =>
         railway.updateOrgSettings({ rateConSettings: { promptInstructions } }),
       ).catch((err) => console.error('[settings] promptInstructions sync failed:', err));
     }, 700);
     return () => clearTimeout(t);
-  }, [promptInstructions, hasHydratedOrgSettings]);
+  }, [promptInstructions, hasHydratedOrgSettings, canEdit]);
 
   const startEdit = () => {
     const d: Record<string, string> = {};
@@ -1006,6 +1016,9 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
           When you upload a rate con PDF, Claude reads it and fills in your enabled load fields automatically. Edit the formatting variables below to control how specific fields are written, then add any customer-specific instructions in the custom instructions box.
         </p>
       </div>
+
+      {!canEdit && <ReadOnlyBanner />}
+      <ReadOnlyWrap disabled={!canEdit}>
 
       {/* Formatting variables */}
       <div className="rounded-2xl overflow-hidden" style={{ border: editing ? '1px solid #1a73e8' : '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)', transition: 'border-color 150ms' }}>
@@ -1138,6 +1151,7 @@ function RateConAIPanel({ setActive }: { setActive: (v: NavItem) => void }) {
           </div>
         )}
       </div>
+      </ReadOnlyWrap>
     </div>
   );
 }
@@ -2977,10 +2991,13 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
 const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
   members:            'org.members.manage',
   'role-permissions': 'org.settings.edit',
-  'ratecon-ai':       'org.settings.edit',
   'invoicing':        'org.settings.edit',
   'integrations':     'org.settings.edit',
   'driver-app':       'org.settings.edit',
+  // Rate Con AI stays visible to everyone — non-admins see it
+  // read-only (same pattern as Timezone + Load Fields). Useful for
+  // dispatchers to know which fields the AI extracts even if they
+  // can't tune the prompts.
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
