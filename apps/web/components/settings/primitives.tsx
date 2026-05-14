@@ -91,7 +91,7 @@ export function SettingsPanel({
   title, description, actions, children, maxWidth = 960, bare,
 }: SettingsPanelProps) {
   return (
-    <div className="mx-auto" style={{ maxWidth, width: "100%" }}>
+    <div style={{ maxWidth, width: "100%" }}>
       {/* Header lives OUTSIDE the card to feel like a page heading
           rather than a card title — matches Google's settings pages
           (Photos, Drive, etc.) */}
@@ -142,17 +142,20 @@ interface SettingsSectionProps {
   first?:       boolean;
 }
 
-/** A logical grouping inside a panel (e.g. "Theme" within Appearance). */
+/** A logical grouping inside a panel (e.g. "Theme" within Appearance).
+ *  All-white surface; sections separated by a thin top divider only,
+ *  so the panel reads as one continuous card with bold inline headers
+ *  rather than alternating gray bands. */
 export function SettingsSection({
   title, description, actions, children, first,
 }: SettingsSectionProps) {
   return (
-    <div style={{ borderTop: first ? "none" : `1px solid ${SETTINGS_COLORS.border}` }}>
+    <div style={{
+      borderTop: first ? "none" : `1px solid ${SETTINGS_COLORS.border}`,
+      padding: "24px 28px",
+    }}>
       {(title || actions) && (
-        <div className="flex items-start justify-between gap-3 px-6 py-4" style={{
-          background: SETTINGS_COLORS.sectionBandBg,
-          borderBottom: `1px solid ${SETTINGS_COLORS.border}`,
-        }}>
+        <div className="flex items-start justify-between gap-3 mb-4">
           <div>
             {title && (
               <div className="text-[12px] font-extrabold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.text }}>
@@ -160,7 +163,7 @@ export function SettingsSection({
               </div>
             )}
             {description && (
-              <div className="mt-1 text-[12.5px]" style={{ color: SETTINGS_COLORS.textMuted }}>
+              <div className="mt-1.5 text-[13px]" style={{ color: SETTINGS_COLORS.textMuted }}>
                 {description}
               </div>
             )}
@@ -168,9 +171,7 @@ export function SettingsSection({
           {actions && <div className="shrink-0">{actions}</div>}
         </div>
       )}
-      <div className="px-6 py-5">
-        {children}
-      </div>
+      {children}
     </div>
   );
 }
@@ -189,13 +190,18 @@ interface SettingsFieldProps {
   inline?:      boolean;
 }
 
-/** One labeled control row. */
+/** One labeled control row. Inline mode (label | control) is used
+ *  for toggle rows and yes/no switches — stacked mode is for inputs
+ *  and selects. Inline rows get a top divider when they're the 2nd+
+ *  field in a section; suppress it on the first one via the
+ *  group's first-of-type styling at the call site. We use plain
+ *  CSS-in-JS so the divider is consistent without a wrapper. */
 export function SettingsField({
   label, hint, trailing, children, inline,
 }: SettingsFieldProps) {
   if (inline) {
     return (
-      <div className="flex items-center justify-between gap-4 py-3" style={{
+      <div className="flex items-center justify-between gap-4 py-3.5 first:pt-0 first:border-t-0" style={{
         borderTop: `1px solid ${SETTINGS_COLORS.border}`,
       }}>
         <div className="flex-1 min-w-0">
