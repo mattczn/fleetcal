@@ -47,7 +47,7 @@ dispatchers.get("/", async (c) => {
   return c.json(res);
 });
 
-dispatchers.post("/", requireCapability("dispatchers.edit"), async (c) => {
+dispatchers.post("/", requireCapability("dispatchers.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateDispatcherRequest>();
   if (!body.name) {

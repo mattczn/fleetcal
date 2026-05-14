@@ -96,21 +96,27 @@ export type Capability =
 
   // Customers / brokers
   | "customers.view"
+  | "customers.create"
   | "customers.edit"
   | "customers.delete"
 
   // Drivers / assets / trailers
   | "drivers.view"
+  | "drivers.create"
   | "drivers.edit"
   | "drivers.delete"
   | "assets.view"
+  | "assets.create"
   | "assets.edit"
   | "assets.delete"
   | "trailers.view"
+  | "trailers.create"
   | "trailers.edit"
   | "trailers.delete"
+  | "savedLocations.create"
   | "savedLocations.edit"
   | "savedLocations.delete"
+  | "dispatchers.create"
   | "dispatchers.edit"
   | "dispatchers.delete"
 
@@ -145,12 +151,12 @@ export type Capability =
 const ALL_CAPS: Capability[] = [
   "org.settings.edit", "org.members.manage",
   "loads.view", "loads.create", "loads.edit", "loads.delete", "loads.view_driver_pay",
-  "customers.view", "customers.edit", "customers.delete",
-  "drivers.view", "drivers.edit", "drivers.delete",
-  "assets.view", "assets.edit", "assets.delete",
-  "trailers.view", "trailers.edit", "trailers.delete",
-  "savedLocations.edit", "savedLocations.delete",
-  "dispatchers.edit", "dispatchers.delete",
+  "customers.view", "customers.create", "customers.edit", "customers.delete",
+  "drivers.view", "drivers.create", "drivers.edit", "drivers.delete",
+  "assets.view", "assets.create", "assets.edit", "assets.delete",
+  "trailers.view", "trailers.create", "trailers.edit", "trailers.delete",
+  "savedLocations.create", "savedLocations.edit", "savedLocations.delete",
+  "dispatchers.create", "dispatchers.edit", "dispatchers.delete",
   "closeout.access", "closeout.release", "closeout.flag",
   "accounting.access", "accounting.send_invoice",
   "payroll.access", "payroll.adjust", "payroll.finalize",
@@ -171,11 +177,12 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // driver pay is hidden.
   dispatcher: new Set<Capability>([
     "loads.view", "loads.create", "loads.edit",
-    "customers.view", "customers.edit",
-    "drivers.view", "drivers.edit",
-    "assets.view", "assets.edit",
-    "trailers.view", "trailers.edit",
-    "savedLocations.edit", "dispatchers.edit",
+    "customers.view", "customers.create", "customers.edit",
+    "drivers.view", "drivers.create", "drivers.edit",
+    "assets.view", "assets.create", "assets.edit",
+    "trailers.view", "trailers.create", "trailers.edit",
+    "savedLocations.create", "savedLocations.edit",
+    "dispatchers.create", "dispatchers.edit",
     "closeout.access", "closeout.release", "closeout.flag",
     "maintenance.access", "maintenance.edit",
     "fuel.access", "fuel.edit",
@@ -270,15 +277,23 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   { cap: "maintenance.access", label: "Maintenance",  group: "Module access" },
   { cap: "reports.access",    label: "Reports",       group: "Module access", hint: "LoadsReport + future custom-report endpoints." },
 
-  // Create / Edit — day-to-day ops.
-  { cap: "loads.create",        label: "Create loads",         group: "Create / Edit" },
-  { cap: "loads.edit",          label: "Edit loads",           group: "Create / Edit" },
-  { cap: "customers.edit",      label: "Edit customers",       group: "Create / Edit" },
-  { cap: "drivers.edit",        label: "Edit drivers",         group: "Create / Edit" },
-  { cap: "assets.edit",         label: "Edit assets",          group: "Create / Edit" },
-  { cap: "trailers.edit",       label: "Edit trailers",        group: "Create / Edit" },
-  { cap: "savedLocations.edit", label: "Edit saved locations", group: "Create / Edit" },
-  { cap: "dispatchers.edit",    label: "Edit dispatchers",     group: "Create / Edit" },
+  // Create / Edit — day-to-day ops. Create and Edit are split per
+  // entity so an admin can grant "edit existing" without "add new"
+  // (or vice versa). The API enforces each separately.
+  { cap: "loads.create",          label: "Create loads",          group: "Create / Edit" },
+  { cap: "loads.edit",            label: "Edit loads",            group: "Create / Edit" },
+  { cap: "customers.create",      label: "Create customers",      group: "Create / Edit" },
+  { cap: "customers.edit",        label: "Edit customers",        group: "Create / Edit" },
+  { cap: "drivers.create",        label: "Create drivers",        group: "Create / Edit" },
+  { cap: "drivers.edit",          label: "Edit drivers",          group: "Create / Edit" },
+  { cap: "assets.create",         label: "Create assets",         group: "Create / Edit" },
+  { cap: "assets.edit",           label: "Edit assets",           group: "Create / Edit" },
+  { cap: "trailers.create",       label: "Create trailers",       group: "Create / Edit" },
+  { cap: "trailers.edit",         label: "Edit trailers",         group: "Create / Edit" },
+  { cap: "savedLocations.create", label: "Create saved locations", group: "Create / Edit" },
+  { cap: "savedLocations.edit",   label: "Edit saved locations",   group: "Create / Edit" },
+  { cap: "dispatchers.create",    label: "Create dispatchers",    group: "Create / Edit" },
+  { cap: "dispatchers.edit",      label: "Edit dispatchers",      group: "Create / Edit" },
 
   // Delete — destructive.
   { cap: "loads.delete",          label: "Delete loads",          group: "Delete" },

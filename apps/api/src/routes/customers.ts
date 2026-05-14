@@ -92,7 +92,7 @@ customers.get("/", async (c) => {
   return c.json(res);
 });
 
-customers.post("/", requireCapability("customers.edit"), async (c) => {
+customers.post("/", requireCapability("customers.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateCustomerRequest>();
   if (!body.name) {

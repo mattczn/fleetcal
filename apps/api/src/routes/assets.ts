@@ -70,7 +70,7 @@ assets.get("/", async (c) => {
   return c.json(res);
 });
 
-assets.post("/", requireCapability("assets.edit"), async (c) => {
+assets.post("/", requireCapability("assets.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateAssetRequest>();
   if (!body.name || !body.color || !body.type) {

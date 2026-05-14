@@ -56,7 +56,7 @@ savedLocations.get("/", async (c) => {
   return c.json(res);
 });
 
-savedLocations.post("/", requireCapability("savedLocations.edit"), async (c) => {
+savedLocations.post("/", requireCapability("savedLocations.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateSavedLocationRequest>();
   if (!body.name) {

@@ -59,7 +59,7 @@ trailers.get("/", async (c) => {
   return c.json(res);
 });
 
-trailers.post("/", requireCapability("trailers.edit"), async (c) => {
+trailers.post("/", requireCapability("trailers.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateTrailerRequest>();
   if (!body.name || !body.category) {

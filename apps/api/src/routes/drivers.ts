@@ -80,7 +80,7 @@ drivers.get("/", async (c) => {
   return c.json(res);
 });
 
-drivers.post("/", requireCapability("drivers.edit"), async (c) => {
+drivers.post("/", requireCapability("drivers.create"), async (c) => {
   const orgId = c.get("orgId");
   const body = await c.req.json<CreateDriverRequest>();
   if (!body.name) {
