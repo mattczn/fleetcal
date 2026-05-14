@@ -585,32 +585,31 @@ function RolePermissionsPanel() {
       </div>
 
       {/* Matrix */}
-      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
+      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #d1d5db', background: '#fff' }}>
         {/* Header row */}
         <div className="grid items-stretch" style={{
           gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
-          background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border)',
+          background: '#f3f4f6', borderBottom: '2px solid #d1d5db',
         }}>
-          <div className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="px-4 py-3 text-[13px] font-bold" style={{ color: '#111827' }}>
             Capability
           </div>
           {ORG_ROLES.map(role => (
             <div key={role} className="px-3 py-3 text-center"
-              style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
-              <div className="text-[12px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>
+              style={{ borderLeft: '1px solid #d1d5db' }}>
+              <div className="text-[13px] font-bold" style={{ color: '#111827' }}>
                 {ORG_ROLE_LABEL[role]}
               </div>
               {role !== 'owner' && (
                 <button type="button" onClick={() => resetRole(role)}
                   disabled={!draft[role]}
                   title="Reset this role to defaults"
-                  className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                  className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded"
                   style={{
-                    color: draft[role] ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                    color: draft[role] ? '#1d4ed8' : '#9ca3af',
                     cursor: draft[role] ? 'pointer' : 'default',
-                    opacity: draft[role] ? 1 : 0.4,
                   }}>
-                  <RotateCcw size={9} /> Reset
+                  <RotateCcw size={10} /> Reset
                 </button>
               )}
             </div>
@@ -620,52 +619,69 @@ function RolePermissionsPanel() {
         {/* Body — grouped capability rows */}
         {(Object.keys(grouped) as CapabilityGroup[]).map(groupName => (
           <div key={groupName}>
-            <div className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider"
+            <div className="px-4 py-2 text-[12px] font-extrabold uppercase tracking-wider"
               style={{
-                color: 'var(--gc-text-3)',
-                background: 'var(--gc-bg)',
-                borderTop: '1px solid var(--gc-border-light)',
-                borderBottom: '1px solid var(--gc-border-light)',
+                color: '#111827',
+                background: '#e5e7eb',
+                borderTop: '1px solid #d1d5db',
+                borderBottom: '1px solid #d1d5db',
               }}>
-              {groupName}
+                {groupName}
             </div>
             {grouped[groupName].map(item => (
               <div key={item.cap} className="grid items-center" style={{
                 gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
-                borderTop: '1px solid var(--gc-border-light)',
+                borderTop: '1px solid #e5e7eb',
+                background: '#fff',
               }}>
                 <div className="px-4 py-2.5" title={item.hint}>
-                  <div className="text-[13px] font-medium" style={{ color: 'var(--gc-text-1)' }}>{item.label}</div>
+                  <div className="text-[13.5px] font-semibold" style={{ color: '#111827' }}>{item.label}</div>
                   {item.hint && (
-                    <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{item.hint}</div>
+                    <div className="text-[11.5px] mt-0.5" style={{ color: '#6b7280' }}>{item.hint}</div>
                   )}
                 </div>
                 {ORG_ROLES.map(role => {
                   const value     = cellValue(role, item.cap);
                   const overridden = isOverridden(role, item.cap);
                   const isOwner   = role === 'owner';
+                  // Saturated, high-contrast palette:
+                  //   value=true,  overridden=false → solid green   (default-grant)
+                  //   value=true,  overridden=true  → solid green + blue dot
+                  //   value=false, overridden=true  → solid red     (explicit revoke)
+                  //   value=false, overridden=false → outlined gray (default-deny)
+                  let bg = 'transparent';
+                  let borderColor = '#9ca3af';
+                  let iconColor = '#fff';
+                  if (value) {
+                    bg = '#16a34a';
+                    borderColor = '#15803d';
+                  } else if (overridden) {
+                    bg = '#dc2626';
+                    borderColor = '#b91c1c';
+                  }
                   return (
-                    <div key={role} className="flex items-center justify-center py-2.5"
-                      style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
+                    <div key={role} className="flex items-center justify-center py-3"
+                      style={{ borderLeft: '1px solid #e5e7eb' }}>
                       <button type="button"
                         onClick={() => toggle(role, item.cap)}
                         disabled={isOwner}
                         title={overridden ? 'Overridden — click to revert to default' : 'Click to override'}
-                        className="relative inline-flex items-center justify-center rounded transition-colors"
+                        className="relative inline-flex items-center justify-center transition-all"
                         style={{
-                          width: 22, height: 22, borderRadius: 6,
-                          border: `1px solid ${value ? (overridden ? '#1a73e8' : '#86efac') : (overridden ? '#1a73e8' : 'var(--gc-border)')}`,
-                          background: value ? (overridden ? '#1a73e8' : '#dcfce7') : (overridden ? '#fee2e2' : 'transparent'),
+                          width: 26, height: 26, borderRadius: 6,
+                          border: `1.5px solid ${borderColor}`,
+                          background: bg,
                           cursor: isOwner ? 'not-allowed' : 'pointer',
-                          opacity: isOwner ? 0.6 : 1,
+                          opacity: isOwner ? 0.55 : 1,
+                          boxShadow: value || overridden ? '0 1px 2px rgba(0,0,0,0.12)' : 'none',
                         }}>
                         {value
-                          ? <Check size={12} style={{ color: overridden ? '#fff' : '#15803d' }} strokeWidth={3} />
-                          : (overridden ? <X size={12} style={{ color: '#991b1b' }} strokeWidth={3} /> : null)}
+                          ? <Check size={15} style={{ color: iconColor }} strokeWidth={3.5} />
+                          : (overridden ? <X size={15} style={{ color: iconColor }} strokeWidth={3.5} /> : null)}
                         {overridden && (
                           <span className="absolute -top-1 -right-1 rounded-full"
                             title="Overridden — different from default"
-                            style={{ width: 6, height: 6, background: '#1a73e8' }} />
+                            style={{ width: 8, height: 8, background: '#1d4ed8', border: '1.5px solid #fff' }} />
                         )}
                       </button>
                     </div>
@@ -677,12 +693,24 @@ function RolePermissionsPanel() {
         ))}
       </div>
 
-      <div className="mt-4 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-        <span className="inline-flex items-center gap-1.5 mr-4">
-          <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: '#1a73e8' }} />
+      <div className="mt-4 text-[12px] flex items-center gap-5 flex-wrap" style={{ color: '#374151' }}>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block rounded" style={{ width: 14, height: 14, background: '#16a34a', border: '1.5px solid #15803d' }} />
+          Granted
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block rounded" style={{ width: 14, height: 14, background: '#dc2626', border: '1.5px solid #b91c1c' }} />
+          Revoked (override)
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block rounded" style={{ width: 14, height: 14, background: '#fff', border: '1.5px solid #9ca3af' }} />
+          Denied by default
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: '#1d4ed8', border: '1.5px solid #fff', boxShadow: '0 0 0 1px #1d4ed8' }} />
           Overridden from default
         </span>
-        <span>Owner is read-only — always has everything.</span>
+        <span style={{ color: '#6b7280' }}>Owner is read-only.</span>
       </div>
     </div>
   );
