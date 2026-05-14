@@ -54,7 +54,6 @@ reports.use("*", requireCapability("reports.access"));
 
 interface LoadRow {
   id:               string;
-  org_id:           string;
   internal_load_id: number;
   load_num:         string | null;
   broker:           string | null;
@@ -67,6 +66,9 @@ interface LoadRow {
   ref_nums:         string | null;
   notes:            string | null;
   internal_notes:   unknown;
+  // Load-level fields migrated off events.
+  commodity:        string | null;
+  weight:           number | null;
   billing_status:   string | null;
   flagged_reason:   string | null;
   flagged_note:     string | null;
@@ -79,28 +81,23 @@ interface LoadRow {
   deleted_at:       string | null;
   created_at:       string | null;
   updated_at:       string | null;
-  // Event-level fields read via the loads.events join below — not on
-  // loads themselves, but added to the row shape so we don't have to
-  // re-fetch.
-  commodity:        string | null;
-  weight:           number | null;
-  trailer_type:     string | null;
 }
 
 interface EventRow {
   id:           string;
   load_id:      string | null;
-  asset_id:    number;
-  driver_id:   number | null;
-  driver_name: string | null;
-  driver_pay:  number | null;
-  start:       string;
-  end:         string;
-  status:      string;
-  priority:    boolean | null;
-  relay_role:  string | null;
+  asset_id:     number;
+  driver_id:    number | null;
+  driver_name:  string | null;
+  driver_pay:   number | null;
+  start:        string;
+  end:          string;
+  status:       string;
+  priority:     boolean | null;
+  relay_role:   string | null;
   loaded_miles: number | null;
-  trailer_id:  number | null;
+  trailer_id:   number | null;
+  trailer_type: string | null;
 }
 
 interface StopRow {
@@ -126,15 +123,16 @@ interface StopRow {
 }
 
 const LOAD_COLS =
-  "id,org_id,internal_load_id,load_num,broker,customer_id,dispatcher,created_by_name," +
+  "id,internal_load_id,load_num,broker,customer_id,dispatcher,created_by_name," +
   "load_price,rate_con_pdf,accessorials,ref_nums,notes,internal_notes," +
+  "commodity,weight," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
   "verified_at,verified_by,invoice_doc_ids,audit_log," +
   "deleted_at,created_at,updated_at";
 
 const EVENT_COLS =
-  "id,load_id,asset_id,driver_id,driver_name,driver_pay,start,\"end\",status,priority," +
-  "relay_role,loaded_miles,trailer_id,commodity,weight,trailer_type";
+  "id,load_id,asset_id,driver_id,driver_name,driver_pay,start,end,status,priority," +
+  "relay_role,loaded_miles,trailer_id,trailer_type";
 
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,state,timezone," +
@@ -246,15 +244,6 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
   // belongs to exactly one event in the DB schema, even on relays.
   const stops: Stop[] = legs.flatMap(l => l.stops);
 
-  // Pull a couple event-level fields that are conceptually load-level
-  // but historically stored on the event row (commodity, weight,
-  // trailer_type). Prefer the pickup leg.
-  const pickupExtra = pickup as EventRow & {
-    commodity?: string | null;
-    weight?: number | null;
-    trailer_type?: string | null;
-  };
-
   return {
     loadId:           load.id,
     internalLoadId:   load.internal_load_id,
@@ -269,9 +258,11 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
     loadPrice:        load.load_price ?? undefined,
     accessorials:     parseJson<Accessorial[]>(load.accessorials),
 
-    commodity:        pickupExtra.commodity ?? undefined,
-    weight:           pickupExtra.weight ?? undefined,
-    trailerType:      pickupExtra.trailer_type ?? undefined,
+    commodity:        load.commodity ?? undefined,
+    weight:           load.weight ?? undefined,
+    // trailer_type lives per-leg on events; surface the pickup leg's
+    // value as the load-level representative.
+    trailerType:      pickup.trailer_type ?? undefined,
     refNums:          parseJson<RefNum[]>(load.ref_nums),
     rateConPdf:       load.rate_con_pdf ?? undefined,
 
