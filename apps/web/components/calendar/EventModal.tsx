@@ -1262,6 +1262,13 @@ export default function EventModal() {
   // pay block) when this is false.
   const { can: canDo } = usePermissions();
   const canViewDriverPay = canDo('loads.view_driver_pay');
+  // Revenue-load vs non-revenue-event capability split. Maintenance
+  // has nonRevenueEvents.* but not loads.* — when they open the
+  // create modal we force eventKind to 'non_revenue' and disable the
+  // Revenue toggle so they can't accidentally submit a load they
+  // wouldn't be allowed to save.
+  const canCreateRevenue    = canDo('loads.create');
+  const canCreateNonRevenue = canDo('nonRevenueEvents.create');
 
   const isEdit  = modalMode === 'edit';
   const isBatch = batchItems.length > 0;
@@ -1934,6 +1941,17 @@ export default function EventModal() {
     setConfirmSkip(false);
     setConfirmBatchCancel(false);
   }, [modalOpen, modalEventId, batchIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Force non-revenue for users without loads.create when opening the
+  // modal in create mode. Maintenance has nonRevenueEvents.create only
+  // — if they tried to save with eventKind='revenue' the API would
+  // 403. Lock them into the right shape from the start.
+  useEffect(() => {
+    if (!modalOpen || isEdit) return;
+    if (!canCreateRevenue && canCreateNonRevenue) {
+      setEventKind('non_revenue');
+    }
+  }, [modalOpen, isEdit, canCreateRevenue, canCreateNonRevenue]);
 
   // Re-run broker matching when customers list loads after the modal opened.
   // (Initial match runs in the effect above with whatever customers were loaded at that moment;
@@ -3625,24 +3643,34 @@ export default function EventModal() {
             <div className="flex items-center pb-3 gap-2">
               <div className="flex-1" />
               <div className="flex items-center gap-2">
-                {(['revenue', 'non_revenue'] as const).map(kind => (
-                  <button
-                    key={kind}
-                    type="button"
-                    onClick={() => { if (!isEdit) setEventKind(kind); }}
-                    disabled={isEdit}
-                    className="text-xs px-3 py-1.5 rounded-lg font-medium"
-                    style={{
-                      background: eventKind === kind ? (kind === 'revenue' ? 'var(--gc-blue)' : '#7c3aed') : 'var(--gc-hover)',
-                      color: eventKind === kind ? '#fff' : 'var(--gc-text-2)',
-                      cursor: isEdit ? 'default' : 'pointer',
-                      opacity: isEdit && eventKind !== kind ? 0.35 : 1,
-                      transition: isEdit ? 'none' : 'colors 150ms',
-                    }}
-                  >
-                    {kind === 'revenue' ? 'Revenue' : 'Non-Revenue'}
-                  </button>
-                ))}
+                {(['revenue', 'non_revenue'] as const).map(kind => {
+                  // Disable Revenue for users who lack loads.create (e.g.
+                  // Maintenance role) — they can only make non-revenue
+                  // events and the API would 403 a revenue submit anyway.
+                  const blockedByPerm = !isEdit && kind === 'revenue' && !canCreateRevenue;
+                  const disabled = isEdit || blockedByPerm;
+                  const hidden   = blockedByPerm && eventKind !== 'revenue';
+                  if (hidden) return null;
+                  return (
+                    <button
+                      key={kind}
+                      type="button"
+                      onClick={() => { if (!disabled) setEventKind(kind); }}
+                      disabled={disabled}
+                      title={blockedByPerm ? 'Your role can only create non-revenue events' : undefined}
+                      className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                      style={{
+                        background: eventKind === kind ? (kind === 'revenue' ? 'var(--gc-blue)' : '#7c3aed') : 'var(--gc-hover)',
+                        color: eventKind === kind ? '#fff' : 'var(--gc-text-2)',
+                        cursor: disabled ? 'default' : 'pointer',
+                        opacity: disabled && eventKind !== kind ? 0.35 : 1,
+                        transition: disabled ? 'none' : 'colors 150ms',
+                      }}
+                    >
+                      {kind === 'revenue' ? 'Revenue' : 'Non-Revenue'}
+                    </button>
+                  );
+                })}
               </div>
               <div className="flex-1 flex items-center justify-end gap-2">
                 {eventKind === 'revenue' && isEdit && (() => {
