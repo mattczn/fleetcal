@@ -1,3 +1,4 @@
 {
+  "installCommand": "cd ../.. && npm install --workspaces --include-workspace-root",
   "crons": []
 }
