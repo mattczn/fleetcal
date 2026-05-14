@@ -9,6 +9,7 @@ import { localDateStr, nowInTz } from '@/lib/time-utils';
 import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
 import Tooltip from '@/components/ui/Tooltip';
+import { Authorize } from '@/components/Authorize';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -816,60 +817,72 @@ export default function CalendarToolbar() {
           {moreOpen && (
             <div className="absolute right-0 flex flex-col overflow-hidden"
               style={{ top: 'calc(100% + 6px)', minWidth: 180, borderRadius: 10, boxShadow: 'var(--shadow-3)', border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', zIndex: 100 }}>
-              <Link href="/dashboard" onClick={() => setMoreOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                style={{ color: 'var(--gc-text-1)' }}
-                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <BarChart2 size={15} style={{ color: 'var(--gc-text-3)' }} />
-                Dashboard
-              </Link>
-              <Link href="/closeout" onClick={() => setMoreOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <FileCheck2 size={15} style={{ color: 'var(--gc-text-3)' }} />
-                Closeout
-              </Link>
-              <Link href="/accounting" onClick={() => setMoreOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <Receipt size={15} style={{ color: 'var(--gc-text-3)' }} />
-                Accounting
-              </Link>
-              <Link href="/payroll" onClick={() => setMoreOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <Users size={15} style={{ color: 'var(--gc-text-3)' }} />
-                Payroll
-              </Link>
-              <Link href="/fuel" onClick={() => setMoreOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <Fuel size={15} style={{ color: 'var(--gc-text-3)' }} />
-                Fuel
-              </Link>
-              <Link href="/maintenance" onClick={() => setMoreOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                <Wrench size={15} style={{ color: 'var(--gc-text-3)' }} />
-                Maintenance
-              </Link>
+              <Authorize cap="dashboard.access">
+                <Link href="/dashboard" onClick={() => setMoreOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                  style={{ color: 'var(--gc-text-1)' }}
+                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                >
+                  <BarChart2 size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Dashboard
+                </Link>
+              </Authorize>
+              <Authorize cap="closeout.access">
+                <Link href="/closeout" onClick={() => setMoreOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                >
+                  <FileCheck2 size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Closeout
+                </Link>
+              </Authorize>
+              <Authorize cap="accounting.access">
+                <Link href="/accounting" onClick={() => setMoreOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                >
+                  <Receipt size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Accounting
+                </Link>
+              </Authorize>
+              <Authorize cap="payroll.access">
+                <Link href="/payroll" onClick={() => setMoreOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                >
+                  <Users size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Payroll
+                </Link>
+              </Authorize>
+              <Authorize cap="fuel.access">
+                <Link href="/fuel" onClick={() => setMoreOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                >
+                  <Fuel size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Fuel
+                </Link>
+              </Authorize>
+              <Authorize cap="maintenance.access">
+                <Link href="/maintenance" onClick={() => setMoreOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
+                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
+                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
+                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                >
+                  <Wrench size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Maintenance
+                </Link>
+              </Authorize>
             </div>
           )}
         </div>

@@ -3,15 +3,25 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Fuel, Wrench } from 'lucide-react';
+import type { Capability } from '@fleetcal/types';
+import { usePermissions } from '@/lib/usePermissions';
 
-const NAV_LINKS = [
-  { href: '/board',       label: 'Command Center', icon: LayoutDashboard },
-  { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2       },
-  { href: '/closeout',    label: 'Closeout',       icon: FileCheck2      },
-  { href: '/accounting',  label: 'Accounting',     icon: Receipt         },
-  { href: '/fuel',        label: 'Fuel',           icon: Fuel            },
-  { href: '/maintenance', label: 'Maintenance',    icon: Wrench          },
-  { href: '/payroll',     label: 'Payroll',        icon: Users           },
+// Each nav link carries the capability required to see it. Anyone
+// missing the cap doesn't get the link rendered. Calendar is always
+// available (it's the home/back button rendered separately above).
+const NAV_LINKS: Array<{
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  cap: Capability;
+}> = [
+  { href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
+  { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
+  { href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access' },
+  { href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access' },
+  { href: '/fuel',        label: 'Fuel',           icon: Fuel,            cap: 'fuel.access' },
+  { href: '/maintenance', label: 'Maintenance',    icon: Wrench,          cap: 'maintenance.access' },
+  { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access' },
 ];
 
 interface ManagementHeaderProps {
@@ -23,6 +33,16 @@ interface ManagementHeaderProps {
 
 export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot }: ManagementHeaderProps) {
   const pathname = usePathname();
+  const { can, isLoading: permsLoading } = usePermissions();
+
+  // Filter the nav by the active user's capabilities. While Clerk is
+  // still hydrating the membership, render the full nav optimistically
+  // — flickering links would be worse than briefly showing a link
+  // the API will 403 if clicked. As soon as perms resolve, the
+  // restricted ones disappear.
+  const visibleLinks = permsLoading
+    ? NAV_LINKS
+    : NAV_LINKS.filter(l => can(l.cap));
 
   return (
     <header
@@ -69,7 +89,7 @@ export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot 
 
       {/* Right: nav links */}
       <nav className="flex items-center gap-1">
-        {NAV_LINKS.map(({ href, label, icon: NavIcon }) => {
+        {visibleLinks.map(({ href, label, icon: NavIcon }) => {
           const active = pathname === href;
           return (
             <Link
