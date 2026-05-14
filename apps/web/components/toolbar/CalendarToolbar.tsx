@@ -828,7 +828,7 @@ export default function CalendarToolbar() {
                   Dashboard
                 </Link>
               </Authorize>
-              <Authorize cap="closeout.access">
+              <Authorize cap="closeout.access" module="closeout">
                 <Link href="/closeout" onClick={() => setMoreOpen(false)}
                   className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
                   style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
@@ -839,7 +839,7 @@ export default function CalendarToolbar() {
                   Closeout
                 </Link>
               </Authorize>
-              <Authorize cap="accounting.access">
+              <Authorize cap="accounting.access" module="accounting">
                 <Link href="/accounting" onClick={() => setMoreOpen(false)}
                   className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
                   style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
@@ -850,7 +850,7 @@ export default function CalendarToolbar() {
                   Accounting
                 </Link>
               </Authorize>
-              <Authorize cap="payroll.access">
+              <Authorize cap="payroll.access" module="payroll">
                 <Link href="/payroll" onClick={() => setMoreOpen(false)}
                   className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
                   style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
@@ -861,7 +861,7 @@ export default function CalendarToolbar() {
                   Payroll
                 </Link>
               </Authorize>
-              <Authorize cap="fuel.access">
+              <Authorize cap="fuel.access" module="fuel">
                 <Link href="/fuel" onClick={() => setMoreOpen(false)}
                   className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
                   style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
@@ -872,7 +872,7 @@ export default function CalendarToolbar() {
                   Fuel
                 </Link>
               </Authorize>
-              <Authorize cap="maintenance.access">
+              <Authorize cap="maintenance.access" module="maintenance">
                 <Link href="/maintenance" onClick={() => setMoreOpen(false)}
                   className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
                   style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}

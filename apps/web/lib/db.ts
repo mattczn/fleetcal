@@ -10,6 +10,9 @@ export interface OrgData {
   events: CalendarEvent[];
   deletedEvents: DeletedEvent[];
   driverPrefs: Record<number, number>;
+  /** Optional secondary driver per asset — backed by
+   *  driver_asset_prefs.secondary_driver_id. */
+  driverPrefsSecondary: Record<number, number>;
 }
 
 export async function fetchOrgData(
@@ -29,8 +32,12 @@ export async function fetchOrgData(
   ]);
 
   const { events, deletedEvents } = splitLoadsByDeleted(loadsRes.loads);
-  const driverPrefs: Record<number, number> = {};
-  for (const p of prefsRes.prefs) driverPrefs[p.assetId] = p.driverId;
+  const driverPrefs:          Record<number, number> = {};
+  const driverPrefsSecondary: Record<number, number> = {};
+  for (const p of prefsRes.prefs) {
+    if (p.driverId != null) driverPrefs[p.assetId] = p.driverId;
+    if (p.secondaryDriverId != null) driverPrefsSecondary[p.assetId] = p.secondaryDriverId;
+  }
 
   return {
     assets:  assetsRes.assets,
@@ -38,6 +45,7 @@ export async function fetchOrgData(
     events,
     deletedEvents,
     driverPrefs,
+    driverPrefsSecondary,
   };
 }
 

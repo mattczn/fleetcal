@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { X, Star, RefreshCw, Truck, User, MapPin, LayoutDashboard, ChevronDown, ChevronUp, EyeOff, Eye } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { calcDirections } from '@/lib/directions';
+import { sanitizeTimezone, parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import MapDrawer from './MapDrawer';
 import CopyChip from '@/components/ui/CopyChip';
@@ -60,39 +61,29 @@ const EXCEPTION_CHIPS: { key: EventStatus }[] = [{ key: 'tonu' }, { key: 'cancel
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-// Load.start/end are naive strings in the org's dispatch zone. Parsing
-// them with `new Date(...)` here would treat them as the browser's
-// local zone — so when the user's browser sits in a different zone
-// from the dispatch zone, the in-progress filter mis-buckets loads.
-// Compute "now" as a naive string in the dispatch zone instead so
-// the lexicographic comparison reflects the same wall clock.
-//
-// TODO: pull dispatch zone from org settings once that column exists.
-const DISPATCH_TZ = 'America/New_York';
-function nowInDispatchTz(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: DISPATCH_TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date());
-  const p = (t: string) => parts.find(x => x.type === t)?.value ?? '00';
-  return `${p('year')}-${p('month')}-${p('day')}T${p('hour')}:${p('minute')}`;
-}
+// Load.start/end are naive ISO strings ("YYYY-MM-DDTHH:mm") meant to
+// be read in the org's dispatch timezone. JavaScript parses them as
+// browser-local — so when the user's browser is in a different zone
+// from the org's dispatch zone, the in-progress filter mis-buckets
+// loads (a future load shows "in transit", a finished one shows
+// "upcoming"). parseNaiveIsoInTz binds the wall components to the
+// org's tz before producing UTC ms so all downstream comparisons
+// happen in the same frame.
 
-function derivedKey(ev: CalendarEvent): 'upcoming' | 'in_progress' | 'completed' {
-  const now = nowInDispatchTz();
-  if (ev.start > now) return 'upcoming';
-  if (ev.end   < now) return 'completed';
+function derivedKey(ev: CalendarEvent, tz?: string): 'upcoming' | 'in_progress' | 'completed' {
+  const now = Date.now();
+  if (parseNaiveIsoInTz(ev.start, tz) > now) return 'upcoming';
+  if (parseNaiveIsoInTz(ev.end,   tz) < now) return 'completed';
   return 'in_progress';
 }
 
-function getColumn(ev: CalendarEvent): ColumnKey {
+function getColumn(ev: CalendarEvent, tz?: string): ColumnKey {
   const s = ev.status;
   if (s === 'tonu' || s === 'cancelled' || s === 'problem') return 'issues';
   if (s === 'delivered') return 'delivered';
   if (s === 'dispatched') return 'dispatched';
   if (s === 'picked_up' || s === 'en_route') return 'in_transit';
-  const dk = derivedKey(ev);
+  const dk = derivedKey(ev, tz);
   if (dk === 'completed') return 'delivered';
   if (dk === 'in_progress') return 'in_transit';
   return 'upcoming';
@@ -101,8 +92,9 @@ function getColumn(ev: CalendarEvent): ColumnKey {
 const WINDOW_HOURS = 12;
 const STEP_HOURS   = 12;
 
-function isInWindow(ev: CalendarEvent, start: Date, end: Date): boolean {
-  return new Date(ev.start) < end && new Date(ev.end) > start;
+function isInWindow(ev: CalendarEvent, start: Date, end: Date, tz?: string): boolean {
+  return parseNaiveIsoInTz(ev.start, tz) < end.getTime()
+      && parseNaiveIsoInTz(ev.end,   tz) > start.getTime();
 }
 
 function fmtBound(d: Date): string {
@@ -112,9 +104,26 @@ function fmtBound(d: Date): string {
   return `${weekday} ${date}, ${time}`;
 }
 
-function fmtTime(iso: string): string {
+// Compact time for the card row (e.g. "7a" / "12:30p"). When `tz`
+// is provided we extract hour/minute via Intl in that timezone so
+// MT orgs viewed from PT/ET browsers still see MT times.
+function fmtTime(iso: string, tz?: string): string {
   const d = new Date(iso);
-  const h = d.getHours(), m = d.getMinutes();
+  let h: number;
+  let m: number;
+  if (tz) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    }).formatToParts(d);
+    h = Number(parts.find(p => p.type === 'hour')?.value ?? '0');
+    m = Number(parts.find(p => p.type === 'minute')?.value ?? '0');
+  } else {
+    h = d.getHours();
+    m = d.getMinutes();
+  }
   const hh = h % 12 || 12, ap = h >= 12 ? 'p' : 'a';
   return m === 0 ? `${hh}${ap}` : `${hh}:${String(m).padStart(2, '0')}${ap}`;
 }
@@ -188,6 +197,11 @@ function LoadCard({
   onHide: () => void;
 }) {
   const eldLocations = useCalendarStore(s => s.eldLocations);
+  // store.calendarTimezone is the clean IANA string; sanitize is
+  // defensive (handles legacy "Mountain Time (America/Denver)"-style
+  // values and returns undefined for unparseable strings so
+  // Intl.DateTimeFormat can never throw).
+  const orgTz        = sanitizeTimezone(useCalendarStore(s => s.calendarTimezone));
   const [statusOpen, setStatusOpen] = useState(false);
   const [compact, setCompact] = useState(false);
   const cardRef   = useRef<HTMLDivElement>(null);
@@ -340,7 +354,7 @@ function LoadCard({
           )}
           {ev.loadNum && <span style={{ fontSize: 12, color: whiteDim }}>·</span>}
           <span style={{ fontSize: 12, fontWeight: 600, color: whiteDim }}>
-            {fmtTime(ev.start)}–{fmtTime(ev.end)}
+            {fmtTime(ev.start, orgTz)}–{fmtTime(ev.end, orgTz)}
           </span>
         </div>
 
@@ -371,8 +385,8 @@ function LoadCard({
             onMouseLeave={e => { if (!ev.status) e.currentTarget.style.background = chipIdle; }}
           >
             {ev.status ? CHIP_META[ev.status]?.label ?? ev.status
-              : derivedKey(ev) === 'completed' ? 'Completed'
-              : derivedKey(ev) === 'in_progress' ? 'In Transit'
+              : derivedKey(ev, orgTz) === 'completed' ? 'Completed'
+              : derivedKey(ev, orgTz) === 'in_progress' ? 'In Transit'
               : 'Scheduled'}
             <ChevronDown size={11} style={{ opacity: 0.7 }} />
           </button>
@@ -593,7 +607,12 @@ function Column({
 // ── Main board ─────────────────────────────────────────────────────────────────
 
 export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
-  const { events, assets, updateEvent, openEditModal, eldLocations } = useCalendarStore();
+  const { events, assets, updateEvent, openEditModal, eldLocations, calendarTimezone } = useCalendarStore();
+  // Org's IANA timezone, sanitized. Drives the in-progress / upcoming /
+  // completed bucketing AND the time window cutoff so the board
+  // matches the wall clock at the org's location rather than the
+  // dispatcher's laptop.
+  const orgTz = sanitizeTimezone(calendarTimezone);
   const router = useRouter();
   const handleClose = onClose ?? (() => router.push('/calendar'));
 
@@ -664,9 +683,9 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
     setPivotTime(p => new Date(p.getTime() + hours * 3600 * 1000));
 
   const todayLoads = useMemo(() =>
-    events.filter(ev => isInWindow(ev, windowStart, windowEnd))
+    events.filter(ev => isInWindow(ev, windowStart, windowEnd, orgTz))
           .sort((a, b) => a.start.localeCompare(b.start)),
-  [events, windowStart, windowEnd]);
+  [events, windowStart, windowEnd, orgTz]);
 
   const assetMap = useMemo(() => {
     const m = new Map<number, Asset>();
@@ -676,9 +695,9 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
 
   const columnedLoads = useMemo(() => {
     const cols: Record<ColumnKey, CalendarEvent[]> = { upcoming: [], dispatched: [], in_transit: [], delivered: [], issues: [] };
-    for (const ev of todayLoads) cols[getColumn(ev)].push(ev);
+    for (const ev of todayLoads) cols[getColumn(ev, orgTz)].push(ev);
     return cols;
-  }, [todayLoads]);
+  }, [todayLoads, orgTz]);
 
   // ── ELD + distance ─────────────────────────────────────────────────────────
 
@@ -690,14 +709,14 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
     for (const l of locs) locMap.set(l.vehicleId, l);
 
     const results = await Promise.all(
-      loads.filter(ev => ['dispatched', 'in_transit'].includes(getColumn(ev))).map(async ev => {
+      loads.filter(ev => ['dispatched', 'in_transit'].includes(getColumn(ev, orgTz))).map(async ev => {
         const asset = assetMap.get(ev.assetId);
         if (!asset?.motiveVehicleId) return null;
         const loc = locMap.get(asset.motiveVehicleId);
         if (!loc) return null;
 
         const stops = ev.stops ?? [];
-        const isDispatched = getColumn(ev) === 'dispatched';
+        const isDispatched = getColumn(ev, orgTz) === 'dispatched';
         let targetStop = isDispatched
           ? stops.find(s => s.type === 'pickup' && s.lat != null && s.lng != null)
           : [...stops].reverse().find(s => (s.type === 'delivery' || s.type === 'drop_hook' || s.type === 'drop') && s.lat != null && s.lng != null);

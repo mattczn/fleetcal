@@ -3,25 +3,30 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Fuel, Wrench } from 'lucide-react';
-import type { Capability } from '@fleetcal/types';
+import type { Capability, OrgModule } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 
-// Each nav link carries the capability required to see it. Anyone
-// missing the cap doesn't get the link rendered. Calendar is always
-// available (it's the home/back button rendered separately above).
+// Each nav link carries:
+//   - cap     — the capability the user's role must have
+//   - module  — (optional) the org-level module flag that must be ON
+// Both must pass. Dashboard + Command Center are part of the core
+// product (no module flag); the five SaaS-gated modules each name
+// their flag so an org without that plan tier doesn't see the link.
 const NAV_LINKS: Array<{
   href: string;
   label: string;
   icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
   cap: Capability;
+  module?: OrgModule;
 }> = [
   { href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
   { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access' },
-  { href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access' },
-  { href: '/fuel',        label: 'Fuel',           icon: Fuel,            cap: 'fuel.access' },
-  { href: '/maintenance', label: 'Maintenance',    icon: Wrench,          cap: 'maintenance.access' },
-  { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access' },
+  { href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',    module: 'closeout' },
+  { href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
+  { href: '/fuel',        label: 'Fuel',           icon: Fuel,            cap: 'fuel.access',        module: 'fuel' },
+  { href: '/maintenance', label: 'Maintenance',    icon: Wrench,          cap: 'maintenance.access', module: 'maintenance' },
+  { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',     module: 'payroll' },
 ];
 
 interface ManagementHeaderProps {
@@ -34,15 +39,16 @@ interface ManagementHeaderProps {
 export default function ManagementHeader({ title, icon: Icon, onBack, rightSlot }: ManagementHeaderProps) {
   const pathname = usePathname();
   const { can, isLoading: permsLoading } = usePermissions();
+  const { enabled: moduleEnabled } = useModules();
 
-  // Filter the nav by the active user's capabilities. While Clerk is
-  // still hydrating the membership, render the full nav optimistically
-  // — flickering links would be worse than briefly showing a link
-  // the API will 403 if clicked. As soon as perms resolve, the
-  // restricted ones disappear.
+  // Filter the nav by BOTH axes: per-user capability AND per-org
+  // module flag. While Clerk is still hydrating the membership, render
+  // the full nav optimistically — flickering links would be worse than
+  // briefly showing a link the API will 403 if clicked. As soon as
+  // perms resolve, the restricted ones disappear.
   const visibleLinks = permsLoading
     ? NAV_LINKS
-    : NAV_LINKS.filter(l => can(l.cap));
+    : NAV_LINKS.filter(l => can(l.cap) && (!l.module || moduleEnabled(l.module)));
 
   return (
     <header

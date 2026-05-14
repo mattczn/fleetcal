@@ -17,6 +17,7 @@ export default function DataLoader() {
   const loadTrailers         = useCalendarStore((s) => s.fetchTrailers);
   const hydrateRateConSettings = useCalendarStore((s) => s.hydrateRateConSettings);
   const hydrateRoleOverrides = useCalendarStore((s) => s.hydrateRoleOverrides);
+  const hydrateOrgModules    = useCalendarStore((s) => s.hydrateOrgModules);
   const autoExpireTrash      = useCalendarStore((s) => s.autoExpireTrash);
   const { phase, completeOnboarding, setPhase } = useOnboardingStore();
   const loadedId = useRef<string | null>(null);
@@ -61,6 +62,7 @@ export default function DataLoader() {
           .then(({ settings }) => {
             hydrateRateConSettings(settings.rateConSettings);
             hydrateRoleOverrides(settings.roleOverrides);
+            hydrateOrgModules(settings.orgModules);
           })
           .catch((err) => console.error('[DataLoader] org settings fetch failed:', err));
         autoExpireTrash();
@@ -69,7 +71,7 @@ export default function DataLoader() {
         void extendLoadedRange(stage2Start, stage2End);
       })
       .catch((err) => console.error('[DataLoader] fetch failed:', err));
-  }, [orgId, hydrate, hydrateDemoMode, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, hydrateRoleOverrides, autoExpireTrash, phase, completeOnboarding, setPhase]);
+  }, [orgId, hydrate, hydrateDemoMode, extendLoadedRange, loadSavedLocations, loadDispatchers, loadCustomers, loadTrailers, hydrateRateConSettings, hydrateRoleOverrides, hydrateOrgModules, autoExpireTrash, phase, completeOnboarding, setPhase]);
 
   return null;
 }

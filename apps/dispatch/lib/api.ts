@@ -18,16 +18,32 @@ import type { Asset, Driver, Load, LoadStatus, RefNum, Stop, StopType, Customer 
  * React Query AsyncStorage persister round-trips through JSON.stringify
  * which silently turns a Map into `{}` on the way back. Use a plain
  * record so it survives persistence.
+ *
+ * Returns BOTH the primary and secondary driver maps. Secondary is
+ * for drivers who share another driver's truck (don't have their own
+ * asset). The web's Asset Preferences panel lets an admin set both;
+ * dispatch only consumes them for auto-fill in pickers.
  */
-export async function fetchDriverAssetPrefs(_orgId: string): Promise<Record<number, number>> {
+export interface DriverAssetPrefMaps {
+  /** assetId → primary driverId */
+  primary:   Record<number, number>;
+  /** assetId → secondary driverId */
+  secondary: Record<number, number>;
+}
+
+export async function fetchDriverAssetPrefs(_orgId: string): Promise<DriverAssetPrefMaps> {
   try {
     const { prefs } = await railway.listDriverAssetPrefs();
-    const out: Record<number, number> = {};
-    for (const p of prefs) out[p.assetId] = p.driverId;
-    return out;
+    const primary:   Record<number, number> = {};
+    const secondary: Record<number, number> = {};
+    for (const p of prefs) {
+      if (p.driverId          != null) primary[p.assetId]   = p.driverId;
+      if (p.secondaryDriverId != null) secondary[p.assetId] = p.secondaryDriverId;
+    }
+    return { primary, secondary };
   } catch (err) {
     console.error("fetchDriverAssetPrefs:", err);
-    return {};
+    return { primary: {}, secondary: {} };
   }
 }
 

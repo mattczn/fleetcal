@@ -23,7 +23,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, requireModule } from "../middleware/require.js";
 
 const fuelReports = new Hono<{ Variables: AuthVariables }>();
 
@@ -31,7 +31,7 @@ const fuelReports = new Hono<{ Variables: AuthVariables }>();
 // Dispatcher, Maintenance). Writes require fuel.edit which all of
 // those roles have today, but keeps the two scopes separable for
 // future view-only roles.
-fuelReports.use("*", requireCapability("fuel.access"));
+fuelReports.use("*", requireModule("fuel"), requireCapability("fuel.access"));
 
 const RECEIPT_BUCKET = "fuel-receipts";
 

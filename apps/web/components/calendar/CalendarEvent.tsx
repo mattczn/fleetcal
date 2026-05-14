@@ -6,6 +6,7 @@ import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/ty
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
 import { timeToPixels, timeHeightPixels, localDateStr } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { usePermissions } from '@/lib/usePermissions';
 
 const STATUS_CONFIG: Record<EventStatus, { dot: string; label: string }> = {
   scheduled:  { dot: 'rgba(255,255,255,0.55)', label: 'Scheduled'  },
@@ -80,6 +81,16 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const [showRelayNotice, setShowRelayNotice] = useState(false);
   const relayNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Read-only roles (maintenance for revenue loads, anyone for events
+  // they can't modify) can click to open the modal but must not be
+  // able to drag — every drag-end fires a PATCH /v1/loads (or /events)
+  // that the API would 403. Show a 'pointer' cursor instead of 'grab'
+  // so the affordance matches what's actually possible.
+  const { can: canDo } = usePermissions();
+  const canDragThis = event.eventKind === 'non_revenue'
+    ? canDo('nonRevenueEvents.edit')
+    : canDo('loads.edit');
+
   // Overlap layout fractions
   const leftFrac  = colIdx / totalCols;
   const widthFrac = 1 / totalCols;
@@ -87,6 +98,10 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const handleMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onSmartAssign) return; // triage mode — let onClick handle it
+    // Read-only role for this event kind: don't initiate drag. The
+    // onClick handler still fires (mouseup → click) so they can open
+    // the modal to view details, just not move the event.
+    if (!canDragThis) return;
     if (event.relayGroupId) {
       const startX = e.clientX;
       const startY = e.clientY;
@@ -145,7 +160,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
         backgroundColor: color,
         borderLeft: totalCols >= 3 ? '2px solid rgba(255,255,255,0.6)' : `3px solid ${color}`,
         borderRight: totalCols >= 3 ? '2px solid rgba(255,255,255,0.6)' : 'none',
-        cursor: isDragging ? 'grabbing' : 'grab',
+        cursor: isDragging ? 'grabbing' : canDragThis ? 'grab' : 'pointer',
         opacity: isDragging ? 0.3 : isCancelled ? 0.55 : 1,
         pointerEvents: isDragging ? 'none' : 'auto',
         transition: isDragging ? 'none' : 'filter 100ms ease, box-shadow 100ms ease',
@@ -165,8 +180,12 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       onClick={e => {
         e.stopPropagation();
         if (onSmartAssign) { onSmartAssign(event.id); return; }
-        // Only relay events bypass the drag system entirely — all others are handled by mouseup
-        if (isRelay) openEditModal(event.id);
+        // Two paths bypass the drag system and open the modal via
+        // plain onClick: relay events (handled separately because the
+        // drag system can't split a relay), and read-only roles whose
+        // drag-start was suppressed (maintenance opening a revenue
+        // load — they still need to see the details).
+        if (isRelay || !canDragThis) openEditModal(event.id);
       }}
       title={`${displayTitle} · ${startTime}–${endTime}`}
     >
@@ -262,6 +281,11 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           {cardFields.map((key, i) => {
             const def = CARD_FIELD_DEFS.find(d => d.key === key);
             if (!def) return null;
+            // Hide $-amount fields from roles that lack the visibility
+            // cap. Maintenance opening a calendar should see route +
+            // driver + status but not the rate.
+            if (key === 'loadPrice' && !canDo('loads.view_price')) return null;
+            if (key === 'driverPay' && !canDo('loads.view_driver_pay')) return null;
             const value = def.render(event, { driverLabel, customers });
             if (!value) return null;
             const minHeight = 20 + i * 14;

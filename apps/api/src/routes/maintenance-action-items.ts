@@ -24,7 +24,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, requireModule } from "../middleware/require.js";
 import {
   rowToActionItem,
   ACTION_ITEM_COLS,
@@ -33,7 +33,7 @@ import {
 
 const actionItems = new Hono<{ Variables: AuthVariables }>();
 
-actionItems.use("*", requireCapability("maintenance.access"));
+actionItems.use("*", requireModule("maintenance"), requireCapability("maintenance.access"));
 
 function clampLimit(raw: string | undefined, fallback = 100): number {
   const n = Number(raw ?? String(fallback));

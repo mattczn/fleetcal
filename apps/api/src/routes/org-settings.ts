@@ -17,6 +17,7 @@ import {
   type RateConSettings,
   type InvoiceSettings,
   type RoleOverrides,
+  type OrgModuleFlags,
   type UpdateOrgSettingsRequest,
   type UpdateOrgSettingsResponse,
   type ApiErrorResponse,
@@ -24,7 +25,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability, invalidateRoleOverrides } from "../middleware/require.js";
+import { requireCapability, invalidateRoleOverrides, invalidateOrgModules } from "../middleware/require.js";
 
 const orgSettings = new Hono<{ Variables: AuthVariables }>();
 
@@ -32,7 +33,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -44,6 +45,7 @@ orgSettings.get("/", async (c) => {
     rate_con_settings: RateConSettings | null;
     invoice_settings:  InvoiceSettings  | null;
     role_overrides:    RoleOverrides    | null;
+    modules:           OrgModuleFlags   | null;
   } | null;
   const res: GetOrgSettingsResponse = {
     settings: {
@@ -51,6 +53,7 @@ orgSettings.get("/", async (c) => {
       rateConSettings: row?.rate_con_settings ?? {},
       invoiceSettings: row?.invoice_settings  ?? {},
       roleOverrides:   row?.role_overrides    ?? {},
+      orgModules:      row?.modules           ?? {},
     },
   };
   return c.json(res);
@@ -64,7 +67,8 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     body.showDriverPay   === undefined &&
     body.rateConSettings === undefined &&
     body.invoiceSettings === undefined &&
-    body.roleOverrides   === undefined
+    body.roleOverrides   === undefined &&
+    body.orgModules      === undefined
   ) {
     return c.json({ error: "validation_failed", errors: ["at least one settable field required"] } satisfies ApiErrorResponse, 400);
   }
@@ -73,7 +77,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules")
     .eq("org_id", orgId)
     .maybeSingle();
   const existingRow = existing as {
@@ -81,6 +85,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     rate_con_settings: RateConSettings | null;
     invoice_settings:  InvoiceSettings  | null;
     role_overrides:    RoleOverrides    | null;
+    modules:           OrgModuleFlags   | null;
   } | null;
 
   const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
@@ -99,6 +104,12 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   const nextRoleOverrides: RoleOverrides = body.roleOverrides === undefined
     ? (existingRow?.role_overrides ?? {})
     : (body.roleOverrides ?? {});
+  // Module flags merge — single-toggle PATCH ships e.g. {fuel: false}
+  // and the API preserves the rest of the map. Reset to defaults by
+  // sending an empty object.
+  const mergedModules: OrgModuleFlags = body.orgModules === undefined
+    ? (existingRow?.modules ?? {})
+    : { ...(existingRow?.modules ?? {}), ...body.orgModules };
 
   const { error } = await supabase
     .from("org_settings")
@@ -109,6 +120,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
         rate_con_settings: mergedRateCon as never,
         invoice_settings:  mergedInvoice as never,
         role_overrides:    nextRoleOverrides as never,
+        modules:           mergedModules as never,
       } as never,
       { onConflict: "org_id" },
     );
@@ -116,10 +128,13 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     console.error("[PATCH /v1/org-settings] failed:", error);
     return c.json({ error: "upsert_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  // Bust the in-memory role-override cache for this org so the new
-  // values take effect on the very next request, not after the TTL.
+  // Bust the in-memory caches so the new values take effect on the
+  // very next request, not after the TTL.
   if (body.roleOverrides !== undefined) {
     invalidateRoleOverrides(orgId);
+  }
+  if (body.orgModules !== undefined) {
+    invalidateOrgModules(orgId);
   }
   const res: UpdateOrgSettingsResponse = {
     settings: {
@@ -127,6 +142,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       rateConSettings: mergedRateCon,
       invoiceSettings: mergedInvoice,
       roleOverrides:   nextRoleOverrides,
+      orgModules:      mergedModules,
     },
   };
   return c.json(res);

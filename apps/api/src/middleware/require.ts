@@ -23,9 +23,12 @@
 import type { MiddlewareHandler } from "hono";
 import {
   effectiveCan,
+  isModuleEnabled,
   type Capability,
   type OrgRole,
   type RoleOverrides,
+  type OrgModule,
+  type OrgModuleFlags,
 } from "@fleetcal/types";
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "./clerk.js";
@@ -64,6 +67,50 @@ export function invalidateRoleOverrides(orgId: string): void {
   overrideCache.delete(orgId);
 }
 
+// ── Per-org module-flags cache ──────────────────────────────────────────
+//
+// Same shape as the role-overrides cache, separate so a PATCH that
+// only touches one of the two doesn't blow away the other. Module
+// flags change much less frequently than role overrides (usually only
+// when an admin/Stripe webhook flips a plan), but we still cap the
+// TTL so a billing event takes effect within the minute.
+
+interface ModuleCacheEntry { flags: OrgModuleFlags; fetchedAt: number }
+const moduleCache = new Map<string, ModuleCacheEntry>();
+const ORG_MODULES_TTL_MS = 60_000;
+
+async function loadOrgModules(orgId: string): Promise<OrgModuleFlags> {
+  const now = Date.now();
+  const cached = moduleCache.get(orgId);
+  if (cached && now - cached.fetchedAt < ORG_MODULES_TTL_MS) {
+    return cached.flags;
+  }
+  const { data, error } = await supabase
+    .from("org_settings")
+    .select("modules")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    // Fail OPEN — if we can't determine which modules are enabled, the
+    // safer default is to let the request through and let downstream
+    // capability checks handle authz. Locking everyone out on a transient
+    // DB blip would be worse than letting one through.
+    console.warn("[requireModule] failed to load modules for", orgId, error);
+    moduleCache.set(orgId, { flags: {}, fetchedAt: now });
+    return {};
+  }
+  const flags = (data as { modules?: OrgModuleFlags } | null)?.modules ?? {};
+  moduleCache.set(orgId, { flags, fetchedAt: now });
+  return flags;
+}
+
+/** Same idea as invalidateRoleOverrides — call from the org-settings
+ *  PATCH handler when modules change so the next request sees fresh
+ *  flags. Also called by the future Stripe webhook receiver. */
+export function invalidateOrgModules(orgId: string): void {
+  moduleCache.delete(orgId);
+}
+
 /** Inline capability check for handlers that need to choose between
  *  caps based on request body content (e.g. POST /v1/events branching
  *  on event_kind to decide between loads.create vs
@@ -96,6 +143,38 @@ export function requireCapability(
           reason: "missing_capability",
           capability: cap,
           role: role ?? null,
+        },
+        403,
+      );
+    }
+    await next();
+  };
+}
+
+/**
+ * Org-level module gate. Returns 403 if the module is OFF for the
+ * org. Mount this BEFORE requireCapability on every route in a
+ * module's group:
+ *
+ *   payroll.use("*", requireModule("payroll"), requireCapability("payroll.access"));
+ *
+ * Module checks happen first so a disabled-module org gets a clean
+ * "module_disabled" response instead of a "missing_capability" one
+ * (the latter would suggest "ask your admin for the cap" when the
+ * real answer is "your plan doesn't include this feature").
+ */
+export function requireModule(
+  module: OrgModule,
+): MiddlewareHandler<{ Variables: AuthVariables }> {
+  return async (c, next) => {
+    const orgId = c.get("orgId");
+    const flags = orgId ? await loadOrgModules(orgId) : {};
+    if (!isModuleEnabled(module, flags)) {
+      return c.json(
+        {
+          error: "forbidden",
+          reason: "module_disabled",
+          module,
         },
         403,
       );

@@ -93,6 +93,17 @@ export type Capability =
   // Owner/Admin have it; Dispatcher + Maintenance don't, unless the
   // org explicitly opts in (Phase 3 setting).
   | "loads.view_driver_pay"
+  // Visibility-only gate — load rate / revenue figures (loadPrice,
+  // accessorials, total). Owner/Admin/Dispatcher have it by default;
+  // Maintenance does NOT, so a maintenance user opening a load card
+  // sees the route and stops but no dollar amounts.
+  | "loads.view_price"
+  // Visibility-only gate — the rate confirmation PDF/document on a
+  // load. Same default audience as loads.view_price: Owner / Admin /
+  // Dispatcher have it; Maintenance does not (the rate con contains
+  // pricing, broker terms, and other operational details they don't
+  // need).
+  | "loads.view_rate_con"
   // Non-revenue calendar events — maintenance/repair blocks, asset
   // out-of-service holds, etc. Distinct from loads.* so a Maintenance
   // role can manage their own events without being able to touch
@@ -159,7 +170,7 @@ export type Capability =
 
 const ALL_CAPS: Capability[] = [
   "org.settings.edit", "org.members.manage",
-  "loads.view", "loads.create", "loads.edit", "loads.delete", "loads.view_driver_pay",
+  "loads.view", "loads.create", "loads.edit", "loads.delete", "loads.view_driver_pay", "loads.view_price", "loads.view_rate_con",
   "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
   "customers.view", "customers.create", "customers.edit", "customers.delete",
   "drivers.view", "drivers.create", "drivers.edit", "drivers.delete",
@@ -186,7 +197,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // revenue / driver-pay numbers we don't want at this tier), and
   // driver pay is hidden.
   dispatcher: new Set<Capability>([
-    "loads.view", "loads.create", "loads.edit",
+    "loads.view", "loads.create", "loads.edit", "loads.view_price", "loads.view_rate_con",
     "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
     "customers.view", "customers.create", "customers.edit",
     "drivers.view", "drivers.create", "drivers.edit",
@@ -338,6 +349,8 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
 
   // Sensitive fields.
   { cap: "loads.view_driver_pay", label: "View driver pay", group: "Sensitive fields", hint: "Hides the Driver Pay column / field across reports, modals, and exports." },
+  { cap: "loads.view_price",      label: "View load price", group: "Sensitive fields", hint: "Hides the load rate / revenue / total across the load modal, cards, dashboard, and reports." },
+  { cap: "loads.view_rate_con",   label: "View rate confirmation", group: "Sensitive fields", hint: "Hides the rate confirmation PDF and the View PDF buttons on the load modal." },
 
   // Org admin.
   { cap: "org.settings.edit",  label: "Edit org settings",    group: "Org admin" },

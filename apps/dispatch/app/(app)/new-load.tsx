@@ -538,8 +538,11 @@ export default function NewLoadScreen() {
           onSelect={(a) => {
             setAssetPickerVisible(false);
             const next: Partial<Draft> = { assetId: a.id };
-            // Auto-fill preferred driver
-            const prefId = driverPrefs?.[a.id];
+            // Auto-fill the asset's PRIMARY driver. Secondary stays a
+            // reverse-lookup signal only (used in the driver picker
+            // below to pre-fill the asset, not the other way around —
+            // an asset's default driver is its primary).
+            const prefId = driverPrefs?.primary?.[a.id];
             if (prefId != null) {
               const d = drivers.find((x) => x.id === prefId);
               if (d) { next.driverId = d.id; next.driverName = d.name; }
@@ -557,7 +560,28 @@ export default function NewLoadScreen() {
           onClose={() => setDriverPickerVisible(false)}
           onSelect={(driverId, driverName) => {
             setDriverPickerVisible(false);
-            patch({ driverId, driverName });
+            const next: Partial<Draft> = { driverId, driverName };
+            // Reverse auto-fill — if this driver is the primary or
+            // secondary preference on some asset, swap that asset in
+            // even if one is already selected (common case:
+            // reassigning a load to a different driver should bring
+            // their truck along). Drivers with no asset preference
+            // leave the asset slot untouched. Loop-safe because both
+            // pickers fire synchronously on tap, no useEffect
+            // watching either field.
+            const primary   = driverPrefs?.primary   ?? {};
+            const secondary = driverPrefs?.secondary ?? {};
+            let targetAid: number | null = null;
+            for (const [aidStr, did] of Object.entries(primary)) {
+              if (did === driverId) { targetAid = Number(aidStr); break; }
+            }
+            if (targetAid == null) {
+              for (const [aidStr, did] of Object.entries(secondary)) {
+                if (did === driverId) { targetAid = Number(aidStr); break; }
+              }
+            }
+            if (targetAid != null) next.assetId = targetAid;
+            patch(next);
           }}
         />
       ) : null}

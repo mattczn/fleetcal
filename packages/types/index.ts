@@ -101,3 +101,7 @@ export * from "./realtime";
 // ── Org roles + capability model ────────────────────────────────────────
 
 export * from "./permissions";
+
+// ── Org-level module toggles (SaaS billing axis) ────────────────────────
+
+export * from "./modules";

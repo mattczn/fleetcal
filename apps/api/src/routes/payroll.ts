@@ -25,7 +25,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, requireModule } from "../middleware/require.js";
 
 const payroll = new Hono<{ Variables: AuthVariables }>();
 
@@ -34,7 +34,7 @@ const payroll = new Hono<{ Variables: AuthVariables }>();
 // .finalize. Read endpoints below the line stay open to anyone with
 // payroll.access — currently the same set of users, but keeps the
 // option to give Accountant role read-only access later.
-payroll.use("*", requireCapability("payroll.access"));
+payroll.use("*", requireModule("payroll"), requireCapability("payroll.access"));
 
 interface AdjRow {
   id: string;

@@ -263,6 +263,52 @@ function EditableRow({
   );
 }
 
+/**
+ * Inline suggestion row rendered beneath the Asset or Driver row in
+ * the Operations card. Surfaces a tappable "Use Truck-X?" pill when
+ * the user picked one side and there's a preferred partner that
+ * differs from the load's current other side. Tap the pill to apply
+ * the swap; tap ✕ to dismiss. Only used in edit mode — new-load
+ * creation auto-applies the partner swap silently elsewhere.
+ */
+function SuggestionRow({ label, onApply, onDismiss }: {
+  label: string;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <View style={{
+      flexDirection: "row", alignItems: "center",
+      paddingVertical: 8, paddingLeft: 25,
+      borderBottomWidth: 1, borderBottomColor: "#f1f3f4",
+    }}>
+      <TouchableOpacity
+        onPress={onApply}
+        activeOpacity={0.7}
+        style={{
+          flexDirection: "row", alignItems: "center",
+          paddingHorizontal: 12, paddingVertical: 6,
+          backgroundColor: "#e8f0fe",
+          borderRadius: 999,
+          borderWidth: 1, borderColor: "#c6dafc",
+          flex: 1, marginRight: 8,
+        }}
+      >
+        <Text style={[txt(700), { fontSize: 12, color: "#1a73e8", flex: 1 }]} numberOfLines={1}>
+          {label}
+        </Text>
+        <Text style={[txt(800), { fontSize: 11, color: "#fff", backgroundColor: "#1a73e8", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 }]}>
+          Switch
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onDismiss} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        style={{ width: 22, height: 22, alignItems: "center", justifyContent: "center" }}>
+        <Text style={[txt(700), { fontSize: 16, color: "#9aa0a6" }]}>×</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function CopyMetaRow({
   Icon, label, value, last, onCopied,
 }: {
@@ -999,6 +1045,9 @@ function DetailsTab({
   accessorials,
   onAddAccessorial, onEditAccessorial,
   customers,
+  suggestAssetSwap, suggestDriverSwap,
+  onApplyAssetSwap, onApplyDriverSwap,
+  onDismissAssetSwap, onDismissDriverSwap,
 }: {
   load: Load;
   width: number;
@@ -1008,6 +1057,12 @@ function DetailsTab({
   onPickDriver: () => void;
   onEditBroker: () => void;
   onEditDate:   () => void;
+  suggestAssetSwap:  { id: number; name: string } | null;
+  suggestDriverSwap: { id: number; name: string } | null;
+  onApplyAssetSwap:    () => void;
+  onApplyDriverSwap:   () => void;
+  onDismissAssetSwap:  () => void;
+  onDismissDriverSwap: () => void;
   loadedMiles?: number | null;
   editMode: boolean;
   onEditField: (f: OpenEditField) => void;
@@ -1131,6 +1186,15 @@ function DetailsTab({
           modified={dirty.has("asset_id")}
           onEdit={onPickAsset}
         />
+        {/* Inline chip: shown after the user picks a driver whose
+            preferred asset differs from the load's current asset. */}
+        {editMode && suggestAssetSwap && (
+          <SuggestionRow
+            label={`Use ${suggestAssetSwap.name}?`}
+            onApply={onApplyAssetSwap}
+            onDismiss={onDismissAssetSwap}
+          />
+        )}
         {editMode ? (
           <EditableRow
             Icon={User}
@@ -1150,6 +1214,15 @@ function DetailsTab({
             <MetaRow Icon={User} label="Driver" value={load.driverName} />
           )
         ) : null}
+        {/* Inline chip: shown after the user picks an asset whose
+            primary driver differs from the load's current driver. */}
+        {editMode && suggestDriverSwap && (
+          <SuggestionRow
+            label={`Use ${suggestDriverSwap.name}?`}
+            onApply={onApplyDriverSwap}
+            onDismiss={onDismissDriverSwap}
+          />
+        )}
         <EditableRow
           Icon={Building2} label="Broker"
           value={editMode ? load.broker : displayBrokerName(load.broker, customers)}
@@ -1456,6 +1529,12 @@ export default function LoadDetail() {
   const [trailerPickerVisible, setTrailerPickerVisible] = useState(false);
   const [assetPickerVisible,  setAssetPickerVisible]  = useState(false);
   const [driverPickerVisible, setDriverPickerVisible] = useState(false);
+  // Inline "switch the partner too?" suggestions. Set when the user
+  // picks one side and that side has a different preferred partner
+  // than the load currently holds. Rendered as a tappable row under
+  // the asset / driver inside the Operations card.
+  const [suggestAssetSwap,  setSuggestAssetSwap]  = useState<{ id: number; name: string } | null>(null);
+  const [suggestDriverSwap, setSuggestDriverSwap] = useState<{ id: number; name: string } | null>(null);
   const [brokerEditVisible,   setBrokerEditVisible]   = useState(false);
   const [scheduleEditOpen,    setScheduleEditOpen]    = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -2213,6 +2292,20 @@ export default function LoadDetail() {
           onAddAccessorial={() => setAccSheetState({ initial: null })}
           onEditAccessorial={(acc) => setAccSheetState({ initial: acc })}
           customers={customers}
+          suggestAssetSwap={suggestAssetSwap}
+          suggestDriverSwap={suggestDriverSwap}
+          onApplyAssetSwap={() => {
+            if (!suggestAssetSwap) return;
+            patchDraft({ asset_id: suggestAssetSwap.id });
+            setSuggestAssetSwap(null);
+          }}
+          onApplyDriverSwap={() => {
+            if (!suggestDriverSwap) return;
+            patchDraft({ driver_id: suggestDriverSwap.id, driver_name: suggestDriverSwap.name });
+            setSuggestDriverSwap(null);
+          }}
+          onDismissAssetSwap={() => setSuggestAssetSwap(null)}
+          onDismissDriverSwap={() => setSuggestDriverSwap(null)}
         />
         {orgId ? (
           <DocumentsView
@@ -2276,17 +2369,20 @@ export default function LoadDetail() {
             setAssetPickerVisible(false);
             const currentAssetId = (viewLoad ?? load).assetId;
             if (a.id === currentAssetId) return;
-            const patch: Record<string, unknown> = { asset_id: a.id };
-            // Auto-stage preferred driver for the new asset (silent — user can override).
-            const prefDriverId = driverPrefs?.[a.id];
-            if (prefDriverId != null) {
-              const prefDriver = drivers.find((d) => d.id === prefDriverId);
-              if (prefDriver) {
-                patch.driver_id   = prefDriver.id;
-                patch.driver_name = prefDriver.name;
-              }
-            }
-            patchDraft(patch);
+            // Apply the asset pick — the user's deliberate choice
+            // always lands.
+            patchDraft({ asset_id: a.id });
+            // User just touched the asset, so a pending "switch
+            // asset to X" chip is stale.
+            setSuggestAssetSwap(null);
+            // If this asset's primary driver differs from the load's
+            // current driver, surface an inline chip.
+            const prefDriverId = driverPrefs?.primary?.[a.id];
+            if (prefDriverId == null) { setSuggestDriverSwap(null); return; }
+            const prefDriver = drivers.find((d) => d.id === prefDriverId);
+            const currentDriverId = (viewLoad ?? load).driverId;
+            if (!prefDriver || prefDriver.id === currentDriverId) { setSuggestDriverSwap(null); return; }
+            setSuggestDriverSwap({ id: prefDriver.id, name: prefDriver.name });
           }}
         />
       ) : null}
@@ -2300,6 +2396,26 @@ export default function LoadDetail() {
           onSelect={(driverId, driverName) => {
             setDriverPickerVisible(false);
             patchDraft({ driver_id: driverId, driver_name: driverName });
+            // User just touched the driver — pending "switch driver
+            // to X" chip is stale.
+            setSuggestDriverSwap(null);
+            const primary   = driverPrefs?.primary   ?? {};
+            const secondary = driverPrefs?.secondary ?? {};
+            let targetAid: number | null = null;
+            for (const [aidStr, did] of Object.entries(primary)) {
+              if (did === driverId) { targetAid = Number(aidStr); break; }
+            }
+            if (targetAid == null) {
+              for (const [aidStr, did] of Object.entries(secondary)) {
+                if (did === driverId) { targetAid = Number(aidStr); break; }
+              }
+            }
+            if (targetAid == null) { setSuggestAssetSwap(null); return; }
+            const currentAssetId = (viewLoad ?? load).assetId;
+            if (targetAid === currentAssetId) { setSuggestAssetSwap(null); return; }
+            const targetAsset = assetsForPicker.find((a) => a.id === targetAid);
+            if (!targetAsset) { setSuggestAssetSwap(null); return; }
+            setSuggestAssetSwap({ id: targetAsset.id, name: targetAsset.name });
           }}
         />
       ) : null}
@@ -2326,7 +2442,7 @@ export default function LoadDetail() {
           stops={stopsDraft ?? load.stops}
           assets={visiblePickerAssets}
           drivers={drivers}
-          driverPrefs={driverPrefs}
+          driverPrefs={driverPrefs?.primary}
           pickupAssetId={load.assetId}
           saving={isSplittingRelay}
           onClose={() => setRelaySplitOpen(false)}

@@ -9,10 +9,16 @@ import {
   ORG_ROLES,
   ORG_ROLE_LABEL,
   ROLE_CAPABILITIES,
+  ORG_MODULES,
+  ORG_MODULE_LABEL,
+  ORG_MODULE_BLURB,
+  isModuleEnabled,
   type Capability,
   type CapabilityGroup,
   type OrgRole,
   type RoleOverrides,
+  type OrgModule,
+  type OrgModuleFlags,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import {
@@ -42,7 +48,7 @@ import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'members' | 'role-permissions';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'members' | 'role-permissions' | 'modules';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -730,6 +736,114 @@ function RolePermissionsPanel() {
 }
 
 /**
+ * ModulesPanel — admin toggles for the SaaS billing axis. Each module
+ * here is a top-level product surface that can be turned on or off
+ * for the entire org. When a module is OFF, even the owner can't see
+ * the page or hit the API (the nav link is hidden and the route
+ * redirects). Capability checks are independent — they decide which
+ * users within the org can see an ENABLED module's features.
+ *
+ * Phase 2: a Stripe webhook receiver will write to the same
+ * /v1/org-settings.modules field when an org changes plans, so this
+ * panel becomes a "current plan" view + manual override surface for
+ * support. For now it's the primary control.
+ */
+function ModulesPanel() {
+  const storedFlags = useCalendarStore(s => s.orgModules);
+  const hydrateOrgModules = useCalendarStore(s => s.hydrateOrgModules);
+  const [draft, setDraft] = useState<OrgModuleFlags>(storedFlags);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  // Re-seed when store hydrates from API (initial load).
+  useEffect(() => { setDraft(storedFlags); }, [storedFlags]);
+
+  const toggle = (module: OrgModule) => {
+    const current = isModuleEnabled(module, draft);
+    setDraft(prev => ({ ...prev, [module]: !current }));
+  };
+
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(storedFlags);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const { settings } = await railway.updateOrgSettings({ orgModules: draft });
+      hydrateOrgModules(settings.orgModules);
+      setSavedAt(Date.now());
+    } catch (err) {
+      console.error('[ModulesPanel] save failed:', err);
+      alert('Failed to save module flags. Check the network tab for details.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const revert = () => setDraft(storedFlags);
+
+  return (
+    <SettingsPanel
+      title="Modules"
+      description="Turn entire product modules on or off for this org. A module that's OFF here is invisible to everyone — capability checks only apply to enabled modules. Stripe will manage these automatically once billing is wired."
+    >
+      <SettingsSection>
+        {ORG_MODULES.map((module, idx) => {
+          const enabled = isModuleEnabled(module, draft);
+          return (
+            <div
+              key={module}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 16,
+                padding: '18px 0',
+                borderTop: idx === 0 ? 'none' : `1px solid ${SETTINGS_COLORS.border}`,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: SETTINGS_COLORS.text, marginBottom: 4 }}>
+                  {ORG_MODULE_LABEL[module]}
+                </div>
+                <div style={{ fontSize: 13, color: SETTINGS_COLORS.textBody, lineHeight: 1.5 }}>
+                  {ORG_MODULE_BLURB[module]}
+                </div>
+              </div>
+              <div style={{ flexShrink: 0, paddingTop: 2 }}>
+                <SettingsToggle
+                  checked={enabled}
+                  onChange={() => toggle(module)}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </SettingsSection>
+
+      {/* Footer — Save / Revert */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 24 }}>
+        <SettingsButton
+          variant="primary"
+          onClick={save}
+          disabled={!isDirty || saving}
+        >
+          {saving ? 'Saving…' : 'Save changes'}
+        </SettingsButton>
+        {isDirty && (
+          <SettingsButton variant="secondary" onClick={revert} disabled={saving}>
+            Revert
+          </SettingsButton>
+        )}
+        {savedAt && !isDirty && (
+          <span style={{ fontSize: 13, color: SETTINGS_COLORS.textBody }}>
+            Saved.
+          </span>
+        )}
+      </div>
+    </SettingsPanel>
+  );
+}
+
+/**
  * MembersPanel — invite teammates, assign roles, remove members.
  *
  * Embeds Clerk's <OrganizationProfile /> component, which provides a
@@ -1340,7 +1454,7 @@ function InvoicingPanel() {
   type Form = {
     companyName: string; mcNumber: string; dotNumber: string; ein: string;
     addressLine1: string; addressLine2: string; city: string; state: string; zip: string;
-    phone: string; email: string;
+    phone: string; email: string; ccEmail: string;
     defaultPaymentTermsDays: string;
     remitToInstructions: string;
     invoiceFooterNotes: string;
@@ -1358,6 +1472,7 @@ function InvoicingPanel() {
     zip:                     '',
     phone:                   '',
     email:                   '',
+    ccEmail:                 '',
     defaultPaymentTermsDays: '',
     remitToInstructions:     '',
     invoiceFooterNotes:      '',
@@ -1429,6 +1544,7 @@ function InvoicingPanel() {
           zip:                     inv.zip                     ?? '',
           phone:                   inv.phone                   ?? '',
           email:                   inv.email                   ?? '',
+          ccEmail:                 inv.ccEmail                 ?? '',
           defaultPaymentTermsDays: inv.defaultPaymentTermsDays != null ? String(inv.defaultPaymentTermsDays) : '',
           remitToInstructions:     inv.remitToInstructions     ?? '',
           invoiceFooterNotes:      inv.invoiceFooterNotes      ?? '',
@@ -1473,6 +1589,7 @@ function InvoicingPanel() {
         zip:                     form.zip.trim()                     || undefined,
         phone:                   form.phone.trim()                   || undefined,
         email:                   form.email.trim()                   || undefined,
+        ccEmail:                 form.ccEmail.trim()                 || undefined,
         defaultPaymentTermsDays: Number.isFinite(parsedTerms) ? parsedTerms : undefined,
         remitToInstructions:     form.remitToInstructions.trim()     || undefined,
         invoiceFooterNotes:      form.invoiceFooterNotes.trim()      || undefined,
@@ -1565,8 +1682,11 @@ function InvoicingPanel() {
 
       {/* Contact */}
       <Card title="Contact" subtitle="Shown on invoices so brokers know who to ask about payment.">
-        <FieldRow label="AR / accounting email">
+        <FieldRow label="AR / accounting email" subtitle="Set as Reply-To on outbound invoice emails — broker replies route here.">
           <Input value={form.email} onChange={v => updateField('email', v)} placeholder="ar@acmetrucking.com" type="email" />
+        </FieldRow>
+        <FieldRow label="Auto-CC email" subtitle="Always CC'd on outbound invoice sends. Use a group inbox (e.g. billing@) so every broker Reply-All lands in one place. Comma-separate for multiple.">
+          <Input value={form.ccEmail} onChange={v => updateField('ccEmail', v)} placeholder="billing@acmetrucking.com" type="email" />
         </FieldRow>
         <FieldRow label="Phone">
           <Input value={form.phone} onChange={v => updateField('phone', v)} placeholder="(555) 123-4567" />
@@ -2358,6 +2478,8 @@ function LocationForm({
 
 function SavedLocationsPanel() {
   const { savedLocations, fetchSavedLocations, addSavedLocation, updateSavedLocation, removeSavedLocation } = useCalendarStore();
+  const { can } = usePermissions();
+  const canDelete = can('savedLocations.delete');
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -2442,12 +2564,14 @@ function SavedLocationsPanel() {
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                       <Pencil size={14} />
                     </button>
-                    <button type="button" onClick={() => setConfirmDeleteId(loc.id)}
-                      style={{ padding: 6, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-3)' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.color = '#d93025'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-                      <Trash2 size={14} />
-                    </button>
+                    {canDelete && (
+                      <button type="button" onClick={() => setConfirmDeleteId(loc.id)}
+                        style={{ padding: 6, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-3)' }}
+                        onMouseEnter={e => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.color = '#d93025'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -2465,6 +2589,8 @@ const TRAILER_CATEGORIES = ['Swing', 'Roll Up', 'Flat Bed', 'Other'] as const;
 
 function TrailersPanel() {
   const { trailers, fetchTrailers, addTrailer, updateTrailer, removeTrailer, orgId } = useCalendarStore();
+  const { can } = usePermissions();
+  const canDelete = can('trailers.delete');
   const [adding, setAdding] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [newName, setNewName] = useState('');
@@ -2580,7 +2706,7 @@ function TrailersPanel() {
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                     <Pencil size={14} />
                   </button>
-                  {confirmDeleteId === t.id ? (
+                  {canDelete && (confirmDeleteId === t.id ? (
                     <div className="flex items-center gap-1">
                       <button onClick={() => { void removeTrailer(t.id); setConfirmDeleteId(null); }}
                         style={{ padding: '4px 8px', borderRadius: 7, border: 'none', background: '#d93025', cursor: 'pointer', color: '#fff', fontSize: 12, fontWeight: 700 }}>
@@ -2598,7 +2724,7 @@ function TrailersPanel() {
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                       <Trash2 size={14} />
                     </button>
-                  )}
+                  ))}
                 </div>
               </div>
             )}
@@ -2646,6 +2772,8 @@ function TrailersPanel() {
 
 function DispatchersPanel() {
   const { dispatchers, addDispatcher, updateDispatcher, removeDispatcher } = useCalendarStore();
+  const { can } = usePermissions();
+  const canDelete = can('dispatchers.delete');
   const [newName, setNewName] = useState('');
   const [newDefault, setNewDefault] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -2727,7 +2855,7 @@ function DispatchersPanel() {
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                     <Pencil size={14} />
                   </button>
-                  {confirmDeleteId === d.id ? (
+                  {canDelete && (confirmDeleteId === d.id ? (
                     <div className="flex items-center gap-1">
                       <button onClick={() => { void removeDispatcher(d.id); setConfirmDeleteId(null); }}
                         style={{ padding: '4px 8px', borderRadius: 7, border: 'none', background: '#d93025', cursor: 'pointer', color: '#fff', fontSize: 12, fontWeight: 700 }}>
@@ -2745,7 +2873,7 @@ function DispatchersPanel() {
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                       <Trash2 size={14} />
                     </button>
-                  )}
+                  ))}
                 </div>
               </div>
             )}
@@ -2791,6 +2919,8 @@ function DispatchersPanel() {
 
 function CustomersPanel() {
   const { customers, addCustomer, updateCustomer, removeCustomer } = useCalendarStore();
+  const { can } = usePermissions();
+  const canDelete = can('customers.delete');
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -2896,7 +3026,7 @@ function CustomersPanel() {
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                     <Pencil size={14} />
                   </button>
-                  {confirmDeleteId === c.id ? (
+                  {canDelete && (confirmDeleteId === c.id ? (
                     <div className="flex items-center gap-1">
                       <button onClick={() => { void removeCustomer(c.id); setConfirmDeleteId(null); }}
                         style={{ padding: '4px 8px', borderRadius: 7, border: 'none', background: '#d93025', cursor: 'pointer', color: '#fff', fontSize: 12, fontWeight: 700 }}>
@@ -2914,7 +3044,7 @@ function CustomersPanel() {
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                       <Trash2 size={14} />
                     </button>
-                  )}
+                  ))}
                 </div>
               </div>
             )}
@@ -2964,6 +3094,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
     items: [
       { id: 'members',          label: 'Members',          icon: <UserCog size={15} /> },
       { id: 'role-permissions', label: 'Role Permissions', icon: <Shield size={15} /> },
+      { id: 'modules',          label: 'Modules',          icon: <Layers size={15} /> },
       { id: 'assets',           label: 'Assets',           icon: <Truck size={15} /> },
       { id: 'trailers',         label: 'Trailers',         icon: <Truck size={15} /> },
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
@@ -2991,6 +3122,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
 const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
   members:            'org.members.manage',
   'role-permissions': 'org.settings.edit',
+  'modules':          'org.settings.edit',
   'invoicing':        'org.settings.edit',
   'integrations':     'org.settings.edit',
   'driver-app':       'org.settings.edit',
@@ -3169,6 +3301,7 @@ export default function SettingsPage() {
           {active === 'driver-app'        && <DriverAppPanel />}
           {active === 'members'           && <MembersPanel />}
           {active === 'role-permissions'  && <RolePermissionsPanel />}
+          {active === 'modules'           && <ModulesPanel />}
         </main>
       </div>
     </div>

@@ -21,7 +21,7 @@ import { joinEventLoadToApp } from "@fleetcal/types";
 import { supabase } from "../lib/supabase.js";
 import { fetchStopsByEvent } from "../lib/stops.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, requireModule } from "../middleware/require.js";
 
 const closeout = new Hono<{ Variables: AuthVariables }>();
 
@@ -29,7 +29,10 @@ const closeout = new Hono<{ Variables: AuthVariables }>();
 // (release / flag actions on PATCH /loads/:id) check the more
 // specific cap inline based on `action`. Maintenance role is locked
 // out entirely.
-closeout.use("*", requireCapability("closeout.access"));
+// Module gate runs first — if an org's plan doesn't include Closeout,
+// the response is "module_disabled" rather than the misleading
+// "missing_capability". Then the per-role check.
+closeout.use("*", requireModule("closeout"), requireCapability("closeout.access"));
 
 const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +

@@ -34,6 +34,111 @@ export function localDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Coerce whatever's stored as the "timezone" setting into something
+ * Intl.DateTimeFormat will accept, or undefined.
+ *
+ * Real-world store has shapes like:
+ *   "America/Denver"                       — clean IANA, pass through
+ *   "Mountain Time (America/Denver)"       — display label with paren
+ *   "America/Denver (MDT)"                 — IANA with trailing abbr
+ *   ""                                     — empty, treat as unset
+ *   "Some Garbage"                         — invalid, treat as unset
+ *
+ * We strip a parenthesized substring matching an IANA pattern (one
+ * or more `Word/Word` segments) and use that if found. Then we
+ * validate the result by attempting an Intl.DateTimeFormat in a
+ * try/catch — if it throws, return undefined so callers fall back
+ * to the browser's local zone.
+ */
+export function sanitizeTimezone(raw: string | undefined | null): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  // Pull "America/Denver"-ish substring from anywhere in the string.
+  const ianaMatch = trimmed.match(/[A-Za-z]+\/[A-Za-z_+\-]+(?:\/[A-Za-z_+\-]+)?/);
+  const candidate = ianaMatch ? ianaMatch[0] : trimmed;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate });
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Returns the UTC offset (in ms) of `tz` at `epochMs`. Accounts for
+ * DST transitions because we ask Intl what the wall-clock would
+ * literally read at that moment in that zone, then compare to the
+ * same moment as if it were UTC.
+ *
+ *   offsetMs = (epochMs displayed as wall-time in tz, treated as UTC) − epochMs
+ *
+ * Example: epoch = 2026-05-14T20:00Z, tz = 'America/Denver' (MDT)
+ *   - wall in MT: 2026-05-14 14:00:00
+ *   - treat as UTC: 2026-05-14T14:00Z
+ *   - difference: −6h (matches MDT's UTC-6)
+ */
+function tzOffsetMsAt(epochMs: number, tz: string): number {
+  const date = new Date(epochMs);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year:   'numeric',
+    month:  '2-digit',
+    day:    '2-digit',
+    hour:   '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const o: Record<string, string> = {};
+  for (const p of parts) o[p.type] = p.value;
+  // Intl emits '24' for midnight in some locales — normalize.
+  const hour = o.hour === '24' ? '0' : o.hour;
+  const tzWallAsUtcMs = Date.UTC(
+    Number(o.year), Number(o.month) - 1, Number(o.day),
+    Number(hour),   Number(o.minute),    Number(o.second),
+  );
+  return tzWallAsUtcMs - epochMs;
+}
+
+/**
+ * Parse a naive ISO string (`YYYY-MM-DDTHH:mm` or with seconds, no
+ * timezone suffix) as a wall-clock time in `tz` and return the true
+ * UTC milliseconds.
+ *
+ * Why this exists: event start/end are stored as naive ISO meant to
+ * be read in the org's dispatch timezone (see CalendarEvent.start).
+ * `new Date(iso)` interprets naive ISO as the browser's local zone,
+ * so a dispatcher in ET viewing an MT-based org sees event boundaries
+ * shifted by the offset difference — breaks "in progress" detection,
+ * window filters, etc.
+ *
+ * If `tz` is undefined we fall back to native parsing (same as
+ * `new Date(iso).getTime()`), which keeps behavior identical for
+ * orgs that haven't picked a timezone.
+ */
+export function parseNaiveIsoInTz(iso: string, tz: string | undefined): number {
+  if (!tz) return new Date(iso).getTime();
+  const [datePart, timePartRaw = '0:0:0'] = iso.split('T');
+  const [y, M, d] = datePart.split('-').map(Number);
+  const [h, m, s] = timePartRaw.split(':').map(n => Number(n) || 0);
+  // First-pass: treat the wall components as if they were UTC.
+  const wallAsUtcMs = Date.UTC(y, (M ?? 1) - 1, d ?? 1, h ?? 0, m ?? 0, s ?? 0);
+  // Then back out the offset at that approximate moment. One pass is
+  // enough except on the literal DST transition hour, where a second
+  // pass with the corrected moment lands on the right side of the
+  // jump.
+  let offset = tzOffsetMsAt(wallAsUtcMs, tz);
+  let candidate = wallAsUtcMs - offset;
+  const refinedOffset = tzOffsetMsAt(candidate, tz);
+  if (refinedOffset !== offset) {
+    offset = refinedOffset;
+    candidate = wallAsUtcMs - offset;
+  }
+  return candidate;
+}
+
 // Returns a Date whose .getHours()/.getDate() etc. reflect the given IANA timezone.
 export function nowInTz(tz: string): Date {
   return new Date(new Date().toLocaleString('en-US', { timeZone: tz }));

@@ -53,9 +53,22 @@ export function InvoiceDetailView({
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
-  const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | 'email' | null>(null);
+  const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | 'email' | 'generate' | null>(null);
+  // Signed URL for the most recently generated packet — set on
+  // successful "Generate" so the user can click View/Download to
+  // preview the bytes the broker will receive. Cleared on every send
+  // (the server rebuilds the packet at send-time, so any prior URL
+  // points at a now-superseded artifact).
+  const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
   const [pdfBusy, setPdfBusy] = useState<'download-packet' | 'download-invoice' | 'view-invoice' | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
+  // Inline broker-picker for invoices that were generated from a
+  // load whose customer wasn't matched. When the user opens such an
+  // invoice and there's no broker, they get a "Set broker" button
+  // that flips this to true and renders an inline select right above
+  // the action buttons.
+  const [brokerPickerOpen, setBrokerPickerOpen] = useState(false);
+  const [brokerPickerValue, setBrokerPickerValue] = useState<string>('');
 
   // Inline PDF state. We fetch the packet PDF as a blob via the authed
   // client, then mount it in an iframe — the browser's built-in PDF
@@ -155,6 +168,47 @@ export function InvoiceDetailView({
     }
   }
 
+  // Build + persist the merged PDF packet without sending. The signed
+  // URL goes into `generatedUrl` so the View / Download buttons can
+  // hand it back to the user for review. /send always rebuilds fresh
+  // at send-time so editing the invoice between Generate and Send
+  // can't produce a stale email.
+  // Assign / reassign the broker on a draft invoice. Used when the
+  // generating load didn't have a customer matched, leaving the
+  // invoice with no broker → no recipient → can't send. The API
+  // also refreshes the snapshot's brokerName/MC# so the printed
+  // invoice and the email target stay aligned.
+  async function handleSetBroker(customerId: string) {
+    if (!invoice || !customerId) return;
+    try {
+      const { invoice: updated } = await railway.updateInvoice(invoice.id, { customerId });
+      setInvoice(updated);
+      setBrokerPickerOpen(false);
+      setBrokerPickerValue('');
+      setPdfRefresh(n => n + 1);
+    } catch (err) {
+      console.error('[invoice] set-broker failed:', err);
+      window.alert('Failed to set broker. Check console for details.');
+    }
+  }
+
+  async function handleGeneratePacket() {
+    if (!invoice) return;
+    setBusy('generate');
+    try {
+      const { signedUrl } = await railway.generateInvoicePacket(invoice.id);
+      setGeneratedUrl(signedUrl);
+      // Refresh the inline preview iframe so the user sees the
+      // freshly-rendered packet immediately.
+      setPdfRefresh(n => n + 1);
+    } catch (err) {
+      console.error('[invoice] generate failed:', err);
+      window.alert('Failed to generate invoice packet. Check console for details.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleEmailSend(args: {
     to: string;
     cc?: string[];
@@ -175,6 +229,10 @@ export function InvoiceDetailView({
       });
       setInvoice(updated);
       setEmailOpen(false);
+      // The server rebuilt + persisted a fresh packet during /send,
+      // so any prior "View generated packet" URL points at an
+      // obsolete artifact. Drop it.
+      setGeneratedUrl(null);
       setPdfRefresh(n => n + 1);
     } catch (err) {
       console.error('[invoice] email send failed:', err);
@@ -370,18 +428,96 @@ export function InvoiceDetailView({
                 </div>
 
                 <div className="border-t pt-3 mt-3 space-y-2" style={{ borderColor: 'var(--gc-border-light)' }}>
+                  {invoice.status === 'draft' && !broker && (
+                    /* No broker on a draft → block sending and offer
+                       an inline picker. The generating load didn't
+                       have a customer matched, so we let the user
+                       pick / create one here without leaving the
+                       invoice. */
+                    <div className="px-3 py-3 rounded-lg space-y-2"
+                      style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
+                      <div className="flex items-start gap-1.5 text-[12px]">
+                        <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                        <span>
+                          No broker linked to this invoice. Pick one to enable sending.
+                        </span>
+                      </div>
+                      {brokerPickerOpen ? (
+                        <div className="space-y-2">
+                          <select
+                            value={brokerPickerValue}
+                            onChange={e => setBrokerPickerValue(e.target.value)}
+                            className="w-full text-[12px] px-2 py-1.5 rounded"
+                            style={{ border: '1px solid #fecaca', background: '#fff', color: 'var(--gc-text-1)' }}
+                            autoFocus
+                          >
+                            <option value="">— Pick a broker —</option>
+                            {[...customers].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}{c.invoiceEmail ? '' : ' (no AP email)'}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => void handleSetBroker(brokerPickerValue)}
+                              disabled={!brokerPickerValue}
+                              className="flex-1 text-[12px] font-semibold px-3 py-1.5 rounded transition-colors disabled:opacity-60"
+                              style={{ background: '#1a73e8', color: '#fff' }}>
+                              Save
+                            </button>
+                            <button
+                              onClick={() => { setBrokerPickerOpen(false); setBrokerPickerValue(''); }}
+                              className="text-[12px] font-semibold px-3 py-1.5 rounded transition-colors"
+                              style={{ background: '#fff', color: '#991b1b', border: '1px solid #fecaca' }}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setBrokerPickerOpen(true)}
+                          className="w-full text-[12px] font-semibold px-3 py-1.5 rounded transition-colors"
+                          style={{ background: '#fff', color: '#991b1b', border: '1px solid #fecaca' }}>
+                          Set broker
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {invoice.status === 'draft' && (
                     <>
+                      {/* Generate: build the merged packet without
+                          sending. Lets the user review before they
+                          click Email — but also optional: Email
+                          builds + sends in one shot. */}
+                      <button onClick={() => void handleGeneratePacket()} disabled={busy !== null}
+                        className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"
+                        style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-1)', border: '1px solid var(--gc-border)' }}
+                        title="Build the merged invoice PDF packet (invoice + rate con + POD/BOL) and save it for review. Doesn't send.">
+                        {busy === 'generate'
+                          ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
+                          : <Download size={12} className="inline mr-1.5" />}
+                        {generatedUrl ? 'Regenerate packet' : 'Generate packet'}
+                      </button>
+                      {generatedUrl && (
+                        <a href={generatedUrl} target="_blank" rel="noopener noreferrer"
+                          className="w-full block text-center text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors"
+                          style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac', textDecoration: 'none' }}>
+                          <Check size={12} className="inline mr-1.5" />
+                          View generated packet
+                        </a>
+                      )}
                       <button onClick={() => setEmailOpen(true)}
                         disabled={busy !== null || !broker?.invoiceEmail}
                         className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                         style={{ background: '#1a73e8', color: '#fff' }}
                         title={
                           broker?.invoiceEmail
-                            ? `Send to ${broker.invoiceEmail}`
+                            ? `Send to ${broker.invoiceEmail} (rebuilds the packet fresh — same process as Generate)`
                             : 'Set this broker\'s invoice email before sending'
                         }>
-                        <Mail size={12} className="inline mr-1.5" /> Email to broker
+                        <Mail size={12} className="inline mr-1.5" />
+                        {generatedUrl ? 'Send to broker' : 'Generate & email to broker'}
                       </button>
                       <button onClick={() => void handleMarkSentManual()} disabled={busy !== null}
                         className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"

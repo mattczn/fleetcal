@@ -33,6 +33,7 @@ import {
   type UpdateInvoiceResponse,
   type SendInvoiceRequest,
   type SendInvoiceResponse,
+  type GenerateInvoicePacketResponse,
   type BatchSendInvoicesRequest,
   type BatchSendInvoicesResponse,
   type BatchGenerateInvoicesRequest,
@@ -55,7 +56,7 @@ import {
 import { supabase } from "../lib/supabase.js";
 import { getOrgIdentity } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, requireModule } from "../middleware/require.js";
 
 const invoices = new Hono<{ Variables: AuthVariables }>();
 
@@ -65,7 +66,9 @@ const invoices = new Hono<{ Variables: AuthVariables }>();
 // additionally need accounting.send_invoice (currently the same
 // allow-list but kept separate so we can add a "view only" role
 // later without rewriting every route).
-invoices.use("*", requireCapability("accounting.access"));
+// Module gate first so a no-accounting plan returns module_disabled
+// instead of missing_capability.
+invoices.use("*", requireModule("accounting"), requireCapability("accounting.access"));
 
 // ─────────────────────────────────────────────────────────────────────────
 // Row shape (snake_case from Postgres)
@@ -716,6 +719,34 @@ invoices.patch("/:id", async (c) => {
   if (body.dueAt !== undefined) {
     update.due_at = body.dueAt ?? null;
   }
+  // Reassign the customer FK + refresh the snapshot's broker name so
+  // the printed invoice and the email-recipient lookup land on the
+  // same customer. Null clears the broker; a real id swaps to the
+  // picked customer. snapshot.email is the carrier's AR email (used
+  // for Reply-To), NOT the broker's — leave it alone. The send
+  // endpoint resolves the recipient from customers.invoice_email
+  // directly at send time.
+  if (body.customerId !== undefined) {
+    update.customer_id = body.customerId;
+    if (body.customerId) {
+      const { data: cust, error: custErr } = await supabase
+        .from("customers")
+        .select("id,name")
+        .eq("id", body.customerId)
+        .eq("org_id", orgId)
+        .maybeSingle();
+      if (custErr) {
+        return c.json({ error: "customer_lookup_failed", detail: custErr.message } satisfies ApiErrorResponse, 500);
+      }
+      if (!cust) {
+        return c.json({ error: "customer_not_found" } satisfies ApiErrorResponse, 404);
+      }
+      next.brokerName = (cust as { name: string }).name;
+    } else {
+      next.brokerName = undefined;
+    }
+    update.snapshot = next;
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await supabase
@@ -733,6 +764,66 @@ invoices.patch("/:id", async (c) => {
   }
   const res: UpdateInvoiceResponse = { invoice: rowToInvoice(data as unknown as InvoiceRow) };
   return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/invoices/:id/packet — build + persist the merged PDF packet
+//
+// "Generate" action in the UI. Reuses persistInvoicePacket which renders
+// the invoice + appends rate con + appends POD/BOL/etc into a single PDF
+// and stores it under load_documents (kind=invoice). The signed URL
+// returned here lets the client preview/download without round-tripping
+// through the API.
+//
+// Idempotent — calling repeatedly replaces the previous packet. Send
+// still rebuilds fresh at send-time, so an invoice edit between
+// Generate and Send produces an email matching the latest state.
+// ─────────────────────────────────────────────────────────────────────────
+
+invoices.post("/:id/packet", requireCapability("accounting.access"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  const { data: existing, error: fetchErr } = await supabase
+    .from("invoices")
+    .select(INVOICE_COLS)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (fetchErr) {
+    return c.json({ error: "fetch_failed", detail: fetchErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const invoice = rowToInvoice(existing as unknown as InvoiceRow);
+
+  try {
+    const { persistInvoicePacket } = await import("../lib/invoicePacket.js");
+    const { documentId, storagePath } = await persistInvoicePacket({ invoice, orgId });
+
+    // Mint a 1-hour signed URL so the client can preview / download
+    // the packet directly from Supabase storage without going back
+    // through our API for the bytes.
+    const { data: signed, error: signErr } = await supabase
+      .storage
+      .from("load-documents")
+      .createSignedUrl(storagePath, 3600);
+    if (signErr || !signed?.signedUrl) {
+      throw new Error(`signed URL mint failed: ${signErr?.message ?? "unknown"}`);
+    }
+
+    const res: GenerateInvoicePacketResponse = {
+      documentId,
+      storagePath,
+      signedUrl: signed.signedUrl,
+    };
+    return c.json(res);
+  } catch (err) {
+    console.error("[POST /v1/invoices/:id/packet] failed:", err);
+    return c.json(
+      { error: "packet_build_failed", detail: (err as Error)?.message } satisfies ApiErrorResponse,
+      500,
+    );
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -811,10 +902,17 @@ invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (
 
   if (body.method === "email") {
     try {
-      const { sendInvoiceEmail } =
+      const { sendInvoiceEmail, mergeCcList, loadOrgAutoCc } =
         await import("../lib/invoiceEmail.js");
       const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad } =
         await import("../lib/invoicePacket.js");
+
+      // Pull the org's always-CC address from invoice settings, merge
+      // with the per-send cc[] from the request body. Dedup is
+      // case-insensitive so a user can't accidentally double-CC the
+      // AR inbox by typing it manually.
+      const autoCc = await loadOrgAutoCc(orgId);
+      const mergedCc = mergeCcList(body.cc, autoCc);
 
       const fmt = (iso?: string) => iso
         ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -848,7 +946,7 @@ invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (
       await sendInvoiceEmail({
         invoice,
         to:         recipient!,
-        cc:         body.cc,
+        cc:         mergedCc.length ? mergedCc : undefined,
         bccSender,
         bodyText:   body.bodyText,
         attachments: [
@@ -1246,7 +1344,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     }
   }
 
-  const { sendInvoiceEmail } =
+  const { sendInvoiceEmail, mergeCcList, loadOrgAutoCc } =
     await import("../lib/invoiceEmail.js");
   const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad, persistInvoicePacket } =
     await import("../lib/invoicePacket.js");
@@ -1256,6 +1354,11 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     : undefined;
 
   const attachLoadDocs = body.attachLoadDocs ?? true;
+
+  // One DB hit per request — the auto-CC applies to every broker
+  // group in this batch.
+  const autoCc = await loadOrgAutoCc(orgId);
+  const mergedCc = mergeCcList(body.cc, autoCc);
 
   const groups: BatchSendInvoicesResponse["groups"] = [];
 
@@ -1320,7 +1423,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       const result = await sendInvoiceEmail({
         invoice:     built[0].invoice,
         to:          recipient,
-        cc:          body.cc,
+        cc:          mergedCc.length ? mergedCc : undefined,
         bccSender,
         bodyText:    body.bodyText,
         attachments: built.map(b => ({

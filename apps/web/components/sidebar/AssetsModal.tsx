@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { usePermissions } from '@/lib/usePermissions';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
 import type { Asset, CalendarEvent, Driver } from '@/lib/types';
@@ -37,33 +38,66 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
   const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, unassignedAssetId } = useCalendarStore();
   const assets = allAssets.filter(a => a.id !== unassignedAssetId);
 
-  const [selected, setSelected] = useState<number>(
+  const [selected, setSelectedRaw] = useState<number>(
     initialAssetId && assets.some(a => a.id === initialAssetId)
       ? initialAssetId
       : (assets.length > 0 ? assets[0].id : -1)
   );
   const [adding, setAdding] = useState(false);
 
+  // Track the id of the row we created via "+ Add Asset" as a
+  // placeholder. If the user navigates away (selection change, close,
+  // unmount) without entering a real name, that row gets removed so
+  // we don't leave "New asset" sitting in the directory.
+  const draftIdRef = useRef<number | null>(null);
+
+  const cleanupDraft = () => {
+    const id = draftIdRef.current;
+    if (id == null) return;
+    draftIdRef.current = null;
+    // Read fresh store state in case the user typed something we
+    // should preserve. If the row was already deleted explicitly,
+    // .find returns undefined and we skip.
+    const fresh = useCalendarStore.getState().assets.find(a => a.id === id);
+    if (fresh && fresh.name === 'New asset' && !fresh.unit && !fresh.truck && !fresh.notes) {
+      removeAsset(id);
+    }
+  };
+
+  const setSelected = (next: number) => {
+    if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
+    setSelectedRaw(next);
+  };
+
+  const handleClose = () => { cleanupDraft(); onClose(); };
+
+  useEffect(() => {
+    return () => { cleanupDraft(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Click + Add Asset → create a placeholder asset server-side and
   // select it. AssetProfilePanel opens with empty fields; user fills
-  // them in and they auto-save on blur. To discard, click Delete at
-  // the bottom of the profile panel.
+  // them in and they auto-save on blur. If the user navigates away
+  // without filling anything in, the placeholder is auto-removed.
   const handleAdd = async () => {
     if (adding) return;
+    cleanupDraft(); // drop any stranded draft from a previous click
     setAdding(true);
     try {
-      // The API requires non-empty name, color, and type. Seed with a
-      // placeholder "New asset N" so creation always validates;
-      // dispatcher renames it in the profile panel that opens next.
-      const placeholder = `New asset ${assets.length + 1}`;
+      // API requires non-empty name on create. Seed with "New asset"
+      // so the call validates; the profile panel opens with the name
+      // field focused so the dispatcher just types their real name
+      // and the placeholder disappears.
       const newId = await addAsset({
-        name:  placeholder,
+        name:  'New asset',
         color: PRESET_COLORS[assets.length % PRESET_COLORS.length],
         type:  assetCategories[0] ?? 'OTR',
         hidden: false,
         sortOrder: 0,
       });
-      setSelected(newId);
+      draftIdRef.current = newId;
+      setSelectedRaw(newId);
     } catch (err) {
       console.error('add asset failed:', err);
     } finally {
@@ -77,7 +111,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.32)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div
         className="flex flex-col"
@@ -96,7 +130,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
               Asset Directory
             </span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-full transition-colors"
+          <button onClick={handleClose} className="p-1.5 rounded-full transition-colors"
             style={{ color: 'var(--gc-text-2)' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -156,9 +190,12 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
                 drivers={drivers}
                 openEditModal={openEditModal}
                 onRemove={() => {
+                  // Explicit delete — clear draft tracking so cleanup
+                  // doesn't try to double-remove an already-gone row.
+                  if (draftIdRef.current === selectedAsset.id) draftIdRef.current = null;
                   const remaining = assets.filter(a => a.id !== selectedAsset.id);
                   removeAsset(selectedAsset.id);
-                  setSelected(remaining.length > 0 ? remaining[0].id : -1);
+                  setSelectedRaw(remaining.length > 0 ? remaining[0].id : -1);
                 }}
               />
             ) : (
@@ -173,7 +210,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
         {/* Footer */}
         <div className="shrink-0 flex justify-end px-7 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-          <button onClick={onClose}
+          <button onClick={handleClose}
             className="px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-colors"
             style={{ background: 'var(--gc-blue)' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
@@ -238,6 +275,9 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
   onRemove: () => void;
 }) {
   const { updateAsset, assetCategories } = useCalendarStore();
+  const { can: canDo } = usePermissions();
+  const canDelete = canDo('assets.delete');
+  const canEdit   = canDo('assets.edit');
 
   const [name,            setName]            = useState(asset.name);
   const [unit,            setUnit]            = useState(asset.unit            ?? '');
@@ -283,6 +323,25 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         </div>
       </div>
 
+      {/* Read-only notice for roles (e.g. maintenance) that have
+          assets.view but not assets.edit. The fieldset below disables
+          all form controls; this banner explains why. */}
+      {!canEdit && (
+        <div style={{
+          padding: '10px 14px',
+          marginBottom: 24,
+          background: '#fef3c7',
+          border: '1px solid #fde68a',
+          borderRadius: 10,
+          color: '#92400e',
+          fontSize: 13,
+          fontWeight: 600,
+        }}>
+          Read-only — your role can view this asset but can&apos;t make changes.
+        </div>
+      )}
+
+      <fieldset disabled={!canEdit} style={{ border: 'none', padding: 0, margin: 0, minWidth: 0 }}>
       {/* Profile fields */}
       <div className="mb-8">
         <div className="text-[10px] font-bold uppercase tracking-widest mb-4"
@@ -462,6 +521,8 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         </Link>
       </div>
 
+      </fieldset>
+
       {/* Recent loads — In Progress / Upcoming / Completed with search.
           Same structure as BrokerProfileModal's load history surface. */}
       <LoadHistorySection
@@ -472,7 +533,10 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         emptyLabel="No loads found for this asset"
       />
 
-      {/* Delete */}
+      {/* Delete — gated on assets.delete; dispatchers see no Delete UI
+          (the API would 403 them anyway, and the gate avoids the
+          optimistic-then-rollback flicker). */}
+      {canDelete && (
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
         {confirmDelete ? (
           <div className="flex items-center gap-3">
@@ -508,6 +572,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }

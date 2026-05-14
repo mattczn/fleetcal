@@ -567,9 +567,24 @@ export interface UpdateDispatcherResponse { dispatcher: Dispatcher; }
 // Asset → preferred driver mapping (one preferred driver per asset).
 // Stored in the driver_asset_prefs table; PK is asset_id.
 
-export interface DriverAssetPref { assetId: number; driverId: number; }
+export interface DriverAssetPref {
+  assetId: number;
+  /** Primary driver — the one whose truck this is. Auto-fills when
+   *  the asset is selected on a load. */
+  driverId: number | null;
+  /** Optional secondary driver — typically a fill-in who doesn't
+   *  have their own truck and uses this one when they work. Picking
+   *  this driver auto-fills the same asset as the primary would. */
+  secondaryDriverId?: number | null;
+}
 export interface ListDriverAssetPrefsResponse { prefs: DriverAssetPref[]; }
-export interface SetDriverAssetPrefRequest { driverId: number; }
+/** PUT body — either field may be null to clear that slot, or omitted
+ *  to leave it unchanged. If both end up null on the server, the row
+ *  is deleted entirely. */
+export interface SetDriverAssetPrefRequest {
+  driverId?: number | null;
+  secondaryDriverId?: number | null;
+}
 export interface SetDriverAssetPrefResponse { pref: DriverAssetPref; }
 
 // ── /v1/saved-locations ──────────────────────────────────────────────────
@@ -629,6 +644,9 @@ export interface UpdateOrgSettingsRequest {
   /** Replaces the entire role-overrides map. Use {} to clear all
    *  overrides; omit to leave unchanged. */
   roleOverrides?:    import("./domain").RoleOverrides;
+  /** Replaces the entire org-modules flags map. Use {} to reset to
+   *  defaults (all-enabled); omit to leave unchanged. */
+  orgModules?:       import("./domain").OrgModuleFlags;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 
@@ -722,6 +740,12 @@ export interface UpdateInvoiceRequest {
   dueAt?:               string | null;
   remitToInstructions?: string | null;
   invoiceFooterNotes?:  string | null;
+  /** Reassign / set the broker (customer FK) on a draft invoice. Used
+   *  to fix invoices generated from loads whose customer wasn't yet
+   *  matched. The API resolves the picked customer and refreshes the
+   *  snapshot's broker fields (name, MC#, AR email) at the same time
+   *  so the printed invoice and the email recipient stay in sync. */
+  customerId?:          string | null;
 }
 
 export interface UpdateInvoiceResponse { invoice: Invoice; }
@@ -753,6 +777,24 @@ export interface SendInvoiceRequest {
 }
 
 export interface SendInvoiceResponse { invoice: Invoice; }
+
+/**
+ * Build the merged invoice PDF packet (invoice + rate con + load
+ * docs) and persist it to load_documents. This is the "Generate"
+ * action — runs independently of /send so the user can review the
+ * packet before emailing the broker. The /send endpoint always
+ * rebuilds fresh at send-time, so editing an invoice between
+ * Generate and Send is safe (the email reflects current state).
+ */
+export interface GenerateInvoicePacketResponse {
+  /** load_documents row id for the freshly persisted packet. */
+  documentId:  string;
+  /** Storage path inside the load-documents bucket. */
+  storagePath: string;
+  /** 1-hour signed URL the client can use to download / preview the
+   *  packet without round-tripping through the API. */
+  signedUrl:   string;
+}
 
 /**
  * POST /v1/invoices/batch-generate — generate an invoice for each

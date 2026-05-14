@@ -44,7 +44,17 @@ const ACTION_STATUSES: MaintenanceActionStatus[] = ['open', 'in_progress', 'done
 
 // ── Page ────────────────────────────────────────────────────────────────
 
+import RequireCap from '@/components/auth/RequireCap';
+
 export default function MaintenancePage() {
+  return (
+    <RequireCap cap="maintenance.access" module="maintenance">
+      <MaintenancePageInner />
+    </RequireCap>
+  );
+}
+
+function MaintenancePageInner() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const searchParams = useSearchParams();
   const drivers  = useCalendarStore(s => s.drivers);

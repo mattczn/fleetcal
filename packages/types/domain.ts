@@ -265,8 +265,15 @@ export interface InvoiceSettings {
 
   // ── Contact (shown so brokers know who to ask) ─────────
   phone?: string;
-  /** AR / accounting email — broker reaches out here with payment Qs. */
+  /** AR / accounting email — broker reaches out here with payment Qs.
+   *  Also used as the Reply-To header on outbound invoice emails. */
   email?: string;
+  /** Always-CC address for outbound invoice sends. Comma-separated
+   *  emails are accepted. Common pattern: a group inbox like
+   *  ar@yourcompany.com or billing@yourcompany.com so every broker
+   *  reply (especially "Reply All") fans out to the AR team. Merged
+   *  into the per-send CC list at the API; duplicates removed. */
+  ccEmail?: string;
 
   // ── Template config ────────────────────────────────────
   /** Default payment terms in days. 30 = "Net 30". */
@@ -293,12 +300,25 @@ export interface OrgSettings {
    *  false revokes. Keys absent from the override map fall back to
    *  the hardcoded default. */
   roleOverrides?: RoleOverrides;
+  /** SaaS module toggles — independent of role capabilities. A
+   *  module set to `false` is OFF for the entire org (even the
+   *  owner won't see the link or be able to hit the API). Missing
+   *  keys default to ON so adding a new module in code is implicit-
+   *  enabled until Stripe/billing flips it. See @fleetcal/types
+   *  modules.ts for the enum + helper. */
+  orgModules?: OrgModuleFlags;
 }
 
 /** Per-role capability override map. Outer key is the role; inner
  *  key is the capability string (matches the Capability union in
  *  @fleetcal/types/permissions). */
 export type RoleOverrides = Partial<Record<string, Record<string, boolean>>>;
+
+/** Per-org module toggle map. Outer key is the module name (must
+ *  match the OrgModule union in @fleetcal/types modules.ts). Value
+ *  is a boolean — false disables the module for the org; absent or
+ *  true enables it. */
+export type OrgModuleFlags = Partial<Record<string, boolean>>;
 
 // ── Customer ────────────────────────────────────────────────────────────
 

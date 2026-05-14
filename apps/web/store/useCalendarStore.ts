@@ -43,6 +43,19 @@ function consumeSelfWrite(id: string): boolean {
   return true;
 }
 
+// ─── Delete-error notify helper ─────────────────────────────────────────
+//
+// The primary defense is the UI gate — the Delete button is removed
+// entirely for roles without the relevant `*.delete` capability, so a
+// non-permitted user never triggers a DELETE call in the first place.
+// This helper only runs on the rare edge case where the API rejects a
+// delete that the UI thought was allowed (server-side rule change,
+// race, etc.). We log and let the caller silently roll local state
+// back — no alert dialog, since the user did nothing wrong.
+function notifyDeleteError(resource: string, err: unknown) {
+  console.error(`remove${resource}:`, err);
+}
+
 export interface DragState {
   eventId: string;
   targetAssetId: number;
@@ -129,7 +142,15 @@ interface CalendarStore extends ModalState {
   events: CalendarEvent[];
   deletedEvents: DeletedEvent[];
   drivers: Driver[];
+  /** Primary driver per asset (assetId → driverId). Auto-fills when
+   *  the asset is selected on a load. Backed by
+   *  driver_asset_prefs.driver_id. */
   driverPrefs: Record<number, number>;
+  /** Optional secondary driver per asset — a driver who shares the
+   *  asset (typically because they don't have their own truck).
+   *  Backed by driver_asset_prefs.secondary_driver_id. Picking this
+   *  driver in the load modal auto-fills the same asset. */
+  driverPrefsSecondary: Record<number, number>;
   currentDate: Date;
   resourceWidth: number;
   resourceWidthLocked: boolean; // true when user has manually set via slider
@@ -154,6 +175,7 @@ interface CalendarStore extends ModalState {
   updateDriver: (id: number, updates: Partial<Omit<Driver, 'id'>>) => void;
   removeDriver: (id: number) => void;
   setDriverPref: (assetId: number, driverId: number | null) => void;
+  setDriverPrefSecondary: (assetId: number, driverId: number | null) => void;
 
   addEvent: (event: Omit<CalendarEvent, 'id'>, presetId?: string) => void;
   updateEvent: (id: string, updates: Partial<Omit<CalendarEvent, 'id'>>) => void;
@@ -209,6 +231,13 @@ interface CalendarStore extends ModalState {
    *  Hydrated from /v1/org-settings on app boot. */
   roleOverrides: import('@fleetcal/types').RoleOverrides;
   hydrateRoleOverrides: (overrides: import('@fleetcal/types').RoleOverrides | undefined) => void;
+
+  /** Per-org module on/off flags. Independent of role capabilities —
+   *  a module turned off here is invisible to everyone in the org,
+   *  including the owner. Hydrated from /v1/org-settings on app
+   *  boot. Empty map = all modules ON (the default). */
+  orgModules: import('@fleetcal/types').OrgModuleFlags;
+  hydrateOrgModules: (flags: import('@fleetcal/types').OrgModuleFlags | undefined) => void;
 
   theme: 'light' | 'dark' | 'system';
   setTheme: (t: 'light' | 'dark' | 'system') => void;
@@ -319,12 +348,14 @@ export const useCalendarStore = create<CalendarStore>()(
   loadedEnd:   null,
   lastKnownAssetCount: 0,
 
-  hydrate: ({ orgId, assets, events, deletedEvents, drivers, driverPrefs, loadedStart, loadedEnd }) => {
+  hydrate: ({ orgId, assets, events, deletedEvents, drivers, driverPrefs, driverPrefsSecondary, loadedStart, loadedEnd }) => {
     const unassigned = assets.find(a => a.type === 'Unassigned' || a.name === 'Unassigned');
     const persistedShowUnassigned = get().showUnassigned;
     const visibleCount = assets.filter(a => !a.hidden).length;
     set({
-      orgId, assets, events, deletedEvents, drivers, driverPrefs,
+      orgId, assets, events, deletedEvents, drivers,
+      driverPrefs,
+      driverPrefsSecondary: driverPrefsSecondary ?? {},
       dbReady: true, currentDate: new Date(), loadedStart, loadedEnd,
       unassignedAssetId: unassigned?.id ?? null,
       showUnassigned: persistedShowUnassigned,
@@ -386,7 +417,8 @@ export const useCalendarStore = create<CalendarStore>()(
   events:        [],
   deletedEvents: [],
   drivers:       [],
-  driverPrefs:   {},
+  driverPrefs:          {},
+  driverPrefsSecondary: {},
   currentDate:   new Date(),
   resourceWidth:       80,
   resourceWidthLocked: false,
@@ -426,6 +458,10 @@ export const useCalendarStore = create<CalendarStore>()(
   hydrateRoleOverrides: (overrides) =>
     set({ roleOverrides: overrides ?? {} }),
 
+  orgModules: {},
+  hydrateOrgModules: (flags) =>
+    set({ orgModules: flags ?? {} }),
+
   theme: 'light',
   setTheme: (t) => {
     set({ theme: t });
@@ -463,26 +499,28 @@ export const useCalendarStore = create<CalendarStore>()(
     const demoPrefs: Record<number, number> = {};
     DUMMY_ASSETS.forEach(a => { demoPrefs[-a.id] = -a.id; });
     set({
-      isDemo:            true,
-      assets:            demoAssets,
-      events:            demoEvents,
-      drivers:           demoDrivers,
-      driverPrefs:       demoPrefs,
-      showUnassigned:    true,
-      unassignedAssetId: UNASSIGNED_ID,
-      currentDate:       new Date(),
+      isDemo:               true,
+      assets:               demoAssets,
+      events:               demoEvents,
+      drivers:              demoDrivers,
+      driverPrefs:          demoPrefs,
+      driverPrefsSecondary: {},
+      showUnassigned:       true,
+      unassignedAssetId:    UNASSIGNED_ID,
+      currentDate:          new Date(),
     });
   },
   exitDemoMode: () => set({
-    isDemo:            false,
-    assets:            [],
-    events:            [],
-    deletedEvents:     [],
-    drivers:           [],
-    driverPrefs:       {},
-    loadedStart:       null,
-    loadedEnd:         null,
-    unassignedAssetId: null,
+    isDemo:               false,
+    assets:               [],
+    events:               [],
+    deletedEvents:        [],
+    drivers:              [],
+    driverPrefs:          {},
+    driverPrefsSecondary: {},
+    loadedStart:          null,
+    loadedEnd:            null,
+    unassignedAssetId:    null,
   }),
 
   showStatusOverlay: true,
@@ -555,8 +593,12 @@ export const useCalendarStore = create<CalendarStore>()(
     set((s) => ({ savedLocations: s.savedLocations.map((l) => l.id === id ? { ...l, ...updates } : l) }));
   },
   removeSavedLocation: async (id) => {
-    await deleteSavedLocation(id);
-    set((s) => ({ savedLocations: s.savedLocations.filter((l) => l.id !== id) }));
+    try {
+      await deleteSavedLocation(id);
+      set((s) => ({ savedLocations: s.savedLocations.filter((l) => l.id !== id) }));
+    } catch (err) {
+      notifyDeleteError('Saved Location', err);
+    }
   },
 
   // ── Dispatchers ───────────────────────────────────────────────────────────
@@ -591,8 +633,12 @@ export const useCalendarStore = create<CalendarStore>()(
     }));
   },
   removeDispatcher: async (id) => {
-    await deleteDispatcher(id);
-    set((s) => ({ dispatchers: s.dispatchers.filter(d => d.id !== id) }));
+    try {
+      await deleteDispatcher(id);
+      set((s) => ({ dispatchers: s.dispatchers.filter(d => d.id !== id) }));
+    } catch (err) {
+      notifyDeleteError('Dispatcher', err);
+    }
   },
 
   // ── Customers ─────────────────────────────────────────────────────────────
@@ -616,8 +662,12 @@ export const useCalendarStore = create<CalendarStore>()(
     set((s) => ({ customers: s.customers.map(c => c.id === id ? { ...c, ...updates } : c) }));
   },
   removeCustomer: async (id) => {
-    await deleteCustomer(id);
-    set((s) => ({ customers: s.customers.filter(c => c.id !== id) }));
+    try {
+      await deleteCustomer(id);
+      set((s) => ({ customers: s.customers.filter(c => c.id !== id) }));
+    } catch (err) {
+      notifyDeleteError('Customer', err);
+    }
   },
   addCustomerAlias: async (id, alias) => {
     const customer = get().customers.find(c => c.id === id);
@@ -676,8 +726,12 @@ export const useCalendarStore = create<CalendarStore>()(
     set((s) => ({ trailers: s.trailers.map(t => t.id === id ? { ...t, ...updates } : t) }));
   },
   removeTrailer: async (id) => {
-    await deleteTrailer(id);
-    set((s) => ({ trailers: s.trailers.filter(t => t.id !== id) }));
+    try {
+      await deleteTrailer(id);
+      set((s) => ({ trailers: s.trailers.filter(t => t.id !== id) }));
+    } catch (err) {
+      notifyDeleteError('Trailer', err);
+    }
   },
 
   // ── Asset categories ──────────────────────────────────────────────────────
@@ -757,12 +811,20 @@ export const useCalendarStore = create<CalendarStore>()(
 
   removeAsset: (id) => {
     if (get().isDemo) return;
+    // Snapshot pre-mutation state so we can roll back on API failure
+    // (most often a 403 for users without assets.delete).
+    const prevAssets        = get().assets;
+    const prevEvents        = get().events;
+    const prevDeletedEvents = get().deletedEvents;
     set((state) => ({
       assets:        state.assets.filter((a) => a.id !== id),
       events:        state.events.filter((e) => e.assetId !== id),
       deletedEvents: state.deletedEvents.filter((e) => e.assetId !== id),
     }));
-    railway.deleteAsset(id).catch((err) => console.error('removeAsset:', err));
+    railway.deleteAsset(id).catch((err) => {
+      set({ assets: prevAssets, events: prevEvents, deletedEvents: prevDeletedEvents });
+      notifyDeleteError('Asset', err);
+    });
   },
 
   reorderAssets: (fromId, toId) => {
@@ -875,10 +937,15 @@ export const useCalendarStore = create<CalendarStore>()(
 
   removeDriver: (id) => {
     if (get().isDemo) return;
-    const prefs = { ...get().driverPrefs };
+    const prevDrivers     = get().drivers;
+    const prevDriverPrefs = get().driverPrefs;
+    const prefs = { ...prevDriverPrefs };
     Object.keys(prefs).forEach((k) => { if (prefs[+k] === id) delete prefs[+k]; });
     set((state) => ({ drivers: state.drivers.filter((d) => d.id !== id), driverPrefs: prefs }));
-    railway.deleteDriver(id).catch((err) => console.error('removeDriver:', err));
+    railway.deleteDriver(id).catch((err) => {
+      set({ drivers: prevDrivers, driverPrefs: prevDriverPrefs });
+      notifyDeleteError('Driver', err);
+    });
   },
 
   setDriverPref: (assetId, driverId) => {
@@ -888,13 +955,22 @@ export const useCalendarStore = create<CalendarStore>()(
       else prefs[assetId] = driverId;
       return { driverPrefs: prefs };
     });
-    if (driverId === null) {
-      railway.deleteDriverAssetPref(assetId)
-        .catch((err) => console.error('setDriverPref delete:', err));
-    } else {
-      railway.setDriverAssetPref(assetId, { driverId })
-        .catch((err) => console.error('setDriverPref upsert:', err));
-    }
+    // The PUT endpoint accepts a single-field patch; we never want to
+    // touch the secondary slot from this setter. The API still deletes
+    // the whole row server-side when BOTH slots end up null.
+    railway.setDriverAssetPref(assetId, { driverId })
+      .catch((err) => console.error('setDriverPref upsert:', err));
+  },
+
+  setDriverPrefSecondary: (assetId, driverId) => {
+    set((state) => {
+      const prefs = { ...state.driverPrefsSecondary };
+      if (driverId === null) delete prefs[assetId];
+      else prefs[assetId] = driverId;
+      return { driverPrefsSecondary: prefs };
+    });
+    railway.setDriverAssetPref(assetId, { secondaryDriverId: driverId })
+      .catch((err) => console.error('setDriverPrefSecondary upsert:', err));
   },
 
   // ── Events ────────────────────────────────────────────────────────────────
@@ -1131,8 +1207,21 @@ export const useCalendarStore = create<CalendarStore>()(
     const { orgId } = get();
     if (!orgId) return;
 
+    // If the API rejects (race, server-side rule change, etc.), roll
+    // the optimistic update back so the load reappears on the calendar
+    // and disappears from "Recently Deleted". The UI gate already
+    // hides the Cancel/Remove buttons from roles without loads.delete,
+    // so this only fires in edge cases — no user-facing alert.
+    const rollback = (err: unknown) => {
+      console.error('removeEvent:', err);
+      set((state) => ({
+        events: state.events.some((e) => e.id === id) ? state.events : [...state.events, ev],
+        deletedEvents: state.deletedEvents.filter((d) => d.id !== id),
+      }));
+    };
+
     if (ev.eventKind === 'non_revenue') {
-      railway.deleteEvent(id).catch((err) => console.error('removeEvent (non-revenue):', err));
+      railway.deleteEvent(id).catch(rollback);
       return;
     }
 
@@ -1142,7 +1231,7 @@ export const useCalendarStore = create<CalendarStore>()(
     }
 
     // Revenue + has loadId: DELETE /v1/loads/:loadId cascades to events.
-    railway.deleteLoad(ev.loadId).catch((err) => console.error('removeEvent:', err));
+    railway.deleteLoad(ev.loadId).catch(rollback);
 
     // Notify the driver if they had already confirmed — same logic as
     // cancelEventKeepLoad. They need to know the load is dead.

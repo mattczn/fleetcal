@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronUp, ChevronDown, Layers, Truck, User, LayoutDashboard, EyeOff, Eye } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { sanitizeTimezone, parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import CopyChip from '@/components/ui/CopyChip';
 import WindowTimeline from '@/components/ui/WindowTimeline';
@@ -35,24 +36,32 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'completed',   label: 'Completed'   },
 ];
 
-function derivedKey(ev: CalendarEvent): string {
+// Event start/end are naive ISO ("YYYY-MM-DDTHH:mm", no zone) meant
+// to be read in the org's dispatch timezone. JavaScript's Date parser
+// interprets naive ISO as the BROWSER's local zone — so a dispatcher
+// in ET viewing an MT-based org sees an offset shift on every
+// comparison. parseNaiveIsoInTz fixes that by binding the wall-time
+// to the org's tz before producing UTC ms. When tz is undefined we
+// fall back to native parsing (orgs with no tz set).
+function derivedKey(ev: CalendarEvent, tz?: string): string {
   const now = Date.now();
-  if (new Date(ev.start).getTime() > now) return 'upcoming';
-  if (new Date(ev.end).getTime() < now)   return 'completed';
+  if (parseNaiveIsoInTz(ev.start, tz) > now) return 'upcoming';
+  if (parseNaiveIsoInTz(ev.end,   tz) < now) return 'completed';
   return 'in_progress';
 }
 
-function statusKey(ev: CalendarEvent): string {
+function statusKey(ev: CalendarEvent, tz?: string): string {
   const manual: EventStatus[] = ['dispatched', 'picked_up', 'delivered', 'tonu', 'cancelled', 'problem'];
   if (ev.status && manual.includes(ev.status)) return ev.status;
-  return derivedKey(ev);
+  return derivedKey(ev, tz);
 }
 
 const WINDOW_HOURS = 12;
 const STEP_HOURS   = 12;
 
-function isInWindow(ev: CalendarEvent, start: Date, end: Date): boolean {
-  return new Date(ev.start) < end && new Date(ev.end) > start;
+function isInWindow(ev: CalendarEvent, start: Date, end: Date, tz?: string): boolean {
+  return parseNaiveIsoInTz(ev.start, tz) < end.getTime()
+      && parseNaiveIsoInTz(ev.end,   tz) > start.getTime();
 }
 
 function fmtBound(d: Date): string {
@@ -60,15 +69,42 @@ function fmtBound(d: Date): string {
     d.toLocaleTimeString('en-US', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined, hour12: true });
 }
 
-function fmtPivot(d: Date): string {
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' +
-    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined, hour12: true });
+// Format the pivot timestamp shown in the tray header (e.g.
+// "Thu, May 14 3:04 PM"). Falls back to the browser's local zone only
+// when the org hasn't configured a timezone in Settings → Timezone.
+function fmtPivot(d: Date, tz?: string): string {
+  // Pull minutes IN the requested tz so the omit-zero-minutes
+  // optimization stays correct for half-hour offsets (India, etc.).
+  const minute = tz
+    ? Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, minute: 'numeric' })
+        .formatToParts(d)
+        .find(p => p.type === 'minute')?.value ?? '0')
+    : d.getMinutes();
+  return d.toLocaleDateString('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' }) + ' ' +
+    d.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: minute ? '2-digit' : undefined, hour12: true });
 }
 
-function fmtTime(iso: string): string {
+// Compact range display for load rows (e.g. "7a-6p" / "12:30p-6p").
+// Extracts hour+minute in the supplied timezone via formatToParts —
+// .getHours() / .getMinutes() return values in the browser's local
+// zone which is what we're explicitly trying to NOT use here.
+function fmtTime(iso: string, tz?: string): string {
   const d = new Date(iso);
-  const h = d.getHours();
-  const m = d.getMinutes();
+  let h: number;
+  let m: number;
+  if (tz) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    }).formatToParts(d);
+    h = Number(parts.find(p => p.type === 'hour')?.value ?? '0');
+    m = Number(parts.find(p => p.type === 'minute')?.value ?? '0');
+  } else {
+    h = d.getHours();
+    m = d.getMinutes();
+  }
   const ampm = h >= 12 ? 'p' : 'a';
   const hh = h % 12 || 12;
   return m === 0 ? `${hh}${ampm}` : `${hh}:${String(m).padStart(2, '0')}${ampm}`;
@@ -93,7 +129,7 @@ const EXCEPTION_CHIPS = CHIPS.filter(c => c.group === 'exception');
 // ── Load row ───────────────────────────────────────────────────────────────────
 
 function LoadRow({
-  ev, asset, selected, batchMode, onToggleSelect, onStatusChange, onOpenLoad, onHide, isHidden,
+  ev, asset, selected, batchMode, onToggleSelect, onStatusChange, onOpenLoad, onHide, isHidden, orgTz,
 }: {
   ev: CalendarEvent;
   asset: Asset | undefined;
@@ -104,8 +140,9 @@ function LoadRow({
   onOpenLoad: (id: string) => void;
   onHide: () => void;
   isHidden?: boolean;
+  orgTz?: string;
 }) {
-  const sk       = statusKey(ev);
+  const sk       = statusKey(ev, orgTz);
   const meta     = STATUS_META[sk] ?? STATUS_META.upcoming;
   const isManual = ['dispatched', 'picked_up', 'delivered', 'tonu', 'cancelled', 'problem'].includes(sk);
 
@@ -162,7 +199,7 @@ function LoadRow({
 
       {/* Time range */}
       <span className="shrink-0 text-[11px] font-medium tabular-nums" style={{ color: 'var(--gc-text-3)', whiteSpace: 'nowrap', width: 72 }}>
-        {fmtTime(ev.start)}–{fmtTime(ev.end)}
+        {fmtTime(ev.start, orgTz)}–{fmtTime(ev.end, orgTz)}
       </span>
 
       {/* Title → opens modal */}
@@ -246,7 +283,14 @@ function LoadRow({
 // ── Main tray ──────────────────────────────────────────────────────────────────
 
 export default function TodaysTray() {
-  const { events, assets, updateEvent, openEditModal, setTrayOpen } = useCalendarStore();
+  const { events, assets, updateEvent, openEditModal, setTrayOpen, calendarTimezone } = useCalendarStore();
+  // Org's configured timezone — drives the header pivot timestamp +
+  // every load row's time range. Stored as a raw IANA string in
+  // store.calendarTimezone (NOT promptVariables.timezone, which holds
+  // a verbose label like "Mountain Time (America/Denver)" used by
+  // the AI rate-con prompt). sanitize is a defensive net for legacy
+  // values + any non-IANA garbage so Intl.DateTimeFormat can't throw.
+  const orgTz = sanitizeTimezone(calendarTimezone);
   const router = useRouter();
   const [expanded,        setExpanded]        = useState(false);
   const [batchMode,       setBatchMode]       = useState(false);
@@ -268,23 +312,23 @@ export default function TodaysTray() {
   const shiftPivot  = (hours: number) => setPivotTime(p => new Date(p.getTime() + hours * 3600 * 1000));
 
   const todayLoads = useMemo(() =>
-    events.filter(ev => isInWindow(ev, windowStart, windowEnd))
+    events.filter(ev => isInWindow(ev, windowStart, windowEnd, orgTz))
           .sort((a, b) => a.start.localeCompare(b.start)),
-  [events, windowStart, windowEnd]);
+  [events, windowStart, windowEnd, orgTz]);
 
   const filteredLoads = useMemo(() => {
     if (filter === 'all') return todayLoads;
-    return todayLoads.filter(ev => derivedKey(ev) === filter);
-  }, [todayLoads, filter]);
+    return todayLoads.filter(ev => derivedKey(ev, orgTz) === filter);
+  }, [todayLoads, filter, orgTz]);
 
   const filterCounts = useMemo(() => {
     const counts: Record<FilterKey, number> = { all: todayLoads.length, upcoming: 0, in_progress: 0, completed: 0 };
     for (const ev of todayLoads) {
-      const dk = derivedKey(ev) as FilterKey;
+      const dk = derivedKey(ev, orgTz) as FilterKey;
       if (dk in counts) counts[dk]++;
     }
     return counts;
-  }, [todayLoads]);
+  }, [todayLoads, orgTz]);
 
   const assetMap = useMemo(() => {
     const m = new Map<number, Asset>();
@@ -333,7 +377,7 @@ export default function TodaysTray() {
 
   const EXCEPTION_KEYS: EventStatus[] = ['tonu', 'cancelled', 'problem'];
   const exceptionCount  = todayLoads.filter(ev => ev.status && EXCEPTION_KEYS.includes(ev.status)).length;
-  const inProgressCount = todayLoads.filter(ev => statusKey(ev) === 'in_progress').length;
+  const inProgressCount = todayLoads.filter(ev => statusKey(ev, orgTz) === 'in_progress').length;
 
   return (
     <div
@@ -348,7 +392,7 @@ export default function TodaysTray() {
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') toggleExpanded(); }}
           className="flex items-center gap-3 flex-1 cursor-pointer min-w-0">
           <Layers size={15} style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }} />
-          <span className="text-sm font-semibold" style={{ color: '#fff' }}>{isAtNow ? "Today's Loads" : fmtPivot(pivotTime)}</span>
+          <span className="text-sm font-semibold" style={{ color: '#fff' }}>{isAtNow ? "Today's Loads" : fmtPivot(pivotTime, orgTz)}</span>
           <span className="text-xs font-medium px-2 py-0.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}>
             {todayLoads.length}
           </span>
@@ -475,6 +519,7 @@ export default function TodaysTray() {
                     onStatusChange={handleStatusChange}
                     onOpenLoad={openEditModal}
                     onHide={() => toggleHide(ev.id)}
+                    orgTz={orgTz}
                   />
                 ))}
 
@@ -502,6 +547,7 @@ export default function TodaysTray() {
                         onOpenLoad={openEditModal}
                         onHide={() => toggleHide(ev.id)}
                         isHidden
+                        orgTz={orgTz}
                       />
                     ))}
                   </>

@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Check, Plus, Truck, Users, Phone, Clock, Trash2, DollarSign, Download, Loader2 } from 'lucide-react';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { usePermissions } from '@/lib/usePermissions';
 import {
   fetchPayrollRecordsForDriver, fetchPayrollAdjustments, fetchEventsInRange,
   type PayrollRecord,
@@ -89,31 +90,70 @@ function driverInitials(d: Driver): string {
 
 export default function DriversModal({ onClose, initialDriverId }: { onClose: () => void; initialDriverId?: number }) {
   const {
-    assets, drivers, driverPrefs,
-    addDriver, removeDriver, updateDriver, setDriverPref,
+    assets, drivers, driverPrefs, driverPrefsSecondary,
+    addDriver, removeDriver, updateDriver, setDriverPref, setDriverPrefSecondary,
     events,
   } = useCalendarStore();
 
-  const [selected, setSelected] = useState<number | 'asset-prefs'>(
+  const [selected, setSelectedRaw] = useState<number | 'asset-prefs'>(
     initialDriverId ?? (drivers.length > 0 ? drivers[0].id : 'asset-prefs')
   );
   const [adding, setAdding] = useState(false);
 
+  // Track the id of the row we created via "+ Add Driver" as a
+  // placeholder. If the user navigates away (selection change, close,
+  // unmount) without entering a real name, that row gets removed so
+  // we don't leave "New driver" sitting in the directory.
+  const draftIdRef = useRef<number | null>(null);
+
+  const cleanupDraft = () => {
+    const id = draftIdRef.current;
+    if (id == null) return;
+    draftIdRef.current = null;
+    // Read fresh store state so we see any auto-saved edits the user
+    // made (firstName / lastName / etc. update on blur). If the row
+    // was already removed (explicit Delete button), .find returns
+    // undefined and we skip.
+    const fresh = useCalendarStore.getState().drivers.find(d => d.id === id);
+    if (fresh && fresh.name === 'New driver' && !fresh.firstName && !fresh.lastName) {
+      removeDriver(id);
+    }
+  };
+
+  // Wrapper: clean up any pending draft when selection moves elsewhere.
+  const setSelected = (next: number | 'asset-prefs') => {
+    if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
+    setSelectedRaw(next);
+  };
+
+  // Modal close: drop the draft before unmounting.
+  const handleClose = () => { cleanupDraft(); onClose(); };
+
+  // Safety net for unexpected unmounts.
+  useEffect(() => {
+    return () => { cleanupDraft(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Click + Add Driver → create an empty driver server-side, then
   // select it so the existing DriverProfilePanel opens with blank
   // fields. The user fills everything in and the fields auto-save on
-  // blur. To discard a draft, click the Delete button at the bottom
-  // of the profile panel (it removes the row).
+  // blur. If they navigate away without filling anything in, the
+  // placeholder row is auto-removed (see cleanupDraft above).
   const handleAdd = async () => {
     if (adding) return;
+    // If a previous draft is still pending, clean it before creating
+    // another so we don't strand multiple "New driver" rows.
+    cleanupDraft();
     setAdding(true);
     try {
-      // API requires name on create; seed with a placeholder so the
-      // call validates, then the dispatcher renames via the profile
-      // panel that opens next.
-      const placeholder = `New driver ${drivers.length + 1}`;
-      const newId = await addDriver({ name: placeholder });
-      setSelected(newId);
+      // API requires a non-empty name on create. Seed with "New driver"
+      // so the call validates; the profile panel opens with the name
+      // field focused so the dispatcher just types their real name
+      // and the placeholder disappears.
+      const newId = await addDriver({ name: 'New driver' });
+      draftIdRef.current = newId;
+      setSelectedRaw(newId);
     } catch (err) {
       console.error('add driver failed:', err);
     } finally {
@@ -122,9 +162,12 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
   };
 
   const handleRemove = (id: number) => {
+    // Explicit delete — clear the draft tracking so the cleanup effect
+    // doesn't try to double-remove a row that's already gone.
+    if (draftIdRef.current === id) draftIdRef.current = null;
     const remaining = drivers.filter(d => d.id !== id);
     removeDriver(id);
-    setSelected(remaining.length > 0 ? remaining[0].id : 'asset-prefs');
+    setSelectedRaw(remaining.length > 0 ? remaining[0].id : 'asset-prefs');
   };
 
   const selectedDriver = typeof selected === 'number'
@@ -135,7 +178,7 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.32)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div
         className="flex flex-col"
@@ -154,7 +197,7 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
               Driver Directory
             </span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-full transition-colors"
+          <button onClick={handleClose} className="p-1.5 rounded-full transition-colors"
             style={{ color: 'var(--gc-text-2)' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
@@ -228,7 +271,9 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
                 assets={assets}
                 drivers={drivers}
                 driverPrefs={driverPrefs}
+                driverPrefsSecondary={driverPrefsSecondary}
                 setDriverPref={setDriverPref}
+                setDriverPrefSecondary={setDriverPrefSecondary}
               />
             ) : selectedDriver ? (
               <DriverProfilePanel
@@ -251,7 +296,7 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
         {/* Footer */}
         <div className="shrink-0 flex justify-end px-7 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-          <button onClick={onClose}
+          <button onClick={handleClose}
             className="px-6 py-2.5 rounded-lg text-sm font-medium text-white transition-colors"
             style={{ background: ACCENT }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
@@ -310,6 +355,10 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
 }) {
   const { openEditModal, orgId } = useCalendarStore();
   const { organization } = useOrganization();
+  const { can: canDo } = usePermissions();
+  const canDelete       = canDo('drivers.delete');
+  const canViewPayroll  = canDo('payroll.access');
+  const canEdit         = canDo('drivers.edit');
   const [firstName, setFirstName] = useState(driver.firstName ?? '');
   const [lastName,  setLastName]  = useState(driver.lastName  ?? '');
   const [phone,     setPhone]     = useState(driver.phone     ?? '');
@@ -333,9 +382,12 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!orgId || !driver.name) return;
+    // Skip when the role can't read /v1/payroll/records — the endpoint
+    // would 403 the request anyway, and the Pay History section below
+    // is hidden in that case.
+    if (!orgId || !driver.name || !canViewPayroll) return;
     fetchPayrollRecordsForDriver(orgId, driver.name).then(setPayHistory);
-  }, [orgId, driver.name]);
+  }, [orgId, driver.name, canViewPayroll]);
 
   async function handleHistoryPdf(rec: PayrollRecord) {
     if (!orgId || downloadingId) return;
@@ -468,6 +520,25 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
         </div>
       </div>
 
+      {/* Read-only notice for roles (e.g. maintenance) that have
+          drivers.view but not drivers.edit. The fieldset below makes
+          every input/select/textarea/button non-interactive. */}
+      {!canEdit && (
+        <div style={{
+          padding: '10px 14px',
+          marginBottom: 24,
+          background: '#fef3c7',
+          border: '1px solid #fde68a',
+          borderRadius: 10,
+          color: '#92400e',
+          fontSize: 13,
+          fontWeight: 600,
+        }}>
+          Read-only — your role can view this driver but can&apos;t make changes.
+        </div>
+      )}
+
+      <fieldset disabled={!canEdit} style={{ border: 'none', padding: 0, margin: 0, minWidth: 0 }}>
       {/* Profile fields */}
       <div className="mb-8">
         <div className="text-[10px] font-bold uppercase tracking-widest mb-4"
@@ -730,6 +801,8 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
         )}
       </div>
 
+      </fieldset>
+
       {/* Recent loads — In Progress / Upcoming / Completed with search.
           Same structure as BrokerProfileModal's load history surface. */}
       <LoadHistorySection
@@ -740,7 +813,10 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
         emptyLabel="No loads found for this driver"
       />
 
-      {/* Pay History */}
+      {/* Pay History — gated on payroll.access. Hidden entirely for
+          roles (e.g. dispatcher) that can't read /v1/payroll/records;
+          the fetch in the useEffect above is skipped in lockstep. */}
+      {canViewPayroll && (
       <div className="mt-8">
         <div className="text-[10px] font-bold uppercase tracking-widest mb-3"
           style={{ color: 'var(--gc-text-3)' }}>
@@ -793,8 +869,11 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
           </div>
         )}
       </div>
+      )}
 
-      {/* Delete */}
+      {/* Delete — gated on drivers.delete; dispatchers see no Delete UI
+          (the API would 403 them anyway). */}
+      {canDelete && (
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
         {confirmDelete ? (
           <div className="flex items-center gap-3">
@@ -830,6 +909,7 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
           </button>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -850,64 +930,112 @@ function PField({ label, children }: { label: string; children: React.ReactNode 
 
 // ─── Asset Preferences Panel ──────────────────────────────────────────────────
 
-function AssetPreferencesPanel({ assets, drivers, driverPrefs, setDriverPref }: {
+function AssetPreferencesPanel({ assets, drivers, driverPrefs, driverPrefsSecondary, setDriverPref, setDriverPrefSecondary }: {
   assets: Asset[];
   drivers: Driver[];
   driverPrefs: Record<number, number>;
+  driverPrefsSecondary: Record<number, number>;
   setDriverPref: (assetId: number, driverId: number | null) => void;
+  setDriverPrefSecondary: (assetId: number, driverId: number | null) => void;
 }) {
+  const selectStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    border: '1px solid var(--gc-border)',
+    borderRadius: 8,
+    padding: '0 11px',
+    height: 38,
+    boxSizing: 'border-box',
+    fontSize: 13,
+    color: 'var(--gc-text-1)',
+    outline: 'none',
+    background: 'var(--gc-surface)',
+    transition: 'border-color 150ms',
+    cursor: 'pointer',
+  };
+
   return (
     <div className="px-8 py-7">
       <div className="text-[10px] font-bold uppercase tracking-widest mb-1"
         style={{ color: 'var(--gc-text-3)' }}>
         Asset Preferences
       </div>
-      <p className="text-sm mb-6" style={{ color: 'var(--gc-text-2)' }}>
-        Set a default driver for each asset. They&apos;ll be pre-filled when creating a new load.
+      <p className="text-sm mb-1" style={{ color: 'var(--gc-text-2)' }}>
+        Assign drivers to each asset. The <strong>Primary</strong> driver auto-fills when the asset is picked on a load; picking either driver in the load modal auto-fills this asset.
+      </p>
+      <p className="text-xs mb-6" style={{ color: 'var(--gc-text-3)' }}>
+        The <strong>Secondary</strong> slot is for drivers who don&apos;t have their own truck and share this one when they work.
       </p>
 
-      <div className="space-y-2.5" style={{ maxWidth: 520 }}>
+      <div className="space-y-3" style={{ maxWidth: 720 }}>
+        {/* Column headers — only when at least one asset exists */}
+        {assets.length > 0 && (
+          <div className="flex items-center gap-3 px-1">
+            <div className="shrink-0" style={{ width: 180 }} />
+            <div className="flex-1 text-[10px] font-bold uppercase tracking-widest"
+              style={{ color: 'var(--gc-text-3)' }}>
+              Primary driver
+            </div>
+            <div className="flex-1 text-[10px] font-bold uppercase tracking-widest"
+              style={{ color: 'var(--gc-text-3)' }}>
+              Secondary driver
+            </div>
+          </div>
+        )}
+
         {assets.length === 0 && (
           <p className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No assets added yet.</p>
         )}
-        {assets.map(asset => (
-          <div key={asset.id} className="flex items-center gap-4">
-            <div className="flex items-center gap-2 shrink-0" style={{ width: 180 }}>
-              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset.color }} />
-              <span className="text-sm truncate" style={{ color: 'var(--gc-text-1)' }}>
-                {asset.name}
-                {asset.unit
-                  ? <span style={{ color: 'var(--gc-text-3)' }}> #{asset.unit}</span>
-                  : null}
-              </span>
+
+        {assets.map(asset => {
+          const primaryId   = driverPrefs[asset.id];
+          const secondaryId = driverPrefsSecondary[asset.id];
+          return (
+            <div key={asset.id} className="flex items-center gap-3">
+              <div className="flex items-center gap-2 shrink-0" style={{ width: 180 }}>
+                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset.color }} />
+                <span className="text-sm truncate" style={{ color: 'var(--gc-text-1)' }}>
+                  {asset.name}
+                  {asset.unit
+                    ? <span style={{ color: 'var(--gc-text-3)' }}> #{asset.unit}</span>
+                    : null}
+                </span>
+              </div>
+
+              {/* Primary */}
+              <select
+                value={primaryId ?? ''}
+                onChange={e => setDriverPref(asset.id, e.target.value ? +e.target.value : null)}
+                style={selectStyle}
+                onFocus={e => (e.currentTarget.style.borderColor = asset.color)}
+                onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+              >
+                <option value="">— No default —</option>
+                {drivers.map(d => (
+                  <option key={d.id} value={d.id} disabled={d.id === secondaryId}>
+                    {driverDisplayName(d)}{d.id === secondaryId ? ' (secondary)' : ''}
+                  </option>
+                ))}
+              </select>
+
+              {/* Secondary */}
+              <select
+                value={secondaryId ?? ''}
+                onChange={e => setDriverPrefSecondary(asset.id, e.target.value ? +e.target.value : null)}
+                style={selectStyle}
+                onFocus={e => (e.currentTarget.style.borderColor = asset.color)}
+                onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+              >
+                <option value="">— None —</option>
+                {drivers.map(d => (
+                  <option key={d.id} value={d.id} disabled={d.id === primaryId}>
+                    {driverDisplayName(d)}{d.id === primaryId ? ' (primary)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-            <select
-              value={driverPrefs[asset.id] ?? ''}
-              onChange={e => setDriverPref(asset.id, e.target.value ? +e.target.value : null)}
-              style={{
-                flex: 1,
-                border: '1px solid var(--gc-border)',
-                borderRadius: 8,
-                padding: '0 11px',
-                height: 42,
-                boxSizing: 'border-box',
-                fontSize: 14,
-                color: 'var(--gc-text-1)',
-                outline: 'none',
-                background: 'var(--gc-surface)',
-                transition: 'border-color 150ms',
-                cursor: 'pointer',
-              }}
-              onFocus={e => (e.currentTarget.style.borderColor = asset.color)}
-              onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-            >
-              <option value="">— No default —</option>
-              {drivers.map(d => (
-                <option key={d.id} value={d.id}>{driverDisplayName(d)}</option>
-              ))}
-            </select>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -24,11 +24,11 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
-import { requireCapability } from "../middleware/require.js";
+import { requireCapability, requireModule } from "../middleware/require.js";
 
 const maintenanceReports = new Hono<{ Variables: AuthVariables }>();
 
-maintenanceReports.use("*", requireCapability("maintenance.access"));
+maintenanceReports.use("*", requireModule("maintenance"), requireCapability("maintenance.access"));
 
 // ── Row types + converters ──────────────────────────────────────────────
 

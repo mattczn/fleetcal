@@ -138,6 +138,56 @@ export async function sendInvoiceEmail(args: SendInvoiceEmailArgs): Promise<Send
 }
 
 /**
+ * Build a deduped CC list from any mix of user-provided + org-default
+ * sources. Each source may be:
+ *   - a string (single email, or comma/semicolon-separated list)
+ *   - a string[] (already split)
+ *   - undefined / null (skipped)
+ *
+ * Dedup is case-insensitive on the address. Order is preserved
+ * across sources so user-provided addresses appear before the org's
+ * auto-CC (matters when an email client truncates very long header
+ * lines — the user's intentional pick stays visible).
+ */
+export function mergeCcList(...sources: Array<string | string[] | undefined | null>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const src of sources) {
+    if (!src) continue;
+    const items = Array.isArray(src) ? src : src.split(/[,;]/);
+    for (const raw of items) {
+      const email = (raw ?? "").trim();
+      if (!email) continue;
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(email);
+    }
+  }
+  return out;
+}
+
+/**
+ * Load the org's invoice_settings.ccEmail (auto-CC string) so the
+ * send routes can merge it into every outbound CC list. Returns
+ * undefined when no row / no value exists.
+ */
+export async function loadOrgAutoCc(orgId: string): Promise<string | undefined> {
+  const { data, error } = await supabase
+    .from("org_settings")
+    .select("invoice_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    console.warn("[invoiceEmail] loadOrgAutoCc failed:", error);
+    return undefined;
+  }
+  const settings = (data as { invoice_settings: { ccEmail?: string } | null } | null)?.invoice_settings;
+  const cc = settings?.ccEmail?.trim();
+  return cc || undefined;
+}
+
+/**
  * Convenience: resolve the load's POD/BOL documents to storage paths
  * suitable for `extraAttachmentPaths`. Returns the most recent file
  * per kind (the typical "primary POD" pattern). Callers can override

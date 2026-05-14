@@ -5,6 +5,7 @@ import { Plus, Layers, Truck, Users, Pencil, GripVertical, Menu, Settings } from
 import Link from 'next/link';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
+import { usePermissions } from '@/lib/usePermissions';
 import { buildBrokerRules } from '@/lib/customerMatch';
 import EditAssetDialog from './EditAssetDialog';
 import DriversModal from './DriversModal';
@@ -32,6 +33,11 @@ function CheckboxSwatch({ color, hidden, onToggle }: { color: string; hidden: bo
 
 export default function AssetSidebar() {
   const { assets: allAssets, reorderAssets, openCreateModal, sidebarOpen, toggleSidebar, toggleAssetVisibility, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, unassignedAssetId, showUnassigned, dbReady } = useCalendarStore();
+  const { can: canDo } = usePermissions();
+  // Maintenance has assets.view but not assets.edit; reorder + edit
+  // affordances on rows fire railway.updateAsset / railway.reorderAssets
+  // which the API would 403. Hide them at the UI tier.
+  const canEditAssets = canDo('assets.edit');
   const assets = allAssets.filter(a => a.id !== unassignedAssetId);
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   const { organization } = useOrganization();
@@ -278,6 +284,7 @@ export default function AssetSidebar() {
               onDrop={() => handleDrop(asset.id)}
               onDragEnd={handleDragEnd}
               onToggleVisibility={() => toggleAssetVisibility(asset.id)}
+              canEdit={canEditAssets}
             />
           ))}
         </div>
@@ -331,20 +338,21 @@ interface RowProps {
   onDrop: () => void;
   onDragEnd: () => void;
   onToggleVisibility: () => void;
+  canEdit: boolean;
 }
 
-function AssetRow({ asset, isOver, onDragStart, onDragOver, onDrop, onDragEnd, onToggleVisibility }: RowProps) {
+function AssetRow({ asset, isOver, onDragStart, onDragOver, onDrop, onDragEnd, onToggleVisibility, canEdit }: RowProps) {
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
 
   return (
     <>
       <div
-        draggable
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-        onDrop={onDrop}
-        onDragEnd={onDragEnd}
+        draggable={canEdit}
+        onDragStart={canEdit ? onDragStart : undefined}
+        onDragOver={canEdit ? onDragOver : undefined}
+        onDrop={canEdit ? onDrop : undefined}
+        onDragEnd={canEdit ? onDragEnd : undefined}
         className="flex items-center gap-2 px-2 py-2 transition-colors select-none"
         style={{
           background: hovered ? 'var(--gc-hover)' : 'transparent',
@@ -354,9 +362,11 @@ function AssetRow({ asset, isOver, onDragStart, onDragOver, onDrop, onDragEnd, o
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <div className="shrink-0 flex items-center" style={{ color: hovered ? 'var(--gc-text-3)' : 'transparent', cursor: 'grab' }}>
-          <GripVertical size={14} />
-        </div>
+        {canEdit && (
+          <div className="shrink-0 flex items-center" style={{ color: hovered ? 'var(--gc-text-3)' : 'transparent', cursor: 'grab' }}>
+            <GripVertical size={14} />
+          </div>
+        )}
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 truncate">
@@ -377,7 +387,7 @@ function AssetRow({ asset, isOver, onDragStart, onDragOver, onDrop, onDragEnd, o
           </div>
         </div>
 
-        {hovered && (
+        {hovered && canEdit && (
           <button
             onClick={() => setEditing(true)}
             className="p-1 rounded-full transition-colors shrink-0"
@@ -398,6 +408,8 @@ function AssetRow({ asset, isOver, onDragStart, onDragOver, onDrop, onDragEnd, o
 function UnassignedRow({ asset }: { asset: import('@/lib/types').Asset }) {
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
+  const { can } = usePermissions();
+  const canEdit = can('assets.edit');
   return (
     <>
       <div
@@ -420,7 +432,7 @@ function UnassignedRow({ asset }: { asset: import('@/lib/types').Asset }) {
             </div>
           )}
         </div>
-        {hovered && (
+        {hovered && canEdit && (
           <button
             onClick={() => setEditing(true)}
             className="p-1 rounded-full transition-colors shrink-0"

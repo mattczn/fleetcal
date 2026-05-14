@@ -307,6 +307,50 @@ function Field({ label, labelSuffix, children }: { label: string; labelSuffix?: 
   );
 }
 
+/**
+ * Inline chip rendered beneath a Driver / Asset select when the user
+ * picked a value whose preferred partner differs from the current
+ * partner-field value. Click the label/Switch button to apply,
+ * click ✕ to dismiss. Used only in edit mode — new loads auto-apply
+ * the partner swap silently (no chip needed).
+ */
+function SuggestionChip({ label, onApply, onDismiss }: { label: string; onApply: () => void; onDismiss: () => void }) {
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '4px 4px 4px 10px',
+        background: 'var(--gc-blue-light)',
+        color: 'var(--gc-blue)',
+        borderRadius: 999,
+        border: '1px solid #c6dafc',
+        fontWeight: 600,
+        fontSize: 12,
+        flexShrink: 0,
+        whiteSpace: 'nowrap',
+      }}>
+      <span>{label}</span>
+      <button type="button" onClick={onApply}
+        className="rounded-full px-2 py-0.5 transition-colors"
+        style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700 }}
+        onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+        onMouseOut={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+        Switch
+      </button>
+      <button type="button" onClick={onDismiss}
+        title="Dismiss"
+        className="rounded-full transition-colors"
+        style={{ background: 'transparent', color: 'var(--gc-blue)', border: 'none', cursor: 'pointer', width: 18, height: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
+        onMouseOver={e => (e.currentTarget.style.background = 'rgba(26,115,232,0.15)')}
+        onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
+        <X size={11} />
+      </button>
+    </div>
+  );
+}
+
 /** Number input prefixed with $. Empty string = unset (omitted on save). */
 function NumberInputWithDollar({ value, onChange, headerColor }: {
   value: number | '';
@@ -1240,7 +1284,7 @@ function SectionFields({ fields, fieldValues, onChange, headerColor, overrides, 
 
 export default function EventModal() {
   const {
-    assets, events, drivers, driverPrefs, currentDate,
+    assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
     addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
@@ -1262,6 +1306,14 @@ export default function EventModal() {
   // pay block) when this is false.
   const { can: canDo } = usePermissions();
   const canViewDriverPay = canDo('loads.view_driver_pay');
+  // Hide the load price / rate field for roles without loads.view_price
+  // (Maintenance). Same pattern as canViewDriverPay below — strip the
+  // field from the rendered list and from any inline summaries.
+  const canViewPrice = canDo('loads.view_price');
+  // Gate the rate confirmation PDF viewer + the "View PDF" buttons
+  // that open it. Maintenance has loads.view but lacks the rate-con
+  // visibility cap.
+  const canViewRateCon = canDo('loads.view_rate_con');
   // Revenue-load vs non-revenue-event capability split. Maintenance
   // has nonRevenueEvents.* but not loads.* — when they open the
   // create modal we force eventKind to 'non_revenue' and disable the
@@ -1269,6 +1321,18 @@ export default function EventModal() {
   // wouldn't be allowed to save.
   const canCreateRevenue    = canDo('loads.create');
   const canCreateNonRevenue = canDo('nonRevenueEvents.create');
+  // Both revenue destructive paths (Cancel load → permanent / Remove
+  // a cancelled load) call DELETE /v1/loads/:id under the hood. Hide
+  // the buttons entirely from roles that lack the capability — the
+  // server rejects them anyway, and showing the button lets the user
+  // trigger an optimistic local removal before the 403 comes back.
+  const canDeleteLoad = canDo('loads.delete');
+  // ── Read-only gate for this modal ────────────────────────────────
+  // Maintenance opens a revenue load → has loads.view but not
+  // loads.edit, so the form should be a static view. We disable all
+  // form controls via a wrapping <fieldset disabled>, suppress the
+  // Save button, and show a small banner at the top. For non-revenue
+  // events the matching gate is nonRevenueEvents.edit.
 
   const isEdit  = modalMode === 'edit';
   const isBatch = batchItems.length > 0;
@@ -1310,6 +1374,26 @@ export default function EventModal() {
     return d ? canonicalDriverName(d) : '';
   };
 
+  // Reverse autofill — given a driver name (the value coming out of
+  // the StyledSelect), find the asset where this driver is the
+  // primary OR secondary preference. Primary wins if the same driver
+  // sits in two rows (shouldn't happen but defensively prefer the
+  // truck owner). Returns null if no match.
+  const preferredAssetForDriverName = (name: string): number | null => {
+    if (!name) return null;
+    const d = drivers.find(x => canonicalDriverName(x) === name || x.name === name);
+    if (!d) return null;
+    // Primary first
+    for (const [assetIdStr, did] of Object.entries(driverPrefs)) {
+      if (did === d.id) return Number(assetIdStr);
+    }
+    // Fall back to secondary
+    for (const [assetIdStr, did] of Object.entries(driverPrefsSecondary)) {
+      if (did === d.id) return Number(assetIdStr);
+    }
+    return null;
+  };
+
   // Core fields (always visible)
   const [title,      setTitle]      = useState('');
   const [assetId,    setAssetId]    = useState(assets[0]?.id ?? 1);
@@ -1318,10 +1402,32 @@ export default function EventModal() {
   const [startTime,  setStartTime]  = useState('08:00');
   const [endDate,    setEndDate]    = useState('');
   const [endTime,    setEndTime]    = useState('17:00');
+
+  // Inline "switch the partner field too?" suggestions for edit mode.
+  // When the user picks a driver that's preferred on a different
+  // asset (or vice versa), we surface a small inline chip below the
+  // field they touched — clicking it applies the swap; clicking ✕
+  // dismisses. Creating a fresh load auto-applies instead (no chip).
+  // Separate state for the main row and the relay-delivery row so
+  // the two rows can't cross-talk.
+  const [suggestAssetSwap,            setSuggestAssetSwap]            = useState<number | null>(null);
+  const [suggestDriverSwap,           setSuggestDriverSwap]           = useState<string | null>(null);
+  const [suggestRelayDelivAssetSwap,  setSuggestRelayDelivAssetSwap]  = useState<number | null>(null);
+  const [suggestRelayDelivDriverSwap, setSuggestRelayDelivDriverSwap] = useState<string | null>(null);
   const [status,     setStatus]     = useState<EventStatus>('scheduled');
   const [priority,   setPriority]   = useState(false);
   const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue'>('revenue');
   const [nonRevenueType, setNonRevenueType] = useState<string>('Maintenance');
+  // Read-only mode for this modal instance: true when the role can
+  // VIEW the underlying record but not modify it (maintenance opening
+  // a revenue load is the canonical case). Field controls get
+  // wrapped in <fieldset disabled> further down so every input is
+  // inert; the Save button is hidden and a banner explains why.
+  const isReadOnly = (
+    isEdit && (eventKind === 'non_revenue'
+      ? !canDo('nonRevenueEvents.edit')
+      : !canDo('loads.edit'))
+  );
   const [confirmDel,           setConfirmDel]           = useState(false);
   const [cancelDialogOpen,     setCancelDialogOpen]    = useState(false);
   const [removeDialogOpen,     setRemoveDialogOpen]    = useState(false);
@@ -1720,7 +1826,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); setSuggestAssetSwap(null); setSuggestDriverSwap(null); setSuggestRelayDelivAssetSwap(null); setSuggestRelayDelivDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -1861,7 +1967,8 @@ export default function EventModal() {
         if (p.broker) {
           const match = matchCustomer(String(p.broker), customers);
           if (match.status === 'auto') {
-            vals['broker'] = match.customer.name;
+            vals['broker']     = match.customer.name;
+            vals['customerId'] = match.customer.id;
             if (String(p.broker).trim() !== match.customer.name) {
               void addCustomerAlias(match.customer.id, String(p.broker).trim());
             }
@@ -1969,6 +2076,47 @@ export default function EventModal() {
     }
   }, [customers, modalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep `customerId` (the FK that downstream invoice generation
+  // copies onto invoices.customer_id) in sync with the broker name.
+  // Without this, every flow that sets `broker` — combobox pick,
+  // banner confirm, AI parse, batch parse, new-customer create —
+  // updates only the text and leaves customerId null. The result
+  // was generated invoices with no broker linked, which then
+  // couldn't be sent (no recipient lookup).
+  //
+  // Strategy: whenever broker text changes OR the customers list
+  // changes, look the broker up by name+alias via matchCustomer.
+  // Only `status === 'auto'` is an unambiguous match — for 'confirm'
+  // and 'new' the user hasn't decided yet, so we leave customerId
+  // alone (the banner action will eventually push the right name in
+  // and trigger us again).
+  useEffect(() => {
+    if (!modalOpen) return;
+    if (eventKind !== 'revenue') return;
+    const brokerVal = String(fieldValues['broker'] ?? '').trim();
+    const currentId = fieldValues['customerId'] as string | undefined;
+    const clearCustomerId = () => setFieldValues(prev => {
+      if (!('customerId' in prev)) return prev;
+      const next = { ...prev };
+      delete next.customerId;
+      return next;
+    });
+    if (!brokerVal) {
+      if (currentId) clearCustomerId();
+      return;
+    }
+    if (customers.length === 0) return;
+    const match = matchCustomer(brokerVal, customers);
+    if (match.status === 'auto') {
+      if (currentId !== match.customer.id) setField('customerId', match.customer.id);
+    } else if (currentId) {
+      // Broker text no longer points at a known customer (typo, deletion,
+      // or pending banner confirmation). Clear the stale FK so we don't
+      // ship the wrong link downstream.
+      clearCustomerId();
+    }
+  }, [fieldValues['broker'], customers, modalOpen, eventKind]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // If the asset list loads after the modal opened and the current assetId
   // doesn't exist in it, snap to the first available asset.
   // Skip in edit mode — the init effect already sets the correct assetId from
@@ -2060,6 +2208,15 @@ export default function EventModal() {
 
   const doSave = async (opts?: { skipGeocodeCheck?: boolean }) => {
     if (!title.trim() || !startDate || !endDate) return;
+
+    // Capability gate — match the API's enforcement so a read-only
+    // role (e.g. maintenance opening a revenue load) can't trigger a
+    // PATCH that the server will 403. Without this, the local Zustand
+    // store would already have applied the optimistic update by the
+    // time the API rejects, leaving phantom edits.
+    const editCap = eventKind === 'non_revenue' ? 'nonRevenueEvents.edit' : 'loads.edit';
+    const createCap = eventKind === 'non_revenue' ? 'nonRevenueEvents.create' : 'loads.create';
+    if (isEdit ? !canDo(editCap) : !canDo(createCap)) return;
 
     // Block save if a new broker was detected but user hasn't resolved it
     if (brokerMatch.status === 'new') {
@@ -2556,6 +2713,7 @@ export default function EventModal() {
           if (match.status === 'auto') {
             resolvedBroker = match.customer.name;
             setField('broker', match.customer.name);
+            setField('customerId', match.customer.id);
             if (String(parsed.broker).trim() !== match.customer.name) {
               void addCustomerAlias(match.customer.id, String(parsed.broker).trim());
             }
@@ -2963,6 +3121,7 @@ export default function EventModal() {
             match={brokerMatch}
             onConfirmMatch={(customer) => {
               setField('broker', customer.name);
+              setField('customerId', customer.id);
               const extracted = String(fieldValues['broker'] ?? '');
               if (extracted && extracted !== customer.name) void addCustomerAlias(customer.id, extracted);
               setBrokerMatch({ status: 'none' });
@@ -3233,8 +3392,8 @@ export default function EventModal() {
       onMouseDown={e => { if (e.target === e.currentTarget) handleBackdropClick(); }}>
       <div className="flex"
         style={{
-          width: (showPdfViewer || showMapPanel || showDriverSummary) ? '96vw' : '100%',
-          maxWidth: (showPdfViewer || showMapPanel)
+          width: ((showPdfViewer && canViewRateCon) || showMapPanel || showDriverSummary) ? '96vw' : '100%',
+          maxWidth: ((showPdfViewer && canViewRateCon) || showMapPanel)
             ? (showDriverSummary ? 2180 : 1800)
             : (showDriverSummary ? 1400 : 1020),
           height: '92vh',
@@ -3255,7 +3414,7 @@ export default function EventModal() {
         )}
 
         {/* ── PDF pane (left, split mode only) ── */}
-        {showPdfViewer && (
+        {showPdfViewer && canViewRateCon && (
           <div className="flex flex-col shrink-0" style={{ width: '44%', borderRight: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
             <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 flex-nowrap" style={{ borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
               <div className="flex items-center gap-1 flex-nowrap min-w-0">
@@ -3579,6 +3738,26 @@ export default function EventModal() {
         {/* Form */}
         <form onSubmit={handleSave} className="flex flex-col overflow-y-auto flex-1"
           onKeyDown={e => { if (e.key === 'Enter' && !(e.target instanceof HTMLTextAreaElement)) e.preventDefault(); }}>
+          {/* Read-only banner — shown when the role can view this
+              record but lacks the edit cap (maintenance opening a
+              revenue load is the canonical case). The fieldset below
+              disables every input/select/textarea/button inside the
+              form body, including all stop inputs and inline saves
+              that bypass doSave. The Save button is hidden separately
+              in the footer. */}
+          {isReadOnly && (
+            <div style={{
+              padding: '10px 32px',
+              background: '#fef3c7',
+              borderBottom: '1px solid #fde68a',
+              color: '#92400e',
+              fontSize: 13,
+              fontWeight: 600,
+            }}>
+              Read-only — your role can view this {eventKind === 'revenue' ? 'load' : 'event'} but can&apos;t make changes. Contact an admin if you need edit access.
+            </div>
+          )}
+          <fieldset disabled={isReadOnly} style={{ border: 'none', padding: 0, margin: 0, minWidth: 0, display: 'flex', flexDirection: 'column', flex: 1 }}>
           <div className="px-8 py-6 space-y-5 flex-1">
 
             {/* Hidden file inputs */}
@@ -3752,7 +3931,7 @@ export default function EventModal() {
                         <CheckCircle2 size={17} style={{ color: '#16a34a', flexShrink: 0 }} />
                         <span className="text-sm font-medium" style={{ color: '#15803d' }}>Rate con parsed — review all fields before saving</span>
                       </div>
-                      {rateConPdf && (
+                      {rateConPdf && canViewRateCon && (
                         <button type="button" onClick={() => setShowPdfViewer(true)}
                           className="flex items-center gap-1.5 text-xs font-semibold shrink-0 ml-3"
                           style={{ color: '#16a34a' }}
@@ -3848,16 +4027,53 @@ export default function EventModal() {
               </Field>
             </div>
 
+            {/* Driver / Asset row.
+                Driver on the LEFT, Asset on the RIGHT — drivers are
+                the more common entry point (dispatcher knows who's
+                running before they pick the truck).
+                Auto-fill behavior depends on mode:
+                  - CREATE (!isEdit): bidirectional & unconditional.
+                    Saves a tap when building a load from scratch.
+                  - EDIT: a deliberate pick on one side never silently
+                    overwrites the other. We confirm() the partner
+                    swap only when the picked side has a preference
+                    AND that preference differs from the current value
+                    on the other side. The user's explicit choice
+                    always lands either way.
+                Both handlers run on synchronous onChange (no
+                useEffect chain) so there's no feedback loop. */}
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Asset *">
-                <StyledSelect value={assetId}
-                  onChange={e => { markDirty(); const aid = +e.target.value; setAssetId(aid); setDriverName(preferredDriverName(aid)); }}
-                  style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
-                  {assets.map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
-                </StyledSelect>
-              </Field>
               <Field label="Driver">
-                <StyledSelect value={driverName} onChange={e => { markDirty(); setDriverName(e.target.value); }}
+                {/* Flex row so the suggestion chip sits inline with
+                    the select instead of dropping below it — gives
+                    the chip equal visual weight as the field. */}
+                <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                <StyledSelect value={driverName} onChange={e => {
+                    markDirty();
+                    const nextName = e.target.value;
+                    setDriverName(nextName);
+                    // User explicitly picked driver — any pending
+                    // "switch driver to X" chip is now stale.
+                    setSuggestDriverSwap(null);
+                    const targetAid = preferredAssetForDriverName(nextName);
+                    if (targetAid == null || targetAid === assetId) {
+                      // Picked a driver with no asset pref, or the
+                      // pref matches the current asset — nothing to
+                      // suggest. Clear any stale suggestion.
+                      setSuggestAssetSwap(null);
+                      return;
+                    }
+                    if (!isEdit) {
+                      // New load: auto-fill silently.
+                      setAssetId(targetAid);
+                      setSuggestAssetSwap(null);
+                      return;
+                    }
+                    // Edit mode: don't touch the asset; surface a
+                    // dismissible chip below the field.
+                    setSuggestAssetSwap(targetAid);
+                  }}
                   style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
                   <option value="">— No driver —</option>
                   {drivers.map(d => {
@@ -3865,6 +4081,19 @@ export default function EventModal() {
                     return <option key={d.id} value={display}>{display}</option>;
                   })}
                 </StyledSelect>
+                </div>
+                {/* Driver-side chip — shown when the user picked an
+                    asset whose primary driver differs from this
+                    field's current value. Sits next to the field
+                    it would update (the driver). */}
+                {suggestDriverSwap && (
+                  <SuggestionChip
+                    label={`Use ${suggestDriverSwap}?`}
+                    onApply={() => { setDriverName(suggestDriverSwap); setSuggestDriverSwap(null); }}
+                    onDismiss={() => setSuggestDriverSwap(null)}
+                  />
+                )}
+                </div>
                 {(() => {
                   const sel = findDriverByName(driverName) ?? null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
@@ -3914,6 +4143,51 @@ export default function EventModal() {
                     </div>
                   );
                 })()}
+              </Field>
+              <Field label="Asset *">
+                <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <StyledSelect value={assetId}
+                      onChange={e => {
+                        markDirty();
+                        const aid = +e.target.value;
+                        setAssetId(aid);
+                        // User explicitly picked an asset — drop any
+                        // stale "use suggested asset" chip.
+                        setSuggestAssetSwap(null);
+                        const suggested = preferredDriverName(aid);
+                        if (!suggested || suggested === driverName) {
+                          setSuggestDriverSwap(null);
+                          return;
+                        }
+                        if (!isEdit) {
+                          setDriverName(suggested);
+                          setSuggestDriverSwap(null);
+                          return;
+                        }
+                        // Edit mode: surface inline suggestion instead of
+                        // silently overwriting the load's driver.
+                        setSuggestDriverSwap(suggested);
+                      }}
+                      style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
+                      {assets.map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
+                    </StyledSelect>
+                  </div>
+                  {/* Asset-side chip — shown when the user picked a
+                      driver whose preferred asset differs from this
+                      field's current value. */}
+                  {suggestAssetSwap != null && (() => {
+                    const targetAsset = assets.find(a => a.id === suggestAssetSwap);
+                    if (!targetAsset) return null;
+                    return (
+                      <SuggestionChip
+                        label={`Use ${assetLabel(targetAsset)}?`}
+                        onApply={() => { setAssetId(suggestAssetSwap); setSuggestAssetSwap(null); }}
+                        onDismiss={() => setSuggestAssetSwap(null)}
+                      />
+                    );
+                  })()}
+                </div>
               </Field>
             </div>
 
@@ -4151,23 +4425,104 @@ export default function EventModal() {
                               {confirmRelayRemove ? 'Confirm cancel?' : isPickupLeg ? 'Remove split' : 'Cancel split'}
                             </button>
                           </div>
+                          {/* Delivery Driver / Asset row — same Driver-first
+                              layout and same loop-safe asymmetric auto-fill
+                              as the main row above. See that row's comment
+                              for the full reasoning. */}
                           <div className="grid grid-cols-2 gap-4">
-                            <Field label="Delivery Asset *">
-                              <StyledSelect value={relayDelivAssetId}
-                                onChange={e => { const aid = +e.target.value; setRelayDelivAssetId(aid); setRelayDelivDriverName(preferredDriverName(aid)); }}
-                                style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
-                                {assets.map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
-                              </StyledSelect>
-                            </Field>
                             <Field label="Delivery Driver">
-                              <StyledSelect value={relayDelivDriverName} onChange={e => setRelayDelivDriverName(e.target.value)}
-                                style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
-                                <option value="">— No driver —</option>
-                                {drivers.map(d => {
-                                  const display = canonicalDriverName(d);
-                                  return <option key={d.id} value={display}>{display}</option>;
-                                })}
-                              </StyledSelect>
+                              <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <StyledSelect value={relayDelivDriverName} onChange={e => {
+                                      const nextName = e.target.value;
+                                      setRelayDelivDriverName(nextName);
+                                      // Manual driver pick clears any
+                                      // pending driver-suggestion chip.
+                                      setSuggestRelayDelivDriverSwap(null);
+                                      const sel = drivers.find(d =>
+                                        canonicalDriverName(d) === nextName || d.name === nextName,
+                                      );
+                                      if (!sel) { setSuggestRelayDelivAssetSwap(null); return; }
+                                      let targetAid: number | null = null;
+                                      for (const [aidStr, did] of Object.entries(driverPrefs)) {
+                                        if (did === sel.id) { targetAid = Number(aidStr); break; }
+                                      }
+                                      if (targetAid == null) {
+                                        for (const [aidStr, did] of Object.entries(driverPrefsSecondary)) {
+                                          if (did === sel.id) { targetAid = Number(aidStr); break; }
+                                        }
+                                      }
+                                      if (targetAid == null || targetAid === relayDelivAssetId) {
+                                        setSuggestRelayDelivAssetSwap(null);
+                                        return;
+                                      }
+                                      if (!isEdit) {
+                                        setRelayDelivAssetId(targetAid);
+                                        setSuggestRelayDelivAssetSwap(null);
+                                        return;
+                                      }
+                                      setSuggestRelayDelivAssetSwap(targetAid);
+                                    }}
+                                    style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
+                                    <option value="">— No driver —</option>
+                                    {drivers.map(d => {
+                                      const display = canonicalDriverName(d);
+                                      return <option key={d.id} value={display}>{display}</option>;
+                                    })}
+                                  </StyledSelect>
+                                </div>
+                                {/* Driver-side chip — offers to swap
+                                    the delivery driver to the primary
+                                    of the just-picked delivery asset. */}
+                                {suggestRelayDelivDriverSwap && (
+                                  <SuggestionChip
+                                    label={`Use ${suggestRelayDelivDriverSwap}?`}
+                                    onApply={() => { setRelayDelivDriverName(suggestRelayDelivDriverSwap); setSuggestRelayDelivDriverSwap(null); }}
+                                    onDismiss={() => setSuggestRelayDelivDriverSwap(null)}
+                                  />
+                                )}
+                              </div>
+                            </Field>
+                            <Field label="Delivery Asset *">
+                              <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <StyledSelect value={relayDelivAssetId}
+                                    onChange={e => {
+                                      const aid = +e.target.value;
+                                      setRelayDelivAssetId(aid);
+                                      setSuggestRelayDelivAssetSwap(null);
+                                      const suggested = preferredDriverName(aid);
+                                      if (!suggested || suggested === relayDelivDriverName) {
+                                        setSuggestRelayDelivDriverSwap(null);
+                                        return;
+                                      }
+                                      if (!isEdit) {
+                                        setRelayDelivDriverName(suggested);
+                                        setSuggestRelayDelivDriverSwap(null);
+                                        return;
+                                      }
+                                      setSuggestRelayDelivDriverSwap(suggested);
+                                    }}
+                                    style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
+                                    {assets.map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
+                                  </StyledSelect>
+                                </div>
+                                {/* Asset-side chip — offers to swap
+                                    the delivery asset to the truck
+                                    the just-picked delivery driver
+                                    drives. */}
+                                {suggestRelayDelivAssetSwap != null && (() => {
+                                  const targetAsset = assets.find(a => a.id === suggestRelayDelivAssetSwap);
+                                  if (!targetAsset) return null;
+                                  return (
+                                    <SuggestionChip
+                                      label={`Use ${assetLabel(targetAsset)}?`}
+                                      onApply={() => { setRelayDelivAssetId(suggestRelayDelivAssetSwap); setSuggestRelayDelivAssetSwap(null); }}
+                                      onDismiss={() => setSuggestRelayDelivAssetSwap(null)}
+                                    />
+                                  );
+                                })()}
+                              </div>
                             </Field>
                           </div>
                           {(() => {
@@ -4224,19 +4579,35 @@ export default function EventModal() {
                       relayRole={relayRole}
                       eventStart={startDate && startTime ? `${startDate}T${startTime}` : undefined}
                       eventEnd={endDate && endTime ? `${endDate}T${endTime}` : undefined}
-                      loadedMiles={loadedMiles}
-                      loadPrice={typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : null}
-                      ratePerMile={(() => {
+                      loadedMiles={(() => {
+                        // On a relay leg, show the WHOLE-HAUL miles in the
+                        // header (this leg + partner leg). RPM is computed
+                        // from load price / total miles, so showing only the
+                        // leg's own miles makes the displayed RPM look wrong
+                        // (e.g. "4 mi · $2.08/mi" on a tiny delivery leg of a
+                        // 1200-mile haul). Both legs render the same number.
+                        if ((isPickupLeg || isDeliveryLeg) && relayPartner && loadedMiles != null) {
+                          return (partnerLoadedMiles ?? 0) + loadedMiles;
+                        }
+                        return loadedMiles;
+                      })()}
+                      loadPrice={canViewPrice && typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : null}
+                      ratePerMile={canViewPrice ? (() => {
                         const thisPrice = typeof fieldValues['loadPrice'] === 'number' ? fieldValues['loadPrice'] : null;
                         if (thisPrice == null || loadedMiles == null || loadedMiles === 0) return null;
+                        // For relay loads, loadPrice is stored at the LOAD level
+                        // (both legs share the same value — see LOAD_LEVEL_KEYS
+                        // in lib/loadFieldSplit.ts). Don't sum the partner's
+                        // price or we'd double-count. The denominator is the
+                        // total trip miles (this leg + partner leg) so both
+                        // legs show the same load-level RPM.
                         if ((isPickupLeg || isDeliveryLeg) && relayPartner) {
-                          const partnerPrice = relayPartner.loadPrice ?? 0;
                           const totalMiles = (partnerLoadedMiles ?? 0) + loadedMiles;
                           if (totalMiles === 0) return null;
-                          return Math.round(((thisPrice + partnerPrice) / totalMiles) * 100) / 100;
+                          return Math.round((thisPrice / totalMiles) * 100) / 100;
                         }
                         return Math.round((thisPrice / loadedMiles) * 100) / 100;
-                      })()}
+                      })() : null}
                     />
                   </div>
                 </div>
@@ -4253,6 +4624,11 @@ export default function EventModal() {
               if (section === 'financial' && !canViewDriverPay) {
                 fields = fields.filter(f => f.id !== 'driverPay');
               }
+              // Same treatment for loadPrice when the role can't see
+              // dollar amounts (Maintenance).
+              if (section === 'financial' && !canViewPrice) {
+                fields = fields.filter(f => f.id !== 'loadPrice');
+              }
               // In relay context the driverPay slot becomes a read-only
               // "Total Driver Pay" tile (rendered via override + noLabel).
               // The editable per-leg inputs live in a separate block below.
@@ -4263,7 +4639,7 @@ export default function EventModal() {
                     <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
                       {SECTION_LABELS[section]}
                     </div>
-                    {section === 'financial' && eventKind === 'revenue' && (
+                    {section === 'financial' && eventKind === 'revenue' && canViewPrice && (
                       <button type="button" onClick={addAccessorial}
                         className="flex items-center gap-1 text-xs font-semibold transition-opacity"
                         style={{ color: ACC_COLOR }}
@@ -4309,7 +4685,7 @@ export default function EventModal() {
                       </div>
                     );
                   })()}
-                  {section === 'financial' && eventKind === 'revenue' && accessorials.length > 0 && (
+                  {section === 'financial' && eventKind === 'revenue' && canViewPrice && accessorials.length > 0 && (
                     <div className="mt-3 space-y-2">
                       {accessorials.map(acc => (
                         <div key={acc.id} className="flex items-center gap-2">
@@ -4553,7 +4929,11 @@ export default function EventModal() {
             );
           })()}
 
-          {/* Footer */}
+          </fieldset>
+
+          {/* Footer — outside the read-only fieldset so Cancel/Close
+              stays clickable for read-only roles even when every form
+              control above is disabled. */}
           {isBatch ? (
             <div className="shrink-0 flex items-center justify-between px-8 py-5"
               style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
@@ -4599,24 +4979,28 @@ export default function EventModal() {
                           <RefreshCw size={15} />
                           Reinstate
                         </button>
-                        <button type="button" onClick={() => setRemoveDialogOpen(true)}
+                        {canDeleteLoad && (
+                          <button type="button" onClick={() => setRemoveDialogOpen(true)}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                            style={{ color: '#d93025', background: 'transparent' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                            <Trash2 size={15} />
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    ) : eventKind === 'revenue' ? (
+                      canDeleteLoad ? (
+                        <button type="button" onClick={() => setCancelDialogOpen(true)}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                           style={{ color: '#d93025', background: 'transparent' }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                           <Trash2 size={15} />
-                          Remove
+                          Cancel load
                         </button>
-                      </>
-                    ) : eventKind === 'revenue' ? (
-                      <button type="button" onClick={() => setCancelDialogOpen(true)}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
-                        style={{ color: '#d93025', background: 'transparent' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
-                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                        <Trash2 size={15} />
-                        Cancel load
-                      </button>
+                      ) : null
                     ) : (
                       <button type="button" onClick={handleDelete}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
@@ -4657,13 +5041,15 @@ export default function EventModal() {
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                   Cancel
                 </button>
-                <button type="submit" disabled={!title.trim() || !startDate || !endDate || modalConflict === 'deleted'}
-                  className="px-6 py-2.5 rounded-lg text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  style={{ background: 'var(--gc-blue)' }}
-                  onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-                  {isEdit ? 'Save changes' : relayActive ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
-                </button>
+                {!isReadOnly && (
+                  <button type="submit" disabled={!title.trim() || !startDate || !endDate || modalConflict === 'deleted'}
+                    className="px-6 py-2.5 rounded-lg text-[13px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    style={{ background: 'var(--gc-blue)' }}
+                    onMouseEnter={e => { if (title.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+                    {isEdit ? 'Save changes' : relayActive ? 'Create relay' : eventKind === 'non_revenue' ? 'Create event' : 'Create load'}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -4738,9 +5124,6 @@ export default function EventModal() {
               <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                 Cancel this load?
               </div>
-              <div className="text-[13px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
-                Pick how to handle it. You can always look it up later by load #.
-              </div>
             </div>
           </div>
 
@@ -4756,7 +5139,7 @@ export default function EventModal() {
                 <Calendar size={14} />
               </div>
               <div className="flex-1">
-                <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Mark cancelled (keep on calendar)
                 </div>
                 <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
@@ -4775,7 +5158,7 @@ export default function EventModal() {
                 <Trash2 size={14} />
               </div>
               <div className="flex-1">
-                <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Remove from calendar (keep load record)
                 </div>
                 <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
@@ -4794,10 +5177,10 @@ export default function EventModal() {
                 <AlertCircle size={14} />
               </div>
               <div className="flex-1">
-                <div className="text-[13px] font-bold" style={{ color: '#b1271b' }}>
+                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Move to Recently Deleted
                 </div>
-                <div className="text-[12px] mt-0.5" style={{ color: '#b1271b', opacity: 0.85 }}>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
                   Removes the event and the load record. Restorable from Trash for 30 days.
                 </div>
               </div>
@@ -4844,9 +5227,6 @@ export default function EventModal() {
               <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                 Remove this load?
               </div>
-              <div className="text-[13px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
-                Already cancelled — pick how to clear it off the calendar.
-              </div>
             </div>
           </div>
 
@@ -4862,7 +5242,7 @@ export default function EventModal() {
                 <Trash2 size={14} />
               </div>
               <div className="flex-1">
-                <div className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
+                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Remove from calendar (keep load record)
                 </div>
                 <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
@@ -4881,10 +5261,10 @@ export default function EventModal() {
                 <AlertCircle size={14} />
               </div>
               <div className="flex-1">
-                <div className="text-[13px] font-bold" style={{ color: '#b1271b' }}>
+                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Move to Recently Deleted
                 </div>
-                <div className="text-[12px] mt-0.5" style={{ color: '#b1271b', opacity: 0.85 }}>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
                   Removes the event and the load record. Restorable from Trash for 30 days.
                 </div>
               </div>

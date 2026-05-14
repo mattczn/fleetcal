@@ -13,6 +13,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
+import { requireCapability } from "../middleware/require.js";
 import { DRIVER_DOC_BUCKET } from "./drivers.js";
 
 const driverDocuments = new Hono<{ Variables: AuthVariables }>();
@@ -36,8 +37,10 @@ driverDocuments.get("/:id/url", async (c) => {
   return c.json(res);
 });
 
-// DELETE /v1/driver-documents/:id
-driverDocuments.delete("/:id", async (c) => {
+// DELETE /v1/driver-documents/:id — gated on drivers.edit so a
+// dispatcher with edit rights can clean up uploads, but a maintenance
+// role (drivers.view only) can't delete other people's documents.
+driverDocuments.delete("/:id", requireCapability("drivers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const id    = c.req.param("id");
   const { data } = await supabase

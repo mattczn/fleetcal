@@ -164,7 +164,17 @@ const PAGE_SIZE = 50;
 
 // ─── Page ───────────────────────────────────────────────────────────────
 
+import RequireCap from '@/components/auth/RequireCap';
+
 export default function AccountingPage() {
+  return (
+    <RequireCap cap="accounting.access" module="accounting">
+      <AccountingPageInner />
+    </RequireCap>
+  );
+}
+
+function AccountingPageInner() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const { user } = useUser();
   const customers = useCalendarStore(s => s.customers);

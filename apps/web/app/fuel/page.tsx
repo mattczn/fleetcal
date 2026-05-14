@@ -58,7 +58,17 @@ function fmtDateTime(iso: string): string {
 
 // ── Page ────────────────────────────────────────────────────────────────
 
+import RequireCap from '@/components/auth/RequireCap';
+
 export default function FuelPage() {
+  return (
+    <RequireCap cap="fuel.access" module="fuel">
+      <FuelPageInner />
+    </RequireCap>
+  );
+}
+
+function FuelPageInner() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const searchParams = useSearchParams();
   const drivers = useCalendarStore(s => s.drivers);

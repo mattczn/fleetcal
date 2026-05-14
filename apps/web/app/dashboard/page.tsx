@@ -2,12 +2,15 @@
 
 import DashboardView from '@/components/dashboard/DashboardView';
 import EventModal from '@/components/calendar/EventModal';
+import RequireCap from '@/components/auth/RequireCap';
 
 export default function DashboardPage() {
   return (
-    <div className="flex h-full overflow-hidden">
-      <DashboardView />
-      <EventModal />
-    </div>
+    <RequireCap cap="dashboard.access">
+      <div className="flex h-full overflow-hidden">
+        <DashboardView />
+        <EventModal />
+      </div>
+    </RequireCap>
   );
 }
