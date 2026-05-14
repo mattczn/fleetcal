@@ -445,3 +445,54 @@ export function SettingsCount({ children }: { children: ReactNode }) {
     </span>
   );
 }
+
+interface ReadOnlyBannerProps {
+  /** Override the default message. */
+  message?: string;
+}
+
+/** Yellow banner shown above a panel's content when the active user
+ *  lacks edit permission. Pairs with `<ReadOnlyWrap>` below which
+ *  visually dims and disables pointer events on the underlying controls. */
+export function ReadOnlyBanner({ message }: ReadOnlyBannerProps) {
+  return (
+    <div className="flex items-start gap-3 mb-4" style={{
+      padding: "12px 16px",
+      borderRadius: SETTINGS_RADIUS.section,
+      border: `1px solid ${SETTINGS_COLORS.yellow}40`,
+      background: SETTINGS_COLORS.yellowLight,
+    }}>
+      <span aria-hidden style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 22, height: 22, borderRadius: 999,
+        background: SETTINGS_COLORS.yellow,
+        color: "#fff", fontSize: 14, fontWeight: 700, flexShrink: 0,
+      }}>!</span>
+      <div className="text-[13px]" style={{ color: SETTINGS_COLORS.text }}>
+        <div className="font-bold">Read-only</div>
+        <div className="mt-0.5" style={{ color: SETTINGS_COLORS.textBody }}>
+          {message ?? "Contact your org Admin or Owner to change these settings."}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Wraps panel content and visually disables it when `disabled` is
+ *  true. Renders children with reduced opacity and blocks pointer
+ *  events so clicks pass through to nothing. Form inputs inside still
+ *  read fine; users just can't interact. */
+export function ReadOnlyWrap({ disabled, children }: { disabled: boolean; children: ReactNode }) {
+  if (!disabled) return <>{children}</>;
+  return (
+    <div style={{
+      opacity: 0.65,
+      pointerEvents: "none",
+      userSelect: "none",
+    }} aria-disabled>
+      {children}
+    </div>
+  );
+}

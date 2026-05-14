@@ -23,6 +23,8 @@ import {
   SettingsButton,
   SettingsInput,
   SettingsSelect,
+  ReadOnlyBanner,
+  ReadOnlyWrap,
   SETTINGS_COLORS,
   SETTINGS_RADIUS,
   SETTINGS_SHADOW,
@@ -265,6 +267,11 @@ function FieldSectionCard({
 function LoadFieldsPanel() {
   const { fieldSettings, sectionOrder, setFieldEnabled, setSectionOrder, driverPayPct, setDriverPayPct, hasHydratedOrgSettings } = useCalendarStore();
   const [pctInput, setPctInput] = useState(driverPayPct != null ? String(driverPayPct) : '');
+  const { can } = usePermissions();
+  // Load field config is org-scoped — Dispatchers can SEE the current
+  // setup but only Admin/Owner can change it. Reflected as a
+  // read-only banner + a dimmed/non-interactive content wrap below.
+  const canEdit = can('org.settings.edit');
 
   // Field toggles are org-scoped; write through to the server so other
   // dispatchers see the same field set.
@@ -296,7 +303,10 @@ function LoadFieldsPanel() {
   const atLimit = false; // no cap — toggle any field freely
 
   return (
-    <div className="flex gap-10 items-start">
+    <div>
+      {!canEdit && <ReadOnlyBanner />}
+      <ReadOnlyWrap disabled={!canEdit}>
+      <div className="flex gap-10 items-start">
       {/* ── Left: controls ── */}
       <div className="space-y-5" style={{ width: 380, flexShrink: 0 }}>
         <div className="flex items-center justify-between">
@@ -380,6 +390,8 @@ function LoadFieldsPanel() {
           <ModalPreview fieldSettings={fieldSettings} sectionOrder={sectionOrder} />
         </div>
       </div>
+      </div>
+      </ReadOnlyWrap>
     </div>
   );
 }
@@ -818,8 +830,13 @@ function DriverAppPanel() {
 
 function TimezonePanel() {
   const { promptVariables, setPromptVariable, calendarTimezone, setCalendarTimezone, hasHydratedOrgSettings } = useCalendarStore();
-  // Timezone affects the rate-con prompt; sync to org settings so all
-  // dispatchers parse with the same TZ.
+  const { can } = usePermissions();
+  // Timezone is org-scoped — sync writes to /v1/org-settings so all
+  // members of the org parse rate-cons with the same TZ. Only
+  // org.settings.edit holders (Admin/Owner) can change it; others
+  // see the current value but the controls are dimmed and
+  // non-interactive.
+  const canEdit = can('org.settings.edit');
   const syncTimezone = (value: string) => {
     if (!hasHydratedOrgSettings) return;
     void import('@/lib/railway').then(({ railway }) =>
@@ -832,45 +849,48 @@ function TimezonePanel() {
       description="Sets the timezone for the calendar display, current time indicator, and rate con AI parsing."
       maxWidth={720}
     >
-      <SettingsSection title="Your timezone" first>
-        <div className="grid grid-cols-2 gap-2 mb-5">
-          {TIMEZONES.map(tz => {
-            const active = calendarTimezone === tz.iana;
-            return (
-              <button key={tz.value} onClick={() => {
-                setCalendarTimezone(tz.iana);
-                setPromptVariable('timezone', tz.value);
-                syncTimezone(tz.value);
+      {!canEdit && <div style={{ padding: '16px 28px 0' }}><ReadOnlyBanner /></div>}
+      <ReadOnlyWrap disabled={!canEdit}>
+        <SettingsSection title="Your timezone" first>
+          <div className="grid grid-cols-2 gap-2 mb-5">
+            {TIMEZONES.map(tz => {
+              const active = calendarTimezone === tz.iana;
+              return (
+                <button key={tz.value} onClick={() => {
+                  setCalendarTimezone(tz.iana);
+                  setPromptVariable('timezone', tz.value);
+                  syncTimezone(tz.value);
+                }}
+                  className="text-[14px] font-semibold text-left transition-all"
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: SETTINGS_RADIUS.control,
+                    border: `1.5px solid ${active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.borderStrong}`,
+                    background: active ? SETTINGS_COLORS.blueLight : SETTINGS_COLORS.panelBg,
+                    color: active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.text,
+                    cursor: 'pointer',
+                  }}>
+                  {tz.label}
+                </button>
+              );
+            })}
+          </div>
+          <SettingsField
+            label="Custom IANA timezone"
+            hint="e.g. America/Phoenix"
+          >
+            <SettingsInput
+              type="text"
+              value={calendarTimezone}
+              onChange={e => {
+                setCalendarTimezone(e.target.value);
+                setPromptVariable('timezone', e.target.value);
+                syncTimezone(e.target.value);
               }}
-                className="text-[14px] font-semibold text-left transition-all"
-                style={{
-                  padding: '10px 14px',
-                  borderRadius: SETTINGS_RADIUS.control,
-                  border: `1.5px solid ${active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.borderStrong}`,
-                  background: active ? SETTINGS_COLORS.blueLight : SETTINGS_COLORS.panelBg,
-                  color: active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.text,
-                  cursor: 'pointer',
-                }}>
-                {tz.label}
-              </button>
-            );
-          })}
-        </div>
-        <SettingsField
-          label="Custom IANA timezone"
-          hint="e.g. America/Phoenix"
-        >
-          <SettingsInput
-            type="text"
-            value={calendarTimezone}
-            onChange={e => {
-              setCalendarTimezone(e.target.value);
-              setPromptVariable('timezone', e.target.value);
-              syncTimezone(e.target.value);
-            }}
-          />
-        </SettingsField>
-      </SettingsSection>
+            />
+          </SettingsField>
+        </SettingsSection>
+      </ReadOnlyWrap>
     </SettingsPanel>
   );
 }
