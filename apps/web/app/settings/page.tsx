@@ -15,6 +15,18 @@ import {
   type RoleOverrides,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
+import {
+  SettingsPanel,
+  SettingsSection,
+  SettingsField,
+  SettingsToggle,
+  SettingsButton,
+  SettingsInput,
+  SettingsSelect,
+  SETTINGS_COLORS,
+  SETTINGS_RADIUS,
+  SETTINGS_SHADOW,
+} from '@/components/settings/primitives';
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -390,62 +402,58 @@ const THEMES: { value: 'light' | 'dark' | 'system'; label: string; icon: React.R
 function AppearancePanel() {
   const { theme, setTheme, showStatusOverlay, setShowStatusOverlay, showUnassigned, setShowUnassigned } = useCalendarStore();
   return (
-    <div style={{ width: 560 }} className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Appearance</h2>
-        <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
-          Saved per member — only affects your view.
-        </p>
-      </div>
-      <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-          <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>Theme</div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>Choose how Dispatch looks on your device.</div>
+    <SettingsPanel
+      title="Appearance"
+      description="Saved per member — only affects your view."
+      maxWidth={720}
+    >
+      <SettingsSection
+        title="Theme"
+        description="Choose how Dispatch looks on your device."
+        first
+      >
+        <div className="grid grid-cols-3 gap-2">
+          {THEMES.map(t => {
+            const active = theme === t.value;
+            return (
+              <button key={t.value} onClick={() => setTheme(t.value)}
+                className="flex items-center justify-center gap-2 text-[14px] font-semibold transition-all"
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: SETTINGS_RADIUS.control,
+                  border: `1.5px solid ${active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.borderStrong}`,
+                  background: active ? SETTINGS_COLORS.blueLight : SETTINGS_COLORS.panelBg,
+                  color: active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.text,
+                  cursor: 'pointer',
+                }}>
+                {t.icon}
+                {t.label}
+              </button>
+            );
+          })}
         </div>
-        <div className="p-5">
-          <div className="grid grid-cols-3 gap-2">
-            {THEMES.map(t => {
-              const active = theme === t.value;
-              return (
-                <button key={t.value} onClick={() => setTheme(t.value)}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors"
-                  style={{
-                    border: `1px solid ${active ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-                    background: active ? 'var(--gc-blue-light)' : 'transparent',
-                    color: active ? 'var(--gc-blue)' : 'var(--gc-text-2)',
-                  }}>
-                  {t.icon}
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+      </SettingsSection>
 
-      <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-          <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>Calendar</div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>Control what's shown on load cards.</div>
-        </div>
-        <div className="divide-y" style={{ borderColor: 'var(--gc-border-light)' }}>
-          <div className="px-5 py-4 flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>Status overlay</div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>Show a status badge on each load card (Scheduled, En Route, Delivered…)</div>
-            </div>
-            <Toggle checked={showStatusOverlay} disabled={false} onChange={() => setShowStatusOverlay(!showStatusOverlay)} />
-          </div>
-          <div className="px-5 py-4 flex items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>Unassigned column</div>
-              <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>Show an Unassigned column as the first column — use it as a placeholder when a truck hasn't been assigned yet.</div>
-            </div>
-            <Toggle checked={showUnassigned} disabled={false} onChange={() => setShowUnassigned(!showUnassigned)} />
-          </div>
-        </div>
-      </div>
-    </div>
+      <SettingsSection
+        title="Calendar"
+        description="Control what's shown on load cards."
+      >
+        <SettingsField
+          inline
+          label="Status overlay"
+          hint="Show a status badge on each load card (Scheduled, En Route, Delivered…)"
+        >
+          <SettingsToggle checked={showStatusOverlay} onChange={setShowStatusOverlay} />
+        </SettingsField>
+        <SettingsField
+          inline
+          label="Unassigned column"
+          hint="Show an Unassigned column as the first column — use it as a placeholder when a truck hasn't been assigned yet."
+        >
+          <SettingsToggle checked={showUnassigned} onChange={setShowUnassigned} />
+        </SettingsField>
+      </SettingsSection>
+    </SettingsPanel>
   );
 }
 
@@ -552,40 +560,32 @@ function RolePermissionsPanel() {
   }, []);
 
   return (
-    <div>
-      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
-            Role Permissions
-          </h1>
-          <p className="text-sm max-w-2xl" style={{ color: 'var(--gc-text-3)' }}>
-            Override the default capability set per role. Owner and Admin start with everything; Dispatcher and Maintenance ship with sensible defaults you can tune for your team. Changes apply within ~60s of save.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+    <SettingsPanel
+      title="Role Permissions"
+      description="Override the default capability set per role. Owner and Admin start with everything; Dispatcher and Maintenance ship with sensible defaults you can tune for your team. Changes apply within ~60s of save."
+      maxWidth={1100}
+      bare
+      actions={
+        <>
           {isDirty && (
-            <button type="button" onClick={revert}
-              className="text-xs font-semibold px-3 py-1.5 rounded-lg border"
-              style={{ borderColor: 'var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
+            <SettingsButton variant="secondary" size="sm" onClick={revert}>
               Revert
-            </button>
+            </SettingsButton>
           )}
-          <button type="button" onClick={save} disabled={!isDirty || saving}
-            className="text-xs font-bold px-4 py-1.5 rounded-lg inline-flex items-center gap-1.5"
-            style={{
-              background: isDirty ? '#1a73e8' : 'var(--gc-border-light)',
-              color: isDirty ? '#fff' : 'var(--gc-text-3)',
-              cursor: isDirty && !saving ? 'pointer' : 'default',
-              opacity: saving ? 0.7 : 1,
-            }}>
-            {saving ? <Loader2 size={12} className="animate-spin" /> : null}
+          <SettingsButton variant="primary" size="sm" onClick={save} disabled={!isDirty} loading={saving}>
             {saving ? 'Saving…' : isDirty ? 'Save changes' : (savedAt ? 'Saved' : 'No changes')}
-          </button>
-        </div>
-      </div>
-
+          </SettingsButton>
+        </>
+      }
+    >
       {/* Matrix */}
-      <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #d1d5db', background: '#fff' }}>
+      <div style={{
+        border: `1px solid ${SETTINGS_COLORS.border}`,
+        borderRadius: SETTINGS_RADIUS.panel,
+        background: SETTINGS_COLORS.panelBg,
+        boxShadow: SETTINGS_SHADOW.card,
+        overflow: 'hidden',
+      }}>
         {/* Header row */}
         <div className="grid items-stretch" style={{
           gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
@@ -710,9 +710,9 @@ function RolePermissionsPanel() {
           <span className="inline-block rounded-full" style={{ width: 8, height: 8, background: '#1d4ed8', border: '1.5px solid #fff', boxShadow: '0 0 0 1px #1d4ed8' }} />
           Overridden from default
         </span>
-        <span style={{ color: '#6b7280' }}>Owner is read-only.</span>
+        <span style={{ color: SETTINGS_COLORS.textMuted }}>Owner is read-only.</span>
       </div>
-    </div>
+    </SettingsPanel>
   );
 }
 
@@ -734,37 +734,37 @@ function RolePermissionsPanel() {
  */
 function MembersPanel() {
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
-          Members &amp; Roles
-        </h1>
-        <p className="text-sm" style={{ color: 'var(--gc-text-3)' }}>
-          Invite teammates, set their role (Owner / Admin / Dispatcher / Maintenance),
-          and remove access. Role changes take effect on the user&apos;s next page load.
-        </p>
-      </div>
-      {/* Render Clerk's OrganizationProfile at its native width — we
-          tried hiding its navbar + clipping the card chrome to fit
-          our settings panel, but Clerk's General / Members /
-          Invitations tabs all live inside that navbar, so hiding it
-          meant the user could only ever see the General tab. The
-          appearance prop now only widens the root box so it can
-          take advantage of the room available in the settings main
-          column. */}
-      <div style={{ minWidth: 0 }}>
+    <SettingsPanel
+      title="Members & Roles"
+      description="Invite teammates, set their role (Owner / Admin / Dispatcher / Maintenance), and remove access. Role changes take effect on the user's next page load."
+      maxWidth={1100}
+      bare
+    >
+      {/* Render Clerk's OrganizationProfile at its native width — its
+          internal General / Members / Invitations tabs all live inside
+          a left navbar that we keep visible. The appearance overrides
+          here only nudge spacing + corner radius to match our card
+          chrome. */}
+      <div style={{
+        minWidth: 0,
+        background: SETTINGS_COLORS.panelBg,
+        border: `1px solid ${SETTINGS_COLORS.border}`,
+        borderRadius: SETTINGS_RADIUS.panel,
+        boxShadow: SETTINGS_SHADOW.card,
+        overflow: 'hidden',
+      }}>
         <OrganizationProfile
           routing="hash"
           appearance={{
             elements: {
               rootBox:  { width: '100%' },
-              cardBox:  { width: '100%', maxWidth: 'none' },
-              card:     { width: '100%', maxWidth: 'none' },
+              cardBox:  { width: '100%', maxWidth: 'none', boxShadow: 'none', borderRadius: 0 },
+              card:     { width: '100%', maxWidth: 'none', boxShadow: 'none', borderRadius: 0, border: 'none' },
             },
           }}
         />
       </div>
-    </div>
+    </SettingsPanel>
   );
 }
 
@@ -795,28 +795,23 @@ function DriverAppPanel() {
   }
 
   return (
-    <div style={{ width: 560 }} className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Driver App</h2>
-        <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
-          Settings that control what drivers see in the mobile app.
-        </p>
-      </div>
-
-      <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
-        <div className="px-5 py-4 flex items-center gap-4">
-          <div className="flex-1">
-            <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>Show driver pay</div>
-            <div className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--gc-text-3)' }}>
-              When on, drivers see the Pay amount on each load. When off, the Pay row is hidden.
-            </div>
-          </div>
+    <SettingsPanel
+      title="Driver App"
+      description="Settings that control what drivers see in the mobile app."
+      maxWidth={720}
+    >
+      <SettingsSection title="Visibility" first>
+        <SettingsField
+          inline
+          label="Show driver pay"
+          hint="When on, drivers see the Pay amount on each load. When off, the Pay row is hidden."
+        >
           {showDriverPay == null
-            ? <Loader2 size={16} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
-            : <Toggle checked={showDriverPay} disabled={busy} onChange={toggle} />}
-        </div>
-      </div>
-    </div>
+            ? <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
+            : <SettingsToggle checked={showDriverPay} disabled={busy} onChange={() => void toggle()} />}
+        </SettingsField>
+      </SettingsSection>
+    </SettingsPanel>
   );
 }
 
@@ -831,57 +826,51 @@ function TimezonePanel() {
     ).catch((err) => console.error('[settings] timezone sync failed:', err));
   };
   return (
-    <div style={{ width: 560 }} className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Timezone</h2>
-        <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
-          Sets the timezone for the calendar display, current time indicator, and rate con AI parsing.
-        </p>
-      </div>
-      <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', boxShadow: 'var(--shadow-1)', background: 'var(--gc-surface)' }}>
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-          <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>Your timezone</div>
-        </div>
-        <div className="p-5 space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            {TIMEZONES.map(tz => {
-              const active = calendarTimezone === tz.iana;
-              return (
-                <button key={tz.value} onClick={() => {
-                  setCalendarTimezone(tz.iana);
-                  setPromptVariable('timezone', tz.value);
-                  syncTimezone(tz.value);
-                }}
-                  className="px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors"
-                  style={{
-                    border: `1px solid ${active ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-                    background: active ? 'var(--gc-blue-light)' : 'transparent',
-                    color: active ? 'var(--gc-blue)' : 'var(--gc-text-1)',
-                  }}>
-                  {tz.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="pt-1">
-            <div className="text-xs mb-1.5" style={{ color: 'var(--gc-text-3)' }}>Or enter a custom IANA timezone (e.g. America/Phoenix):</div>
-            <input
-              type="text"
-              value={calendarTimezone}
-              onChange={e => {
-                setCalendarTimezone(e.target.value);
-                setPromptVariable('timezone', e.target.value);
-                syncTimezone(e.target.value);
+    <SettingsPanel
+      title="Timezone"
+      description="Sets the timezone for the calendar display, current time indicator, and rate con AI parsing."
+      maxWidth={720}
+    >
+      <SettingsSection title="Your timezone" first>
+        <div className="grid grid-cols-2 gap-2 mb-5">
+          {TIMEZONES.map(tz => {
+            const active = calendarTimezone === tz.iana;
+            return (
+              <button key={tz.value} onClick={() => {
+                setCalendarTimezone(tz.iana);
+                setPromptVariable('timezone', tz.value);
+                syncTimezone(tz.value);
               }}
-              className="w-full rounded-lg text-sm outline-none"
-              style={{ border: '1px solid var(--gc-border)', padding: '8px 12px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }}
-              onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
-              onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-            />
-          </div>
+                className="text-[14px] font-semibold text-left transition-all"
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: SETTINGS_RADIUS.control,
+                  border: `1.5px solid ${active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.borderStrong}`,
+                  background: active ? SETTINGS_COLORS.blueLight : SETTINGS_COLORS.panelBg,
+                  color: active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.text,
+                  cursor: 'pointer',
+                }}>
+                {tz.label}
+              </button>
+            );
+          })}
         </div>
-      </div>
-    </div>
+        <SettingsField
+          label="Custom IANA timezone"
+          hint="e.g. America/Phoenix"
+        >
+          <SettingsInput
+            type="text"
+            value={calendarTimezone}
+            onChange={e => {
+              setCalendarTimezone(e.target.value);
+              setPromptVariable('timezone', e.target.value);
+              syncTimezone(e.target.value);
+            }}
+          />
+        </SettingsField>
+      </SettingsSection>
+    </SettingsPanel>
   );
 }
 
@@ -2991,12 +2980,18 @@ function ResetDemoButton() {
     <button
       onClick={handleReset}
       disabled={busy}
-      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-      style={{ color: 'var(--gc-red)', background: 'transparent' }}
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+      className="w-full flex items-center gap-3 transition-colors"
+      style={{
+        padding: '9px 14px',
+        borderRadius: 999,
+        color: SETTINGS_COLORS.red,
+        background: 'transparent',
+        fontSize: 14, fontWeight: 500,
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = SETTINGS_COLORS.redLight)}
       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
     >
-      {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+      {busy ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
       Reset to Demo Mode
     </button>
   );
@@ -3031,37 +3026,65 @@ export default function SettingsPage() {
   }, [permsLoading, visibleNav, active]);
 
   return (
-    <div className="flex flex-col" style={{ height: '100vh', background: 'var(--gc-bg)' }}>
+    <div className="flex flex-col" style={{ height: '100vh', background: SETTINGS_COLORS.pageBg }}>
       <DataLoader />
 
-      {/* Top bar */}
-      <div className="shrink-0 flex items-center gap-4 px-6" style={{ height: 64, borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
-        <Link href="/calendar" className="p-2 rounded-full transition-colors" style={{ color: 'var(--gc-text-2)' }}
-          onMouseEnter={(e: React.MouseEvent<HTMLAnchorElement>) => (e.currentTarget.style.background = 'var(--gc-hover)')}
-          onMouseLeave={(e: React.MouseEvent<HTMLAnchorElement>) => (e.currentTarget.style.background = 'transparent')}>
+      {/* Top bar — Google-style: tall, clean, bold title, blue accents on hover */}
+      <div className="shrink-0 flex items-center gap-3 px-6" style={{
+        height: 64,
+        background: '#fff',
+        borderBottom: `1px solid ${SETTINGS_COLORS.border}`,
+      }}>
+        <Link href="/calendar"
+          className="inline-flex items-center justify-center transition-colors"
+          style={{
+            width: 40, height: 40, borderRadius: 999,
+            color: SETTINGS_COLORS.textBody,
+          }}
+          onMouseEnter={(e: React.MouseEvent<HTMLAnchorElement>) => {
+            (e.currentTarget as HTMLElement).style.background = SETTINGS_COLORS.blueLight;
+            (e.currentTarget as HTMLElement).style.color = SETTINGS_COLORS.blue;
+          }}
+          onMouseLeave={(e: React.MouseEvent<HTMLAnchorElement>) => {
+            (e.currentTarget as HTMLElement).style.background = 'transparent';
+            (e.currentTarget as HTMLElement).style.color = SETTINGS_COLORS.textBody;
+          }}>
           <ArrowLeft size={20} />
         </Link>
-        <h1 className="text-base font-semibold" style={{ color: 'var(--gc-text-1)' }}>Settings</h1>
+        <h1 className="text-[20px] font-semibold tracking-tight" style={{ color: SETTINGS_COLORS.text }}>
+          Settings
+        </h1>
       </div>
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* Left nav */}
-        <nav className="shrink-0 flex flex-col py-4 px-3 overflow-y-auto" style={{ width: 320, borderRight: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
+        {/* Left nav — pill-style active state, generous spacing */}
+        <nav className="shrink-0 flex flex-col py-5 px-3 overflow-y-auto" style={{
+          width: 280,
+          borderRight: `1px solid ${SETTINGS_COLORS.border}`,
+          background: '#fff',
+        }}>
           <div className="flex-1">
             {visibleNav.map(group => (
-              <div key={group.section} className="mb-4">
-                <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+              <div key={group.section} className="mb-5">
+                <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.textMuted }}>
                   {group.section}
                 </div>
                 {group.items.map(item => {
                   const isActive = active === item.id;
                   return (
                     <button key={item.id} onClick={() => setActive(item.id)}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
-                      style={{ color: isActive ? '#1a73e8' : 'var(--gc-text-2)', background: isActive ? '#e8f0fe' : 'transparent' }}
-                      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      className="w-full flex items-center gap-3 text-[14px] font-medium transition-colors"
+                      style={{
+                        padding: '9px 14px',
+                        marginBottom: 2,
+                        borderRadius: 999,
+                        color:      isActive ? SETTINGS_COLORS.blue : SETTINGS_COLORS.textBody,
+                        background: isActive ? SETTINGS_COLORS.blueLight : 'transparent',
+                        fontWeight: isActive ? 600 : 500,
+                      }}
+                      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = SETTINGS_COLORS.sectionBandBg; }}
                       onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}>
                       {item.icon}
                       {item.label}
@@ -3073,8 +3096,8 @@ export default function SettingsPage() {
           </div>
 
           {/* Dev tools */}
-          <div style={{ borderTop: '1px solid var(--gc-border)', paddingTop: 12, marginTop: 8 }}>
-            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+          <div style={{ borderTop: `1px solid ${SETTINGS_COLORS.border}`, paddingTop: 14, marginTop: 12 }}>
+            <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.textMuted }}>
               Developer
             </div>
             <ResetDemoButton />
@@ -3082,7 +3105,7 @@ export default function SettingsPage() {
         </nav>
 
         {/* Main content — scrollable */}
-        <main className="flex-1 overflow-y-auto py-8 px-8">
+        <main className="flex-1 overflow-y-auto" style={{ padding: '40px 48px' }}>
           {active === 'appearance'   && <AppearancePanel />}
           {active === 'timezone'     && <TimezonePanel />}
           {active === 'assets'       && <AssetsPanel />}
