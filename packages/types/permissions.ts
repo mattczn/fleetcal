@@ -166,7 +166,9 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // Dispatcher: day-to-day operations. Reads everything operations-
   // related, edits loads/customers/drivers/trailers, runs closeout.
   // BUT — no destructive deletes, no payroll/accounting, no org
-  // settings or member management, and driver pay is hidden.
+  // settings or member management, no dashboard (those KPIs include
+  // revenue / driver-pay numbers we don't want at this tier), and
+  // driver pay is hidden.
   dispatcher: new Set<Capability>([
     "loads.view", "loads.create", "loads.edit",
     "customers.view", "customers.edit",
@@ -177,7 +179,7 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "closeout.access", "closeout.release", "closeout.flag",
     "maintenance.access", "maintenance.edit",
     "fuel.access", "fuel.edit",
-    "dashboard.access", "reports.access",
+    "reports.access",
   ]),
 
   // Maintenance: stripped-down nav. Sees the calendar but can't
