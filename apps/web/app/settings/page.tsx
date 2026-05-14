@@ -2947,10 +2947,20 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
 
 // Per-nav-item capability gates. Entries in this map are hidden when
 // the active user lacks the listed capability. Missing entries are
-// visible to everyone.
+// visible to everyone (Appearance is per-user; Assets/Drivers/etc.
+// are visible to anyone who has the relevant entity caps anyway).
+//
+// org.settings.edit is the "Admin / Owner only" gate for panels that
+// modify org-wide config — Rate Con AI prompts, invoice letterhead +
+// branding, third-party integrations, driver-app preferences, the
+// permissions matrix itself.
 const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
   members:            'org.members.manage',
   'role-permissions': 'org.settings.edit',
+  'ratecon-ai':       'org.settings.edit',
+  'invoicing':        'org.settings.edit',
+  'integrations':     'org.settings.edit',
+  'driver-app':       'org.settings.edit',
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
