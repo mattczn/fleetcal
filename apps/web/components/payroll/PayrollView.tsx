@@ -1369,8 +1369,20 @@ export default function PayrollView() {
     return rows;
   }, [weekEvents, adjDriverNames, drivers]);
 
+  // Total driver pay across every leg — each driver gets paid for
+  // their leg, so summing every event's driverPay is the correct
+  // "what did we pay drivers this week" answer.
   const totalPay = driverGroups.reduce((s, g) => s + g.loads.reduce((ss, l) => ss + (l.driverPay ?? 0), 0), 0);
-  const totalLoads = weekEvents.length;
+  // Total LOADS — dedupe by loadId so a relay (two legs sharing a
+  // load_id) counts once. Without this, a week with three relays would
+  // read "6 loads" when it's really three.
+  const totalLoads = useMemo(() => {
+    const seen = new Set<string>();
+    for (const ev of weekEvents) {
+      seen.add(ev.loadId ?? ev.id);
+    }
+    return seen.size;
+  }, [weekEvents]);
 
   const orgName    = organization?.name    ?? 'My Organization';
   const orgLogoUrl = organization?.imageUrl;

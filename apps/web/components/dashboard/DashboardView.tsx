@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { railway } from '@/lib/railway';
 import DataLoader from '@/components/DataLoader';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -17,6 +18,7 @@ import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
 import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
+import type { LoadSummary } from '@fleetcal/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -315,6 +317,31 @@ export default function DashboardView() {
     extendLoadedRange(startIso, endIso).finally(() => setFetching(false));
   }, [period, dbReady, pStart, pEnd, loadedStart, loadedEnd, extendLoadedRange]);
 
+  // Load-shaped data sourced from /v1/reports/loads. One row per load
+  // (relays collapsed server-side), filtered by pickup date in the
+  // user's local timezone. This is the source of truth for every KPI
+  // card — matches LoadsReport exactly, no client-side dedupe needed.
+  // The events-store-driven `deduped` array below still powers charts;
+  // both arrive at the same numbers because both are load-deduped.
+  const [loadSummaries, setLoadSummaries] = useState<LoadSummary[] | null>(null);
+  useEffect(() => {
+    if (!dbReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { loads } = await railway.listLoadSummaries({
+          pickupFrom: pStart.toISOString(),
+          pickupTo:   pEnd.toISOString(),
+        });
+        if (!cancelled) setLoadSummaries(loads);
+      } catch (err) {
+        console.error('[DashboardView] listLoadSummaries failed:', err);
+        if (!cancelled) setLoadSummaries([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dbReady, pStart, pEnd]);
+
   // Filter to period — based on each event's start date; exclude placeholder unassigned asset
   const filtered = useMemo(
     () => events.filter(e => {
@@ -347,20 +374,56 @@ export default function DashboardView() {
     });
   }, [filtered]);
 
-  // ── KPI summary (uses deduped — each relay load counted once) ──
+  // ── KPI summary (sourced from /v1/reports/loads — one row per load) ──
+  //
+  // While the report is still in flight, fall back to the events-store
+  // `deduped` array so the cards show *something* during the initial
+  // load instead of zeros. Once the report response arrives, KPIs lock
+  // to the load-shaped data — the same source LoadsReport uses, so
+  // numbers always agree.
   const kpis = useMemo(() => {
+    if (loadSummaries) {
+      const revenue = loadSummaries.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+      const loads   = loadSummaries.length;
+      // Delivery side reflects the load's final state — the leg whose
+      // status is "delivered" is the one that physically delivered.
+      const delivered = loadSummaries.filter(l => l.deliveryStatus === 'delivered').length;
+      // For relays, a load only counts as cancelled if BOTH legs are
+      // cancelled; otherwise we treat the pickup status as the
+      // active-side gate. Simplifying to pickup-side keeps behavior
+      // identical to the legacy events-deduped path.
+      const nonCancel    = loadSummaries.filter(l => l.pickupStatus !== 'cancelled').length;
+      const delivRate    = nonCancel > 0 ? (delivered / nonCancel) * 100 : 0;
+      const avgRevPerLoad = loads > 0 ? revenue / loads : 0;
+      // Assets — union of pickup + delivery so a relay surfaces both
+      // assets, not just the pickup leg's.
+      const assetIds = new Set<number>();
+      for (const l of loadSummaries) {
+        assetIds.add(l.pickupAssetId);
+        if (l.deliveryAssetId !== l.pickupAssetId) assetIds.add(l.deliveryAssetId);
+      }
+      const activeAssets   = assetIds.size;
+      const avgRevPerAsset = activeAssets > 0 ? revenue / activeAssets : 0;
+      // Total driver pay across every leg — each driver gets paid for
+      // their leg, so summing legs is the correct "what did we pay
+      // drivers this period" answer.
+      const driverPay = loadSummaries.reduce((s, l) => s + (l.totalDriverPay ?? 0), 0);
+      const miles     = loadSummaries.reduce((s, l) => s + (l.totalLoadedMiles ?? 0), 0);
+      return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay };
+    }
+    // ─ Fallback while the load-shaped report is still in flight ─
     const revenue = deduped.reduce((s, e) => s + (e.loadPrice ?? 0), 0);
     const loads   = deduped.length;
     const delivered  = deduped.filter(e => e.status === 'delivered').length;
     const nonCancel  = deduped.filter(e => e.status !== 'cancelled').length;
     const delivRate  = nonCancel > 0 ? (delivered / nonCancel) * 100 : 0;
     const avgRevPerLoad  = loads > 0 ? revenue / loads : 0;
-    const activeAssets   = new Set(deduped.map(e => e.assetId)).size; // unassigned already excluded from deduped via filtered
+    const activeAssets   = new Set(deduped.map(e => e.assetId)).size;
     const avgRevPerAsset = activeAssets > 0 ? revenue / activeAssets : 0;
-    const miles      = 0; // auto-calculated from stops per load, not stored
+    const miles      = 0;
     const driverPay  = filtered.reduce((s, e) => s + (e.driverPay ?? 0), 0);
     return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay };
-  }, [deduped, filtered]);
+  }, [loadSummaries, deduped, filtered]);
 
   // ── Revenue by asset ──────────────────────────────────────────────────
   // Relay (split) loads are prorated by haversine leg miles so each
