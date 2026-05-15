@@ -537,7 +537,18 @@ function StopCard({
   const [etaLoading, setEtaLoading] = useState(false);
   const tint = STOP_TINT[s.type];
   const facility = s.facilityName ?? s.city ?? s.address ?? "—";
-  const copyValue = s.address ?? s.city ?? s.facilityName ?? "";
+  // Copy a full, pasteable address — street + city, state — so dropping
+  // it into Apple Maps / Google Maps / a text message gives the user
+  // something they can actually navigate to. Fall back to lat,lng if
+  // there's no street/city (some loads only have coordinates), then to
+  // the facility name as a last resort.
+  const cityState = [s.city, s.state].filter(Boolean).join(", ");
+  const addressLine = [s.address, cityState].filter(Boolean).join(", ");
+  const copyValue =
+    addressLine ||
+    (s.lat != null && s.lng != null ? `${s.lat},${s.lng}` : "") ||
+    s.facilityName ||
+    "";
   const window = s.apptStart && s.apptEnd && s.apptStart !== s.apptEnd
     ? `${fmtTime(s.apptStart)} – ${fmtTime(s.apptEnd)}`
     : fmtTime(s.apptStart);

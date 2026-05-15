@@ -402,6 +402,16 @@ export default function MapScreen() {
     }
   }, [focusAssetId, assets, activeLoadsByAsset, focusedLoadId, selectedVehicleId]);
 
+  // When the user arrives at the map screen via "Zoom to truck"
+  // (or switches to a different truck while already here), reset
+  // any stale sheet/collapse state from a previous visit so the
+  // map opens clean on that one truck.
+  React.useEffect(() => {
+    if (focusAssetId == null) return;
+    setRoutesSheetOpen(false);
+    setLoadsCollapsed(false);
+  }, [focusAssetId]);
+
   const assetById = useMemo(() => {
     const m = new Map<number, Asset>();
     for (const a of assets) m.set(a.id, a);
@@ -583,6 +593,8 @@ export default function MapScreen() {
               onPress={() => {
                 setSelectedVehicleId(null);
                 setFocusedLoadId(null);
+                setRoutesSheetOpen(false);
+                setLoadsCollapsed(false);
                 // If we entered standalone via ?assetId=, drop the param so
                 // the auto-focus effect doesn't re-apply on the next render.
                 if (focusAssetId !== null) router.setParams({ assetId: "" });
