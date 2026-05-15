@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useUser, useAuth, useOrganization } from "@clerk/clerk-expo";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -440,6 +441,12 @@ export default function CalendarScreen() {
   // Track keyboard height so the floating search pill can hop above it
   // when focused. RN doesn't push absolute-positioned views up for the
   // keyboard, so we adjust `bottom` manually on show/hide.
+  //
+  // The pill is positioned inside the tab navigator's screen view, whose
+  // bottom edge is already above the tab bar. Subtracting the tab bar
+  // height from the keyboard height gives the lift the pill needs to
+  // sit just above the keyboard (no gap).
+  const tabBarHeight = useBottomTabBarHeight();
   const [kbHeight, setKbHeight] = useState(0);
   useEffect(() => {
     const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -450,6 +457,7 @@ export default function CalendarScreen() {
     const h = Keyboard.addListener(hideEvt, onHide);
     return () => { s.remove(); h.remove(); };
   }, []);
+  const kbLift = Math.max(0, kbHeight - tabBarHeight);
 
   // Calendar (hourly grid) vs Schedule (card list) — persisted in AsyncStorage
   // so the user's choice survives app restarts.
@@ -702,7 +710,7 @@ export default function CalendarScreen() {
         // result isn't trapped behind the keyboard + floating pill.
         <ScrollView
           style={{ flex: 1, backgroundColor: "#f8f9fa" }}
-          contentContainerStyle={{ padding: 16, paddingBottom: 120 + insets.bottom + kbHeight }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 120 + insets.bottom + kbLift }}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={[txt(800), { fontSize: 11, letterSpacing: 1.1, color: "#5f6368", textTransform: "uppercase", marginBottom: 10 }]}>
@@ -806,7 +814,7 @@ export default function CalendarScreen() {
       {searchOpen ? (
         <View style={{
           position: "absolute",
-          bottom: 8 + kbHeight,
+          bottom: 8 + kbLift,
           left: 14, right: 14,
           flexDirection: "row", alignItems: "center", gap: 10,
           paddingHorizontal: 16, paddingVertical: 12,
