@@ -42,6 +42,27 @@ const STOP_COLOR: Record<string, string> = {
   relay:     "#8b5cf6",
 };
 
+// All load times are stored as naive ISO strings (YYYY-MM-DDTHH:mm) in the
+// org's dispatch zone (see packages/types/domain.ts). The mobile device may
+// be in a different zone — formatting "now" with `d.getHours()` would give
+// device-local values and mis-bucket loads on the Today's Loads sheet.
+//
+// TODO: pull this from org settings once mobile fetches them. Hardcoded to
+// ET for now — matches the current single-org install (Curzon).
+const DISPATCH_TZ = "America/New_York";
+function fmtNaiveInDispatchTz(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPATCH_TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d);
+  const p = (t: string) => parts.find(x => x.type === t)?.value ?? "00";
+  // Intl returns "24" for midnight on some platforms (Node hourCycle quirk);
+  // normalize back to "00".
+  const hh = p("hour") === "24" ? "00" : p("hour");
+  return `${p("year")}-${p("month")}-${p("day")}T${hh}:${p("minute")}`;
+}
+
 function fmtAge(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
@@ -286,17 +307,21 @@ export default function MapScreen() {
   // We pull a 24-hour window (now ± 12h) which covers all overnight runs
   // touching now, then filter precisely client-side. The query persists
   // through the normal cache so it's available offline.
+  //
+  // The from/to params are naive ISO strings interpreted in the org's
+  // dispatch zone (see packages/types/domain.ts). The device may be in
+  // a different timezone, so we format the window in DISPATCH_TZ rather
+  // than calling `d.getHours()` (which gives device-local values).
   const { data: inTransitWindow = [] } = useQuery<Load[]>({
     queryKey: ["loads-in-transit-window", orgId],
     queryFn:  async () => {
       const now = new Date();
-      const back = new Date(now); back.setHours(now.getHours() - 12);
-      const fwd  = new Date(now); fwd.setHours(now.getHours() + 12);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const fmt = (d: Date) =>
-        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-        `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      const { loads } = await railway.listLoads({ from: fmt(back), to: fmt(fwd) });
+      const back = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      const fwd  = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+      const { loads } = await railway.listLoads({
+        from: fmtNaiveInDispatchTz(back),
+        to:   fmtNaiveInDispatchTz(fwd),
+      });
       return loads;
     },
     enabled:  !!orgId,
@@ -316,23 +341,10 @@ export default function MapScreen() {
   // Format "now" in the dispatch zone instead so both sides of the
   // string comparison are in the same zone.
   const { inTransitArr, pickupsSoonArr, justDeliveredArr } = useMemo(() => {
-    // TODO: pull dispatch timezone from org settings once that column
-    // exists. Hardcoded to ET — fits the current single-org install
-    // and matches where load times are entered.
-    const DISPATCH_TZ = "America/New_York";
-    const fmtInTz = (d: Date) => {
-      const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: DISPATCH_TZ,
-        year: "numeric", month: "2-digit", day: "2-digit",
-        hour: "2-digit", minute: "2-digit", hour12: false,
-      }).formatToParts(d);
-      const p = (t: string) => parts.find(x => x.type === t)?.value ?? "00";
-      return `${p("year")}-${p("month")}-${p("day")}T${p("hour")}:${p("minute")}`;
-    };
     const now = new Date();
-    const nowNaive = fmtInTz(now);
-    const fourFwd  = fmtInTz(new Date(now.getTime() + 4 * 60 * 60 * 1000));
-    const fourBack = fmtInTz(new Date(now.getTime() - 4 * 60 * 60 * 1000));
+    const nowNaive = fmtNaiveInDispatchTz(now);
+    const fourFwd  = fmtNaiveInDispatchTz(new Date(now.getTime() + 4 * 60 * 60 * 1000));
+    const fourBack = fmtNaiveInDispatchTz(new Date(now.getTime() - 4 * 60 * 60 * 1000));
 
     const inTransit:     Load[] = [];
     const pickupsSoon:   Load[] = [];

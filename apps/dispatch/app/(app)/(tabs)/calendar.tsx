@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, Dimensions, ActivityIndicator,
-  TextInput,
+  TextInput, Keyboard, Platform,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -437,6 +437,20 @@ export default function CalendarScreen() {
   const searchInputRef = useRef<TextInput>(null);
   const pagerRef = useRef<ScrollView>(null);
 
+  // Track keyboard height so the floating search pill can hop above it
+  // when focused. RN doesn't push absolute-positioned views up for the
+  // keyboard, so we adjust `bottom` manually on show/hide.
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const onShow = (e: any) => setKbHeight(e?.endCoordinates?.height ?? 0);
+    const onHide = () => setKbHeight(0);
+    const s = Keyboard.addListener(showEvt, onShow);
+    const h = Keyboard.addListener(hideEvt, onHide);
+    return () => { s.remove(); h.remove(); };
+  }, []);
+
   // Calendar (hourly grid) vs Schedule (card list) — persisted in AsyncStorage
   // so the user's choice survives app restarts.
   const [viewMode, setViewMode] = useState<ViewMode>("calendar");
@@ -684,9 +698,11 @@ export default function CalendarScreen() {
 
       {isSearching ? (
         // Search results list — replaces the calendar pager while searching.
+        // Extra bottom padding while the keyboard is open so the last
+        // result isn't trapped behind the keyboard + floating pill.
         <ScrollView
           style={{ flex: 1, backgroundColor: "#f8f9fa" }}
-          contentContainerStyle={{ padding: 16, paddingBottom: 120 + insets.bottom }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 120 + insets.bottom + kbHeight }}
           keyboardShouldPersistTaps="handled"
         >
           <Text style={[txt(800), { fontSize: 11, letterSpacing: 1.1, color: "#5f6368", textTransform: "uppercase", marginBottom: 10 }]}>
@@ -784,11 +800,13 @@ export default function CalendarScreen() {
         </TouchableOpacity>
       ) : null}
 
-      {/* Floating search pill — sits just above the bottom tab bar when open */}
+      {/* Floating search pill — sits just above the bottom tab bar when open.
+          Lifts above the keyboard when focused (RN doesn't push absolute
+          views up automatically). */}
       {searchOpen ? (
         <View style={{
           position: "absolute",
-          bottom: 8,
+          bottom: 8 + kbHeight,
           left: 14, right: 14,
           flexDirection: "row", alignItems: "center", gap: 10,
           paddingHorizontal: 16, paddingVertical: 12,
