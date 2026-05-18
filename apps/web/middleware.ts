@@ -1,10 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 
-// /privacy and /terms must be publicly fetchable — they're linked from
-// the Twilio A2P 10DLC registration as the required Privacy Policy and
-// Terms URLs. Twilio's reviewer must be able to load them without auth.
-const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)', '/privacy', '/terms'])
-const isOrgFreeRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)', '/settings(.*)', '/privacy', '/terms'])
+const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)'])
+const isOrgFreeRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)', '/settings(.*)'])
 
 export default clerkMiddleware(async (auth, request) => {
   if (!isPublicRoute(request)) {
