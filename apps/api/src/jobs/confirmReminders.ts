@@ -1,0 +1,380 @@
+/**
+ * Auto driver-notification sweeps. Three rules:
+ *
+ *   1. Evening confirm sweep — fires once per driver per local-date
+ *      when the org-local clock crosses the rule's timeOfDay.
+ *      Aggregates every unconfirmed scheduled load in the next
+ *      `lookAheadHours` into one push. Idempotent via
+ *      driver_evening_sweeps.
+ *   2. Pre-pickup confirm    — per-load, fires once when pickup is
+ *      ~hoursBeforePickup hours away. Idempotent via "no confirm
+ *      notification in last 24h".
+ *   3. Missing POD reminder  — fires once when an event delivered
+ *      ~hoursAfterDelivery hours ago still has no kind='pod'
+ *      document. Idempotent via "no missing-POD nudge in last 24h".
+ *
+ * Per-org notification rules + per-driver overrides are honored. A
+ * disabled rule is a no-op; a per-driver opt-out is enforced inside
+ * sendAutoPushToDriver. Manual dispatcher nudges bypass everything.
+ *
+ * Invoked by the in-process scheduler in apps/api/src/index.ts on a
+ * 15-minute cron.
+ */
+import { supabase } from "../lib/supabase.js";
+import { sendAutoPushToDriver } from "../lib/push.js";
+import {
+  DEFAULT_NOTIFICATION_RULES,
+  type NotificationRules,
+} from "@fleetcal/types";
+
+const TZ = "America/Denver";
+/** Assumed cron cadence — used to widen the evening-sweep + missing-POD
+ *  fire windows so a tick that lands a few min off-schedule still
+ *  catches the rule. Idempotency dedup prevents repeats. */
+const CRON_WINDOW_MIN = 30;
+
+// ── Time helpers ───────────────────────────────────────────────────────
+
+function naiveMT(date: Date): { date: string; time: string; hour: number; minute: number; minutesOfDay: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(date);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "00";
+  const hh = get("hour") === "24" ? "00" : get("hour");
+  const hour   = parseInt(hh, 10);
+  const minute = parseInt(get("minute"), 10);
+  return {
+    date:   `${get("year")}-${get("month")}-${get("day")}`,
+    time:   `${hh}:${get("minute")}`,
+    hour,
+    minute,
+    minutesOfDay: hour * 60 + minute,
+  };
+}
+
+function naiveMTString(offsetMs = 0): string {
+  const n = naiveMT(new Date(Date.now() + offsetMs));
+  return `${n.date}T${n.time}`;
+}
+
+function parseHm(hm: string | undefined | null): number | null {
+  if (!hm) return null;
+  const m = hm.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function fmtPickup(naive: string): string {
+  const m = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return naive;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const wd = d.toLocaleDateString("en-US", { weekday: "short" });
+  return `${wd} ${Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}`;
+}
+
+// ── Per-org rules cache (one job invocation = one Map) ────────────────
+
+async function loadOrgRules(orgId: string, cache: Map<string, NotificationRules>): Promise<NotificationRules> {
+  const cached = cache.get(orgId);
+  if (cached) return cached;
+  const { data } = await supabase
+    .from("org_settings")
+    .select("notification_rules")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const stored = (data as { notification_rules: NotificationRules | null } | null)
+    ?.notification_rules ?? null;
+  const resolved: NotificationRules = stored
+    ? {
+        eveningConfirmSweep: { ...DEFAULT_NOTIFICATION_RULES.eveningConfirmSweep, ...(stored.eveningConfirmSweep ?? {}) },
+        prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(stored.prePickupConfirm    ?? {}) },
+        onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(stored.onAssignment        ?? {}) },
+        missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(stored.missingPodReminder  ?? {}) },
+      }
+    : DEFAULT_NOTIFICATION_RULES;
+  cache.set(orgId, resolved);
+  return resolved;
+}
+
+// ── Shared row + record helpers ────────────────────────────────────────
+
+interface PendingRow {
+  id:        string;
+  org_id:    string;
+  driver_id: number;
+  load_id:   string | null;
+  start:     string;
+  load:      { load_num: string | null } | { load_num: string | null }[] | null;
+}
+
+interface DeliveredRow {
+  id:           string;
+  org_id:       string;
+  driver_id:    number | null;
+  load_id:      string | null;
+  /** Proxy for the actual delivery time — we use events.updated_at on
+   *  rows with status='delivered'. The events table doesn't yet have a
+   *  delivered_at column (similar to confirmed_at) so this is the
+   *  closest thing. Limitation: any later edit to the event will reset
+   *  the timer; the 24h notification dedup keeps re-fires bounded to
+   *  one extra ping in that edge case. */
+  updated_at:   string;
+  load:         { load_num: string | null } | { load_num: string | null }[] | null;
+}
+
+async function recordNudge(
+  orgId: string,
+  eventId: string,
+  loadId: string | null,
+  driverId: number,
+  kind: "confirm" | "upload_pod",
+  sentByName: string,
+): Promise<void> {
+  const { error } = await supabase.from("load_notifications").insert({
+    org_id:       orgId,
+    event_id:     eventId,
+    load_id:      loadId,
+    driver_id:    driverId,
+    kind,
+    sent_by_name: sentByName,
+  });
+  if (error) console.error("[load_notifications insert]", eventId, error);
+}
+
+// ── Rule 1: Evening confirm sweep ──────────────────────────────────────
+
+async function runEveningSweep(rulesCache: Map<string, NotificationRules>) {
+  const nowMT = naiveMT(new Date());
+  const cutoff24 = naiveMTString(24 * 60 * 60 * 1000);
+  const nowStr   = naiveMTString(0);
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, org_id, driver_id, load_id, start, load:loads(load_num)")
+    .in("status", ["scheduled", "assigned", "dispatched"])
+    .is("deleted_at", null)
+    .is("confirmed_at", null)
+    .not("driver_id", "is", null)
+    .gte("start", nowStr)
+    .lte("start", cutoff24);
+  if (error) { console.error("eveningSweep query:", error); return { sent: 0, error: error.message, drivers: 0 }; }
+
+  const rows = (data ?? []) as PendingRow[];
+
+  type Group = { orgId: string; driverId: number; loads: PendingRow[] };
+  const groups = new Map<string, Group>();
+  for (const r of rows) {
+    const rules = await loadOrgRules(r.org_id, rulesCache);
+    if (!rules.eveningConfirmSweep.enabled) continue;
+    const lookCutoff = naiveMTString(rules.eveningConfirmSweep.lookAheadHours * 60 * 60 * 1000);
+    if (r.start > lookCutoff) continue;
+    const ruleMin = parseHm(rules.eveningConfirmSweep.timeOfDay);
+    if (ruleMin == null) continue;
+    const inWindow = nowMT.minutesOfDay >= ruleMin && nowMT.minutesOfDay < ruleMin + CRON_WINDOW_MIN;
+    if (!inWindow) continue;
+    const key = `${r.org_id}|${r.driver_id}`;
+    const entry = groups.get(key) ?? { orgId: r.org_id, driverId: r.driver_id, loads: [] };
+    entry.loads.push(r);
+    groups.set(key, entry);
+  }
+
+  let sent = 0; let failed = 0; let alreadySent = 0; let suppressed = 0;
+  const today = nowMT.date;
+
+  for (const [, { orgId, driverId, loads }] of groups) {
+    const { error: claimErr } = await supabase
+      .from("driver_evening_sweeps")
+      .insert({ org_id: orgId, driver_id: driverId, local_date: today, load_count: loads.length } as never);
+    if (claimErr) {
+      if ((claimErr as { code?: string }).code === "23505") { alreadySent++; continue; }
+      console.error("eveningSweep claim:", claimErr); failed++; continue;
+    }
+
+    try {
+      const firstPickup = loads.map(l => l.start).sort()[0];
+      const count = loads.length;
+      const body = count === 1
+        ? `1 load to confirm — pickup ${fmtPickup(firstPickup)}.`
+        : `${count} loads to confirm — first pickup ${fmtPickup(firstPickup)}.`;
+      const did = await sendAutoPushToDriver(orgId, driverId, "evening_confirm_sweep", {
+        title: count === 1 ? "Confirm tomorrow's load" : `Confirm ${count} upcoming loads`,
+        body,
+        data: count === 1
+          ? { type: "confirm", eventId: loads[0].id, url: `/load/${loads[0].id}` }
+          : { type: "confirm", url: "/loads" },
+      });
+      if (!did) { suppressed++; continue; }
+      await Promise.all(loads.map(l => recordNudge(orgId, l.id, l.load_id, driverId, "confirm", "Auto: evening sweep")));
+      sent++;
+    } catch (err) {
+      console.error("eveningSweep send:", orgId, driverId, err);
+      failed++;
+    }
+  }
+
+  return { sent, failed, alreadySent, suppressed, drivers: groups.size };
+}
+
+// ── Rule 2: Pre-pickup confirm reminder ────────────────────────────────
+
+async function runPrePickupSweep(rulesCache: Map<string, NotificationRules>) {
+  const fromStr = naiveMTString(0);
+  const toStr   = naiveMTString(12 * 60 * 60 * 1000);
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, org_id, driver_id, load_id, start, load:loads(load_num)")
+    .in("status", ["scheduled", "assigned", "dispatched"])
+    .is("deleted_at", null)
+    .is("confirmed_at", null)
+    .not("driver_id", "is", null)
+    .gte("start", fromStr)
+    .lte("start", toStr);
+  if (error) { console.error("prePickupSweep query:", error); return { sent: 0, error: error.message }; }
+
+  const rows = (data ?? []) as PendingRow[];
+  if (rows.length === 0) return { sent: 0, matched: 0 };
+
+  const eligible: PendingRow[] = [];
+  for (const r of rows) {
+    const rules = await loadOrgRules(r.org_id, rulesCache);
+    if (!rules.prePickupConfirm.enabled) continue;
+    const pickupMs = Date.parse(r.start.replace(" ", "T"));
+    if (!isFinite(pickupMs)) continue;
+    const hoursOut = (pickupMs - Date.now()) / 3_600_000;
+    const target   = rules.prePickupConfirm.hoursBeforePickup;
+    if (hoursOut < target - 0.5 || hoursOut >= target + 0.5) continue;
+    eligible.push(r);
+  }
+  if (eligible.length === 0) return { sent: 0, matched: rows.length, eligible: 0 };
+
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: recent } = await supabase
+    .from("load_notifications")
+    .select("event_id")
+    .in("event_id", eligible.map(r => r.id))
+    .eq("kind", "confirm")
+    .gte("sent_at", cutoff24h);
+  const recentlyNudged = new Set<string>(((recent ?? []) as { event_id: string }[]).map(r => r.event_id));
+
+  let sent = 0; let failed = 0; let skipped = 0; let suppressed = 0;
+
+  for (const row of eligible) {
+    if (recentlyNudged.has(row.id)) { skipped++; continue; }
+    try {
+      const loadObj = Array.isArray(row.load) ? row.load[0] : row.load;
+      const loadNum = loadObj?.load_num ?? null;
+      const did = await sendAutoPushToDriver(row.org_id, row.driver_id, "pre_pickup_confirm", {
+        title: loadNum ? `Confirm load #${loadNum}` : "Confirm load",
+        body:  `Pickup at ${fmtPickup(row.start)}. Tap to confirm.`,
+        data:  { type: "confirm", eventId: row.id, url: `/load/${row.id}` },
+      });
+      if (!did) { suppressed++; continue; }
+      await recordNudge(row.org_id, row.id, row.load_id, row.driver_id, "confirm", "Auto: pre-pickup reminder");
+      sent++;
+    } catch (err) {
+      console.error("prePickupSweep send:", row.id, err); failed++;
+    }
+  }
+
+  return { sent, failed, matched: rows.length, eligible: eligible.length, skipped, suppressed };
+}
+
+// ── Rule 3: Missing POD reminder ───────────────────────────────────────
+
+async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("events")
+    .select("id, org_id, driver_id, load_id, updated_at, load:loads(load_num)")
+    .eq("status", "delivered")
+    .is("deleted_at", null)
+    .not("driver_id", "is", null)
+    .gte("updated_at", sevenDaysAgo);
+  if (error) { console.error("missingPodSweep query:", error); return { sent: 0, error: error.message }; }
+
+  const rows = (data ?? []) as DeliveredRow[];
+  if (rows.length === 0) return { sent: 0, matched: 0 };
+
+  const eligible: DeliveredRow[] = [];
+  for (const r of rows) {
+    if (!r.updated_at || !r.driver_id || !r.load_id) continue;
+    const rules = await loadOrgRules(r.org_id, rulesCache);
+    if (!rules.missingPodReminder.enabled) continue;
+    const hoursSince = (Date.now() - Date.parse(r.updated_at)) / 3_600_000;
+    const target = rules.missingPodReminder.hoursAfterDelivery;
+    // Fire only when we've crossed target within the last hour (allows
+    // up to 60 min of cron drift before missing a window). Idempotency
+    // via load_notifications dedup prevents repeats.
+    if (hoursSince < target || hoursSince >= target + 1) continue;
+    eligible.push(r);
+  }
+  if (eligible.length === 0) return { sent: 0, matched: rows.length, eligible: 0 };
+
+  const loadIds = [...new Set(eligible.map(r => r.load_id).filter((x): x is string => !!x))];
+  const { data: pods } = await supabase
+    .from("load_documents")
+    .select("load_id")
+    .in("load_id", loadIds)
+    .eq("kind", "pod");
+  const haveSomePod = new Set<string>(((pods ?? []) as { load_id: string }[]).map(r => r.load_id));
+
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: recent } = await supabase
+    .from("load_notifications")
+    .select("event_id")
+    .in("event_id", eligible.map(r => r.id))
+    .eq("kind", "upload_pod")
+    .gte("sent_at", cutoff24h);
+  const recentlyNudged = new Set<string>(((recent ?? []) as { event_id: string }[]).map(r => r.event_id));
+
+  let sent = 0; let failed = 0; let skipped = 0; let suppressed = 0;
+
+  for (const row of eligible) {
+    if (haveSomePod.has(row.load_id!)) { skipped++; continue; }
+    if (recentlyNudged.has(row.id))    { skipped++; continue; }
+    try {
+      const loadObj = Array.isArray(row.load) ? row.load[0] : row.load;
+      const loadNum = loadObj?.load_num ?? null;
+      const did = await sendAutoPushToDriver(row.org_id, row.driver_id!, "missing_pod_reminder", {
+        title: loadNum ? `Upload POD for load #${loadNum}` : "Upload POD",
+        body:  `Don't forget — your delivered load is still missing a POD.`,
+        data:  { type: "upload_pod", eventId: row.id, url: `/load/${row.id}` },
+      });
+      if (!did) { suppressed++; continue; }
+      await recordNudge(row.org_id, row.id, row.load_id, row.driver_id!, "upload_pod", "Auto: missing POD");
+      sent++;
+    } catch (err) {
+      console.error("missingPodSweep send:", row.id, err); failed++;
+    }
+  }
+
+  return { sent, failed, matched: rows.length, eligible: eligible.length, skipped, suppressed };
+}
+
+// ── Entrypoint ─────────────────────────────────────────────────────────
+
+/**
+ * Run all three sweeps. Returns a summary object — log it after each
+ * tick so we can grep Railway logs for "[cron]" to audit fires.
+ */
+export async function runConfirmReminders(): Promise<{
+  ranAt:      string;
+  evening:    Awaited<ReturnType<typeof runEveningSweep>>;
+  prePickup:  Awaited<ReturnType<typeof runPrePickupSweep>>;
+  missingPod: Awaited<ReturnType<typeof runMissingPodSweep>>;
+}> {
+  const rulesCache = new Map<string, NotificationRules>();
+  const evening    = await runEveningSweep(rulesCache);
+  const prePickup  = await runPrePickupSweep(rulesCache);
+  const missingPod = await runMissingPodSweep(rulesCache);
+  return {
+    ranAt: new Date().toISOString(),
+    evening,
+    prePickup,
+    missingPod,
+  };
+}

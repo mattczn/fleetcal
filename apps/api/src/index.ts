@@ -43,6 +43,7 @@ import driverDocumentsRoute from "./routes/driver-documents.js";
 import reportsRoute from "./routes/reports.js";
 import internalRoute from "./routes/internal.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
+import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -190,3 +191,35 @@ setInterval(() => {
       console.error("[auto-deliver-sweep] hourly run failed:", err);
     });
 }, SWEEP_INTERVAL_MS).unref();
+
+// ── In-process driver-notification cron ─────────────────────────────────
+//
+// Runs every 15 minutes — fires the evening confirm sweep,
+// pre-pickup reminders, and missing-POD nudges. Configurable per-org
+// rules + per-driver overrides live in org_settings / driver_notification_prefs
+// and are resolved inside the job (see apps/api/src/jobs/confirmReminders.ts).
+//
+// Tick cadence (15 min) is half of CRON_WINDOW_MIN (30 min) inside the
+// job, so a rule's fire window always catches at least one tick even
+// if a previous tick was missed (e.g. brief restart). Idempotency at
+// the rule level (driver_evening_sweeps, load_notifications 24h dedup)
+// prevents duplicate sends on overlapping ticks.
+//
+// Safe only with a single replica — if this service is ever scaled
+// horizontally we'd need to gate on a "primary instance" flag or
+// move the cron to a separate one-shot Railway service.
+const CONFIRM_REMINDERS_INTERVAL_MS = 15 * 60 * 1000;
+const CONFIRM_REMINDERS_STARTUP_DELAY_MS = 45_000; // wait for app to settle
+console.log(`[confirm-reminders] scheduled: startup in ${CONFIRM_REMINDERS_STARTUP_DELAY_MS / 1000}s, then every ${CONFIRM_REMINDERS_INTERVAL_MS / 60000}min`);
+function fireConfirmReminders(label: string) {
+  void runConfirmReminders()
+    .then((r) => {
+      const e = r.evening; const p = r.prePickup; const m = r.missingPod;
+      console.log(`[confirm-reminders] ${label} done: evening{sent=${e.sent ?? 0},drivers=${e.drivers ?? 0}} prePickup{sent=${p.sent ?? 0},matched=${p.matched ?? 0}} missingPod{sent=${m.sent ?? 0},matched=${m.matched ?? 0}}`);
+    })
+    .catch((err) => {
+      console.error(`[confirm-reminders] ${label} run failed:`, err);
+    });
+}
+setTimeout(() => fireConfirmReminders("startup pass"), CONFIRM_REMINDERS_STARTUP_DELAY_MS).unref();
+setInterval(() => fireConfirmReminders("tick"), CONFIRM_REMINDERS_INTERVAL_MS).unref();
