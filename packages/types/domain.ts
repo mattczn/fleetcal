@@ -238,6 +238,11 @@ export interface RateConSettings {
   promptVariables?:    RateConPromptVariables;
   promptInstructions?: string;
   fieldSettings?:      Record<string, boolean>;
+  /** Default driver pay percent (0-100) used to auto-fill the Driver
+   *  Pay field when Load Price is entered. null/undefined disables
+   *  the auto-calc. Stored server-side so it survives clearing
+   *  browser data + applies across every dispatcher's device. */
+  driverPayPct?:       number | null;
 }
 
 /**
