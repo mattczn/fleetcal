@@ -18,6 +18,7 @@
 import { useRef, useState } from 'react';
 import { Upload, Loader2, Image as ImageIcon } from 'lucide-react';
 import { railway } from '@/lib/railway';
+import { useCalendarStore } from '@/store/useCalendarStore';
 
 interface PhotoLite {
   id: string;
@@ -39,6 +40,9 @@ export function HandoffPhotosButton({ loadId, photos, onSelectInPanel, onUploade
     if (!files || files.length === 0) return;
     setBusy(true);
     try {
+      // Suppress the "another dispatcher" banner on our own realtime echo.
+      // The handoff upload also writes through to the loads row.
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       for (const file of Array.from(files)) {
         await railway.uploadLoadDocument(loadId, file, 'relay_handoff');
       }

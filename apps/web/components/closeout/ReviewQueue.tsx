@@ -538,6 +538,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           d.fileName.replace(/\.[^.]+$/, '') + '.pdf',
           { type: 'application/pdf' },
         );
+        useCalendarStore.getState().markLoadSelfWrite(loadId);
         await railway.uploadLoadDocument(loadId, pdfFile, d.kind as import('@fleetcal/types').DocumentKind);
       }
       // Refresh: invalidate cache + re-prefetch.
@@ -610,6 +611,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const kindCounts = new Map<string, number>();
       for (const d of selected) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
       const mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selected[0].kind) as import('@fleetcal/types').DocumentKind;
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
       // Originals are NOT deleted — the merged doc is appended.
       // Refresh: invalidate cache + re-prefetch.
@@ -649,6 +651,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     if (!loadId || rateConUploading) return;
     setRateConUploading(true);
     try {
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       const { document } = await railway.uploadLoadDocument(loadId, file, 'rate_con');
       // Invalidate the cache for this load and re-fetch so:
       //   - the Rate Con viewer pulls the new signed URL
@@ -709,6 +712,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         toUpload = new File([mergedBlob], `merged-${kind}.pdf`, { type: 'application/pdf' });
         setMergeStatus(`Uploading…`);
       }
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       const { document } = await railway.uploadLoadDocument(loadId, toUpload, kind);
       const newDoc: LoadDocument = {
         id:         document.id,

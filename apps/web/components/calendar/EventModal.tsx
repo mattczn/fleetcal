@@ -432,6 +432,8 @@ function UploadedDocsPanel({
     setUploadError(null);
     try {
       const { railway } = await import('@/lib/railway');
+      // Suppress the "another dispatcher" banner on our own realtime echo.
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       await railway.uploadLoadDocument(loadId, pendingFile, kind);
       setPendingFile(null);
       onChange?.();
@@ -3796,6 +3798,10 @@ export default function EventModal() {
                 // kind=rate_con row in load_documents (history).
                 try {
                   const { railway } = await import('@/lib/railway');
+                  // Suppress the "another dispatcher" banner on our own
+                  // realtime echo (the API mirrors the doc onto
+                  // loads.rate_con_pdf, which bounces back through realtime).
+                  useCalendarStore.getState().markLoadSelfWrite(ev.loadId);
                   await railway.uploadLoadDocument(ev.loadId, f, 'rate_con');
                   // Refresh: pull the updated load + events back into
                   // the calendar store, then sync the new path into

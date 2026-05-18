@@ -335,6 +335,11 @@ interface CalendarStore extends ModalState {
   openEditModalWithMap: (eventId: string) => void;
   closeModal: () => void;
   clearModalConflict: () => void;
+  /** Tag every event belonging to a load as a self-write so the incoming
+   *  realtime echo doesn't trigger the "another dispatcher updated this
+   *  load" banner. Call this before a direct API write that bypasses a
+   *  store action (e.g. document uploads via railway.uploadLoadDocument). */
+  markLoadSelfWrite: (loadId: string) => void;
 }
 
 export const useCalendarStore = create<CalendarStore>()(
@@ -435,7 +440,15 @@ export const useCalendarStore = create<CalendarStore>()(
     set((state) => ({ fieldSettings: { ...state.fieldSettings, [id]: enabled } })),
   setSectionOrder: (order) => set({ sectionOrder: order }),
   driverPayPct: null,
-  setDriverPayPct: (pct) => set({ driverPayPct: pct }),
+  setDriverPayPct: (pct) => {
+    set({ driverPayPct: pct });
+    // Persist to server so the value follows the org across devices
+    // and survives clearing localStorage. Fire-and-forget — local
+    // state already updated.
+    void railway.updateOrgSettings({
+      rateConSettings: { driverPayPct: pct },
+    }).catch(err => console.error('[setDriverPayPct] save failed:', err));
+  },
 
   promptInstructions: '',
   setPromptInstructions: (s) => set({ promptInstructions: s }),
@@ -451,6 +464,11 @@ export const useCalendarStore = create<CalendarStore>()(
         settings?.fieldSettings && Object.keys(settings.fieldSettings).length > 0
           ? { ...state.fieldSettings, ...settings.fieldSettings }
           : state.fieldSettings,
+      // Server is the source of truth for driverPayPct now. If the
+      // org has it set, use it; otherwise leave whatever's in local
+      // state (which may have come from localStorage, see legacy
+      // persistence note at line ~1760).
+      driverPayPct: settings?.driverPayPct ?? state.driverPayPct,
       hasHydratedOrgSettings: true,
     })),
 
@@ -1718,6 +1736,16 @@ export const useCalendarStore = create<CalendarStore>()(
     set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false }),
 
   clearModalConflict: () => set({ modalConflict: null }),
+
+  markLoadSelfWrite: (loadId) => {
+    // Tag every leg of this load. The realtime echo from a document upload
+    // (or any other side-channel write that mutates loads.updated_at /
+    // loads.rate_con_pdf) fires updateEventFromRemote per leg; without
+    // this, the banner pops for the dispatcher who actually did the write.
+    for (const e of get().events) {
+      if (e.loadId === loadId) markSelfWrite(e.id);
+    }
+  },
 
     }),
     {
