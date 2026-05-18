@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useMemo } from 'react';
+import { parseTimeInput } from '@/lib/time-utils';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
 import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
@@ -901,6 +902,93 @@ function MembersPanel() {
   );
 }
 
+// Style match for the time + number inputs in the Notifications section
+// of this panel — mirrors the load modal's inputStyle() so the look
+// stays consistent between settings and the modal.
+const LOAD_MODAL_INPUT_STYLE: React.CSSProperties = {
+  border:       '1px solid var(--gc-border)',
+  borderRadius: 8,
+  padding:      '10px 12px',
+  fontSize:     15,
+  color:        'var(--gc-text-1)',
+  outline:      'none',
+  background:   'var(--gc-surface)',
+  transition:   'border-color 150ms',
+  cursor:       'text',
+};
+
+/** Text-based time input matching the load modal's SmartTimeInput.
+ *  Accepts "8am", "1:30pm", "1430", etc.; commits a normalized "HH:MM"
+ *  string on blur or Enter. */
+function SettingsSmartTimeInput({
+  value, onChange, disabled, width = 120, placeholder = '8am, 1:30pm',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  width?: number;
+  placeholder?: string;
+}) {
+  const [raw, setRaw] = useState(value);
+  useEffect(() => { setRaw(value); }, [value]);
+  const commit = () => {
+    const parsed = parseTimeInput(raw);
+    if (parsed) { setRaw(parsed); onChange(parsed); }
+    else setRaw(value);
+  };
+  return (
+    <input
+      type="text"
+      value={raw}
+      disabled={disabled}
+      onChange={e => setRaw(e.target.value)}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
+      placeholder={placeholder}
+      style={{ ...LOAD_MODAL_INPUT_STYLE, width, minWidth: width, opacity: disabled ? 0.6 : 1 }}
+      onFocus={e => {
+        const el = e.currentTarget;
+        requestAnimationFrame(() => el.select());
+        el.style.borderColor = SETTINGS_COLORS.blue;
+      }}
+      onBlur={e => { commit(); e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
+    />
+  );
+}
+
+/** Number input with the same border/padding/font as the load modal. */
+function SettingsNumberInput({
+  value, min, max, disabled, onCommit, width = 80,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  disabled?: boolean;
+  onCommit: (n: number) => void;
+  width?: number;
+}) {
+  const [raw, setRaw] = useState(String(value));
+  useEffect(() => { setRaw(String(value)); }, [value]);
+  const commit = () => {
+    const n = parseInt(raw, 10);
+    if (!isFinite(n) || n < min || n > max) { setRaw(String(value)); return; }
+    if (n !== value) onCommit(n);
+  };
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      value={raw}
+      disabled={disabled}
+      onChange={e => setRaw(e.target.value)}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); (e.target as HTMLInputElement).blur(); } }}
+      onBlur={commit}
+      style={{ ...LOAD_MODAL_INPUT_STYLE, width, minWidth: width, opacity: disabled ? 0.6 : 1 }}
+      onFocus={e => { e.currentTarget.style.borderColor = SETTINGS_COLORS.blue; }}
+    />
+  );
+}
+
 // Human labels for each document kind — drives the toggle list copy in
 // the Driver App panel. Keep in sync with @fleetcal/types DocumentKind.
 const DOC_KIND_LABEL: Record<DocumentKind, string> = {
@@ -1077,32 +1165,24 @@ function DriverAppPanel() {
             {rules.eveningConfirmSweep.enabled && (
               <>
                 <SettingsField inline label="Time of day" hint="When the daily sweep fires (org local time).">
-                  <SettingsInput
-                    type="time"
+                  <SettingsSmartTimeInput
                     value={rules.eveningConfirmSweep.timeOfDay}
                     disabled={rulesBusy}
-                    onChange={(e) => void saveRules({
+                    onChange={(v) => void saveRules({
                       ...rules,
-                      eveningConfirmSweep: { ...rules.eveningConfirmSweep, timeOfDay: e.target.value },
+                      eveningConfirmSweep: { ...rules.eveningConfirmSweep, timeOfDay: v },
                     })}
-                    style={{ width: 120 }}
                   />
                 </SettingsField>
                 <SettingsField inline label="Look-ahead window" hint="Include unconfirmed loads with pickups within this many hours.">
-                  <SettingsInput
-                    type="number"
-                    min={1} max={48}
+                  <SettingsNumberInput
                     value={rules.eveningConfirmSweep.lookAheadHours}
+                    min={1} max={48}
                     disabled={rulesBusy}
-                    onChange={(e) => {
-                      const n = parseInt(e.target.value || '0', 10);
-                      if (!isFinite(n) || n < 1 || n > 48) return;
-                      void saveRules({
-                        ...rules,
-                        eveningConfirmSweep: { ...rules.eveningConfirmSweep, lookAheadHours: n },
-                      });
-                    }}
-                    style={{ width: 80 }}
+                    onCommit={(n) => void saveRules({
+                      ...rules,
+                      eveningConfirmSweep: { ...rules.eveningConfirmSweep, lookAheadHours: n },
+                    })}
                   />
                 </SettingsField>
               </>
@@ -1125,20 +1205,14 @@ function DriverAppPanel() {
             </SettingsField>
             {rules.prePickupConfirm.enabled && (
               <SettingsField inline label="Hours before pickup" hint="Fire the reminder once when pickup is this many hours away.">
-                <SettingsInput
-                  type="number"
-                  min={1} max={24}
+                <SettingsNumberInput
                   value={rules.prePickupConfirm.hoursBeforePickup}
+                  min={1} max={24}
                   disabled={rulesBusy}
-                  onChange={(e) => {
-                    const n = parseInt(e.target.value || '0', 10);
-                    if (!isFinite(n) || n < 1 || n > 24) return;
-                    void saveRules({
-                      ...rules,
-                      prePickupConfirm: { ...rules.prePickupConfirm, hoursBeforePickup: n },
-                    });
-                  }}
-                  style={{ width: 80 }}
+                  onCommit={(n) => void saveRules({
+                    ...rules,
+                    prePickupConfirm: { ...rules.prePickupConfirm, hoursBeforePickup: n },
+                  })}
                 />
               </SettingsField>
             )}
@@ -1159,35 +1233,52 @@ function DriverAppPanel() {
               />
             </SettingsField>
             {rules.onAssignment.enabled && (
-              <SettingsField
-                inline
-                label="Quiet hours"
-                hint="Optional. Suppress on-assignment pushes between these times. Leave blank to always fire."
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <SettingsInput
-                    type="time"
-                    value={rules.onAssignment.quietHoursStart ?? ''}
+              <>
+                <SettingsField
+                  inline
+                  label="Window"
+                  hint="Only fire the immediate push when the load starts within this many hours. Loads further out are handled by the evening confirm reminder instead."
+                >
+                  <SettingsNumberInput
+                    value={rules.onAssignment.hoursBeforeStart}
+                    min={1} max={168}
                     disabled={rulesBusy}
-                    onChange={(e) => void saveRules({
+                    onCommit={(n) => void saveRules({
                       ...rules,
-                      onAssignment: { ...rules.onAssignment, quietHoursStart: e.target.value || null },
+                      onAssignment: { ...rules.onAssignment, hoursBeforeStart: n },
                     })}
-                    style={{ width: 110 }}
                   />
-                  <span style={{ color: SETTINGS_COLORS.textMuted, fontSize: 12 }}>to</span>
-                  <SettingsInput
-                    type="time"
-                    value={rules.onAssignment.quietHoursEnd ?? ''}
-                    disabled={rulesBusy}
-                    onChange={(e) => void saveRules({
-                      ...rules,
-                      onAssignment: { ...rules.onAssignment, quietHoursEnd: e.target.value || null },
-                    })}
-                    style={{ width: 110 }}
-                  />
-                </div>
-              </SettingsField>
+                </SettingsField>
+                <SettingsField
+                  inline
+                  label="Quiet hours"
+                  hint="Optional. Suppress on-assignment pushes between these times. Leave blank to always fire."
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <SettingsSmartTimeInput
+                      value={rules.onAssignment.quietHoursStart ?? ''}
+                      disabled={rulesBusy}
+                      onChange={(v) => void saveRules({
+                        ...rules,
+                        onAssignment: { ...rules.onAssignment, quietHoursStart: v || null },
+                      })}
+                      width={110}
+                      placeholder="—"
+                    />
+                    <span style={{ color: SETTINGS_COLORS.textMuted, fontSize: 12 }}>to</span>
+                    <SettingsSmartTimeInput
+                      value={rules.onAssignment.quietHoursEnd ?? ''}
+                      disabled={rulesBusy}
+                      onChange={(v) => void saveRules({
+                        ...rules,
+                        onAssignment: { ...rules.onAssignment, quietHoursEnd: v || null },
+                      })}
+                      width={110}
+                      placeholder="—"
+                    />
+                  </div>
+                </SettingsField>
+              </>
             )}
 
             {/* Missing POD */}
@@ -1207,20 +1298,14 @@ function DriverAppPanel() {
             </SettingsField>
             {rules.missingPodReminder.enabled && (
               <SettingsField inline label="Hours after delivery" hint="Nudge the driver this many hours after they marked delivered if no POD is on file.">
-                <SettingsInput
-                  type="number"
-                  min={1} max={168}
+                <SettingsNumberInput
                   value={rules.missingPodReminder.hoursAfterDelivery}
+                  min={1} max={168}
                   disabled={rulesBusy}
-                  onChange={(e) => {
-                    const n = parseInt(e.target.value || '0', 10);
-                    if (!isFinite(n) || n < 1 || n > 168) return;
-                    void saveRules({
-                      ...rules,
-                      missingPodReminder: { ...rules.missingPodReminder, hoursAfterDelivery: n },
-                    });
-                  }}
-                  style={{ width: 80 }}
+                  onCommit={(n) => void saveRules({
+                    ...rules,
+                    missingPodReminder: { ...rules.missingPodReminder, hoursAfterDelivery: n },
+                  })}
                 />
               </SettingsField>
             )}

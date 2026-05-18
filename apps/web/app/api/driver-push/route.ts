@@ -14,6 +14,9 @@ interface SendBody {
    *  fires unconditionally — used for protective notifications
    *  (cancellation, reassign-away) and manual dispatcher nudges. */
   ruleKey?: string;
+  /** For on_assignment pushes — the load's start time (naive ISO in
+   *  dispatch zone). Used to enforce the `hoursBeforeStart` window. */
+  eventStart?: string | null;
 }
 
 export async function POST(req: Request) {
@@ -43,6 +46,7 @@ export async function POST(req: Request) {
       payload.driverId,
       payload.ruleKey as NotificationRuleKey,
       { title: payload.title, body: payload.body, data: payload.data },
+      { eventStart: payload.eventStart ?? null },
     );
     return NextResponse.json({ ok: true, sent });
   }

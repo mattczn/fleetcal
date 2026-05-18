@@ -127,24 +127,44 @@ async function loadOrgNotificationRules(orgId: string): Promise<NotificationRule
  * Manual dispatcher nudges (NotifyDriverPopover) should use the bare
  * sendPushToDriver — they're an escape hatch and bypass rules.
  *
- * Also enforces on_assignment quiet hours (org-tz wall-clock; the
- * server tz is "good enough" until org tz is threaded through).
+ * For on_assignment specifically:
+ *   - Optional `eventStart` (naive ISO in dispatch zone) gates the
+ *     push to loads starting within `hoursBeforeStart` from now. Far-
+ *     out assignments rely on the evening confirm sweep instead.
+ *   - Optional quiet-hours window suppresses pushes between start/end.
  */
 export async function sendAutoPushToDriver(
   orgId: string,
   driverId: number,
   ruleKey: NotificationRuleKey,
   payload: PushPayload,
-  opts?: { rules?: NotificationRules; driverPrefs?: Record<string, boolean> },
+  opts?: {
+    rules?: NotificationRules;
+    driverPrefs?: Record<string, boolean>;
+    /** Naive ISO of the event start ("YYYY-MM-DDTHH:mm"); used by
+     *  on_assignment rule to enforce hoursBeforeStart. Ignored for
+     *  other rules. */
+    eventStart?: string | null;
+  },
 ): Promise<boolean> {
   const db = getSupabase();
   const rules = opts?.rules ?? await loadOrgNotificationRules(orgId);
   const rule  = rules[NOTIFICATION_RULE_FIELD_FROM_KEY[ruleKey]];
   if (!rule.enabled) return false;
 
-  // Quiet hours apply to on_assignment only — cron rules manage their
-  // own timing via tunables.
   if (ruleKey === 'on_assignment') {
+    // Window check: only push when the load is starting soon enough.
+    // Treat the naive ISO as local server time (good enough for the
+    // single-org Curzon install; thread org tz in when multi-org lands).
+    if (opts?.eventStart) {
+      const startMs = Date.parse(opts.eventStart.replace(' ', 'T'));
+      if (isFinite(startMs)) {
+        const hoursOut = (startMs - Date.now()) / 3_600_000;
+        if (hoursOut > rules.onAssignment.hoursBeforeStart) return false;
+      }
+    }
+    // Quiet hours apply to on_assignment only — cron rules manage
+    // their own timing via tunables.
     const start = rules.onAssignment.quietHoursStart;
     const end   = rules.onAssignment.quietHoursEnd;
     if (start && end) {

@@ -41,7 +41,8 @@ UPDATE org_settings
            "hoursBeforePickup": 6
          },
          "onAssignment": {
-           "enabled": true
+           "enabled": true,
+           "hoursBeforeStart": 12
          },
          "missingPodReminder": {
            "enabled": false,

@@ -43,6 +43,11 @@ export interface PrePickupConfirmRule {
 }
 export interface OnAssignmentRule {
   enabled: boolean;
+  /** Only fire the immediate push when the assigned load's start time
+   *  is within this many hours from now. Loads scheduled further out
+   *  rely on the evening confirm sweep instead — no point pinging a
+   *  driver about a load that's 4 days away. */
+  hoursBeforeStart: number;
   /** Optional quiet-hours window in the org's dispatch tz (HH:MM).
    *  When the current org-local time is inside [start, end), the
    *  synchronous push is suppressed. null/undefined → always fire. */
@@ -70,7 +75,7 @@ export interface NotificationRules {
 export const DEFAULT_NOTIFICATION_RULES: NotificationRules = {
   eveningConfirmSweep: { enabled: true,  timeOfDay: "19:00", lookAheadHours: 18 },
   prePickupConfirm:    { enabled: true,  hoursBeforePickup: 6 },
-  onAssignment:        { enabled: true,  quietHoursStart: null, quietHoursEnd: null },
+  onAssignment:        { enabled: true,  hoursBeforeStart: 12, quietHoursStart: null, quietHoursEnd: null },
   missingPodReminder:  { enabled: false, hoursAfterDelivery: 24 },
 };
 

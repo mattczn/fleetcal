@@ -121,17 +121,22 @@ function withResolvedDriverId<T extends { driverName?: string; driverId?: number
 // notifications (load cancellation, reassign-away) that the driver
 // can't opt out of, since they already confirmed and would otherwise
 // show up to a pickup that no longer exists.
+//
+// For ruleKey='on_assignment', pass `eventStart` (naive ISO in dispatch
+// zone) so the server can enforce the rule's hoursBeforeStart window —
+// far-out assignments rely on the evening confirm sweep instead.
 function notifyDriver(
   driverId: number,
   title: string,
   body: string,
   data?: Record<string, unknown>,
   ruleKey?: 'on_assignment',
+  eventStart?: string | null,
 ) {
   fetch('/api/driver-push', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ driverId, title, body, data, ruleKey }),
+    body:    JSON.stringify({ driverId, title, body, data, ruleKey, eventStart }),
   }).catch(err => console.error('notifyDriver:', err));
 }
 
@@ -1069,8 +1074,8 @@ export const useCalendarStore = create<CalendarStore>()(
           ],
         }));
         // Notify driver if assigned. Rule-gated: respects org
-        // notification_rules.onAssignment.enabled + quiet hours + the
-        // driver's per-rule opt-out.
+        // notification_rules.onAssignment.enabled + hoursBeforeStart
+        // window + quiet hours + the driver's per-rule opt-out.
         if (resolved.driverId) {
           notifyDriver(
             resolved.driverId,
@@ -1078,6 +1083,7 @@ export const useCalendarStore = create<CalendarStore>()(
             event.loadNum ? `Load #${event.loadNum} — ${event.title}` : event.title,
             { loadId: created.id },
             'on_assignment',
+            event.start,
           );
         }
       })
@@ -1157,6 +1163,7 @@ export const useCalendarStore = create<CalendarStore>()(
             ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
             { type: lastMinute ? 'last_minute_assign' : 'assigned', loadId: ev.loadId, eventId: id, url: `/load/${id}` },
             'on_assignment',
+            ev.start,
           );
           // If the previous driver had confirmed, tell them their
           // load is no longer theirs so they don't show up to a
