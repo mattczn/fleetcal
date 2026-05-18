@@ -285,34 +285,49 @@ async function runPrePickupSweep(rulesCache: Map<string, NotificationRules>) {
 // ── Rule 3: Missing POD reminder ───────────────────────────────────────
 
 async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Per-org targeted query. Pulling all delivered events in the last 7d
+  // and filtering in JS hits PostgREST's default 1000-row cap once the
+  // org has any volume — narrow at the SQL level by the org's actual
+  // hoursAfterDelivery window (~1h wide per tick).
+  // notification_rules column lands via the 20260518 migration; the
+  // generated Database types still don't know about it. Cast around.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: orgRows, error: orgErr } = await (supabase as any)
+    .from("org_settings")
+    .select("org_id, notification_rules");
+  if (orgErr) { console.error("missingPodSweep org query:", orgErr); return { sent: 0, error: orgErr.message }; }
 
-  const { data, error } = await supabase
-    .from("events")
-    .select("id, org_id, driver_id, load_id, updated_at, load:loads(load_num)")
-    .eq("status", "delivered")
-    .is("deleted_at", null)
-    .not("driver_id", "is", null)
-    .gte("updated_at", sevenDaysAgo);
-  if (error) { console.error("missingPodSweep query:", error); return { sent: 0, error: error.message }; }
-
-  const rows = (data ?? []) as DeliveredRow[];
-  if (rows.length === 0) return { sent: 0, matched: 0 };
+  const orgsList = (orgRows ?? []) as { org_id: string; notification_rules: NotificationRules | null }[];
 
   const eligible: DeliveredRow[] = [];
-  for (const r of rows) {
-    if (!r.updated_at || !r.driver_id || !r.load_id) continue;
-    const rules = await loadOrgRules(r.org_id, rulesCache);
+  let totalMatched = 0;
+  for (const orgRow of orgsList) {
+    const rules = await loadOrgRules(orgRow.org_id, rulesCache);
     if (!rules.missingPodReminder.enabled) continue;
-    const hoursSince = (Date.now() - Date.parse(r.updated_at)) / 3_600_000;
     const target = rules.missingPodReminder.hoursAfterDelivery;
-    // Fire only when we've crossed target within the last hour (allows
-    // up to 60 min of cron drift before missing a window). Idempotency
-    // via load_notifications dedup prevents repeats.
-    if (hoursSince < target || hoursSince >= target + 1) continue;
-    eligible.push(r);
+    // Window: events where status flipped to delivered between
+    // (target+1)h ago and target h ago. 1-hour wide; tolerates one
+    // cron tick of drift. Idempotency via load_notifications dedup.
+    const windowEnd   = new Date(Date.now() - target       * 3_600_000).toISOString();
+    const windowStart = new Date(Date.now() - (target + 1) * 3_600_000).toISOString();
+    const { data: events, error: evErr } = await supabase
+      .from("events")
+      .select("id, org_id, driver_id, load_id, updated_at, load:loads(load_num)")
+      .eq("org_id", orgRow.org_id)
+      .eq("status", "delivered")
+      .is("deleted_at", null)
+      .not("driver_id", "is", null)
+      .gte("updated_at", windowStart)
+      .lt("updated_at", windowEnd);
+    if (evErr) { console.error("missingPodSweep org events:", orgRow.org_id, evErr); continue; }
+    const rows = (events ?? []) as DeliveredRow[];
+    totalMatched += rows.length;
+    for (const r of rows) {
+      if (!r.driver_id || !r.load_id) continue;
+      eligible.push(r);
+    }
   }
-  if (eligible.length === 0) return { sent: 0, matched: rows.length, eligible: 0 };
+  if (eligible.length === 0) return { sent: 0, matched: totalMatched, eligible: 0 };
 
   const loadIds = [...new Set(eligible.map(r => r.load_id).filter((x): x is string => !!x))];
   const { data: pods } = await supabase
@@ -352,7 +367,7 @@ async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
     }
   }
 
-  return { sent, failed, matched: rows.length, eligible: eligible.length, skipped, suppressed };
+  return { sent, failed, matched: totalMatched, eligible: eligible.length, skipped, suppressed };
 }
 
 // ── Entrypoint ─────────────────────────────────────────────────────────

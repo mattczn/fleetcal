@@ -214,8 +214,18 @@ console.log(`[confirm-reminders] scheduled: startup in ${CONFIRM_REMINDERS_START
 function fireConfirmReminders(label: string) {
   void runConfirmReminders()
     .then((r) => {
-      const e = r.evening; const p = r.prePickup; const m = r.missingPod;
-      console.log(`[confirm-reminders] ${label} done: evening{sent=${e.sent ?? 0},drivers=${e.drivers ?? 0}} prePickup{sent=${p.sent ?? 0},matched=${p.matched ?? 0}} missingPod{sent=${m.sent ?? 0},matched=${m.matched ?? 0}}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const e = r.evening    as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const p = r.prePickup  as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const m = r.missingPod as any;
+      console.log(
+        `[confirm-reminders] ${label} done: ` +
+        `evening{sent=${e.sent ?? 0},drivers=${e.drivers ?? 0},suppressed=${e.suppressed ?? 0},alreadySent=${e.alreadySent ?? 0}} ` +
+        `prePickup{sent=${p.sent ?? 0},matched=${p.matched ?? 0},eligible=${p.eligible ?? 0},suppressed=${p.suppressed ?? 0}} ` +
+        `missingPod{sent=${m.sent ?? 0},matched=${m.matched ?? 0},eligible=${m.eligible ?? 0},suppressed=${m.suppressed ?? 0}}`,
+      );
     })
     .catch((err) => {
       console.error(`[confirm-reminders] ${label} run failed:`, err);
