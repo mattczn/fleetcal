@@ -660,8 +660,33 @@ export interface UpdateOrgSettingsRequest {
    *  to set; omit to leave unchanged. See OrgSettings.driverVisibleDocKinds
    *  for default semantics. */
   driverVisibleDocKinds?: string[] | null;
+  /** Replaces the per-org notification rules. Full-object replace
+   *  (the UI ships the whole shape on save). Omit to leave unchanged.
+   *  null clears back to the server default. */
+  notificationRules?: import("./notifications").NotificationRules | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
+
+// ── /v1/driver/notification-prefs ──────────────────────────────────────
+//
+// Per-driver overrides for org-level notification rules. Sparse: a
+// missing key means "follow org default". Driver-app only — manager
+// surfaces sit on /v1/drivers/:id/notification-prefs (not yet built).
+
+export interface GetDriverNotificationPrefsResponse {
+  /** Map of rule key → enabled flag. Sparse — only rules the driver
+   *  has explicitly overridden are present. */
+  prefs: Record<string, boolean>;
+}
+export interface UpdateDriverNotificationPrefRequest {
+  /** Which rule to override. See NotificationRuleKey. */
+  ruleKey: string;
+  /** Set to follow the org default by passing null. */
+  enabled: boolean | null;
+}
+export interface UpdateDriverNotificationPrefResponse {
+  prefs: Record<string, boolean>;
+}
 
 // ── /v1/stops/recent ────────────────────────────────────────────────────
 //

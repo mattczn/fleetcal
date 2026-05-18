@@ -260,4 +260,14 @@ export const railway = {
       `/v1/driver/maintenance-reports/history?${qs.toString()}`,
     );
   },
+  getNotificationPrefs() {
+    return req<{ prefs: Record<string, boolean> }>("GET", `/v1/driver/notification-prefs`);
+  },
+  setNotificationPref(ruleKey: string, enabled: boolean | null) {
+    return req<{ prefs: Record<string, boolean> }>(
+      "PATCH",
+      `/v1/driver/notification-prefs`,
+      { ruleKey, enabled },
+    );
+  },
 };

@@ -1,4 +1,10 @@
 import { getSupabase } from './supabase';
+import {
+  DEFAULT_NOTIFICATION_RULES,
+  NOTIFICATION_RULE_FIELD_FROM_KEY,
+  type NotificationRules,
+  type NotificationRuleKey,
+} from '@fleetcal/types';
 
 export interface PushPayload {
   title: string;
@@ -88,4 +94,82 @@ export async function sendPushToDriver(
   if (dead.length > 0) {
     await db.from('driver_push_tokens').delete().in('token', dead);
   }
+}
+
+/** Resolve the per-org notification rules (with defaults filled in). */
+async function loadOrgNotificationRules(orgId: string): Promise<NotificationRules> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from('org_settings')
+    .select('notification_rules')
+    .eq('org_id', orgId)
+    .maybeSingle();
+  if (error) {
+    console.error('[push] org notification_rules lookup:', error);
+    return DEFAULT_NOTIFICATION_RULES;
+  }
+  const stored = (data as { notification_rules: NotificationRules | null } | null)
+    ?.notification_rules ?? null;
+  if (!stored) return DEFAULT_NOTIFICATION_RULES;
+  return {
+    eveningConfirmSweep: { ...DEFAULT_NOTIFICATION_RULES.eveningConfirmSweep, ...(stored.eveningConfirmSweep ?? {}) },
+    prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(stored.prePickupConfirm    ?? {}) },
+    onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(stored.onAssignment        ?? {}) },
+    missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(stored.missingPodReminder  ?? {}) },
+  };
+}
+
+/**
+ * Auto-fired push variant. Checks the org's notification rule + the
+ * driver's per-rule override before sending. Returns true if the push
+ * was attempted, false if suppressed by config.
+ *
+ * Manual dispatcher nudges (NotifyDriverPopover) should use the bare
+ * sendPushToDriver — they're an escape hatch and bypass rules.
+ *
+ * Also enforces on_assignment quiet hours (org-tz wall-clock; the
+ * server tz is "good enough" until org tz is threaded through).
+ */
+export async function sendAutoPushToDriver(
+  orgId: string,
+  driverId: number,
+  ruleKey: NotificationRuleKey,
+  payload: PushPayload,
+  opts?: { rules?: NotificationRules; driverPrefs?: Record<string, boolean> },
+): Promise<boolean> {
+  const db = getSupabase();
+  const rules = opts?.rules ?? await loadOrgNotificationRules(orgId);
+  const rule  = rules[NOTIFICATION_RULE_FIELD_FROM_KEY[ruleKey]];
+  if (!rule.enabled) return false;
+
+  // Quiet hours apply to on_assignment only — cron rules manage their
+  // own timing via tunables.
+  if (ruleKey === 'on_assignment') {
+    const start = rules.onAssignment.quietHoursStart;
+    const end   = rules.onAssignment.quietHoursEnd;
+    if (start && end) {
+      const now = new Date();
+      const hm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const inQuiet = start <= end
+        ? (hm >= start && hm < end)
+        : (hm >= start || hm < end); // wraps midnight
+      if (inQuiet) return false;
+    }
+  }
+
+  // Driver per-rule override (sparse — missing means follow org default).
+  if (!opts?.driverPrefs) {
+    const { data: prefRows } = await db
+      .from('driver_notification_prefs')
+      .select('rule_key,enabled')
+      .eq('driver_id', driverId);
+    const rows = (prefRows ?? []) as { rule_key: string; enabled: boolean }[];
+    const explicit = rows.find(r => r.rule_key === ruleKey);
+    if (explicit && explicit.enabled === false) return false;
+  } else if (opts.driverPrefs[ruleKey] === false) {
+    return false;
+  }
+
+  await sendPushToDriver(orgId, driverId, payload);
+  return true;
 }

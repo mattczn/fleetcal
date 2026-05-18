@@ -102,6 +102,10 @@ export * from "./realtime";
 
 export * from "./permissions";
 
+// ── Driver notification configuration ───────────────────────────────────
+
+export * from "./notifications";
+
 // ── Org-level module toggles (SaaS billing axis) ────────────────────────
 
 export * from "./modules";

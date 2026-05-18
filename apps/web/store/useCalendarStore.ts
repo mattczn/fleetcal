@@ -114,11 +114,24 @@ function withResolvedDriverId<T extends { driverName?: string; driverId?: number
 
 // Fire a push notification to a driver via the dispatch API. Best-effort —
 // failures are logged but don't block the event write.
-function notifyDriver(driverId: number, title: string, body: string, data?: Record<string, unknown>) {
+//
+// If `ruleKey` is provided, the server applies the org notification rule
+// + per-driver override check before sending (auto-fire). Without it,
+// the push goes through unconditionally — reserved for protective
+// notifications (load cancellation, reassign-away) that the driver
+// can't opt out of, since they already confirmed and would otherwise
+// show up to a pickup that no longer exists.
+function notifyDriver(
+  driverId: number,
+  title: string,
+  body: string,
+  data?: Record<string, unknown>,
+  ruleKey?: 'on_assignment',
+) {
   fetch('/api/driver-push', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ driverId, title, body, data }),
+    body:    JSON.stringify({ driverId, title, body, data, ruleKey }),
   }).catch(err => console.error('notifyDriver:', err));
 }
 
@@ -1055,13 +1068,16 @@ export const useCalendarStore = create<CalendarStore>()(
             created,
           ],
         }));
-        // Notify driver if assigned
+        // Notify driver if assigned. Rule-gated: respects org
+        // notification_rules.onAssignment.enabled + quiet hours + the
+        // driver's per-rule opt-out.
         if (resolved.driverId) {
           notifyDriver(
             resolved.driverId,
             'New load assigned',
             event.loadNum ? `Load #${event.loadNum} — ${event.title}` : event.title,
             { loadId: created.id },
+            'on_assignment',
           );
         }
       })
@@ -1140,6 +1156,7 @@ export const useCalendarStore = create<CalendarStore>()(
             lastMinute ? 'Load assigned — pickup soon' : 'Load assigned to you',
             ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
             { type: lastMinute ? 'last_minute_assign' : 'assigned', loadId: ev.loadId, eventId: id, url: `/load/${id}` },
+            'on_assignment',
           );
           // If the previous driver had confirmed, tell them their
           // load is no longer theirs so they don't show up to a

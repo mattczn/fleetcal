@@ -320,6 +320,11 @@ export interface OrgSettings {
    *  - New kinds added to DocumentKind in the future are HIDDEN by
    *    default; the admin must opt them in via Settings → Driver App. */
   driverVisibleDocKinds?: string[] | null;
+  /** Per-org driver-notification rules. Configured by an admin in
+   *  Settings → Driver App → Notifications. See @fleetcal/types
+   *  notifications.ts for the shape + defaults. null/undefined ⇒
+   *  server falls back to DEFAULT_NOTIFICATION_RULES at send time. */
+  notificationRules?: import("./notifications").NotificationRules | null;
 }
 
 /** Per-role capability override map. Outer key is the role; inner

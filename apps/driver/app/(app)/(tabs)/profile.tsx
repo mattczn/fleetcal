@@ -23,6 +23,12 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { supabase } from "@/lib/supabase";
 import { railway, type DriverProfileUpdate, type DriverMeResponse } from "@/lib/railway";
 import type { DriverDocument, DriverDocumentKind } from "@fleetcal/types";
+import {
+  NOTIFICATION_RULE_KEYS,
+  NOTIFICATION_RULE_LABEL,
+  NOTIFICATION_RULE_BLURB,
+  type NotificationRuleKey,
+} from "@fleetcal/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -443,6 +449,12 @@ export default function ProfileScreen() {
                 )}
               </Card>
 
+              {/* Notifications */}
+              <SectionHeader label="Notifications" />
+              <Card>
+                <NotificationsPrefs />
+              </Card>
+
               {/* Sign out */}
               <TouchableOpacity onPress={handleSignOut}
                 style={{
@@ -737,5 +749,125 @@ function DocRow({
         <Trash2 size={16} color="#b91c1c" />
       </TouchableOpacity>
     </View>
+  );
+}
+
+/**
+ * Per-rule opt-out toggles for driver-facing auto notifications. A
+ * toggle's state reflects the driver's explicit override; missing
+ * override means the rule follows the org default (rendered as ON
+ * — drivers see "on by default, tap to silence"). Manual dispatcher
+ * nudges bypass these and always send.
+ */
+function NotificationsPrefs() {
+  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    railway.getNotificationPrefs()
+      .then(({ prefs: p }) => { if (!cancelled) setPrefs(p); })
+      .catch(() => { if (!cancelled) setPrefs({}); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // For UI purposes: "on" = either no override OR override=true.
+  // Tapping flips between explicit-off and clear-override (which is
+  // back to on by default).
+  function isOn(ruleKey: string): boolean {
+    if (prefs == null) return true;
+    const explicit = prefs[ruleKey];
+    if (explicit === false) return false;
+    return true;
+  }
+
+  async function toggle(ruleKey: NotificationRuleKey) {
+    if (prefs == null || busyKey) return;
+    const currentlyOn = isOn(ruleKey);
+    setBusyKey(ruleKey);
+    try {
+      // currentlyOn → switch to explicit off.
+      // currently off → clear the override so it follows org default again.
+      const { prefs: next } = await railway.setNotificationPref(
+        ruleKey,
+        currentlyOn ? false : null,
+      );
+      setPrefs(next);
+    } catch (err) {
+      console.error("[NotificationsPrefs] save failed:", err);
+      Alert.alert("Couldn't save", "Try again in a moment.");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  if (prefs == null) {
+    return (
+      <View style={{ paddingVertical: 18, alignItems: "center" }}>
+        <ActivityIndicator color="#1a73e8" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ paddingVertical: 6 }}>
+      <Text style={[txt(500), { fontSize: 12, color: "#5f6368", marginBottom: 12 }]}>
+        Choose which automatic alerts you'll get. Your dispatcher can still
+        send you direct messages — those always come through.
+      </Text>
+      {NOTIFICATION_RULE_KEYS.map((ruleKey, i) => (
+        <View
+          key={ruleKey}
+          style={{
+            flexDirection: "row",
+            alignItems: "flex-start",
+            paddingVertical: 12,
+            borderTopWidth: i === 0 ? 0 : 1,
+            borderTopColor: "#f1f3f4",
+            gap: 12,
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[txt(700), { fontSize: 14, color: "#202124", marginBottom: 2 }]}>
+              {NOTIFICATION_RULE_LABEL[ruleKey]}
+            </Text>
+            <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]}>
+              {NOTIFICATION_RULE_BLURB[ruleKey]}
+            </Text>
+          </View>
+          <PrefSwitch
+            value={isOn(ruleKey)}
+            disabled={busyKey != null}
+            onChange={() => void toggle(ruleKey)}
+          />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Minimal on/off pill. Tapping toggles; disabled dims. */
+function PrefSwitch({
+  value, disabled, onChange,
+}: { value: boolean; disabled: boolean; onChange: () => void }) {
+  return (
+    <TouchableOpacity
+      onPress={onChange}
+      disabled={disabled}
+      style={{
+        width: 50, height: 28, borderRadius: 14,
+        backgroundColor: value ? "#1a73e8" : "#dadce0",
+        opacity: disabled ? 0.5 : 1,
+        padding: 2,
+        justifyContent: "center",
+      }}
+      activeOpacity={0.7}
+    >
+      <View style={{
+        width: 24, height: 24, borderRadius: 12,
+        backgroundColor: "#ffffff",
+        alignSelf: value ? "flex-end" : "flex-start",
+      }} />
+    </TouchableOpacity>
   );
 }

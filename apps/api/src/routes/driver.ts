@@ -13,6 +13,7 @@ import {
   type DocumentKind,
   DOCUMENT_KINDS,
   DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
+  NOTIFICATION_RULE_KEYS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -238,6 +239,78 @@ driver.patch("/me", async (c) => {
     return c.json({ error: "update_failed", detail: error.message }, 500);
   }
   return c.json({ ok: true });
+});
+
+// GET /v1/driver/notification-prefs — sparse map of per-rule overrides
+// the driver has set. Missing keys follow the org default.
+//
+// driver_notification_prefs lands via 20260518 migration; the generated
+// Database types don't include it yet (regenerate after applying).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const sbAny = supabase as any;
+driver.get("/notification-prefs", async (c) => {
+  const driverId = c.get("driverId");
+  const { data, error } = await sbAny
+    .from("driver_notification_prefs")
+    .select("rule_key,enabled")
+    .eq("driver_id", driverId);
+  if (error) {
+    console.error("[GET /v1/driver/notification-prefs] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+  const rows = (data ?? []) as { rule_key: string; enabled: boolean }[];
+  const prefs: Record<string, boolean> = {};
+  for (const r of rows) prefs[r.rule_key] = r.enabled;
+  return c.json({ prefs });
+});
+
+// PATCH /v1/driver/notification-prefs — set/clear one override.
+//   body: { ruleKey: string, enabled: boolean | null }
+//   null clears the override (driver falls back to org default).
+driver.patch("/notification-prefs", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const body = await c.req.json<{ ruleKey?: string; enabled?: boolean | null }>();
+  const ruleKey = (body.ruleKey ?? "").trim();
+  if (!NOTIFICATION_RULE_KEYS.includes(ruleKey as never)) {
+    return c.json({ error: "validation_failed", errors: ["unknown ruleKey"] }, 400);
+  }
+  if (body.enabled === null) {
+    // Clear override: delete the row so resolution falls back to default.
+    const { error: delErr } = await sbAny
+      .from("driver_notification_prefs")
+      .delete()
+      .eq("driver_id", driverId)
+      .eq("rule_key", ruleKey);
+    if (delErr) {
+      console.error("[PATCH /v1/driver/notification-prefs] delete failed:", delErr);
+      return c.json({ error: "delete_failed", detail: delErr.message }, 500);
+    }
+  } else if (body.enabled === true || body.enabled === false) {
+    const { error: upErr } = await sbAny
+      .from("driver_notification_prefs")
+      .upsert(
+        { driver_id: driverId, org_id: orgId, rule_key: ruleKey, enabled: body.enabled },
+        { onConflict: "driver_id,rule_key" },
+      );
+    if (upErr) {
+      console.error("[PATCH /v1/driver/notification-prefs] upsert failed:", upErr);
+      return c.json({ error: "upsert_failed", detail: upErr.message }, 500);
+    }
+  } else {
+    return c.json({ error: "validation_failed", errors: ["enabled must be true, false, or null"] }, 400);
+  }
+
+  // Return the full refreshed map.
+  const { data: rows2 } = await sbAny
+    .from("driver_notification_prefs")
+    .select("rule_key,enabled")
+    .eq("driver_id", driverId);
+  const prefs: Record<string, boolean> = {};
+  for (const r of (rows2 ?? []) as { rule_key: string; enabled: boolean }[]) {
+    prefs[r.rule_key] = r.enabled;
+  }
+  return c.json({ prefs });
 });
 
 // GET /v1/driver/loads — every (non-deleted) load assigned to the auth'd

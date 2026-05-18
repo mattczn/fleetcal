@@ -18,6 +18,7 @@ import {
   type InvoiceSettings,
   type RoleOverrides,
   type OrgModuleFlags,
+  type NotificationRules,
   type UpdateOrgSettingsRequest,
   type UpdateOrgSettingsResponse,
   type ApiErrorResponse,
@@ -33,7 +34,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,notification_rules")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -42,11 +43,12 @@ orgSettings.get("/", async (c) => {
   }
   const row = data as {
     show_driver_pay:           boolean;
-    rate_con_settings:         RateConSettings | null;
-    invoice_settings:          InvoiceSettings  | null;
-    role_overrides:            RoleOverrides    | null;
-    modules:                   OrgModuleFlags   | null;
-    driver_visible_doc_kinds:  string[]         | null;
+    rate_con_settings:         RateConSettings   | null;
+    invoice_settings:          InvoiceSettings   | null;
+    role_overrides:            RoleOverrides     | null;
+    modules:                   OrgModuleFlags    | null;
+    driver_visible_doc_kinds:  string[]          | null;
+    notification_rules:        NotificationRules | null;
   } | null;
   const res: GetOrgSettingsResponse = {
     settings: {
@@ -56,6 +58,7 @@ orgSettings.get("/", async (c) => {
       roleOverrides:         row?.role_overrides          ?? {},
       orgModules:            row?.modules                 ?? {},
       driverVisibleDocKinds: row?.driver_visible_doc_kinds ?? null,
+      notificationRules:     row?.notification_rules      ?? null,
     },
   };
   return c.json(res);
@@ -71,7 +74,8 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     body.invoiceSettings       === undefined &&
     body.roleOverrides         === undefined &&
     body.orgModules            === undefined &&
-    body.driverVisibleDocKinds === undefined
+    body.driverVisibleDocKinds === undefined &&
+    body.notificationRules     === undefined
   ) {
     return c.json({ error: "validation_failed", errors: ["at least one settable field required"] } satisfies ApiErrorResponse, 400);
   }
@@ -80,16 +84,17 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,notification_rules")
     .eq("org_id", orgId)
     .maybeSingle();
   const existingRow = existing as {
     show_driver_pay:           boolean;
-    rate_con_settings:         RateConSettings | null;
-    invoice_settings:          InvoiceSettings  | null;
-    role_overrides:            RoleOverrides    | null;
-    modules:                   OrgModuleFlags   | null;
-    driver_visible_doc_kinds:  string[]         | null;
+    rate_con_settings:         RateConSettings   | null;
+    invoice_settings:          InvoiceSettings   | null;
+    role_overrides:            RoleOverrides     | null;
+    modules:                   OrgModuleFlags    | null;
+    driver_visible_doc_kinds:  string[]          | null;
+    notification_rules:        NotificationRules | null;
   } | null;
 
   const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
@@ -120,6 +125,12 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     body.driverVisibleDocKinds === undefined
       ? (existingRow?.driver_visible_doc_kinds ?? null)
       : (body.driverVisibleDocKinds ?? null);
+  // notificationRules is also full REPLACE — admin saves the whole
+  // shape from the UI; null resets to server defaults.
+  const nextNotificationRules: NotificationRules | null =
+    body.notificationRules === undefined
+      ? (existingRow?.notification_rules ?? null)
+      : (body.notificationRules ?? null);
 
   const { error } = await supabase
     .from("org_settings")
@@ -132,6 +143,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
         role_overrides:            nextRoleOverrides as never,
         modules:                   mergedModules as never,
         driver_visible_doc_kinds:  nextDriverVisibleDocKinds as never,
+        notification_rules:        nextNotificationRules as never,
       } as never,
       { onConflict: "org_id" },
     );
@@ -155,6 +167,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       roleOverrides:         nextRoleOverrides,
       orgModules:            mergedModules,
       driverVisibleDocKinds: nextDriverVisibleDocKinds,
+      notificationRules:     nextNotificationRules,
     },
   };
   return c.json(res);

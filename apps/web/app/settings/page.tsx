@@ -15,6 +15,8 @@ import {
   isModuleEnabled,
   DOCUMENT_KINDS,
   DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
+  DEFAULT_NOTIFICATION_RULES,
+  NOTIFICATION_RULE_BLURB,
   type Capability,
   type CapabilityGroup,
   type OrgRole,
@@ -22,6 +24,7 @@ import {
   type OrgModule,
   type OrgModuleFlags,
   type DocumentKind,
+  type NotificationRules,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import {
@@ -922,8 +925,11 @@ function DriverAppPanel() {
   // null = still loading; otherwise the current allow-list (server
   // returns null when never customized — we render the defaults).
   const [visibleKinds, setVisibleKinds] = useState<DocumentKind[] | null>(null);
+  // Notification rules; null = still loading.
+  const [rules, setRules] = useState<NotificationRules | null>(null);
   const [busy, setBusy] = useState(false);
   const [kindsBusy, setKindsBusy] = useState(false);
+  const [rulesBusy, setRulesBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -933,11 +939,23 @@ function DriverAppPanel() {
         setShowDriverPay(settings.showDriverPay);
         const stored = (settings.driverVisibleDocKinds ?? null) as DocumentKind[] | null;
         setVisibleKinds(stored ?? [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS]);
+        // Notification rules: merge stored over defaults so partial DB
+        // shapes still produce a fully-populated form.
+        const storedRules = settings.notificationRules ?? null;
+        setRules(storedRules
+          ? {
+              eveningConfirmSweep: { ...DEFAULT_NOTIFICATION_RULES.eveningConfirmSweep, ...(storedRules.eveningConfirmSweep ?? {}) },
+              prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(storedRules.prePickupConfirm    ?? {}) },
+              onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(storedRules.onAssignment        ?? {}) },
+              missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(storedRules.missingPodReminder  ?? {}) },
+            }
+          : DEFAULT_NOTIFICATION_RULES);
       })
       .catch(() => {
         if (cancelled) return;
         setShowDriverPay(false);
         setVisibleKinds([...DEFAULT_DRIVER_VISIBLE_DOC_KINDS]);
+        setRules(DEFAULT_NOTIFICATION_RULES);
       });
     return () => { cancelled = true; };
   }, []);
@@ -974,6 +992,22 @@ function DriverAppPanel() {
       setVisibleKinds(prev); // roll back
     }
     setKindsBusy(false);
+  }
+
+  // Notification rules — every edit fires a debounced full-shape save.
+  // Optimistic update with rollback on failure.
+  async function saveRules(next: NotificationRules) {
+    if (rules == null || rulesBusy) return;
+    const prev = rules;
+    setRules(next); // optimistic
+    setRulesBusy(true);
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.updateOrgSettings({ notificationRules: next });
+    } catch {
+      setRules(prev); // roll back
+    }
+    setRulesBusy(false);
   }
 
   return (
@@ -1015,6 +1049,183 @@ function DriverAppPanel() {
               </SettingsField>
             ))
         }
+      </SettingsSection>
+
+      <SettingsSection
+        title="Notifications"
+        description="Auto-fired pushes to drivers. Manual dispatcher nudges (Confirm load, Upload POD buttons on a load) are not affected by these rules — those always send. Drivers can opt out of any rule from their app's Notifications screen."
+      >
+        {rules == null ? (
+          <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
+        ) : (
+          <>
+            {/* Evening confirm sweep */}
+            <SettingsField
+              inline
+              label="Evening confirm reminder"
+              hint={NOTIFICATION_RULE_BLURB.evening_confirm_sweep}
+            >
+              <SettingsToggle
+                checked={rules.eveningConfirmSweep.enabled}
+                disabled={rulesBusy}
+                onChange={() => void saveRules({
+                  ...rules,
+                  eveningConfirmSweep: { ...rules.eveningConfirmSweep, enabled: !rules.eveningConfirmSweep.enabled },
+                })}
+              />
+            </SettingsField>
+            {rules.eveningConfirmSweep.enabled && (
+              <>
+                <SettingsField inline label="Time of day" hint="When the daily sweep fires (org local time).">
+                  <SettingsInput
+                    type="time"
+                    value={rules.eveningConfirmSweep.timeOfDay}
+                    disabled={rulesBusy}
+                    onChange={(e) => void saveRules({
+                      ...rules,
+                      eveningConfirmSweep: { ...rules.eveningConfirmSweep, timeOfDay: e.target.value },
+                    })}
+                    style={{ width: 120 }}
+                  />
+                </SettingsField>
+                <SettingsField inline label="Look-ahead window" hint="Include unconfirmed loads with pickups within this many hours.">
+                  <SettingsInput
+                    type="number"
+                    min={1} max={48}
+                    value={rules.eveningConfirmSweep.lookAheadHours}
+                    disabled={rulesBusy}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value || '0', 10);
+                      if (!isFinite(n) || n < 1 || n > 48) return;
+                      void saveRules({
+                        ...rules,
+                        eveningConfirmSweep: { ...rules.eveningConfirmSweep, lookAheadHours: n },
+                      });
+                    }}
+                    style={{ width: 80 }}
+                  />
+                </SettingsField>
+              </>
+            )}
+
+            {/* Pre-pickup confirm */}
+            <SettingsField
+              inline
+              label="Pre-pickup confirm reminder"
+              hint={NOTIFICATION_RULE_BLURB.pre_pickup_confirm}
+            >
+              <SettingsToggle
+                checked={rules.prePickupConfirm.enabled}
+                disabled={rulesBusy}
+                onChange={() => void saveRules({
+                  ...rules,
+                  prePickupConfirm: { ...rules.prePickupConfirm, enabled: !rules.prePickupConfirm.enabled },
+                })}
+              />
+            </SettingsField>
+            {rules.prePickupConfirm.enabled && (
+              <SettingsField inline label="Hours before pickup" hint="Fire the reminder once when pickup is this many hours away.">
+                <SettingsInput
+                  type="number"
+                  min={1} max={24}
+                  value={rules.prePickupConfirm.hoursBeforePickup}
+                  disabled={rulesBusy}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value || '0', 10);
+                    if (!isFinite(n) || n < 1 || n > 24) return;
+                    void saveRules({
+                      ...rules,
+                      prePickupConfirm: { ...rules.prePickupConfirm, hoursBeforePickup: n },
+                    });
+                  }}
+                  style={{ width: 80 }}
+                />
+              </SettingsField>
+            )}
+
+            {/* On-assignment */}
+            <SettingsField
+              inline
+              label="New load assigned"
+              hint={NOTIFICATION_RULE_BLURB.on_assignment}
+            >
+              <SettingsToggle
+                checked={rules.onAssignment.enabled}
+                disabled={rulesBusy}
+                onChange={() => void saveRules({
+                  ...rules,
+                  onAssignment: { ...rules.onAssignment, enabled: !rules.onAssignment.enabled },
+                })}
+              />
+            </SettingsField>
+            {rules.onAssignment.enabled && (
+              <SettingsField
+                inline
+                label="Quiet hours"
+                hint="Optional. Suppress on-assignment pushes between these times. Leave blank to always fire."
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <SettingsInput
+                    type="time"
+                    value={rules.onAssignment.quietHoursStart ?? ''}
+                    disabled={rulesBusy}
+                    onChange={(e) => void saveRules({
+                      ...rules,
+                      onAssignment: { ...rules.onAssignment, quietHoursStart: e.target.value || null },
+                    })}
+                    style={{ width: 110 }}
+                  />
+                  <span style={{ color: SETTINGS_COLORS.textMuted, fontSize: 12 }}>to</span>
+                  <SettingsInput
+                    type="time"
+                    value={rules.onAssignment.quietHoursEnd ?? ''}
+                    disabled={rulesBusy}
+                    onChange={(e) => void saveRules({
+                      ...rules,
+                      onAssignment: { ...rules.onAssignment, quietHoursEnd: e.target.value || null },
+                    })}
+                    style={{ width: 110 }}
+                  />
+                </div>
+              </SettingsField>
+            )}
+
+            {/* Missing POD */}
+            <SettingsField
+              inline
+              label="Missing POD reminder"
+              hint={NOTIFICATION_RULE_BLURB.missing_pod_reminder}
+            >
+              <SettingsToggle
+                checked={rules.missingPodReminder.enabled}
+                disabled={rulesBusy}
+                onChange={() => void saveRules({
+                  ...rules,
+                  missingPodReminder: { ...rules.missingPodReminder, enabled: !rules.missingPodReminder.enabled },
+                })}
+              />
+            </SettingsField>
+            {rules.missingPodReminder.enabled && (
+              <SettingsField inline label="Hours after delivery" hint="Nudge the driver this many hours after they marked delivered if no POD is on file.">
+                <SettingsInput
+                  type="number"
+                  min={1} max={168}
+                  value={rules.missingPodReminder.hoursAfterDelivery}
+                  disabled={rulesBusy}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value || '0', 10);
+                    if (!isFinite(n) || n < 1 || n > 168) return;
+                    void saveRules({
+                      ...rules,
+                      missingPodReminder: { ...rules.missingPodReminder, hoursAfterDelivery: n },
+                    });
+                  }}
+                  style={{ width: 80 }}
+                />
+              </SettingsField>
+            )}
+          </>
+        )}
       </SettingsSection>
     </SettingsPanel>
   );
