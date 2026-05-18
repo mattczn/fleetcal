@@ -25,7 +25,8 @@
               "NSIncludesSubdomains": true
             }
           }
-        }
+        },
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -59,7 +60,17 @@
       "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZneWJxbXZtb3JqaGxnYnNzc21pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MDA4MzcsImV4cCI6MjA5MjQ3NjgzN30.c6IutFuTbGiuCUSYXO0bVh-Wa_K00dq9Wc8jgiIEYuE",
       "googleMapsKey": "AIzaSyDKxh_Na3r3bjA9LgZTgQ7JRJ-X-BvoYfo",
       "dispatchApiUrl": "http://192.168.7.126:3000",
-      "railwayApiUrl": "https://fleetcalapi-production.up.railway.app"
+      "railwayApiUrl": "https://fleetcalapi-production.up.railway.app",
+      "router": {},
+      "eas": {
+        "projectId": "eb0ae55b-8fee-47e1-85e7-473eaba4d811"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/eb0ae55b-8fee-47e1-85e7-473eaba4d811"
     }
   }
 }
