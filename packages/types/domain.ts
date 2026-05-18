@@ -312,6 +312,14 @@ export interface OrgSettings {
    *  enabled until Stripe/billing flips it. See @fleetcal/types
    *  modules.ts for the enum + helper. */
   orgModules?: OrgModuleFlags;
+  /** Allow-list of DocumentKind values the driver app is permitted
+   *  to display. Server-side filter on GET /v1/driver/loads/:id/documents.
+   *  - undefined / null → server applies the default allow-list:
+   *    every kind except `rate_con` and `invoice` (financial/broker).
+   *  - [] (empty array) → drivers see no documents.
+   *  - New kinds added to DocumentKind in the future are HIDDEN by
+   *    default; the admin must opt them in via Settings → Driver App. */
+  driverVisibleDocKinds?: string[] | null;
 }
 
 /** Per-role capability override map. Outer key is the role; inner

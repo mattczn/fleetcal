@@ -13,12 +13,15 @@ import {
   ORG_MODULE_LABEL,
   ORG_MODULE_BLURB,
   isModuleEnabled,
+  DOCUMENT_KINDS,
+  DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
   type Capability,
   type CapabilityGroup,
   type OrgRole,
   type RoleOverrides,
   type OrgModule,
   type OrgModuleFlags,
+  type DocumentKind,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import {
@@ -895,15 +898,47 @@ function MembersPanel() {
   );
 }
 
+// Human labels for each document kind — drives the toggle list copy in
+// the Driver App panel. Keep in sync with @fleetcal/types DocumentKind.
+const DOC_KIND_LABEL: Record<DocumentKind, string> = {
+  rate_con:      'Rate Confirmation',
+  pod:           'POD (Proof of Delivery)',
+  bol:           'Bill of Lading',
+  scale:         'Scale Ticket',
+  lumper:        'Lumper Receipt',
+  receipt:       'Receipt',
+  driver_sheet:  'Driver Pay Sheet',
+  invoice:       'Invoice',
+  relay_handoff: 'Relay Handoff Photos',
+  other:         'Other',
+};
+const DOC_KIND_HINT: Partial<Record<DocumentKind, string>> = {
+  rate_con: 'Off by default — broker proprietary.',
+  invoice:  'Off by default — customer-facing financial doc.',
+};
+
 function DriverAppPanel() {
   const [showDriverPay, setShowDriverPay] = useState<boolean | null>(null);
+  // null = still loading; otherwise the current allow-list (server
+  // returns null when never customized — we render the defaults).
+  const [visibleKinds, setVisibleKinds] = useState<DocumentKind[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [kindsBusy, setKindsBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     import('@/lib/railway').then(({ railway }) => railway.getOrgSettings())
-      .then(({ settings }) => { if (!cancelled) setShowDriverPay(settings.showDriverPay); })
-      .catch(() => { if (!cancelled) setShowDriverPay(false); });
+      .then(({ settings }) => {
+        if (cancelled) return;
+        setShowDriverPay(settings.showDriverPay);
+        const stored = (settings.driverVisibleDocKinds ?? null) as DocumentKind[] | null;
+        setVisibleKinds(stored ?? [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS]);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setShowDriverPay(false);
+        setVisibleKinds([...DEFAULT_DRIVER_VISIBLE_DOC_KINDS]);
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -919,6 +954,26 @@ function DriverAppPanel() {
       setShowDriverPay(!next); // roll back
     }
     setBusy(false);
+  }
+
+  async function toggleKind(kind: DocumentKind) {
+    if (visibleKinds == null || kindsBusy) return;
+    const has = visibleKinds.includes(kind);
+    const next = has
+      ? visibleKinds.filter(k => k !== kind)
+      // Re-add in canonical DOCUMENT_KINDS order so the saved array
+      // stays stable across saves (avoids "should I sort?" debates).
+      : DOCUMENT_KINDS.filter(k => visibleKinds.includes(k) || k === kind);
+    const prev = visibleKinds;
+    setVisibleKinds(next); // optimistic
+    setKindsBusy(true);
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.updateOrgSettings({ driverVisibleDocKinds: next });
+    } catch {
+      setVisibleKinds(prev); // roll back
+    }
+    setKindsBusy(false);
   }
 
   return (
@@ -937,6 +992,29 @@ function DriverAppPanel() {
             ? <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
             : <SettingsToggle checked={showDriverPay} disabled={busy} onChange={() => void toggle()} />}
         </SettingsField>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Visible Documents"
+        description="Pick which uploaded document kinds the driver app shows on a load. Hidden kinds are filtered server-side, so a driver can never see them even with a stale build."
+      >
+        {visibleKinds == null
+          ? <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
+          : DOCUMENT_KINDS.map(kind => (
+              <SettingsField
+                key={kind}
+                inline
+                label={DOC_KIND_LABEL[kind]}
+                hint={DOC_KIND_HINT[kind]}
+              >
+                <SettingsToggle
+                  checked={visibleKinds.includes(kind)}
+                  disabled={kindsBusy}
+                  onChange={() => void toggleKind(kind)}
+                />
+              </SettingsField>
+            ))
+        }
       </SettingsSection>
     </SettingsPanel>
   );

@@ -33,7 +33,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -41,19 +41,21 @@ orgSettings.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   const row = data as {
-    show_driver_pay:   boolean;
-    rate_con_settings: RateConSettings | null;
-    invoice_settings:  InvoiceSettings  | null;
-    role_overrides:    RoleOverrides    | null;
-    modules:           OrgModuleFlags   | null;
+    show_driver_pay:           boolean;
+    rate_con_settings:         RateConSettings | null;
+    invoice_settings:          InvoiceSettings  | null;
+    role_overrides:            RoleOverrides    | null;
+    modules:                   OrgModuleFlags   | null;
+    driver_visible_doc_kinds:  string[]         | null;
   } | null;
   const res: GetOrgSettingsResponse = {
     settings: {
-      showDriverPay:   row?.show_driver_pay   ?? false,
-      rateConSettings: row?.rate_con_settings ?? {},
-      invoiceSettings: row?.invoice_settings  ?? {},
-      roleOverrides:   row?.role_overrides    ?? {},
-      orgModules:      row?.modules           ?? {},
+      showDriverPay:         row?.show_driver_pay         ?? false,
+      rateConSettings:       row?.rate_con_settings       ?? {},
+      invoiceSettings:       row?.invoice_settings        ?? {},
+      roleOverrides:         row?.role_overrides          ?? {},
+      orgModules:            row?.modules                 ?? {},
+      driverVisibleDocKinds: row?.driver_visible_doc_kinds ?? null,
     },
   };
   return c.json(res);
@@ -64,11 +66,12 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   const body = await c.req.json<UpdateOrgSettingsRequest>();
   // At least one allowed key must be present.
   if (
-    body.showDriverPay   === undefined &&
-    body.rateConSettings === undefined &&
-    body.invoiceSettings === undefined &&
-    body.roleOverrides   === undefined &&
-    body.orgModules      === undefined
+    body.showDriverPay         === undefined &&
+    body.rateConSettings       === undefined &&
+    body.invoiceSettings       === undefined &&
+    body.roleOverrides         === undefined &&
+    body.orgModules            === undefined &&
+    body.driverVisibleDocKinds === undefined
   ) {
     return c.json({ error: "validation_failed", errors: ["at least one settable field required"] } satisfies ApiErrorResponse, 400);
   }
@@ -77,15 +80,16 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds")
     .eq("org_id", orgId)
     .maybeSingle();
   const existingRow = existing as {
-    show_driver_pay:   boolean;
-    rate_con_settings: RateConSettings | null;
-    invoice_settings:  InvoiceSettings  | null;
-    role_overrides:    RoleOverrides    | null;
-    modules:           OrgModuleFlags   | null;
+    show_driver_pay:           boolean;
+    rate_con_settings:         RateConSettings | null;
+    invoice_settings:          InvoiceSettings  | null;
+    role_overrides:            RoleOverrides    | null;
+    modules:                   OrgModuleFlags   | null;
+    driver_visible_doc_kinds:  string[]         | null;
   } | null;
 
   const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
@@ -110,17 +114,24 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   const mergedModules: OrgModuleFlags = body.orgModules === undefined
     ? (existingRow?.modules ?? {})
     : { ...(existingRow?.modules ?? {}), ...body.orgModules };
+  // driverVisibleDocKinds is a full REPLACE — the UI sends the whole
+  // toggled list every save. null clears back to the server default.
+  const nextDriverVisibleDocKinds: string[] | null =
+    body.driverVisibleDocKinds === undefined
+      ? (existingRow?.driver_visible_doc_kinds ?? null)
+      : (body.driverVisibleDocKinds ?? null);
 
   const { error } = await supabase
     .from("org_settings")
     .upsert(
       {
-        org_id:            orgId,
-        show_driver_pay:   nextShowDriverPay,
-        rate_con_settings: mergedRateCon as never,
-        invoice_settings:  mergedInvoice as never,
-        role_overrides:    nextRoleOverrides as never,
-        modules:           mergedModules as never,
+        org_id:                    orgId,
+        show_driver_pay:           nextShowDriverPay,
+        rate_con_settings:         mergedRateCon as never,
+        invoice_settings:          mergedInvoice as never,
+        role_overrides:            nextRoleOverrides as never,
+        modules:                   mergedModules as never,
+        driver_visible_doc_kinds:  nextDriverVisibleDocKinds as never,
       } as never,
       { onConflict: "org_id" },
     );
@@ -138,11 +149,12 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   }
   const res: UpdateOrgSettingsResponse = {
     settings: {
-      showDriverPay:   nextShowDriverPay,
-      rateConSettings: mergedRateCon,
-      invoiceSettings: mergedInvoice,
-      roleOverrides:   nextRoleOverrides,
-      orgModules:      mergedModules,
+      showDriverPay:         nextShowDriverPay,
+      rateConSettings:       mergedRateCon,
+      invoiceSettings:       mergedInvoice,
+      roleOverrides:         nextRoleOverrides,
+      orgModules:            mergedModules,
+      driverVisibleDocKinds: nextDriverVisibleDocKinds,
     },
   };
   return c.json(res);

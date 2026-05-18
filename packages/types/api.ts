@@ -388,6 +388,15 @@ export const DOCUMENT_KINDS: readonly DocumentKind[] = [
   "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "relay_handoff", "other",
 ];
 
+/** Default allow-list of kinds shown to drivers when an org hasn't
+ *  customized OrgSettings.driverVisibleDocKinds. Excludes rate_con
+ *  (broker proprietary) and invoice (financial); these can be re-
+ *  enabled per-org in Settings → Driver App. New kinds added to
+ *  DocumentKind do NOT auto-appear here — admins must opt them in. */
+export const DEFAULT_DRIVER_VISIBLE_DOC_KINDS: readonly DocumentKind[] = [
+  "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other",
+];
+
 /**
  * Document summary shape returned by list/show endpoints. `signedUrl` is
  * populated by the list endpoint (1-hour signed URL minted server-side);
@@ -647,6 +656,10 @@ export interface UpdateOrgSettingsRequest {
   /** Replaces the entire org-modules flags map. Use {} to reset to
    *  defaults (all-enabled); omit to leave unchanged. */
   orgModules?:       import("./domain").OrgModuleFlags;
+  /** Replaces the driver-visible-doc-kinds allow-list. Send an array
+   *  to set; omit to leave unchanged. See OrgSettings.driverVisibleDocKinds
+   *  for default semantics. */
+  driverVisibleDocKinds?: string[] | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 

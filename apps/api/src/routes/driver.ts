@@ -12,6 +12,7 @@ import {
   type StopType,
   type DocumentKind,
   DOCUMENT_KINDS,
+  DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -1079,6 +1080,21 @@ driver.get("/loads/:id/documents", async (c) => {
   const found = await loadDriverEvent(id, driverId, orgId);
   if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
 
+  // Apply the org's driver-visible kinds allow-list. Default (when
+  // never customized): every kind except rate_con + invoice. Server-
+  // side filter so even a tampered client can't see hidden kinds.
+  const { data: settingsRow } = await supabase
+    .from("org_settings")
+    .select("driver_visible_doc_kinds")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const visibleKinds: string[] =
+    (settingsRow as { driver_visible_doc_kinds: string[] | null } | null)
+      ?.driver_visible_doc_kinds
+    ?? [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
+  // Empty allow-list → short-circuit; no docs visible.
+  if (visibleKinds.length === 0) return c.json({ documents: [] });
+
   const { data: ev } = await supabase
     .from("events")
     .select("load_id")
@@ -1090,6 +1106,7 @@ driver.get("/loads/:id/documents", async (c) => {
     .from("load_documents")
     .select("*")
     .eq("org_id", orgId)
+    .in("kind", visibleKinds)
     .order("uploaded_at", { ascending: false });
   const { data, error } = await (loadId
     ? baseQuery.eq("load_id", loadId)
