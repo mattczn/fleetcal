@@ -142,6 +142,15 @@ export interface Driver {
   licenseExp?: string;         // YYYY-MM-DD
   medicalCardExp?: string;     // YYYY-MM-DD
   dob?: string;                // YYYY-MM-DD
+
+  /** Active lifecycle. `activeFrom` is the first day this driver is part
+   *  of the fleet (defaults to creation date). `activeTo` is the last
+   *  day — null/undefined means currently active. Both are YYYY-MM-DD
+   *  strings. The calendar grid and driver pickers filter by the
+   *  visible date range so retired drivers don't show up on today's
+   *  view but still appear on historical loads they ran. */
+  activeFrom?: string;
+  activeTo?: string | null;
 }
 
 export type DriverDocumentKind = 'license' | 'medical_card' | 'mvr' | 'other';
@@ -179,6 +188,12 @@ export interface Asset {
   motiveVehicleId?: string;
   /** assets.sort_order — NOT NULL DEFAULT 0 in the DB; always present. */
   sortOrder: number;
+  /** Active lifecycle. See Driver.activeFrom — same semantics. The
+   *  calendar columns filter by the visible date range, so a truck
+   *  retired in March still appears on the March calendar but drops
+   *  out of today's view. */
+  activeFrom?: string;
+  activeTo?: string | null;
 }
 
 // ── Trailer ─────────────────────────────────────────────────────────────
@@ -191,6 +206,9 @@ export interface Trailer {
   notes?: string;
   motiveVehicleId?: string;
   sortOrder?: number;
+  /** Active lifecycle — see Driver.activeFrom for semantics. */
+  activeFrom?: string;
+  activeTo?: string | null;
 }
 
 // ── Saved Location ──────────────────────────────────────────────────────

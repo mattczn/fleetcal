@@ -443,6 +443,10 @@ export interface CreateAssetRequest {
   motiveVehicleId?: string | null;
   /** Optional explicit sort_order; otherwise the server appends to the end. */
   sortOrder?:       number;
+  /** YYYY-MM-DD; defaults to today server-side. */
+  activeFrom?:      string;
+  /** YYYY-MM-DD or null. null = currently active (the default). */
+  activeTo?:        string | null;
 }
 export interface CreateAssetResponse { asset: Asset; }
 export interface UpdateAssetRequest  {
@@ -455,6 +459,10 @@ export interface UpdateAssetRequest  {
   hidden?:          boolean;
   motiveVehicleId?: string | null;
   sortOrder?:       number;
+  /** Move the start of active period (rare — usually set once on create). */
+  activeFrom?:      string;
+  /** Stamp/clear the retire date. null = "currently active" (unretire). */
+  activeTo?:        string | null;
 }
 export interface UpdateAssetResponse { asset: Asset; }
 /** Reorder assets in one shot. The server writes sort_order = index for each id. */
@@ -469,6 +477,10 @@ export interface CreateDriverRequest {
   lastName?:  string | null;
   phone?:     string | null;
   notes?:     string | null;
+  /** YYYY-MM-DD; defaults to today server-side. */
+  activeFrom?: string;
+  /** YYYY-MM-DD or null. null = currently active. */
+  activeTo?:   string | null;
 }
 export interface CreateDriverResponse { driver: Driver; }
 export interface UpdateDriverRequest {
@@ -484,6 +496,9 @@ export interface UpdateDriverRequest {
   licenseExp?:     string | null;
   medicalCardExp?: string | null;
   dob?:            string | null;
+  activeFrom?:     string;
+  /** Stamp/clear the retire date. null = currently active (unretire). */
+  activeTo?:       string | null;
 }
 export interface UpdateDriverResponse { driver: Driver; }
 
@@ -546,6 +561,10 @@ export interface CreateTrailerRequest {
   category:         TrailerCategory;
   notes?:           string | null;
   motiveVehicleId?: string | null;
+  /** YYYY-MM-DD; defaults to today server-side. */
+  activeFrom?:      string;
+  /** YYYY-MM-DD or null. null = currently active. */
+  activeTo?:        string | null;
 }
 export interface CreateTrailerResponse { trailer: Trailer; }
 export interface UpdateTrailerRequest {
@@ -554,6 +573,9 @@ export interface UpdateTrailerRequest {
   category?:        TrailerCategory;
   notes?:           string | null;
   motiveVehicleId?: string | null;
+  activeFrom?:      string;
+  /** Stamp/clear the retire date. null = currently active (unretire). */
+  activeTo?:        string | null;
 }
 export interface UpdateTrailerResponse { trailer: Trailer; }
 

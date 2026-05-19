@@ -9,6 +9,7 @@ import { usePermissions } from '@/lib/usePermissions';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
+import { isActiveOn } from '@/lib/lifecycle';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
@@ -3101,9 +3102,11 @@ export default function EventModal() {
         style={{ ...iStyle, cursor: 'pointer' }}
         onFocus={focusH} onBlur={blurColor}>
         <option value="">— None —</option>
-        {trailers.map(t => (
-          <option key={t.id} value={t.id}>{t.name}</option>
-        ))}
+        {trailers
+          .filter(t => isActiveOn(t, startDate) || t.id === linkedTrailerId)
+          .map(t => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
       </StyledSelect>
     ),
     dispatcher: (
@@ -4094,10 +4097,12 @@ export default function EventModal() {
                   }}
                   style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
                   <option value="">— No driver —</option>
-                  {drivers.map(d => {
-                    const display = canonicalDriverName(d);
-                    return <option key={d.id} value={display}>{display}</option>;
-                  })}
+                  {drivers
+                    .filter(d => isActiveOn(d, startDate) || canonicalDriverName(d) === driverName)
+                    .map(d => {
+                      const display = canonicalDriverName(d);
+                      return <option key={d.id} value={display}>{display}</option>;
+                    })}
                 </StyledSelect>
                 </div>
                 {/* Driver-side chip — shown when the user picked an
@@ -4188,7 +4193,9 @@ export default function EventModal() {
                         setSuggestDriverSwap(suggested);
                       }}
                       style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
-                      {assets.map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
+                      {assets
+                        .filter(a => isActiveOn(a, startDate) || a.id === assetId)
+                        .map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
                     </StyledSelect>
                   </div>
                   {/* Asset-side chip — shown when the user picked a
@@ -4483,10 +4490,12 @@ export default function EventModal() {
                                     }}
                                     style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
                                     <option value="">— No driver —</option>
-                                    {drivers.map(d => {
-                                      const display = canonicalDriverName(d);
-                                      return <option key={d.id} value={display}>{display}</option>;
-                                    })}
+                                    {drivers
+                                      .filter(d => isActiveOn(d, startDate) || canonicalDriverName(d) === relayDelivDriverName)
+                                      .map(d => {
+                                        const display = canonicalDriverName(d);
+                                        return <option key={d.id} value={display}>{display}</option>;
+                                      })}
                                   </StyledSelect>
                                 </div>
                                 {/* Driver-side chip — offers to swap
@@ -4522,7 +4531,9 @@ export default function EventModal() {
                                       setSuggestRelayDelivDriverSwap(suggested);
                                     }}
                                     style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
-                                    {assets.map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
+                                    {assets
+                                      .filter(a => isActiveOn(a, startDate) || a.id === relayDelivAssetId)
+                                      .map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
                                   </StyledSelect>
                                 </div>
                                 {/* Asset-side chip — offers to swap

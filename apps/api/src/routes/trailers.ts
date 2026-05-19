@@ -28,6 +28,8 @@ interface DbTrailerRow {
   notes: string | null;
   motive_vehicle_id: string | null;
   sort_order: number;
+  active_from: string;
+  active_to: string | null;
 }
 
 function rowToTrailer(r: DbTrailerRow): Trailer {
@@ -39,10 +41,16 @@ function rowToTrailer(r: DbTrailerRow): Trailer {
     notes:            r.notes             ?? undefined,
     motiveVehicleId:  r.motive_vehicle_id ?? undefined,
     sortOrder:        r.sort_order,
+    activeFrom:       r.active_from,
+    activeTo:         r.active_to,
   };
 }
 
-const COLS = "id,name,trailer_number,category,notes,motive_vehicle_id,sort_order";
+const COLS = "id,name,trailer_number,category,notes,motive_vehicle_id,sort_order,active_from,active_to";
+
+function todayUtcDateKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 trailers.get("/", async (c) => {
   const orgId = c.get("orgId");
@@ -55,7 +63,7 @@ trailers.get("/", async (c) => {
     console.error("[GET /v1/trailers] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const res: ListTrailersResponse = { trailers: ((data ?? []) as DbTrailerRow[]).map(rowToTrailer) };
+  const res: ListTrailersResponse = { trailers: ((data ?? []) as unknown as DbTrailerRow[]).map(rowToTrailer) };
   return c.json(res);
 });
 
@@ -78,6 +86,8 @@ trailers.post("/", requireCapability("trailers.create"), async (c) => {
     notes:             body.notes           ?? null,
     motive_vehicle_id: body.motiveVehicleId ?? null,
     sort_order:        count ?? 0,
+    active_from:       body.activeFrom      ?? todayUtcDateKey(),
+    active_to:         body.activeTo        ?? null,
   };
   const { data, error } = await supabase
     .from("trailers")
@@ -88,7 +98,7 @@ trailers.post("/", requireCapability("trailers.create"), async (c) => {
     console.error("[POST /v1/trailers] failed:", error);
     return c.json({ error: "create_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
-  const res: CreateTrailerResponse = { trailer: rowToTrailer(data as DbTrailerRow) };
+  const res: CreateTrailerResponse = { trailer: rowToTrailer(data as unknown as DbTrailerRow) };
   return c.json(res, 201);
 });
 
@@ -105,6 +115,8 @@ trailers.patch("/:id", requireCapability("trailers.edit"), async (c) => {
   if ("category"        in body) update.category          = body.category;
   if ("notes"           in body) update.notes             = body.notes            ?? null;
   if ("motiveVehicleId" in body) update.motive_vehicle_id = body.motiveVehicleId  ?? null;
+  if ("activeFrom"      in body) update.active_from       = body.activeFrom;
+  if ("activeTo"        in body) update.active_to         = body.activeTo ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }
@@ -119,26 +131,42 @@ trailers.patch("/:id", requireCapability("trailers.edit"), async (c) => {
     console.error("[PATCH /v1/trailers/:id] failed:", error);
     return c.json({ error: "update_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
-  const res: UpdateTrailerResponse = { trailer: rowToTrailer(data as DbTrailerRow) };
+  const res: UpdateTrailerResponse = { trailer: rowToTrailer(data as unknown as DbTrailerRow) };
   return c.json(res);
 });
 
+// DELETE retires the trailer (sets active_to = today). Hard-delete
+// blocked by FK RESTRICT while events.trailer_id references it.
 trailers.delete("/:id", requireCapability("trailers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
     return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
   }
-  const { error } = await supabase
+  const today = todayUtcDateKey();
+  const { data, error } = await supabase
     .from("trailers")
-    .delete()
+    .update({ active_to: today } as never)
     .eq("id", id)
-    .eq("org_id", orgId);
+    .eq("org_id", orgId)
+    .is("active_to", null)
+    .select(COLS)
+    .maybeSingle();
   if (error) {
-    console.error("[DELETE /v1/trailers/:id] failed:", error);
-    return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    console.error("[DELETE /v1/trailers/:id] retire failed:", error);
+    return c.json({ error: "retire_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  return c.body(null, 204);
+  if (!data) {
+    const { data: existing } = await supabase
+      .from("trailers")
+      .select(COLS)
+      .eq("id", id)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+    return c.json({ trailer: rowToTrailer(existing as unknown as unknown as DbTrailerRow) });
+  }
+  return c.json({ trailer: rowToTrailer(data as unknown as unknown as DbTrailerRow) });
 });
 
 export default trailers;

@@ -8,6 +8,7 @@ import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import VehicleMapPanel from './VehicleMapPanel';
 import type { Asset } from '@/lib/types';
 import { tzAbbr } from '@/lib/time-utils';
+import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 
 const POLL_MS = 30 * 60_000; // 30 minutes
 
@@ -96,11 +97,30 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 }
 
 export default function CalendarHeader() {
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
+  // Date range that matches the calendar grid below — same logic, so
+  // header chips align with the columns shown.
+  const viewRange = (() => {
+    if (viewMode === 'week') {
+      const d = new Date(currentDate);
+      const dow = d.getDay();
+      const mondayOffset = dow === 0 ? -6 : 1 - dow;
+      const mon = new Date(d); mon.setDate(d.getDate() + mondayOffset);
+      const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+      return { start: dateKeyOf(mon), end: dateKeyOf(sun) };
+    }
+    const k = dateKeyOf(currentDate);
+    return { start: k, end: k };
+  })();
   const visibleAssets = [
     ...(unassignedAsset ? [unassignedAsset] : []),
-    ...allAssets.filter(a => !a.hidden && a.id !== unassignedAssetId && (activeCategoryFilter === null || a.type === activeCategoryFilter)),
+    ...allAssets.filter(a =>
+      !a.hidden
+      && a.id !== unassignedAssetId
+      && (activeCategoryFilter === null || a.type === activeCategoryFilter)
+      && isActiveInRange(a, viewRange.start, viewRange.end)
+    ),
   ];
 
   const hasMotiveAssets = visibleAssets.some(a => !!a.motiveVehicleId);

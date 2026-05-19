@@ -871,14 +871,19 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
       </div>
       )}
 
-      {/* Delete — gated on drivers.delete; dispatchers see no Delete UI
-          (the API would 403 them anyway). */}
+      {/* Retire — gated on drivers.delete. API now stamps active_to
+          rather than hard-deleting; historical loads keep the driver
+          reference intact. */}
       {canDelete && (
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-        {confirmDelete ? (
+        {driver.activeTo ? (
+          <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
+            Retired on <strong>{driver.activeTo}</strong>. This driver no longer appears in pickers for new loads. Historical loads remain attached.
+          </div>
+        ) : confirmDelete ? (
           <div className="flex items-center gap-3">
             <span className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
-              Remove <strong>{driverDisplayName(driver)}</strong>? This cannot be undone.
+              Retire <strong>{driverDisplayName(driver)}</strong>? They'll drop out of new-load pickers starting today. Existing loads stay attached and visible in history.
             </span>
             <button
               onClick={onRemove}
@@ -886,7 +891,7 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
               style={{ background: '#d93025' }}
               onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
               onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-              Remove
+              Retire
             </button>
             <button
               onClick={() => setConfirmDelete(false)}
@@ -905,7 +910,7 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
             onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.08)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <Trash2 size={14} />
-            Delete Driver
+            Retire Driver
           </button>
         )}
       </div>

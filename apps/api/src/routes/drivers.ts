@@ -33,11 +33,14 @@ interface DbDriverRow {
   license_exp: string | null;
   medical_card_exp: string | null;
   dob: string | null;
+  active_from: string;
+  active_to: string | null;
 }
 
 export const DRIVER_COLS =
   "id,name,first_name,last_name,phone,notes," +
-  "email,address,license_number,license_state,license_exp,medical_card_exp,dob";
+  "email,address,license_number,license_state,license_exp,medical_card_exp,dob," +
+  "active_from,active_to";
 
 export function rowToDriver(r: DbDriverRow): Driver {
   return {
@@ -54,7 +57,13 @@ export function rowToDriver(r: DbDriverRow): Driver {
     licenseExp:     r.license_exp     ?? undefined,
     medicalCardExp: r.medical_card_exp?? undefined,
     dob:            r.dob             ?? undefined,
+    activeFrom:     r.active_from,
+    activeTo:       r.active_to,
   };
+}
+
+function todayUtcDateKey(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 /** Match web's normalizePhone: keep '+' and digits, strip everything else. */
@@ -87,12 +96,14 @@ drivers.post("/", requireCapability("drivers.create"), async (c) => {
     return c.json({ error: "validation_failed", errors: ["name required"] } satisfies ApiErrorResponse, 400);
   }
   const insert = {
-    org_id:     orgId,
-    name:       body.name,
-    first_name: body.firstName ?? null,
-    last_name:  body.lastName  ?? null,
-    phone:      normalizePhone(body.phone),
-    notes:      body.notes     ?? null,
+    org_id:      orgId,
+    name:        body.name,
+    first_name:  body.firstName ?? null,
+    last_name:   body.lastName  ?? null,
+    phone:       normalizePhone(body.phone),
+    notes:       body.notes     ?? null,
+    active_from: body.activeFrom ?? todayUtcDateKey(),
+    active_to:   body.activeTo   ?? null,
   };
   const { data, error } = await supabase
     .from("drivers")
@@ -127,6 +138,8 @@ drivers.patch("/:id", requireCapability("drivers.edit"), async (c) => {
   if ("licenseExp"     in body) update.license_exp      = body.licenseExp ?? null;
   if ("medicalCardExp" in body) update.medical_card_exp = body.medicalCardExp ?? null;
   if ("dob"            in body) update.dob              = body.dob ?? null;
+  if ("activeFrom"     in body) update.active_from      = body.activeFrom;
+  if ("activeTo"       in body) update.active_to        = body.activeTo ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }
@@ -146,22 +159,41 @@ drivers.patch("/:id", requireCapability("drivers.edit"), async (c) => {
   return c.json(res);
 });
 
+// DELETE now retires the driver (sets active_to = today). Historical
+// loads keep their driver_id reference. The events.driver_id FK is
+// ON DELETE RESTRICT after the lifecycle migration, so a true hard-
+// delete would be blocked while any events reference this driver
+// anyway. Idempotent — if already retired, returns current state.
 drivers.delete("/:id", requireCapability("drivers.delete"), async (c) => {
   const orgId = c.get("orgId");
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) {
     return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
   }
-  const { error } = await supabase
+  const today = todayUtcDateKey();
+  const { data, error } = await supabase
     .from("drivers")
-    .delete()
+    .update({ active_to: today } as never)
     .eq("id", id)
-    .eq("org_id", orgId);
+    .eq("org_id", orgId)
+    .is("active_to", null)
+    .select(DRIVER_COLS)
+    .maybeSingle();
   if (error) {
-    console.error("[DELETE /v1/drivers/:id] failed:", error);
-    return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    console.error("[DELETE /v1/drivers/:id] retire failed:", error);
+    return c.json({ error: "retire_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  return c.body(null, 204);
+  if (!data) {
+    const { data: existing } = await supabase
+      .from("drivers")
+      .select(DRIVER_COLS)
+      .eq("id", id)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+    return c.json({ driver: rowToDriver(existing as unknown as DbDriverRow) });
+  }
+  return c.json({ driver: rowToDriver(data as unknown as DbDriverRow) });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

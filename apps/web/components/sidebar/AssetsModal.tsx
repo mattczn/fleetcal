@@ -533,15 +533,20 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         emptyLabel="No loads found for this asset"
       />
 
-      {/* Delete — gated on assets.delete; dispatchers see no Delete UI
-          (the API would 403 them anyway, and the gate avoids the
-          optimistic-then-rollback flicker). */}
+      {/* Retire — gated on assets.delete. Underlying API now stamps
+          active_to = today rather than hard-deleting; historical loads
+          stay attached. If already retired, show that state instead of
+          the retire button. */}
       {canDelete && (
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-        {confirmDelete ? (
+        {asset.activeTo ? (
+          <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
+            Retired on <strong>{asset.activeTo}</strong>. This asset no longer appears on the calendar after that date. Historical loads remain attached.
+          </div>
+        ) : confirmDelete ? (
           <div className="flex items-center gap-3">
             <span className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
-              Remove <strong>{asset.name}</strong>? This cannot be undone.
+              Retire <strong>{asset.name}</strong>? It'll drop off the calendar starting today. Existing loads stay attached and you can review them in history.
             </span>
             <button
               onClick={onRemove}
@@ -549,7 +554,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
               style={{ background: '#d93025' }}
               onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
               onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-              Remove
+              Retire
             </button>
             <button
               onClick={() => setConfirmDelete(false)}
@@ -568,7 +573,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
             onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.08)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <Trash2 size={14} />
-            Delete Asset
+            Retire Asset
           </button>
         )}
       </div>

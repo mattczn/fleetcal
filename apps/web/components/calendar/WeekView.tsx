@@ -4,7 +4,8 @@ import { Fragment } from 'react';
 import { Truck } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { CalendarEvent } from '@/lib/types';
-import { localDateStr, todayStrInTz } from '@/lib/time-utils';
+import { localDateStr, todayStrInTz, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
+import { isActiveInRange } from '@/lib/lifecycle';
 
 const ASSET_GUTTER = 140;
 const HEADER_H     = 68;
@@ -47,19 +48,28 @@ interface WeekEventLayout {
   lane: number;
 }
 
-function computeWeekLayout(events: CalendarEvent[], weekDayStrs: string[]): WeekEventLayout[] {
+function computeWeekLayout(events: CalendarEvent[], weekDayStrs: string[], viewTz: string): WeekEventLayout[] {
   const weekStart = weekDayStrs[0];
   const weekEnd   = weekDayStrs[6];
 
-  const relevant = events
-    .filter(e => e.start.split('T')[0] <= weekEnd && e.end.split('T')[0] >= weekStart)
-    .sort((a, b) => a.start.localeCompare(b.start));
+  // Shift events to view-tz before laying them out so a "MT 23:00" event
+  // that lands on Tuesday in MT but Wednesday in ET appears in the right
+  // column when the user switches their setting.
+  const shifted = events.map(e => ({
+    event: e,
+    viewStart: naiveHomeToView(e.start, viewTz),
+    viewEnd:   naiveHomeToView(e.end,   viewTz),
+  }));
 
-  const withFrac = relevant.map(event => {
-    const eStartDate = event.start.split('T')[0];
-    const eEndDate   = event.end.split('T')[0];
-    const eStartTime = event.start.split('T')[1]?.slice(0, 5) ?? '00:00';
-    const eEndTime   = event.end.split('T')[1]?.slice(0, 5)   ?? '00:00';
+  const relevant = shifted
+    .filter(s => s.viewStart.split('T')[0] <= weekEnd && s.viewEnd.split('T')[0] >= weekStart)
+    .sort((a, b) => a.viewStart.localeCompare(b.viewStart));
+
+  const withFrac = relevant.map(({ event, viewStart, viewEnd }) => {
+    const eStartDate = viewStart.split('T')[0];
+    const eEndDate   = viewEnd.split('T')[0];
+    const eStartTime = viewStart.split('T')[1]?.slice(0, 5) ?? '00:00';
+    const eEndTime   = viewEnd.split('T')[1]?.slice(0, 5)   ?? '00:00';
 
     const startsBefore = eStartDate < weekStart;
     const endsAfter    = eEndDate   > weekEnd;
@@ -96,13 +106,23 @@ function computeWeekLayout(events: CalendarEvent[], weekDayStrs: string[]): Week
 export default function WeekView() {
   const { assets: allAssets, events, currentDate, rowHeight, openEditModal, openCreateModal, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
-  const assets = [
-    ...(unassignedAsset ? [unassignedAsset] : []),
-    ...allAssets.filter(a => !a.hidden && a.id !== unassignedAssetId && (activeCategoryFilter === null || a.type === activeCategoryFilter)),
-  ];
 
   const weekDays    = getWeekDays(currentDate);
   const weekDayStrs = weekDays.map(d => localDateStr(d));
+  // Filter assets to those active any day in the visible week. A
+  // truck retired mid-week still shows so its loads stay visible.
+  const weekStart = weekDayStrs[0];
+  const weekEnd   = weekDayStrs[weekDayStrs.length - 1];
+
+  const assets = [
+    ...(unassignedAsset ? [unassignedAsset] : []),
+    ...allAssets.filter(a =>
+      !a.hidden
+      && a.id !== unassignedAssetId
+      && (activeCategoryFilter === null || a.type === activeCategoryFilter)
+      && isActiveInRange(a, weekStart, weekEnd)
+    ),
+  ];
   const todayStr    = todayStrInTz(calendarTimezone);
 
   return (
@@ -176,7 +196,7 @@ export default function WeekView() {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {assets.map(asset => {
             const assetEvents = events.filter(e => e.assetId === asset.id);
-            const layout      = computeWeekLayout(assetEvents, weekDayStrs);
+            const layout      = computeWeekLayout(assetEvents, weekDayStrs, calendarTimezone);
             const numLanes    = layout.length === 0 ? 1 : Math.max(...layout.map(l => l.lane)) + 1;
 
             return (
@@ -241,8 +261,9 @@ export default function WeekView() {
                       style={{ left: `${(i / 7) * 100}%`, width: `${(1 / 7) * 100}%` }}
                       onClick={() => openCreateModal({
                         assetId: asset.id,
-                        start:   `${dStr}T08:00`,
-                        end:     `${dStr}T17:00`,
+                        // Clicked day is in view-tz; convert to HOME_TZ for storage.
+                        start: naiveViewToHome(`${dStr}T08:00`, calendarTimezone),
+                        end:   naiveViewToHome(`${dStr}T17:00`, calendarTimezone),
                       })}
                     >
                       <div className="absolute inset-0 group-hover:bg-blue-50/20 transition-colors pointer-events-none" />
@@ -253,8 +274,8 @@ export default function WeekView() {
                   {layout.map(({ event, leftFrac, rightFrac, lane }) => {
                     const topPct    = (lane / numLanes) * 100;
                     const heightPct = (1 / numLanes) * 100;
-                    const startTime = event.start.split('T')[1]?.slice(0, 5) ?? '';
-                    const endTime   = event.end.split('T')[1]?.slice(0, 5)   ?? '';
+                    const startTime = naiveHomeToView(event.start, calendarTimezone).split('T')[1]?.slice(0, 5) ?? '';
+                    const endTime   = naiveHomeToView(event.end,   calendarTimezone).split('T')[1]?.slice(0, 5) ?? '';
                     const widthFrac = rightFrac - leftFrac;
 
                     return (

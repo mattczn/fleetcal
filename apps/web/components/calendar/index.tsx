@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useCalendarStore, DragState } from '@/store/useCalendarStore';
-import { GUTTER_W, hoursToTimeStr, addMsToNaiveDatetime } from '@/lib/time-utils';
+import { GUTTER_W, hoursToTimeStr, addMsToNaiveDatetime, naiveViewToHome } from '@/lib/time-utils';
+import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import CalendarHeader from './CalendarHeader';
 import CalendarColumn from './CalendarColumn';
 import HourGutter from './HourGutter';
@@ -30,11 +31,32 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function CalendarView() {
-  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked, currentDate, viewMode } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
+  // Date range the calendar is currently displaying. Day view = just
+  // currentDate. Week view = the Mon-Sun containing it. Assets that
+  // were retired (activeTo set) before this range, or not yet started
+  // (activeFrom after this range), are filtered out.
+  const viewRange = (() => {
+    if (viewMode === 'week') {
+      const d = new Date(currentDate);
+      const dow = d.getDay(); // Sun=0, Mon=1, ...
+      const mondayOffset = dow === 0 ? -6 : 1 - dow;
+      const mon = new Date(d); mon.setDate(d.getDate() + mondayOffset);
+      const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+      return { start: dateKeyOf(mon), end: dateKeyOf(sun) };
+    }
+    const k = dateKeyOf(currentDate);
+    return { start: k, end: k };
+  })();
   const assets = [
     ...(unassignedAsset ? [unassignedAsset] : []),
-    ...allAssets.filter(a => !a.hidden && a.id !== unassignedAssetId && (activeCategoryFilter === null || a.type === activeCategoryFilter)),
+    ...allAssets.filter(a =>
+      !a.hidden
+      && a.id !== unassignedAssetId
+      && (activeCategoryFilter === null || a.type === activeCategoryFilter)
+      && isActiveInRange(a, viewRange.start, viewRange.end)
+    ),
   ];
   const scrollRef  = useRef<HTMLDivElement>(null);
   const gridBodyRef = useRef<HTMLDivElement>(null);
@@ -77,11 +99,30 @@ export default function CalendarView() {
       const ds = dragStateRef.current;
       if (!ds || !gridBodyRef.current) return;
 
-      const { assets: allAssets, resourceWidth: rw, rowHeight: hourH, setDragState, events, activeCategoryFilter: catFilter, showUnassigned: su, unassignedAssetId: uaid } = useCalendarStore.getState();
+      const { assets: allAssets, resourceWidth: rw, rowHeight: hourH, setDragState, events, activeCategoryFilter: catFilter, showUnassigned: su, unassignedAssetId: uaid, currentDate: dragCurrentDate, viewMode: dragViewMode } = useCalendarStore.getState();
       const unassignedInDrag = su && uaid !== null ? allAssets.find(a => a.id === uaid) ?? null : null;
+      // Same date-range filter as the render path so drag-target
+      // resolution stays in sync with what's visually showing.
+      const dragRange = (() => {
+        if (dragViewMode === 'week') {
+          const d = new Date(dragCurrentDate);
+          const dow = d.getDay();
+          const mondayOffset = dow === 0 ? -6 : 1 - dow;
+          const mon = new Date(d); mon.setDate(d.getDate() + mondayOffset);
+          const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+          return { start: dateKeyOf(mon), end: dateKeyOf(sun) };
+        }
+        const k = dateKeyOf(dragCurrentDate);
+        return { start: k, end: k };
+      })();
       const assets = [
         ...(unassignedInDrag ? [unassignedInDrag] : []),
-        ...allAssets.filter(a => !a.hidden && a.id !== uaid && (catFilter === null || a.type === catFilter)),
+        ...allAssets.filter(a =>
+          !a.hidden
+          && a.id !== uaid
+          && (catFilter === null || a.type === catFilter)
+          && isActiveInRange(a, dragRange.start, dragRange.end)
+        ),
       ];
       const gridRect = gridBodyRef.current.getBoundingClientRect();
       const xInGrid  = e.clientX - gridRect.left;
@@ -120,15 +161,19 @@ export default function CalendarView() {
     const handleMouseUp = () => {
       const ds = dragStateRef.current;
       if (ds) {
-        const { updateEvent, openEditModal, setDragState } = useCalendarStore.getState();
+        const { updateEvent, openEditModal, setDragState, calendarTimezone } = useCalendarStore.getState();
         if (ds.hasMoved) {
           const { driverPrefs, drivers } = useCalendarStore.getState();
           const prefDriverId = driverPrefs[ds.targetAssetId];
           const prefDriver   = prefDriverId != null ? drivers.find(d => d.id === prefDriverId) : undefined;
+          // ds.newStart/newEnd are in view-tz space (drag operates on
+          // view-positioned blocks — see CalendarEvent.tsx). Convert
+          // back to HOME_TZ before persisting so the round-trip is
+          // stable.
           updateEvent(ds.eventId, {
             assetId:    ds.targetAssetId,
-            start:      ds.newStart,
-            end:        ds.newEnd,
+            start:      naiveViewToHome(ds.newStart, calendarTimezone),
+            end:        naiveViewToHome(ds.newEnd,   calendarTimezone),
             ...(prefDriver ? { driverName: prefDriver.name } : {}),
           });
           // Prevent the upcoming click from firing the column create handler
