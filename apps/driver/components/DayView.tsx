@@ -10,6 +10,8 @@ import {
   RelayChip, NonRevChip, DiagonalStripes,
   fmtTimeRangeShort,
 } from "@/lib/loadCard";
+import { useDriverSession } from "@/lib/useDriverSession";
+import { useOrgTz, nowInTz, todayKeyInTz } from "@/lib/orgTz";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -28,22 +30,30 @@ function pad(n: number) { return String(n).padStart(2, "0"); }
 function dateKeyFromDate(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
-function todayKey(): string { return dateKeyFromDate(new Date()); }
 
-function fmtDayHeader(dateKey: string): string {
-  const d = new Date(`${dateKey}T00:00:00`);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const same = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+/** Shift a "YYYY-MM-DD" key by N days, anchored on noon to avoid
+ *  DST-edge weirdness (a midnight anchor can land on the missing or
+ *  duplicate hour at a transition and drift). */
+function shiftDateKey(dateKey: string, days: number): string {
+  const d = new Date(`${dateKey}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return dateKeyFromDate(d);
+}
+
+/** Header label for a date pane. `todayKey` MUST be passed in by the
+ *  caller — derived from the org tz, not the device. Otherwise "Today"
+ *  would mean "today in the device's tz" which is the bug we're
+ *  killing. */
+function fmtDayHeader(dateKey: string, todayKey: string): string {
+  const d = new Date(`${dateKey}T12:00:00`);
+  const todayD = new Date(`${todayKey}T12:00:00`);
   const dateLabel = d.toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric",
-    year: today.getFullYear() !== d.getFullYear() ? "numeric" : undefined,
+    year: todayD.getFullYear() !== d.getFullYear() ? "numeric" : undefined,
   });
-  if (same(d, today)) return `Today · ${dateLabel}`;
-  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  if (same(d, tomorrow)) return `Tomorrow · ${dateLabel}`;
-  const yest = new Date(today); yest.setDate(today.getDate() - 1);
-  if (same(d, yest)) return `Yesterday · ${dateLabel}`;
+  if (dateKey === todayKey)                       return `Today · ${dateLabel}`;
+  if (dateKey === shiftDateKey(todayKey,  1))     return `Tomorrow · ${dateLabel}`;
+  if (dateKey === shiftDateKey(todayKey, -1))     return `Yesterday · ${dateLabel}`;
   return dateLabel;
 }
 
@@ -151,14 +161,17 @@ function HourGrid() {
   );
 }
 
-function NowLine({ dateKey }: { dateKey: string }) {
+function NowLine({ dateKey, todayKey, orgTz }: { dateKey: string; todayKey: string; orgTz: string | null }) {
   const [, force] = useState(0);
   React.useEffect(() => {
     const id = setInterval(() => force((n) => n + 1), 60_000);
     return () => clearInterval(id);
   }, []);
-  if (dateKey !== todayKey()) return null;
-  const now = new Date();
+  if (dateKey !== todayKey) return null;
+  // Position the red line at the current hour IN THE ORG'S TZ — not
+  // the device's. Events are laid out by their naive ISO time-of-day
+  // (also org-tz), so this keeps the line aligned with the events.
+  const now = nowInTz(orgTz);
   const top = (now.getHours() + now.getMinutes() / 60) * HOUR_HEIGHT;
   return (
     <View style={{ position: "absolute", top, left: HOUR_LABEL_WIDTH - 4, right: 8, zIndex: 10, flexDirection: "row", alignItems: "center" }}>
@@ -227,7 +240,12 @@ function EventBlock({ ev, paneWidth }: { ev: PositionedEvent; paneWidth: number 
   );
 }
 
-function DayPane({ dateKey, loads }: { dateKey: string; loads: Load[] }) {
+function DayPane({ dateKey, loads, todayKey, orgTz }: {
+  dateKey: string;
+  loads: Load[];
+  todayKey: string;
+  orgTz: string | null;
+}) {
   const events = useMemo(
     () => assignLanes(
       loads.map((l) => positionFor(l, dateKey)).filter((p): p is PositionedEvent => p !== null),
@@ -253,7 +271,7 @@ function DayPane({ dateKey, loads }: { dateKey: string; loads: Load[] }) {
       showsVerticalScrollIndicator
     >
       <HourGrid />
-      <NowLine dateKey={dateKey} />
+      <NowLine dateKey={dateKey} todayKey={todayKey} orgTz={orgTz} />
       {events.map((ev) => <EventBlock key={ev.load.id} ev={ev} paneWidth={SCREEN_W} />)}
     </ScrollView>
   );
@@ -262,16 +280,21 @@ function DayPane({ dateKey, loads }: { dateKey: string; loads: Load[] }) {
 export interface DayViewHandle { goToToday: () => void; }
 
 export const DayView = React.forwardRef<DayViewHandle, { loads: Load[] }>(({ loads }, ref) => {
+  // Org tz must drive "today" — otherwise the centered date and the
+  // "Today" header refer to the device's local day, which can be one
+  // day ahead/behind the org around midnight.
+  const session = useDriverSession();
+  const driver = session.status === "matched" ? session.driver : null;
+  const orgTz = useOrgTz(driver?.driverId, driver?.orgId);
+
+  const todayKey = useMemo(() => todayKeyInTz(orgTz), [orgTz]);
   const dateKeys = useMemo(() => {
     const out: string[] = [];
-    const center = new Date();
     for (let i = -DAY_RANGE; i <= DAY_RANGE; i++) {
-      const d = new Date(center);
-      d.setDate(center.getDate() + i);
-      out.push(dateKeyFromDate(d));
+      out.push(shiftDateKey(todayKey, i));
     }
     return out;
-  }, []);
+  }, [todayKey]);
   const todayIndex = DAY_RANGE;
   const [currentIndex, setCurrentIndex] = useState(todayIndex);
   const flatListRef = useRef<FlatList>(null);
@@ -303,7 +326,7 @@ export const DayView = React.forwardRef<DayViewHandle, { loads: Load[] }>(({ loa
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: "center" }}>
           <Text style={[txt(800), { fontSize: 15, color: "#202124", letterSpacing: -0.2 }]} numberOfLines={1}>
-            {fmtDayHeader(currentKey)}
+            {fmtDayHeader(currentKey, todayKey)}
           </Text>
         </View>
         <TouchableOpacity onPress={goNext} activeOpacity={0.6}
@@ -326,7 +349,7 @@ export const DayView = React.forwardRef<DayViewHandle, { loads: Load[] }>(({ loa
           const idx = Math.round(e.nativeEvent.contentOffset.x / SCREEN_W);
           if (idx !== currentIndex) setCurrentIndex(idx);
         }}
-        renderItem={({ item }) => <DayPane dateKey={item} loads={loads} />}
+        renderItem={({ item }) => <DayPane dateKey={item} loads={loads} todayKey={todayKey} orgTz={orgTz} />}
       />
     </View>
   );

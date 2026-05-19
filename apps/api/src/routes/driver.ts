@@ -536,12 +536,16 @@ driver.get("/loads/:id", async (c) => {
 });
 
 // GET /v1/driver/org-settings — the subset of org_settings the driver app
-// actually reads. Right now that's just showDriverPay; defaults to false.
+// actually reads. Returns:
+//   - showDriverPay: gates the Pay row on the driver-app load card
+//   - timezone:      sanitized IANA from rate_con_settings.promptVariables.timezone
+//                    so the driver app can render all "now"/"today" math in
+//                    the org's dispatch zone instead of the device's tz.
 driver.get("/org-settings", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay")
+    .select("show_driver_pay,rate_con_settings")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -551,9 +555,30 @@ driver.get("/org-settings", async (c) => {
       return c.json({ error: "fetch_failed", detail: error.message }, 500);
     }
   }
-  const showDriverPay = (data as { show_driver_pay: boolean } | null)?.show_driver_pay ?? false;
-  return c.json({ settings: { showDriverPay } });
+  const row = data as {
+    show_driver_pay:   boolean;
+    rate_con_settings: { promptVariables?: { timezone?: string } } | null;
+  } | null;
+  const showDriverPay = row?.show_driver_pay ?? false;
+  const rawTz = row?.rate_con_settings?.promptVariables?.timezone ?? null;
+  const timezone = sanitizeTz(rawTz);
+  return c.json({ settings: { showDriverPay, timezone } });
 });
+
+// Pull the IANA portion ("America/Denver") out of values like
+// "Mountain Time (America/Denver)" stored on rate_con_settings.
+// Returns null when the value doesn't contain a parseable IANA tz.
+function sanitizeTz(raw: string | null): string | null {
+  if (!raw) return null;
+  const m = raw.match(/[A-Za-z]+\/[A-Za-z_+\-]+(?:\/[A-Za-z_+\-]+)?/);
+  const candidate = m ? m[0] : raw.trim();
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    return candidate;
+  } catch {
+    return null;
+  }
+}
 
 // GET /v1/driver/trailers — list of trailers in the driver's org for the
 // trailer picker. Sort order matches the dispatch app.

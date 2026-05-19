@@ -6,9 +6,14 @@ import { railway } from "@/lib/railway";
 
 export interface OrgSettings {
   showDriverPay: boolean;
+  /** IANA tz the org's dispatch zone uses (e.g. "America/Denver").
+   *  null when the org hasn't configured one — caller is expected to
+   *  treat that as "tz info unavailable" and avoid device-tz fallback
+   *  for "now"/"today" math. */
+  timezone: string | null;
 }
 
-const DEFAULTS: OrgSettings = { showDriverPay: false };
+const DEFAULTS: OrgSettings = { showDriverPay: false, timezone: null };
 
 export async function fetchOrgSettings(_orgId: string): Promise<OrgSettings> {
   try {

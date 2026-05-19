@@ -168,7 +168,7 @@ export const railway = {
 
   // Org settings + assets + trailers
   getOrgSettings() {
-    return req<{ settings: { showDriverPay: boolean } }>("GET", "/v1/driver/org-settings");
+    return req<{ settings: { showDriverPay: boolean; timezone: string | null } }>("GET", "/v1/driver/org-settings");
   },
   listAssets() {
     return req<{

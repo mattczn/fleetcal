@@ -17,6 +17,7 @@ import {
   RelayChip, NonRevChip, StatusPill, DiagonalStripes,
   fmtTimeRangeShort, loadNumLabel,
 } from "@/lib/loadCard";
+import { useOrgTz, todayKeyInTz } from "@/lib/orgTz";
 import type { Load } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -29,20 +30,26 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
 
 function dateKeyOf(iso: string): string { return iso.slice(0, 10); }
 
-function fmtDateHeader(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  const today = new Date();    today.setHours(0, 0, 0, 0);
-  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  const yest = new Date(today);     yest.setDate(today.getDate() - 1);
-  const same = (a: Date, b: Date) =>
-    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+/** Shift a "YYYY-MM-DD" key by N days. Noon anchor avoids DST edge cases. */
+function shiftDateKey(key: string, days: number): string {
+  const d = new Date(`${key}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Section header for a day. `todayKey` must be in the org's tz — pass
+ *  in from the caller (uses todayKeyInTz(orgTz)) so "Today" / "Tomorrow"
+ *  / "Yesterday" reflect the org's calendar day, not the device's. */
+function fmtDateHeader(dateStr: string, todayKey: string): string {
+  const d = new Date(`${dateStr}T12:00:00`);
+  const todayD = new Date(`${todayKey}T12:00:00`);
   const dateLabel = d.toLocaleDateString("en-US", {
     weekday: "short", month: "short", day: "numeric",
-    year: today.getFullYear() !== d.getFullYear() ? "numeric" : undefined,
+    year: todayD.getFullYear() !== d.getFullYear() ? "numeric" : undefined,
   });
-  if (same(d, today))    return `Today · ${dateLabel}`;
-  if (same(d, tomorrow)) return `Tomorrow · ${dateLabel}`;
-  if (same(d, yest))     return `Yesterday · ${dateLabel}`;
+  if (dateStr === todayKey)                   return `Today · ${dateLabel}`;
+  if (dateStr === shiftDateKey(todayKey,  1)) return `Tomorrow · ${dateLabel}`;
+  if (dateStr === shiftDateKey(todayKey, -1)) return `Yesterday · ${dateLabel}`;
   return dateLabel;
 }
 
@@ -166,15 +173,18 @@ export default function ScheduleScreen() {
     enabled:  !!driver,
   });
 
+  // "Today" must be in the org's tz — otherwise the count and the
+  // Today/Tomorrow/Yesterday section labels are based on the device's
+  // calendar day, which is wrong when the driver is in a different
+  // zone than the org. orgTz comes from the server (/v1/driver/org-settings).
+  const orgTz = useOrgTz(driver?.driverId, driver?.orgId);
+  const todayKey = todayKeyInTz(orgTz);
+
   const upcomingCount = useMemo(() => {
     if (!loads) return 0;
-    const todayKey = (() => {
-      const d = new Date();
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    })();
     // A load counts if its end date is today or later (i.e. not fully in the past)
     return loads.filter((l) => l.end.slice(0, 10) >= todayKey).length;
-  }, [loads]);
+  }, [loads, todayKey]);
 
   const sections = useMemo(() => {
     if (!loads) return [];
@@ -204,10 +214,10 @@ export default function ScheduleScreen() {
 
     const sortedKeys = [...groups.keys()].sort();
     return sortedKeys.map((dateStr) => ({
-      title: fmtDateHeader(dateStr),
+      title: fmtDateHeader(dateStr, todayKey),
       data:  (groups.get(dateStr) ?? []).sort((a, b) => a.load.start.localeCompare(b.load.start)),
     }));
-  }, [loads]);
+  }, [loads, todayKey]);
 
   const listRef        = React.useRef<SectionList<DayEntry>>(null);
   const listContainer  = React.useRef<View>(null);

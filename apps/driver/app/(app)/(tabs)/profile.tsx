@@ -29,6 +29,7 @@ import {
   NOTIFICATION_RULE_BLURB,
   type NotificationRuleKey,
 } from "@fleetcal/types";
+import { useOrgTz, describeTz } from "@/lib/orgTz";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -110,6 +111,10 @@ export default function ProfileScreen() {
   const [docs,       setDocs]       = useState<DriverDocument[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Org tz read-only display. Query is gated on `me` being loaded so
+  // it doesn't fire before auth context is ready.
+  const orgTz = useOrgTz(me?.driverId, me?.orgId);
 
   // Editable form state — seeded from `me` after fetch.
   const [firstName, setFirstName] = useState("");
@@ -447,6 +452,27 @@ export default function ProfileScreen() {
                       onDelete={() => deleteDoc(d)} />
                   ))
                 )}
+              </Card>
+
+              {/* Organization */}
+              <SectionHeader label="Organization" />
+              <Card>
+                <View style={{ paddingVertical: 8 }}>
+                  <FieldLabel label="Timezone" />
+                  <View style={{
+                    paddingVertical: 10, paddingHorizontal: 12,
+                    backgroundColor: "#f1f3f4",
+                    borderRadius: 8,
+                    borderWidth: 1, borderColor: "#e8eaed",
+                  }}>
+                    <Text style={[txt(700), { fontSize: 14, color: "#3c4043" }]}>
+                      {describeTz(orgTz)}
+                    </Text>
+                  </View>
+                  <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", marginTop: 6 }]}>
+                    Set by your dispatcher. All times in this app display in this timezone.
+                  </Text>
+                </View>
               </Card>
 
               {/* Notifications */}
