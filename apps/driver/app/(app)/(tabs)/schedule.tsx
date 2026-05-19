@@ -15,8 +15,10 @@ import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
 import {
   RelayChip, NonRevChip, StatusPill, DiagonalStripes,
-  fmtTimeRangeShort, loadNumLabel,
+  fmtTimeRangeShortInTz, loadNumLabel,
 } from "@/lib/loadCard";
+import { useTzMode } from "@/lib/useTzMode";
+import { getDeviceTz, tzAbbr } from "@/lib/timeFmt";
 import type { Load } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -71,6 +73,16 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
   const isMulti  = totalDays > 1;
   const needsAction = needsConfirmation(load);
   const isNonRev   = load.eventKind === "non_revenue";
+  // Tz-aware time display: read load.start/end as if in the first
+  // stop's geocoded tz (pickup origin), render in whichever zone the
+  // TzMode toggle says. Suffix the abbreviation so it's never
+  // ambiguous which clock the driver is reading.
+  const [scheduleTzMode] = useTzMode();
+  const deviceTz = getDeviceTz();
+  const stopTz = pickup?.timezone || deviceTz;
+  const displayTz = scheduleTzMode === "device" ? deviceTz : stopTz;
+  const timeRange = fmtTimeRangeShortInTz(load, stopTz, displayTz);
+  const tzLabel = tzAbbr(displayTz);
 
   return (
     <TouchableOpacity
@@ -136,7 +148,7 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
           </Text>
           <Text style={[txt(600), { fontSize: 11, color: "#9aa0a6" }]}>·</Text>
           <Text style={[txt(600), { fontSize: 11, color: "#5f6368", flex: 1 }]} numberOfLines={1}>
-            {fmtTimeRangeShort(load)}
+            {timeRange} {tzLabel}
           </Text>
           <StatusPill status={load.status} size="small" />
           {isMulti ? (

@@ -9,6 +9,7 @@ import { View, Text } from "react-native";
 import Svg, { Defs, Pattern, Rect } from "react-native-svg";
 import { Split } from "lucide-react-native";
 import type { Load, LoadStatus, Stop } from "./types";
+import { parseNaiveIsoInTz } from "./timeFmt";
 
 // Driver app uses inline txt() helpers across files — duplicate the
 // shape here so this module doesn't depend on a shared font helper.
@@ -91,6 +92,32 @@ export function fmtTimeRangeShort(load: Pick<Load, "start" | "end">): string {
   const s = fmtTimeShort(load.start);
   const e = fmtTimeShort(load.end ?? load.start);
   return e && e !== s ? `${s}-${e}` : s;
+}
+
+/** Tz-aware variant — reads the load's naive start/end as if in
+ *  `sourceTz`, renders them in `displayTz`. Use the load's first stop's
+ *  geocoded tz as the source. */
+export function fmtTimeRangeShortInTz(
+  load: Pick<Load, "start" | "end">,
+  sourceTz: string,
+  displayTz: string,
+): string {
+  if (sourceTz === displayTz) return fmtTimeRangeShort(load);
+  return `${fmtOneShortInTz(load.start, sourceTz, displayTz)}-${fmtOneShortInTz(load.end ?? load.start, sourceTz, displayTz)}`;
+}
+
+function fmtOneShortInTz(iso: string | undefined, sourceTz: string, displayTz: string): string {
+  if (!iso) return "";
+  const utcMs = parseNaiveIsoInTz(iso, sourceTz);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: displayTz, hour: "numeric", minute: "2-digit", hour12: true,
+  }).formatToParts(new Date(utcMs));
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
+  const h  = parseInt(get("hour"), 10);
+  const mn = parseInt(get("minute"), 10);
+  const dp = get("dayPeriod").toLowerCase();
+  const tag = dp.startsWith("p") ? "p" : "a";
+  return mn === 0 ? `${h}${tag}` : `${h}:${pad2(mn)}${tag}`;
 }
 
 /** Stop appt window — "8a-12p" or "8 AM" depending on scheduleType. */
