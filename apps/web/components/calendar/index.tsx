@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCalendarStore, DragState } from '@/store/useCalendarStore';
 import { GUTTER_W, hoursToTimeStr, addMsToNaiveDatetime, naiveViewToHome } from '@/lib/time-utils';
-import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
+import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
 import CalendarHeader from './CalendarHeader';
 import CalendarColumn from './CalendarColumn';
 import HourGutter from './HourGutter';
@@ -31,23 +31,28 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function CalendarView() {
-  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked, currentDate, viewMode } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked, currentDate, viewMode, calendarTimezone } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
-  // Date range the calendar is currently displaying. Day view = just
-  // currentDate. Week view = the Mon-Sun containing it. Assets that
-  // were retired (activeTo set) before this range, or not yet started
-  // (activeFrom after this range), are filtered out.
+  // Date range the calendar is currently displaying, computed in the
+  // ORG'S tz — not the browser's — so the day boundary matches what
+  // the dispatcher considers "today." Around midnight (when browser
+  // and org tz can disagree on which day it is), this picks the org's
+  // day. Assets retired before this range, or not yet started, are
+  // filtered out.
   const viewRange = (() => {
+    const todayKey = dateKeyInTz(currentDate, calendarTimezone);
     if (viewMode === 'week') {
-      const d = new Date(currentDate);
-      const dow = d.getDay(); // Sun=0, Mon=1, ...
+      // Build the Mon-Sun containing `todayKey` using string-date math
+      // (noon anchor) to avoid DST edge drift.
+      const anchor = new Date(`${todayKey}T12:00:00`);
+      const dow = anchor.getDay();
       const mondayOffset = dow === 0 ? -6 : 1 - dow;
-      const mon = new Date(d); mon.setDate(d.getDate() + mondayOffset);
+      const mon = new Date(anchor); mon.setDate(anchor.getDate() + mondayOffset);
       const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-      return { start: dateKeyOf(mon), end: dateKeyOf(sun) };
+      const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return { start: fmt(mon), end: fmt(sun) };
     }
-    const k = dateKeyOf(currentDate);
-    return { start: k, end: k };
+    return { start: todayKey, end: todayKey };
   })();
   const assets = [
     ...(unassignedAsset ? [unassignedAsset] : []),
@@ -99,21 +104,22 @@ export default function CalendarView() {
       const ds = dragStateRef.current;
       if (!ds || !gridBodyRef.current) return;
 
-      const { assets: allAssets, resourceWidth: rw, rowHeight: hourH, setDragState, events, activeCategoryFilter: catFilter, showUnassigned: su, unassignedAssetId: uaid, currentDate: dragCurrentDate, viewMode: dragViewMode } = useCalendarStore.getState();
+      const { assets: allAssets, resourceWidth: rw, rowHeight: hourH, setDragState, events, activeCategoryFilter: catFilter, showUnassigned: su, unassignedAssetId: uaid, currentDate: dragCurrentDate, viewMode: dragViewMode, calendarTimezone: dragTz } = useCalendarStore.getState();
       const unassignedInDrag = su && uaid !== null ? allAssets.find(a => a.id === uaid) ?? null : null;
       // Same date-range filter as the render path so drag-target
       // resolution stays in sync with what's visually showing.
       const dragRange = (() => {
+        const todayKey = dateKeyInTz(dragCurrentDate, dragTz);
         if (dragViewMode === 'week') {
-          const d = new Date(dragCurrentDate);
-          const dow = d.getDay();
+          const anchor = new Date(`${todayKey}T12:00:00`);
+          const dow = anchor.getDay();
           const mondayOffset = dow === 0 ? -6 : 1 - dow;
-          const mon = new Date(d); mon.setDate(d.getDate() + mondayOffset);
+          const mon = new Date(anchor); mon.setDate(anchor.getDate() + mondayOffset);
           const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-          return { start: dateKeyOf(mon), end: dateKeyOf(sun) };
+          const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          return { start: fmt(mon), end: fmt(sun) };
         }
-        const k = dateKeyOf(dragCurrentDate);
-        return { start: k, end: k };
+        return { start: todayKey, end: todayKey };
       })();
       const assets = [
         ...(unassignedInDrag ? [unassignedInDrag] : []),

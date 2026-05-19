@@ -8,7 +8,7 @@ import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import VehicleMapPanel from './VehicleMapPanel';
 import type { Asset } from '@/lib/types';
 import { tzAbbr } from '@/lib/time-utils';
-import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
+import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
 
 const POLL_MS = 30 * 60_000; // 30 minutes
 
@@ -99,19 +99,20 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 export default function CalendarHeader() {
   const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
-  // Date range that matches the calendar grid below — same logic, so
-  // header chips align with the columns shown.
+  // Date range that matches the calendar grid below — same logic +
+  // same org-tz interpretation, so header chips align with columns.
   const viewRange = (() => {
+    const todayKey = dateKeyInTz(currentDate, calendarTimezone);
     if (viewMode === 'week') {
-      const d = new Date(currentDate);
-      const dow = d.getDay();
+      const anchor = new Date(`${todayKey}T12:00:00`);
+      const dow = anchor.getDay();
       const mondayOffset = dow === 0 ? -6 : 1 - dow;
-      const mon = new Date(d); mon.setDate(d.getDate() + mondayOffset);
+      const mon = new Date(anchor); mon.setDate(anchor.getDate() + mondayOffset);
       const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-      return { start: dateKeyOf(mon), end: dateKeyOf(sun) };
+      const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return { start: fmt(mon), end: fmt(sun) };
     }
-    const k = dateKeyOf(currentDate);
-    return { start: k, end: k };
+    return { start: todayKey, end: todayKey };
   })();
   const visibleAssets = [
     ...(unassignedAsset ? [unassignedAsset] : []),

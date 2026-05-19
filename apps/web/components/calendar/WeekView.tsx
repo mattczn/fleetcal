@@ -5,7 +5,7 @@ import { Truck } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { CalendarEvent } from '@/lib/types';
 import { localDateStr, todayStrInTz, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
-import { isActiveInRange } from '@/lib/lifecycle';
+import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
 
 const ASSET_GUTTER = 140;
 const HEADER_H     = 68;
@@ -111,8 +111,18 @@ export default function WeekView() {
   const weekDayStrs = weekDays.map(d => localDateStr(d));
   // Filter assets to those active any day in the visible week. A
   // truck retired mid-week still shows so its loads stay visible.
-  const weekStart = weekDayStrs[0];
-  const weekEnd   = weekDayStrs[weekDayStrs.length - 1];
+  // Computed in the ORG'S tz (not browser) so the Mon-Sun boundary
+  // matches the dispatcher's clock around midnight edges.
+  const { weekStart, weekEnd } = (() => {
+    const todayKey = dateKeyInTz(currentDate, calendarTimezone);
+    const anchor = new Date(`${todayKey}T12:00:00`);
+    const dow = anchor.getDay();
+    const mondayOffset = dow === 0 ? -6 : 1 - dow;
+    const mon = new Date(anchor); mon.setDate(anchor.getDate() + mondayOffset);
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { weekStart: fmt(mon), weekEnd: fmt(sun) };
+  })();
 
   const assets = [
     ...(unassignedAsset ? [unassignedAsset] : []),
