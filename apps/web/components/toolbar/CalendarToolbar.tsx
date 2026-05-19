@@ -10,6 +10,7 @@ import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
 import Tooltip from '@/components/ui/Tooltip';
 import { Authorize } from '@/components/Authorize';
+import DatePicker from '@/components/calendar/DatePicker';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -231,10 +232,33 @@ export default function CalendarToolbar() {
         ))}
       </div>
 
-      {/* Date label */}
-      <h1 suppressHydrationWarning className="text-xl font-normal hidden lg:block whitespace-nowrap shrink-0" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.2px' }}>
-        {formatToolbarDate(currentDate, viewMode)}
-      </h1>
+      {/* Date label — same popup picker as the load modal. Click to
+          jump to a specific date; clicking opens the month calendar.
+          We keep the toolbar's existing label format (compact for
+          day view, range for week view) via the displayText override
+          and strip the picker's default border so it sits flush like
+          the original h1 did. */}
+      <div suppressHydrationWarning className="hidden lg:block shrink-0">
+        <DatePicker
+          value={localDateStr(currentDate)}
+          onChange={(v) => {
+            const [y, m, d] = v.split('-').map(Number);
+            setCurrentDate(new Date(y, m - 1, d));
+          }}
+          headerColor="#1a73e8"
+          displayText={formatToolbarDate(currentDate, viewMode)}
+          buttonStyle={{
+            width: 'auto',
+            border: 'none',
+            background: 'transparent',
+            padding: '4px 8px',
+            fontSize: 20,
+            fontWeight: 400,
+            letterSpacing: '-0.2px',
+            color: 'var(--gc-text-1)',
+          }}
+        />
+      </div>
 
       {/* Command Center */}
       <Link

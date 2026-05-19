@@ -9,6 +9,19 @@ interface Props {
   headerColor: string;
   min?: string;
   required?: boolean;
+  /** Override the button label. When omitted, falls back to
+   *  `formatDisplay(value)` ("Sat, May 19, 2026"). Useful for the
+   *  calendar toolbar which wants to show a custom format
+   *  ("May 19 – 25, 2026" for the week range). */
+  displayText?: string;
+  /** Optional className passed to the trigger button. Lets callers
+   *  swap the visual style (e.g. the toolbar wants a borderless
+   *  header label, not a bordered input). */
+  buttonClassName?: string;
+  /** Optional inline style overrides for the trigger button. Merged
+   *  on top of the defaults so callers can drop the border, change
+   *  font size, etc. without rebuilding the trigger from scratch. */
+  buttonStyle?: React.CSSProperties;
 }
 
 const DOW   = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -28,7 +41,7 @@ function todayStr(): string {
   return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
 }
 
-export default function DatePicker({ value, onChange, headerColor, min, required }: Props) {
+export default function DatePicker({ value, onChange, headerColor, min, required, displayText, buttonClassName, buttonStyle }: Props) {
   const [open, setOpen]         = useState(false);
   const [popupPos, setPopupPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [viewYear, setVY]       = useState(() => value ? parseInt(value.slice(0, 4)) : new Date().getFullYear());
@@ -102,6 +115,7 @@ export default function DatePicker({ value, onChange, headerColor, min, required
         ref={btnRef}
         type="button"
         onClick={handleOpen}
+        className={buttonClassName}
         style={{
           width: '100%',
           border: `1px solid ${open ? headerColor : 'var(--gc-border)'}`,
@@ -116,9 +130,10 @@ export default function DatePicker({ value, onChange, headerColor, min, required
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
+          ...buttonStyle,
         }}
       >
-        {value ? formatDisplay(value) : 'Select date…'}
+        {displayText ?? (value ? formatDisplay(value) : 'Select date…')}
       </button>
 
       {/* Calendar popover — fixed so it escapes modal overflow clipping */}
