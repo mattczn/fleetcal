@@ -807,6 +807,21 @@ export default function LoadDetailScreen() {
     onError: (err: Error) => Alert.alert("Update failed", err.message),
   });
 
+  // ── Timezone awareness ───────────────────────────────────────────────
+  // Stops carry a per-stop IANA tz from geocoding. When any stop's tz
+  // differs from the driver's device tz, we surface a banner + a toggle
+  // so the driver can flip between "stop's local" and "my phone's
+  // local" without ambiguity. Times throughout the StopCard respect
+  // the same tzMode via useTzMode.
+  //
+  // CRITICAL: this hook MUST be called above any early returns below
+  // so React's hooks order stays stable across renders. Putting it
+  // after the `if (isLoading || !load) return` early bail would crash
+  // the second render when load arrives ("rendered more hooks than
+  // during the previous render").
+  const [loadTzMode, setLoadTzMode] = useTzMode();
+  const loadDeviceTz = getDeviceTz();
+
   if (isLoading || !load) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f9fa", alignItems: "center", justifyContent: "center" }}>
@@ -825,14 +840,6 @@ export default function LoadDetailScreen() {
   // First geocoded pickup stop — used to auto-fire picked_up on its check-in.
   const firstPickupStopId = load.stops.find((s) => s.type === "pickup")?.id;
 
-  // ── Timezone awareness ───────────────────────────────────────────────
-  // Stops carry a per-stop IANA tz from geocoding. When any stop's tz
-  // differs from the driver's device tz, we surface a banner + a toggle
-  // so the driver can flip between "stop's local" and "my phone's
-  // local" without ambiguity. Times throughout the StopCard respect
-  // the same tzMode via useTzMode.
-  const [loadTzMode, setLoadTzMode] = useTzMode();
-  const loadDeviceTz = getDeviceTz();
   const primaryStopTz =
     load.stops.find((s) => s.type === "pickup")?.timezone ||
     load.stops.find((s) => s.timezone)?.timezone ||
