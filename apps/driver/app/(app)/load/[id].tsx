@@ -53,10 +53,6 @@ import { DocumentsView } from "@/components/DocumentsView";
 import { ExpandableInstructions } from "@/components/ExpandableInstructions";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { ScheduleTypeChip } from "@/lib/loadCard";
-import {
-  formatTimeInTz, tzAbbr, getDeviceTz, tzOffsetDescription,
-} from "@/lib/timeFmt";
-import { useTzMode } from "@/lib/useTzMode";
 import type { LoadStatus, Stop } from "@/lib/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -120,19 +116,9 @@ function SelectableText({ value, style }: { value: string; style: object }) {
   );
 }
 
-/** Stop times are naive ISO strings ("YYYY-MM-DDTHH:mm"). We interpret
- *  each in the stop's own geocoded timezone (stop.timezone — populated
- *  when the rate-con's address geocoded successfully). Display in
- *  either the stop's tz (default) or the driver's device tz, depending
- *  on the user's TzMode toggle. */
-function fmtTime(
-  iso: string | undefined,
-  stopTz: string | undefined | null,
-  displayTz: string,
-): string {
+function fmtTime(iso: string | undefined): string {
   if (!iso) return "—";
-  const sourceTz = stopTz || displayTz; // legacy stops without geocode: assume already in display tz
-  return formatTimeInTz(iso, sourceTz, displayTz);
+  return iso.slice(11, 16);
 }
 function fmtDate(iso: string | undefined): string {
   if (!iso) return "—";
@@ -540,18 +526,10 @@ function StopCard({
   const accent = STOP_ACCENT[stop.type];
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
-  // Time display tz: stop's own tz by default, driver's phone tz when
-  // the toggle is "device". The fmtTime helper handles the conversion;
-  // we append a short label so it's unambiguous which zone the driver
-  // is reading (MT vs ET vs CT etc.).
-  const [tzMode] = useTzMode();
-  const deviceTz = getDeviceTz();
-  const displayTz = tzMode === "device" ? deviceTz : (stop.timezone || deviceTz);
   const window =
     stop.apptStart && stop.apptEnd && stop.apptStart !== stop.apptEnd
-      ? `${fmtTime(stop.apptStart, stop.timezone, displayTz)} – ${fmtTime(stop.apptEnd, stop.timezone, displayTz)}`
-      : fmtTime(stop.apptStart, stop.timezone, displayTz);
-  const windowWithTz = `${window} ${tzAbbr(displayTz)}`;
+      ? `${fmtTime(stop.apptStart)} – ${fmtTime(stop.apptEnd)}`
+      : fmtTime(stop.apptStart);
 
   function openMaps() {
     const target =
@@ -621,7 +599,7 @@ function StopCard({
             <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
               <Clock size={12} color="#5f6368" strokeWidth={2.2} />
               <Text style={[txt(700), { fontSize: 12, color: "#3c4043" }]}>
-                {fmtDate(stop.apptStart)} · {windowWithTz}
+                {fmtDate(stop.apptStart)} · {window}
               </Text>
             </View>
             <ScheduleTypeChip stop={stop} size="small" />
@@ -807,21 +785,6 @@ export default function LoadDetailScreen() {
     onError: (err: Error) => Alert.alert("Update failed", err.message),
   });
 
-  // ── Timezone awareness ───────────────────────────────────────────────
-  // Stops carry a per-stop IANA tz from geocoding. When any stop's tz
-  // differs from the driver's device tz, we surface a banner + a toggle
-  // so the driver can flip between "stop's local" and "my phone's
-  // local" without ambiguity. Times throughout the StopCard respect
-  // the same tzMode via useTzMode.
-  //
-  // CRITICAL: this hook MUST be called above any early returns below
-  // so React's hooks order stays stable across renders. Putting it
-  // after the `if (isLoading || !load) return` early bail would crash
-  // the second render when load arrives ("rendered more hooks than
-  // during the previous render").
-  const [loadTzMode, setLoadTzMode] = useTzMode();
-  const loadDeviceTz = getDeviceTz();
-
   if (isLoading || !load) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: "#f8f9fa", alignItems: "center", justifyContent: "center" }}>
@@ -839,14 +802,6 @@ export default function LoadDetailScreen() {
 
   // First geocoded pickup stop — used to auto-fire picked_up on its check-in.
   const firstPickupStopId = load.stops.find((s) => s.type === "pickup")?.id;
-
-  const primaryStopTz =
-    load.stops.find((s) => s.type === "pickup")?.timezone ||
-    load.stops.find((s) => s.timezone)?.timezone ||
-    null;
-  const hasTzMismatch =
-    !!primaryStopTz &&
-    load.stops.some((s) => s.timezone && s.timezone !== loadDeviceTz);
 
   // After a stop check-in, if the load is en_route and the checked-in stop is the
   // first pickup, advance status to picked_up automatically.
@@ -1019,64 +974,6 @@ export default function LoadDetailScreen() {
       >
       {/* Stops tab — route map + timeline */}
       <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
-        {/* Timezone banner + toggle — only when at least one stop is
-            in a different tz than the driver's phone. Lets the driver
-            flip between "stop's local time" (default — what the
-            shipper expects) and "my phone's local time" (handy for
-            mental conversion). State persists across screens. */}
-        {hasTzMismatch && primaryStopTz && (
-          <View style={{
-            backgroundColor: "#eff6ff",
-            borderRadius: 12,
-            borderWidth: 1, borderColor: "#bfdbfe",
-            padding: 14,
-            marginBottom: 12,
-          }}>
-            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
-              <Clock size={16} color="#1d4ed8" strokeWidth={2.2} />
-              <View style={{ flex: 1 }}>
-                <Text style={[txt(700), { fontSize: 13, color: "#1e3a8a", marginBottom: 2 }]}>
-                  This load runs in {tzAbbr(primaryStopTz)}
-                </Text>
-                <Text style={[txt(500), { fontSize: 12, color: "#1e3a8a" }]}>
-                  That's {tzOffsetDescription(primaryStopTz, loadDeviceTz)}.
-                </Text>
-              </View>
-            </View>
-            <View style={{
-              flexDirection: "row",
-              marginTop: 12,
-              borderRadius: 8,
-              backgroundColor: "#ffffff",
-              borderWidth: 1, borderColor: "#bfdbfe",
-              overflow: "hidden",
-            }}>
-              {(["stop", "device"] as const).map((m) => {
-                const active = loadTzMode === m;
-                const label = m === "stop"
-                  ? `Stop time (${tzAbbr(primaryStopTz)})`
-                  : `My time (${tzAbbr(loadDeviceTz)})`;
-                return (
-                  <TouchableOpacity
-                    key={m}
-                    onPress={() => setLoadTzMode(m)}
-                    activeOpacity={0.7}
-                    style={{
-                      flex: 1,
-                      paddingVertical: 8,
-                      alignItems: "center",
-                      backgroundColor: active ? "#1d4ed8" : "transparent",
-                    }}
-                  >
-                    <Text style={[txt(700), { fontSize: 12, color: active ? "#ffffff" : "#1e3a8a" }]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        )}
         {/* Pending dispatcher nudges — surfaces every kind the dispatcher
             has asked for that's still unacknowledged. Driver sees a
             clear list of what's needed without having to remember the
