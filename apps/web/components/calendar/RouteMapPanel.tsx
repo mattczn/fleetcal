@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X, MapPin, Clock, Truck, CheckCircle2, Activity } from 'lucide-react';
 import type { Stop, StopType } from '@/lib/types';
 import { fmtStopWindow } from './StopsSection';
+import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
 const VERIFY_THRESHOLD_MI = 0.5;
@@ -70,6 +71,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
   const [truckLoc, setTruckLoc] = useState<TruckLocation | null>(null);
   const truckRef = useRef<TruckLocation | null>(null);
   const [etas, setEtas] = useState<Record<string, string | 'loading'>>({});
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
 
   const geocodedStops = stops.filter(s => s.lat != null && s.lng != null);
 
@@ -143,7 +145,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
             <div style="font-weight:700;color:${MARKER_COLORS[stop.type]}">${TYPE_CONFIG[stop.type].label}</div>
             ${stop.facilityName ? `<div style="font-weight:600">${stop.facilityName}</div>` : ''}
             ${stop.address     ? `<div style="color:#555">${stop.address}</div>` : ''}
-            ${stop.apptStart   ? `<div style="color:#888;margin-top:2px">${fmtStopWindow(stop)}</div>` : ''}
+            ${stop.apptStart   ? `<div style="color:#888;margin-top:2px">${fmtStopWindow(stop, calendarTimezone)}</div>` : ''}
           </div>`;
         const marker = new google.maps.marker.AdvancedMarkerElement({
           map,
@@ -353,7 +355,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
                   )}
                   {stop.apptStart && (
                     <div style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-                      <Clock size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />{fmtStopWindow(stop)}
+                      <Clock size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />{fmtStopWindow(stop, calendarTimezone)}
                     </div>
                   )}
                   {stop.arrivedAt && stop.arrivedLat != null && stop.arrivedLng != null && (() => {

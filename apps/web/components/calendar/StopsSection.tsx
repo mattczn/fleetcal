@@ -5,7 +5,7 @@ import { GripVertical, Plus, Trash2, MapPin, CheckCircle2, AlertCircle, Clock, L
 import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import DatePicker from './DatePicker';
-import { parseTimeInput } from '@/lib/time-utils';
+import { parseTimeInput, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 
 interface Props {
@@ -34,11 +34,19 @@ function tzAbbr(iana: string): string {
   }
 }
 
-/** Format "2026-04-23T08:00" → "Apr 23, 8:00 AM" — used by RouteMapPanel too */
-export function fmtAppt(val: string): string {
+/**
+ * Format "2026-04-23T08:00" → "Apr 23, 8:00 AM".
+ *
+ * When `viewTz` is provided, the stored naive string (anchored in
+ * HOME_TZ — see lib/time-utils.ts) is first shifted into the view
+ * timezone so the rendered time tracks the user's setting. Without
+ * `viewTz` the string is rendered as-is (legacy behavior).
+ */
+export function fmtAppt(val: string, viewTz?: string): string {
   if (!val) return val;
-  const m = val.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
-  if (!m) return val;
+  const shifted = viewTz ? naiveHomeToView(val, viewTz) : val;
+  const m = shifted.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
+  if (!m) return shifted;
   const [y, mo, d] = m[1].split('-').map(Number);
   const [h, min]   = m[2].split(':').map(Number);
   const month = new Date(y, mo - 1, d).toLocaleString('en-US', { month: 'short' });
@@ -51,11 +59,14 @@ export function fmtAppt(val: string): string {
  *   window      → "Window: Apr 23, 8:00 AM – 11:00 AM"
  *   fcfs        → "FCFS: opens Apr 23, 7:00 AM, closes 5:00 PM"
  * Falls back to legacy interpretation if scheduleType is not set.
+ *
+ * `viewTz` shifts the rendered times from HOME_TZ into the user's
+ * current view timezone (see fmtAppt). Omit for legacy behavior.
  */
-export function fmtStopWindow(stop: { apptStart?: string; apptEnd?: string; scheduleType?: string }): string {
+export function fmtStopWindow(stop: { apptStart?: string; apptEnd?: string; scheduleType?: string }, viewTz?: string): string {
   if (!stop.apptStart) return '';
-  const start = fmtAppt(stop.apptStart);
-  const end   = stop.apptEnd ? fmtAppt(stop.apptEnd) : '';
+  const start = fmtAppt(stop.apptStart, viewTz);
+  const end   = stop.apptEnd ? fmtAppt(stop.apptEnd, viewTz) : '';
   const effective = stop.scheduleType ?? (stop.apptEnd ? 'window' : 'appointment');
   if (effective === 'fcfs')   return end ? `FCFS: ${start} – ${end}` : `FCFS: opens ${start}`;
   if (effective === 'window') return end ? `Window: ${start} – ${end}` : `Window: ${start}`;
@@ -192,6 +203,12 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
   const savedLocations    = useCalendarStore(s => s.savedLocations);
   const fetchSavedLocs    = useCalendarStore(s => s.fetchSavedLocations);
   const allEvents         = useCalendarStore(s => s.events);
+  const calendarTimezone  = useCalendarStore(s => s.calendarTimezone);
+  // Stops store appt_start/appt_end in HOME_TZ but the user enters and
+  // sees times in their current view timezone. Wrap reads/writes so the
+  // form state on disk stays in HOME_TZ while the inputs reflect view tz.
+  const toView = (v: string | undefined): string => v ? naiveHomeToView(v, calendarTimezone) : '';
+  const toHome = (v: string): string => v ? naiveViewToHome(v, calendarTimezone) : '';
   const dragIdx    = useRef<number | null>(null);
   const dragOverIdx = useRef<number | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -795,12 +812,13 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                     <div>
                       <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>Driver 1 drop</div>
                       <ApptInput
-                        value={stop.apptStart ?? ''}
+                        value={toView(stop.apptStart)}
                         onChange={v => {
                           setRelayTimeError(null);
-                          update(idx, { apptStart: v });
+                          const stored = toHome(v);
+                          update(idx, { apptStart: stored });
                           // Warn (but don't block) if drop ends up after Driver 2 pickup
-                          if (stop.apptEnd && v && v > stop.apptEnd) {
+                          if (stop.apptEnd && stored && stored > stop.apptEnd) {
                             showRelayError('Driver 1 drop is after Driver 2 pickup — check times.');
                           }
                         }}
@@ -811,12 +829,13 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                     <div>
                       <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6d28d9', marginBottom: 3 }}>Driver 2 pickup</div>
                       <ApptInput
-                        value={stop.apptEnd ?? ''}
+                        value={toView(stop.apptEnd)}
                         onChange={v => {
                           setRelayTimeError(null);
-                          update(idx, { apptEnd: v });
+                          const stored = toHome(v);
+                          update(idx, { apptEnd: stored });
                           // Warn (but don't block) if pickup ends up before Driver 1 drop
-                          if (stop.apptStart && v && v < stop.apptStart) {
+                          if (stop.apptStart && stored && stored < stop.apptStart) {
                             showRelayError('Driver 2 pickup is before Driver 1 drop — check times.');
                           }
                         }}
@@ -860,13 +879,13 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                     {(() => {
                       const effective = stop.scheduleType ?? (stop.apptEnd ? 'window' : 'appointment');
                       if (effective === 'appointment') {
-                        return <ApptInput value={stop.apptStart ?? ''} onChange={v => update(idx, { apptStart: v, apptEnd: undefined })} placeholder="Appointment" headerColor={headerColor} />;
+                        return <ApptInput value={toView(stop.apptStart)} onChange={v => update(idx, { apptStart: toHome(v), apptEnd: undefined })} placeholder="Appointment" headerColor={headerColor} />;
                       }
                       // window OR fcfs both use a start/end pair
                       return (
                         <>
-                          <ApptInput value={stop.apptStart ?? ''} onChange={v => update(idx, { apptStart: v })} placeholder={effective === 'fcfs' ? 'Opens' : 'From'} headerColor={headerColor} />
-                          <ApptInput value={stop.apptEnd ?? ''} onChange={v => update(idx, { apptEnd: v })} placeholder={effective === 'fcfs' ? 'Closes' : 'To'} headerColor={headerColor} />
+                          <ApptInput value={toView(stop.apptStart)} onChange={v => update(idx, { apptStart: toHome(v) })} placeholder={effective === 'fcfs' ? 'Opens' : 'From'} headerColor={headerColor} />
+                          <ApptInput value={toView(stop.apptEnd)}   onChange={v => update(idx, { apptEnd:   toHome(v) })} placeholder={effective === 'fcfs' ? 'Closes' : 'To'}   headerColor={headerColor} />
                         </>
                       );
                     })()}

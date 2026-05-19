@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, MapPin, Clock, Truck, User, ExternalLink, Star, Navigation, Activity } from 'lucide-react';
 import type { CalendarEvent, Asset, EventStatus } from '@/lib/types';
-import type { EldLocation } from '@/store/useCalendarStore';
+import { useCalendarStore, type EldLocation } from '@/store/useCalendarStore';
 import { fmtStopWindow } from '@/components/calendar/StopsSection';
+import { naiveHomeToView } from '@/lib/time-utils';
 import { calcDirections } from '@/lib/directions';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import CopyChip from '@/components/ui/CopyChip';
@@ -33,9 +34,13 @@ function fmtEta(seconds: number, timezone?: string): string {
 
 type StopDistance = { miles: number; durationSeconds: number };
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  const h = d.getHours(), m = d.getMinutes();
+// Format a naive home-tz ISO as wall-clock in viewTz, e.g. "8:00 AM".
+function fmtTime(iso: string, viewTz: string): string {
+  const shifted = naiveHomeToView(iso, viewTz);
+  const t = shifted.split('T')[1]?.slice(0, 5) ?? '';
+  const [hStr, mStr] = t.split(':');
+  const h = parseInt(hStr, 10), m = parseInt(mStr, 10);
+  if (Number.isNaN(h)) return '';
   const hh = h % 12 || 12, ap = h >= 12 ? 'PM' : 'AM';
   return m === 0 ? `${hh} ${ap}` : `${hh}:${String(m).padStart(2, '0')} ${ap}`;
 }
@@ -84,6 +89,7 @@ export default function MapDrawer({ ev, asset, truckLoc, onClose, onOpenLoad, on
   const [trafficOn, setTrafficOn] = useState(true);
   const geocodedStops = (ev.stops ?? []).filter(s => s.lat != null && s.lng != null);
   const assetColor = asset?.color ?? '#64748b';
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
 
   // Per-stop ETAs from truck — fetched on demand (click)
   const [stopDistances, setStopDistances] = useState<Map<string, StopDistance | 'loading'>>(new Map());
@@ -144,7 +150,7 @@ export default function MapDrawer({ ev, asset, truckLoc, onClose, onOpenLoad, on
             <div style="font-weight:700;color:${STOP_COLORS[stop.type] ?? '#64748b'}">${STOP_LABELS[stop.type] ?? 'Stop'}</div>
             ${stop.facilityName ? `<div style="font-weight:600">${stop.facilityName}</div>` : ''}
             ${stop.address     ? `<div style="color:#555">${stop.address}</div>` : ''}
-            ${stop.apptStart   ? `<div style="color:#888;margin-top:2px">${fmtStopWindow(stop)}</div>` : ''}
+            ${stop.apptStart   ? `<div style="color:#888;margin-top:2px">${fmtStopWindow(stop, calendarTimezone)}</div>` : ''}
           </div>`;
         const marker = new google.maps.marker.AdvancedMarkerElement({
           map,
@@ -292,7 +298,7 @@ export default function MapDrawer({ ev, asset, truckLoc, onClose, onOpenLoad, on
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: truckLoc ? 6 : 0 }}>
               {ev.loadNum && <CopyChip value={ev.loadNum} style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)' }} />}
               {ev.loadNum && <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12 }}>·</span>}
-              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)' }}>{fmtTime(ev.start)} – {fmtTime(ev.end)}</span>
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)' }}>{fmtTime(ev.start, calendarTimezone)} – {fmtTime(ev.end, calendarTimezone)}</span>
               {ev.driverName && (
                 <>
                   <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12 }}>·</span>
@@ -379,7 +385,7 @@ export default function MapDrawer({ ev, asset, truckLoc, onClose, onOpenLoad, on
                         {stop.apptStart && (
                           <div style={{ fontSize: 11, color: 'var(--gc-text-3)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
                             <Clock size={10} />
-                            {fmtStopWindow(stop)}
+                            {fmtStopWindow(stop, calendarTimezone)}
                           </div>
                         )}
                         {hasCoords && truckLoc && (() => {

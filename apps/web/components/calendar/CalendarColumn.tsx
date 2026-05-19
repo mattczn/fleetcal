@@ -2,7 +2,7 @@
 
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
-import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels } from '@/lib/time-utils';
+import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 
 import CalendarEvent from './CalendarEvent';
 
@@ -19,12 +19,16 @@ interface LayoutEvent {
   top?: number;
 }
 
-function computeLayout(colEvents: EventType[], dateStr: string, rowH: number): LayoutEvent[] {
+function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, viewTz: string): LayoutEvent[] {
   if (colEvents.length === 0) return [];
 
   const items = colEvents.map(e => {
-    const top = e.start.split('T')[0] < dateStr ? 0 : timeToPixels(e.start, rowH);
-    const h = timeHeightPixels(e.start, e.end, dateStr, rowH);
+    // Layout in view-tz space — matches the positions CalendarEvent
+    // will paint, so overlap detection lines up with what users see.
+    const vs = naiveHomeToView(e.start, viewTz);
+    const ve = naiveHomeToView(e.end,   viewTz);
+    const top = vs.split('T')[0] < dateStr ? 0 : timeToPixels(vs, rowH);
+    const h = timeHeightPixels(vs, ve, dateStr, rowH);
     return { event: e, top, bottom: top + h };
   });
 
@@ -85,17 +89,21 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number): L
 }
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
-  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal } = useCalendarStore();
+  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone } = useCalendarStore();
   const dateStr = localDateStr(currentDate);
 
   const colEvents = events.filter((e) => {
     if (e.assetId !== asset.id) return false;
-    const eStart = e.start.split('T')[0];
-    const eEnd   = e.end.split('T')[0];
+    // Filter against view-tz dates so events that straddle midnight in
+    // home-tz but fall fully inside today in view-tz still render.
+    const vs = naiveHomeToView(e.start, calendarTimezone);
+    const ve = naiveHomeToView(e.end,   calendarTimezone);
+    const eStart = vs.split('T')[0];
+    const eEnd   = ve.split('T')[0];
     return eStart === dateStr || (eStart < dateStr && eEnd >= dateStr);
   });
 
-  const layoutEvents = computeLayout(colEvents, dateStr, rowHeight);
+  const layoutEvents = computeLayout(colEvents, dateStr, rowHeight, calendarTimezone);
 
   // In triage mode, position events at their real start time with a fixed 1-hour height.
   // Run the same overlap algorithm but using 1-hour bounds so side-by-side stacking works.
@@ -103,7 +111,8 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
     ? (() => {
         if (colEvents.length === 0) return [];
         const items = colEvents.map(e => {
-          const top = e.start.split('T')[0] < dateStr ? 0 : timeToPixels(e.start, rowHeight);
+          const vs = naiveHomeToView(e.start, calendarTimezone);
+          const top = vs.split('T')[0] < dateStr ? 0 : timeToPixels(vs, rowHeight);
           return { event: e, top, bottom: top + rowHeight };
         });
         items.sort((a, b) => a.top - b.top);
@@ -154,10 +163,13 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
     const startH    = Math.floor(rawHours * 4) / 4;
     const endH      = Math.min(24, startH + 1);
 
+    // Clicked position is in view-tz space; convert to HOME_TZ before
+    // storing so the round-trip through naiveHomeToView lands back on
+    // the user-clicked time.
     openCreateModal({
       assetId: asset.id,
-      start: `${dateStr}T${hoursToTimeStr(startH)}`,
-      end:   `${dateStr}T${hoursToTimeStr(endH)}`,
+      start: naiveViewToHome(`${dateStr}T${hoursToTimeStr(startH)}`, calendarTimezone),
+      end:   naiveViewToHome(`${dateStr}T${hoursToTimeStr(endH)}`,   calendarTimezone),
     });
   };
 
