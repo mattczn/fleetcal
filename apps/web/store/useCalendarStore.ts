@@ -840,6 +840,8 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(updates.notes !== undefined           ? { notes: updates.notes ?? null } : {}),
       ...(updates.hidden !== undefined          ? { hidden: updates.hidden } : {}),
       ...(updates.motiveVehicleId !== undefined ? { motiveVehicleId: updates.motiveVehicleId ?? null } : {}),
+      ...(updates.activeFrom !== undefined      ? { activeFrom: updates.activeFrom } : {}),
+      ...(updates.activeTo !== undefined        ? { activeTo: updates.activeTo ?? null } : {}),
     };
     if (Object.keys(body).length === 0) return;
     railway.updateAsset(id, body).catch((err) => console.error('updateAsset:', err));
@@ -966,6 +968,8 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(updates.licenseExp     !== undefined ? { licenseExp: updates.licenseExp ?? null } : {}),
       ...(updates.medicalCardExp !== undefined ? { medicalCardExp: updates.medicalCardExp ?? null } : {}),
       ...(updates.dob            !== undefined ? { dob: updates.dob ?? null } : {}),
+      ...(updates.activeFrom     !== undefined ? { activeFrom: updates.activeFrom } : {}),
+      ...(updates.activeTo       !== undefined ? { activeTo: updates.activeTo ?? null } : {}),
     };
     if (Object.keys(body).length === 0) return;
     railway.updateDriver(id, body).catch((err) => console.error('updateDriver:', err));

@@ -7,6 +7,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
+import LifecycleEditor from './LifecycleEditor';
 import type { Asset, CalendarEvent, Driver } from '@/lib/types';
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
@@ -533,17 +534,26 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
         emptyLabel="No loads found for this asset"
       />
 
+      {/* Lifecycle editor — set/edit the active_from and retire date.
+          Bookkeeping fixes happen here; the Retire button below is the
+          one-tap "retire today" shortcut. Both write to the same
+          fields. Gated on assets.edit (not delete) because backdating
+          active_from is a correction, not a destructive action. */}
+      <LifecycleEditor
+        activeFrom={asset.activeFrom}
+        activeTo={asset.activeTo}
+        accent={color}
+        canEdit={canEdit}
+        onSave={(changes) => save(changes)}
+      />
+
       {/* Retire — gated on assets.delete. Underlying API now stamps
           active_to = today rather than hard-deleting; historical loads
-          stay attached. If already retired, show that state instead of
-          the retire button. */}
-      {canDelete && (
+          stay attached. Skipped when already retired (the lifecycle
+          editor above shows the retire date in that case). */}
+      {canDelete && !asset.activeTo && (
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-        {asset.activeTo ? (
-          <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
-            Retired on <strong>{asset.activeTo}</strong>. This asset no longer appears on the calendar after that date. Historical loads remain attached.
-          </div>
-        ) : confirmDelete ? (
+        {confirmDelete ? (
           <div className="flex items-center gap-3">
             <span className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
               Retire <strong>{asset.name}</strong>? It'll drop off the calendar starting today. Existing loads stay attached and you can review them in history.

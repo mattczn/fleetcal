@@ -11,6 +11,7 @@ import {
 } from '@/lib/db';
 import { printPayroll, fmtDate } from '@/lib/payrollPdf';
 import LoadHistorySection from './LoadHistorySection';
+import LifecycleEditor from './LifecycleEditor';
 import type { Driver, CalendarEvent, Asset } from '@/lib/types';
 
 const ACCENT = '#1a73e8';
@@ -871,16 +872,24 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
       </div>
       )}
 
+      {/* Lifecycle editor — set/edit active_from + retire date. Backdate,
+          schedule future retirement, or un-retire here. The big Retire
+          button below remains the one-tap "retire today" shortcut. */}
+      <LifecycleEditor
+        activeFrom={driver.activeFrom}
+        activeTo={driver.activeTo}
+        accent="#1a73e8"
+        canEdit={canEdit}
+        onSave={(changes) => updateDriver(driver.id, changes)}
+      />
+
       {/* Retire — gated on drivers.delete. API now stamps active_to
           rather than hard-deleting; historical loads keep the driver
-          reference intact. */}
-      {canDelete && (
+          reference intact. Skipped when already retired (the lifecycle
+          editor above already exposes the retire date input). */}
+      {canDelete && !driver.activeTo && (
       <div className="mt-10 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-        {driver.activeTo ? (
-          <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
-            Retired on <strong>{driver.activeTo}</strong>. This driver no longer appears in pickers for new loads. Historical loads remain attached.
-          </div>
-        ) : confirmDelete ? (
+        {confirmDelete ? (
           <div className="flex items-center gap-3">
             <span className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
               Retire <strong>{driverDisplayName(driver)}</strong>? They'll drop out of new-load pickers starting today. Existing loads stay attached and visible in history.
