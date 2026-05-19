@@ -32,25 +32,46 @@ export function useOrgTz(driverId: number | null | undefined, orgId: string | nu
   return data ?? null;
 }
 
-/** Returns a Date whose .getHours() / .getDate() etc. reflect the
- *  given IANA timezone. Round-trip trick: format current moment in
- *  `tz` as a locale string, then re-parse it (which the browser does
- *  in its own local tz) — the resulting Date's .getHours() reads the
- *  tz's wall-clock hour because the offset cancelled out twice. */
-export function nowInTz(tz: string | null | undefined): Date {
-  if (!tz) return new Date();
-  try {
-    return new Date(new Date().toLocaleString("en-US", { timeZone: tz }));
-  } catch {
-    return new Date();
+/** Read current wall-clock parts in the given tz. We avoid the
+ *  `new Date(toLocaleString(...))` round-trip because Hermes (React
+ *  Native's iOS JS engine) returns Invalid Date for the en-US
+ *  locale string output. formatToParts is reliable across engines. */
+function partsInTz(tz: string | null | undefined): {
+  year: number; month: number; day: number; hour: number; minute: number;
+} {
+  if (!tz) {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes() };
   }
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? "0");
+    const hh = get("hour") === 24 ? 0 : get("hour");
+    return { year: get("year"), month: get("month"), day: get("day"), hour: hh, minute: get("minute") };
+  } catch {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(), minute: d.getMinutes() };
+  }
+}
+
+/** A Date whose .getFullYear() / .getMonth() / .getDate() / .getHours() /
+ *  .getMinutes() reflect the wall clock in `tz`. The Date's absolute
+ *  UTC instant is meaningless — only the components matter. Built
+ *  directly from formatToParts so it works on Hermes (iOS RN). */
+export function nowInTz(tz: string | null | undefined): Date {
+  const p = partsInTz(tz);
+  return new Date(p.year, p.month - 1, p.day, p.hour, p.minute, 0);
 }
 
 /** "YYYY-MM-DD" for the current calendar date in the given tz. */
 export function todayKeyInTz(tz: string | null | undefined): string {
-  const d = nowInTz(tz);
+  const p = partsInTz(tz);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
 }
 
 /** Short tz label suitable for inline display: "MT", "ET", "CT", "PT",

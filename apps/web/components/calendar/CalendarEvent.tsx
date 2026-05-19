@@ -4,7 +4,7 @@ import { useState, useRef } from 'react';
 import { Star, CheckCircle2, FileCheck2 } from 'lucide-react';
 import { CalendarEvent as EventType, Asset, Driver, EventStatus } from '@/lib/types';
 import { CARD_FIELD_DEFS } from '@/lib/cardFields';
-import { timeToPixels, timeHeightPixels, localDateStr } from '@/lib/time-utils';
+import { timeToPixels, timeHeightPixels, localDateStr, naiveHomeToView } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 
@@ -41,8 +41,13 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const {
     events, currentDate, dragState, setDragState, rowHeight,
     showStatusOverlay, showConfirmedOverlay, showPodOverlay, showBillingOverlay,
-    drivers, openEditModal, cardFields, customers,
+    drivers, openEditModal, cardFields, customers, calendarTimezone,
   } = useCalendarStore();
+  // Event times are stored in HOME_TZ; shift to view tz for display +
+  // positioning so they track the user's timezone selector alongside
+  // NowLine. See lib/time-utils.ts for the conversion rationale.
+  const viewStart = naiveHomeToView(event.start, calendarTimezone);
+  const viewEnd   = naiveHomeToView(event.end,   calendarTimezone);
   const matchedDriver = event.driverName ? drivers.find(d => d.name === event.driverName) ?? null : null;
   const driverLabel = matchedDriver ? driverDisplayName(matchedDriver) : (event.driverName ?? null);
   const driverPhone = matchedDriver?.phone ?? null;
@@ -71,11 +76,11 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       ? `CANCELLED · ${event.title}`
       : event.title;
   const dateStr = localDateStr(currentDate);
-  const top    = overrideTop  ?? (event.start.split('T')[0] < dateStr ? 0 : timeToPixels(event.start, rowHeight));
-  const height = overrideHeight ?? timeHeightPixels(event.start, event.end, dateStr, rowHeight);
+  const top    = overrideTop  ?? (viewStart.split('T')[0] < dateStr ? 0 : timeToPixels(viewStart, rowHeight));
+  const height = overrideHeight ?? timeHeightPixels(viewStart, viewEnd, dateStr, rowHeight);
 
-  const startTime = event.start.split('T')[1]?.slice(0, 5) ?? '';
-  const endTime   = event.end.split('T')[1]?.slice(0, 5)   ?? '';
+  const startTime = viewStart.split('T')[1]?.slice(0, 5) ?? '';
+  const endTime   = viewEnd.split('T')[1]?.slice(0, 5)   ?? '';
 
   const isDragging = dragState?.eventId === event.id && dragState.hasMoved;
   const [showRelayNotice, setShowRelayNotice] = useState(false);
@@ -122,13 +127,14 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       return;
     }
     const rect = e.currentTarget.getBoundingClientRect();
-    // For continuation events (started before current view date), grab offset is 0
-    // since the event is clamped to the top of the column.
-    const isContinuation = event.start.split('T')[0] < dateStr;
+    // Drag operates in view-tz space because the block was positioned
+    // using viewStart/viewEnd (see top of component). The save handler
+    // in calendar/index.tsx converts back to HOME_TZ before persisting.
+    const isContinuation = viewStart.split('T')[0] < dateStr;
     const grabOffsetPx = isContinuation ? 0 : e.clientY - rect.top;
 
-    const [sd, st] = event.start.split('T');
-    const [ed, et] = event.end.split('T');
+    const [sd, st] = viewStart.split('T');
+    const [ed, et] = viewEnd.split('T');
     const [sy, sm, sday] = sd.split('-').map(Number);
     const [sh, smin] = st.split(':').map(Number);
     const [ey, em, eday] = ed.split('-').map(Number);
@@ -143,8 +149,8 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       dateStr: sd,
       grabOffsetPx,
       durationMs,
-      newStart: event.start,
-      newEnd: event.end,
+      newStart: viewStart,
+      newEnd: viewEnd,
       hasMoved: false,
     });
   };

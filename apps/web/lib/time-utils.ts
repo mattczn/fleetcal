@@ -2,6 +2,20 @@ export const HOUR_H  = 68;          // default px per hour (used as fallback)
 export const GRID_H  = 24 * HOUR_H; // default total grid height
 export const GUTTER_W = 64;         // hour label gutter width
 
+/**
+ * Anchor timezone for stored appointment times.
+ *
+ * Stops store `appt_start`/`appt_end` as naive "YYYY-MM-DDTHH:mm" strings
+ * (see schema.sql). Those strings are interpreted as wall-clock in
+ * HOME_TZ at render time and re-formatted into the user's current view
+ * timezone (`calendarTimezone`). Same anchor is used in reverse on save
+ * so a "08:00" typed while the view is ET stores as "06:00" (MT).
+ *
+ * Hardcoded for now — single-org SaaS. If/when multi-org with distinct
+ * home zones lands, promote this to org_settings.
+ */
+export const HOME_TZ = 'America/Denver';
+
 export function timeToPixels(timeStr: string, hourH: number = HOUR_H): number {
   const timePart = timeStr.includes('T') ? timeStr.split('T')[1] : timeStr;
   const [hours, minutes] = timePart.split(':').map(Number);
@@ -137,6 +151,64 @@ export function parseNaiveIsoInTz(iso: string, tz: string | undefined): number {
     candidate = wallAsUtcMs - offset;
   }
   return candidate;
+}
+
+/**
+ * Format a UTC epoch as a naive "YYYY-MM-DDTHH:mm" string of wall-clock
+ * in `tz`. Inverse of parseNaiveIsoInTz — round-trip a naive iso through
+ * (parseNaiveIsoInTz → formatNaiveIsoInTz) and you get back the original
+ * naive string (modulo seconds, which we drop).
+ */
+function formatNaiveIsoInTz(epochMs: number, tz: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year:   'numeric',
+    month:  '2-digit',
+    day:    '2-digit',
+    hour:   '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(epochMs));
+  const o: Record<string, string> = {};
+  for (const p of parts) o[p.type] = p.value;
+  const hour = o.hour === '24' ? '00' : o.hour;
+  return `${o.year}-${o.month}-${o.day}T${hour}:${o.minute}`;
+}
+
+/**
+ * Convert a naive ISO string (anchored in HOME_TZ) to the same instant
+ * rendered as a naive ISO string in `viewTz`.
+ *
+ *   HOME=MT, view=ET, input "2026-05-19T08:00" → "2026-05-19T10:00"
+ *
+ * Used at every read site where stored appointment/event times need
+ * to display in the user's current view timezone. When viewTz is
+ * undefined or equals HOME_TZ, returns input unchanged.
+ */
+export function naiveHomeToView(iso: string, viewTz: string | undefined): string {
+  if (!iso) return iso;
+  const tz = sanitizeTimezone(viewTz);
+  if (!tz || tz === HOME_TZ) return iso;
+  const utcMs = parseNaiveIsoInTz(iso, HOME_TZ);
+  return formatNaiveIsoInTz(utcMs, tz);
+}
+
+/**
+ * Inverse of naiveHomeToView — convert a naive ISO entered/displayed in
+ * `viewTz` back to HOME_TZ for storage.
+ *
+ *   HOME=MT, view=ET, input "2026-05-19T08:00" → "2026-05-19T06:00"
+ *
+ * Used at every write site that takes a user-entered time while the
+ * view tz differs from HOME_TZ. When viewTz is undefined or equals
+ * HOME_TZ, returns input unchanged.
+ */
+export function naiveViewToHome(iso: string, viewTz: string | undefined): string {
+  if (!iso) return iso;
+  const tz = sanitizeTimezone(viewTz);
+  if (!tz || tz === HOME_TZ) return iso;
+  const utcMs = parseNaiveIsoInTz(iso, tz);
+  return formatNaiveIsoInTz(utcMs, HOME_TZ);
 }
 
 // Returns a Date whose .getHours()/.getDate() etc. reflect the given IANA timezone.
