@@ -8,38 +8,21 @@ import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import DocumentScanner from "react-native-document-scanner-plugin";
-import { ScanLine, Camera, Image as ImageIcon, FileText, X, Layers } from "lucide-react-native";
-import { uploadDocument, type DocumentKind, type LoadDocument } from "@/lib/api/documents";
-import { enqueueUpload } from "@/lib/uploadQueue";
-import { useOnline } from "@/lib/useOnline";
-
-const txt = (weight: 500 | 600 | 700 | 800) => ({
-  fontFamily:
-    weight === 500 ? "PlusJakartaSans_500Medium"  :
-    weight === 600 ? "PlusJakartaSans_600SemiBold" :
-    weight === 700 ? "PlusJakartaSans_700Bold"     :
-                     "PlusJakartaSans_800ExtraBold",
-});
+import { ScanLine, Camera, Image as ImageIcon, FileText, X, Check, Layers } from "lucide-react-native";
+import { uploadDocument, type DocumentKind } from "@/lib/api";
+import { txt } from "@/lib/font";
 
 type Props = {
   eventId:    string;
   loadNum?:   string;
-  orgId:      string;
-  driverId:   number;
-  driverName?: string;
   visible:    boolean;
   onClose:    () => void;
-  /**
-   * Fires after a successful (online) upload, with the just-inserted
-   * document so the parent can pop the EditDocumentSheet for the user
-   * to pick a kind. Called with `null` when the upload was queued
-   * offline — we don't have a doc id yet in that case, and the
-   * categorize step happens later once the upload drains.
-   */
-  onUploaded: (doc: LoadDocument | null) => void;
+  onUploaded: () => void;
 };
 
-const MAX_TOTAL_BYTES = 3 * 1024 * 1024; // 3 MB final upload cap
+// 3 MB cap matches the driver UploadSheet and the server's body limit —
+// keep them in sync if/when the API raises this.
+const MAX_TOTAL_BYTES = 3 * 1024 * 1024;
 
 async function fileSize(uri: string): Promise<number> {
   const info = await FileSystem.getInfoAsync(uri);
@@ -47,9 +30,11 @@ async function fileSize(uri: string): Promise<number> {
 }
 
 /**
- * Compress an image to fit under `targetBytes`.
- * Resizes to `maxWidth` first, then steps quality down until small enough.
- * Always re-encodes to JPEG — smaller than HEIC/PNG for photos.
+ * Resize+recompress an image until it fits under `targetBytes`. Always
+ * encodes to JPEG (smaller than HEIC/PNG for photos) and steps down the
+ * quality ladder; bails early if the source is already small enough
+ * unless `force` is set (used by the multi-page PDF path because each
+ * page needs to be smaller than the per-page budget regardless).
  */
 async function compressImage(
   uri: string,
@@ -78,7 +63,6 @@ async function compressImage(
   return { uri: result, mimeType: "image/jpeg" };
 }
 
-/** Compress an image bound for a multi-page PDF — divides the 3MB cap by page count. */
 async function compressForPdfPage(uri: string, pageCount: number): Promise<{ uri: string; mimeType: string }> {
   const perPageBytes = Math.max(Math.floor(MAX_TOTAL_BYTES / Math.max(pageCount, 1)) - 50_000, 200_000);
   return compressImage(uri, { targetBytes: perPageBytes, maxWidth: 1600, force: true });
@@ -86,27 +70,28 @@ async function compressForPdfPage(uri: string, pageCount: number): Promise<{ uri
 
 function buildFileName(kind: DocumentKind, loadNum: string | undefined, suffix: string, ext: string): string {
   const safe = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, "");
-  // Filename is just for display — storage path adds its own uniqueness, so we
-  // keep the visible name short. Optional suffix is only used when it adds info
-  // beyond the kind (e.g. carrying a Files-app filename forward).
   const parts = [kind.toUpperCase(), loadNum ? safe(loadNum) : "", suffix && safe(suffix)].filter(Boolean);
   return `${parts.join("_")}.${ext}`;
 }
 
 type Step = "idle" | "scanning" | "converting" | "uploading";
 
-// Documents are uploaded with a placeholder kind. The parent component
-// pops EditDocumentSheet immediately after a successful upload so the
-// driver picks the actual kind (POD / BOL / Scale / etc.) on the
-// just-uploaded doc rather than guessing the type before scanning.
-// "other" is the only kind that survives in the queued-offline path,
-// where there's no UI follow-up until the upload drains.
-const DEFAULT_KIND: DocumentKind = "other";
+// Dispatcher-facing kinds — order reflects how often each shows up in
+// the dispatch flow. Rate con first because that's the canonical inbound
+// doc from brokers; driver_sheet + invoice are dispatch-only (drivers
+// never originate those). Excludes "relay_handoff" which is field-only.
+const KIND_OPTIONS: { key: DocumentKind; label: string; tint: string }[] = [
+  { key: "rate_con",     label: "Rate Con",  tint: "#92400e" },
+  { key: "bol",          label: "BOL",       tint: "#1a73e8" },
+  { key: "pod",          label: "POD",       tint: "#15803d" },
+  { key: "driver_sheet", label: "Sheet",     tint: "#6d28d9" },
+  { key: "invoice",      label: "Invoice",   tint: "#9d174d" },
+  { key: "other",        label: "Other",     tint: "#5f6368" },
+];
 
-export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, visible, onClose, onUploaded }: Props) {
+export function UploadSheet({ eventId, loadNum, visible, onClose, onUploaded }: Props) {
   const [step, setStep] = useState<Step>("idle");
-  const online = useOnline();
-  const kind = DEFAULT_KIND;
+  const [kind, setKind] = useState<DocumentKind>("rate_con");
 
   async function scanToPdf() {
     try {
@@ -117,8 +102,9 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
       if (!scannedImages || scannedImages.length === 0) { setStep("idle"); return; }
 
       setStep("converting");
-      // Compress each scanned page first so the resulting PDF stays under MAX_BYTES.
-      // Inline as base64 data URL — file:// URIs aren't resolved when the PDF renders.
+      // Inline scanned pages as base64 data URLs into the print HTML —
+      // expo-print's HTML renderer doesn't resolve file:// references
+      // reliably across platforms, so we ship the image bytes directly.
       const dataUrls = await Promise.all(
         scannedImages.map(async (uri) => {
           const compressed = await compressForPdfPage(uri, scannedImages.length);
@@ -260,50 +246,13 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
   }
 
   async function doUpload(fileUri: string, fileName: string, mimeType: string) {
-    // Offline path: enqueue and exit. The file gets copied into the
-    // app's document directory (so iOS can't purge it from cache) and
-    // a NetInfo-driven drain in _layout.tsx picks it up on reconnect.
-    // No EditDocumentSheet pop here — we don't have a doc id yet.
-    if (online === false) {
-      setStep("uploading");
-      try {
-        await enqueueUpload({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
-        Alert.alert(
-          "Saved for upload",
-          "You're offline — this document will upload as Other and you can re-categorize it from the list when it finishes.",
-        );
-        onUploaded(null);
-        onClose();
-      } catch (err) {
-        Alert.alert("Save failed", err instanceof Error ? err.message : "Could not save for offline upload");
-      } finally {
-        setStep("idle");
-      }
-      return;
-    }
     setStep("uploading");
     try {
-      const doc = await uploadDocument({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
-      onUploaded(doc);
+      await uploadDocument({ fileUri, fileName, mimeType, eventId, kind });
+      onUploaded();
       onClose();
     } catch (err) {
-      // Fallback: if the live upload fails for a network-y reason
-      // (radio dropped between the online check and the request),
-      // queue it instead of leaving the driver to retry by hand.
-      const msg = err instanceof Error ? err.message : String(err);
-      const looksLikeNetwork = /network|fetch|timeout|connection|offline/i.test(msg);
-      if (looksLikeNetwork) {
-        try {
-          await enqueueUpload({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
-          Alert.alert("Saved for upload", "Connection dropped — we'll retry automatically.");
-          onUploaded(null);
-          onClose();
-        } catch (qerr) {
-          Alert.alert("Upload failed", msg);
-        }
-      } else {
-        Alert.alert("Upload failed", msg);
-      }
+      Alert.alert("Upload failed", err instanceof Error ? err.message : "Could not upload");
     } finally {
       setStep("idle");
     }
@@ -317,10 +266,10 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
 
   const options: { label: string; sub: string; Icon: typeof ScanLine; action: () => void; primary?: boolean }[] = [
     { label: "Scan Document",       sub: "Auto-crop & filter, multi-page PDF",  Icon: ScanLine,  action: scanToPdf,        primary: true },
-    { label: "Photos to PDF",       sub: "Take multiple photos, combined PDF",   Icon: Layers,    action: multiPhotoToPdf                },
-    { label: "Take Photo",          sub: "Single image from camera",             Icon: Camera,    action: handleCamera                   },
-    { label: "Photo Library",       sub: "Pick existing photo",                  Icon: ImageIcon, action: handleGallery                  },
-    { label: "Browse Files",        sub: "PDF or image from Files",              Icon: FileText,  action: handleFile                     },
+    { label: "Photos to PDF",       sub: "Take multiple photos, combined PDF",  Icon: Layers,    action: multiPhotoToPdf                },
+    { label: "Take Photo",          sub: "Single image from camera",            Icon: Camera,    action: handleCamera                   },
+    { label: "Photo Library",       sub: "Pick existing photo",                 Icon: ImageIcon, action: handleGallery                  },
+    { label: "Browse Files",        sub: "PDF or image from Files",             Icon: FileText,  action: handleFile                     },
   ];
 
   return (
@@ -333,21 +282,47 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
             paddingHorizontal: 18, paddingTop: 8, paddingBottom: 28,
           }}
         >
-          {/* Handle */}
           <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: "#e8eaed", alignSelf: "center", marginBottom: 14 }} />
 
-          {/* Header */}
           <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}>
             <Text style={[txt(800), { fontSize: 18, color: "#202124", flex: 1 }]}>Add document</Text>
             <TouchableOpacity onPress={onClose} hitSlop={10}>
               <X size={20} color="#5f6368" strokeWidth={2.2} />
             </TouchableOpacity>
           </View>
-          <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginBottom: 18 }]}>
-            Scan it now — you'll pick the type after the upload finishes.
+          <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginBottom: 14 }]}>
+            Rate cons, BOLs, PODs, anything paperwork.
           </Text>
 
-          {/* Sources */}
+          <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: "#5f6368", textTransform: "uppercase", marginBottom: 8 }]}>
+            Document type
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+            {KIND_OPTIONS.map((opt) => {
+              const active = kind === opt.key;
+              return (
+                <TouchableOpacity key={opt.key} onPress={() => setKind(opt.key)} activeOpacity={0.7}
+                  style={{
+                    paddingVertical: 9,
+                    paddingHorizontal: 12,
+                    borderRadius: 10,
+                    backgroundColor: active ? `${opt.tint}15` : "#f8f9fa",
+                    borderWidth: 1.5,
+                    borderColor: active ? opt.tint : "#e8eaed",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  {active ? <Check size={12} color={opt.tint} strokeWidth={2.6} /> : null}
+                  <Text style={[txt(800), { fontSize: 12, color: active ? opt.tint : "#5f6368", letterSpacing: 0.3 }]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           {busy ? (
             <View style={{ paddingVertical: 36, alignItems: "center" }}>
               <ActivityIndicator size="large" color="#1a73e8" />

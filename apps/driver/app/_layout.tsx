@@ -1,7 +1,9 @@
 import React, { useEffect } from "react";
 import { View, ActivityIndicator } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { onlineManager } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import NetInfo from "@react-native-community/netinfo";
 import {
   useFonts,
   PlusJakartaSans_500Medium,
@@ -10,14 +12,36 @@ import {
   PlusJakartaSans_800ExtraBold,
 } from "@expo-google-fonts/plus-jakarta-sans";
 import { useDriverSession, type DriverSessionState } from "@/lib/useDriverSession";
+import { queryClient, asyncStoragePersister, PERSIST_MAX_AGE } from "@/lib/queryClient";
+import { drainQueue } from "@/lib/uploadQueue";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      retry: 2,
-    },
-  },
+// Drive React Query's online state from NetInfo so paused mutations
+// auto-resume the moment the radio comes back. Default behavior in
+// React Native is "always online" because there's no `window.online`
+// event — without this wiring, a mutation fired in airplane mode
+// would attempt the network request, fail, and not retry on its own.
+//
+// The same listener also drives the document upload queue: any PDFs /
+// photos enqueued while offline get drained when NetInfo flips online.
+// React Query mutations and the upload queue are intentionally separate
+// systems because FormData payloads don't serialize through the React
+// Query persister — see lib/uploadQueue.ts for why.
+let lastOnline: boolean | null = null;
+onlineManager.setEventListener(setOnline => {
+  return NetInfo.addEventListener(state => {
+    const reachable = state.isInternetReachable;
+    const isOnline = reachable === null ? !!state.isConnected : !!reachable;
+    setOnline(isOnline);
+    // Only drain on a false→true edge, not on every online tick.
+    if (isOnline && lastOnline !== true) {
+      void drainQueue(entry => {
+        // Refresh the documents list for the load this upload was for,
+        // so the freshly-replayed doc appears without a manual pull-down.
+        queryClient.invalidateQueries({ queryKey: ["documents", entry.eventId] });
+      });
+    }
+    lastOnline = isOnline;
+  });
 });
 
 function RootNavigator({ session }: { session: DriverSessionState }) {
@@ -53,9 +77,31 @@ function RootNavigator({ session }: { session: DriverSessionState }) {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        maxAge:    PERSIST_MAX_AGE,
+        // Bump when the cache shape changes (e.g. Load type fields)
+        // so old persisted blobs are discarded on next launch.
+        buster:    "v1",
+      }}
+      onSuccess={() => {
+        // Resume any mutations that were paused (queued) because the
+        // device was offline when they fired. Runs after the persister
+        // rehydrates, so check-ins / status updates that the driver
+        // submitted in a dead zone replay automatically.
+        queryClient.resumePausedMutations();
+        // Also try draining the document upload queue once at startup
+        // in case the app was relaunched online while items were still
+        // pending (i.e. before the NetInfo edge listener fires).
+        void drainQueue(entry => {
+          queryClient.invalidateQueries({ queryKey: ["documents", entry.eventId] });
+        });
+      }}
+    >
       <RootLayoutInner />
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }
 

@@ -32,7 +32,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a73e8"
+        "backgroundColor": "#1A56DB"
       },
       "package": "com.dispatchgo.app",
       "edgeToEdgeEnabled": true,
@@ -49,7 +49,20 @@
       "@react-native-community/datetimepicker",
       "expo-font",
       "expo-sharing",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow DispatchGo to access your photos so you can attach paperwork to loads.",
+          "cameraPermission": "Allow DispatchGo to use your camera to capture paperwork."
+        }
+      ],
+      [
+        "react-native-document-scanner-plugin",
+        {
+          "cameraPermission": "Allow DispatchGo to scan paperwork documents."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

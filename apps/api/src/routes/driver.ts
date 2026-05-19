@@ -1284,6 +1284,34 @@ driver.post("/loads/:id/documents", async (c) => {
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${id}/${Date.now()}_${random}.${ext}`;
 
+  // Build the display filename the same way as POST /v1/loads/:id/documents
+  // (loads.ts) so dispatcher-uploaded and driver-uploaded docs follow one
+  // convention: "{LOAD_NUM}_{KIND}{_N}.{ext}". Suffix _N appears when the
+  // load already has another doc of the same kind. Falls back to the
+  // client-sent name if the load has no load_num (non-revenue, untagged).
+  let displayName = file.name;
+  if (loadId) {
+    const { data: loadInfo } = await supabase
+      .from("loads")
+      .select("load_num")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const loadNum = (loadInfo as { load_num: string | null } | null)?.load_num ?? null;
+    if (loadNum) {
+      const safeNum = loadNum.replace(/[^A-Za-z0-9_-]/g, "");
+      const kindLabel = kind.toUpperCase();
+      const { count: priorCount } = await supabase
+        .from("load_documents")
+        .select("id", { head: true, count: "exact" })
+        .eq("load_id", loadId)
+        .eq("org_id", orgId)
+        .eq("kind", kind);
+      const suffix = (priorCount ?? 0) > 0 ? `_${(priorCount ?? 0) + 1}` : "";
+      displayName = `${safeNum}_${kindLabel}${suffix}.${ext}`;
+    }
+  }
+
   const { error: uploadErr } = await supabase.storage
     .from(DOC_BUCKET)
     .upload(storagePath, bytes, {
@@ -1302,7 +1330,7 @@ driver.post("/loads/:id/documents", async (c) => {
       load_id:               loadId,
       org_id:                orgId,
       storage_path:          storagePath,
-      file_name:             file.name,
+      file_name:             displayName,
       mime_type:             file.type || null,
       size_bytes:            bytes.length,
       kind,

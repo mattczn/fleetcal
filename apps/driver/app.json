@@ -22,7 +22,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a2332"
+        "backgroundColor": "#1A56DB"
       },
       "package": "com.curzontrucking.driver",
       "edgeToEdgeEnabled": true,

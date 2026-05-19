@@ -5,12 +5,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
-import { useQuery } from "@tanstack/react-query";
-import { FileText, X, Share2 } from "lucide-react-native";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { FileText, X, Share2, Plus } from "lucide-react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { fetchDocuments, type LoadDocument } from "@/lib/api";
 import { railway } from "@/lib/railway";
+import { UploadSheet } from "@/components/UploadSheet";
 import { txt } from "@/lib/font";
 
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
@@ -196,14 +197,17 @@ interface Props {
   eventId:     string;
   orgId:       string;
   loadId?:     string;        // needed to resolve the rate-con signed URL
+  loadNum?:    string;        // used in upload filenames; cosmetic only
   rateConPath?: string;       // null/missing means no rate con attached
   width:       number;
 }
 
-/** Read-only documents tab — list + tap to view. No upload UI. */
-export function DocumentsView({ eventId, orgId, loadId, rateConPath, width }: Props) {
+/** Documents tab — list, tap to view, "Add Document" launches camera/scan/file picker. */
+export function DocumentsView({ eventId, orgId, loadId, loadNum, rateConPath, width }: Props) {
+  const queryClient = useQueryClient();
   const [viewerDoc, setViewerDoc] = useState<LoadDocument | null>(null);
   const [viewerIsRateCon, setViewerIsRateCon] = useState(false);
+  const [uploadVisible, setUploadVisible] = useState(false);
 
   const { data: docs = [], isLoading } = useQuery({
     queryKey: ["documents", eventId],
@@ -225,6 +229,24 @@ export function DocumentsView({ eventId, orgId, loadId, rateConPath, width }: Pr
   return (
     <View style={{ width, flex: 1 }}>
       <ScrollView style={{ flex: 1, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <TouchableOpacity onPress={() => setUploadVisible(true)} activeOpacity={0.85}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            paddingVertical: 14,
+            borderRadius: 14,
+            backgroundColor: "#1a73e8",
+            shadowColor: "#1a73e8", shadowOpacity: 0.3, shadowRadius: 12, shadowOffset: { width: 0, height: 5 },
+            marginBottom: 16,
+          }}>
+          <Plus size={16} color="#ffffff" strokeWidth={2.6} />
+          <Text style={[txt(800), { fontSize: 14, color: "#ffffff", letterSpacing: 0.3 }]}>
+            Add Document
+          </Text>
+        </TouchableOpacity>
+
         <Text style={[txt(800), { fontSize: 11, letterSpacing: 1.1, color: "#5f6368", textTransform: "uppercase", marginBottom: 10 }]}>
           Documents · {total}
         </Text>
@@ -272,6 +294,16 @@ export function DocumentsView({ eventId, orgId, loadId, rateConPath, width }: Pr
         loadId={loadId}
         visible={!!viewerDoc}
         onClose={() => { setViewerDoc(null); setViewerIsRateCon(false); }}
+      />
+
+      <UploadSheet
+        eventId={eventId}
+        loadNum={loadNum}
+        visible={uploadVisible}
+        onClose={() => setUploadVisible(false)}
+        onUploaded={() => {
+          queryClient.invalidateQueries({ queryKey: ["documents", eventId] });
+        }}
       />
     </View>
   );

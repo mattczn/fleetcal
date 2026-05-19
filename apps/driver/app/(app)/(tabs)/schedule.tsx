@@ -1,12 +1,12 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
-  View, Text, SectionList, TouchableOpacity, ActivityIndicator, RefreshControl,
+  View, Text, SectionList, TouchableOpacity, ActivityIndicator, RefreshControl, ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { Calendar, MapPin, CalendarCheck, Truck, CalendarDays, List } from "lucide-react-native";
-import { fetchLoadsForDriver } from "@/lib/api/loads";
+import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { EmptyState } from "@/components/EmptyState";
 import { DayView, type DayViewHandle } from "@/components/DayView";
 import { useDriverSession } from "@/lib/useDriverSession";
@@ -161,6 +161,7 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
 
 export default function ScheduleScreen() {
   const session = useDriverSession();
+  const queryClient = useQueryClient();
   const [mode, setMode] = React.useState<"schedule" | "day">("schedule");
   const dayViewRef = React.useRef<DayViewHandle>(null);
   const driver = session.status === "matched" ? session.driver : null;
@@ -172,6 +173,30 @@ export default function ScheduleScreen() {
     queryFn:  () => fetchLoadsForDriver(driver!.driverId, driver!.orgId),
     enabled:  !!driver,
   });
+
+  // Pre-fetch full details for every load whose time window touches the
+  // ±24h band. The list endpoint already returns enough to render cards,
+  // but the load-detail screen issues a separate fetchLoad on tap — and
+  // that one won't hit the network if the driver is offline. Prefetching
+  // here seeds ['load', id] in the persisted cache so airplane-mode tap
+  // lands on the full detail view, not a spinner.
+  useEffect(() => {
+    if (!loads || !driver) return;
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    const active = loads.filter((l) => {
+      const start = new Date(l.start).getTime();
+      const end   = new Date(l.end).getTime();
+      // Window touches [now - 24h, now + 24h]
+      return end >= now - DAY && start <= now + DAY;
+    });
+    for (const l of active) {
+      void queryClient.prefetchQuery({
+        queryKey: ["load", l.id],
+        queryFn:  () => fetchLoad(l.id, driver.driverId, driver.orgId),
+      });
+    }
+  }, [loads, driver, queryClient]);
 
   // "Today" must be in the org's tz — otherwise the count and the
   // Today/Tomorrow/Yesterday section labels are based on the device's
@@ -315,11 +340,24 @@ export default function ScheduleScreen() {
           <ActivityIndicator size="large" color="#1a73e8" />
         </View>
       ) : isError ? (
-        <EmptyState title="Could not load schedule" subtitle="Pull down to retry" />
+        // Wrap in a ScrollView so RefreshControl works — without this the
+        // EmptyState is a static View and the user can't actually pull
+        // down to retry, despite the subtitle saying they should.
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />}
+        >
+          <EmptyState title="Could not load schedule" subtitle="Pull down to retry" />
+        </ScrollView>
       ) : mode === "day" ? (
         <DayView ref={dayViewRef} loads={loads ?? []} />
       ) : sections.length === 0 ? (
-        <EmptyState title="No loads scheduled" subtitle="Check back when dispatch adds a load" Icon={Calendar} />
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />}
+        >
+          <EmptyState title="No loads scheduled" subtitle="Check back when dispatch adds a load" Icon={Calendar} />
+        </ScrollView>
       ) : (
         <View ref={listContainer} style={{ flex: 1 }}>
           <SectionList

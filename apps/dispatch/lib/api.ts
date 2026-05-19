@@ -497,6 +497,35 @@ export async function fetchDocuments(eventId: string, _orgId: string): Promise<L
   }
 }
 
+/**
+ * Upload a local file (image or PDF) for the load this event belongs to.
+ * Resolves event → load via /v1/events/:id (same lookup fetchDocuments
+ * uses) and POSTs multipart/form-data through railway.uploadLoadDocument.
+ *
+ * `fileUri` is a local "file://..." path produced by expo-image-picker /
+ * expo-print / the document scanner — passed straight into FormData as
+ * the RN-style {uri,name,type} blob descriptor.
+ */
+export async function uploadDocument(args: {
+  fileUri:    string;
+  fileName:   string;
+  mimeType:   string;
+  eventId:    string;
+  kind:       DocumentKind;
+}): Promise<void> {
+  const { loads } = await railway.getEvent(args.eventId);
+  const loadId = loads.find(l => l.id === args.eventId)?.loadId ?? loads[0]?.loadId;
+  if (!loadId) throw new Error("This event has no parent load — can't attach documents.");
+  const form = new FormData();
+  form.append("file", {
+    uri:  args.fileUri,
+    name: args.fileName,
+    type: args.mimeType,
+  } as unknown as Blob);
+  form.append("kind", args.kind);
+  await railway.uploadLoadDocument(loadId, form);
+}
+
 export type TrailerCategory = "Swing" | "Roll Up" | "Flat Bed" | "Other";
 
 export interface Trailer {

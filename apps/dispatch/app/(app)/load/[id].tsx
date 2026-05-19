@@ -16,6 +16,7 @@ import { fetchMotiveLocations, distanceMiles, type MotiveLocation } from "@/lib/
 import { calcRoadMiles } from "@/lib/directions";
 import { env } from "@/lib/env";
 import { RouteMap } from "@/components/RouteMap";
+import { MotiveStatusBar } from "@/components/MotiveStatusBar";
 import { DocumentsView } from "@/components/DocumentsView";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
@@ -499,6 +500,15 @@ interface StopsTabProps {
   truckLoc?:   MotiveLocation | null;
   /** Asset color used to tint the live truck pin on the route map. */
   assetColor?: string | null;
+  /** Whether the load's asset has a motive_vehicle_id — drives the
+   *  "asset not linked to Motive" branch of the status bar. */
+  motiveHasVehicleId: boolean;
+  /** dataUpdatedAt from the motive-locations query (0 = never fetched). */
+  motiveLastUpdateMs: number | undefined;
+  /** isFetching from the motive-locations query — spins the refresh icon. */
+  motiveIsFetching:   boolean;
+  /** Manual refresh — typically invalidateQueries on the motive-locations key. */
+  onRefreshMotive:    () => void;
   onCopied:    (msg: string) => void;
   editMode:    boolean;
   draftStops?: Stop[]; // when editing, rendered list comes from draft
@@ -792,7 +802,9 @@ function RelayHandoffBanner({ mode, partnerName }: { mode: "pickup" | "delivery"
 }
 
 function StopsTab({
-  load, width, truckLoc, assetColor, onCopied,
+  load, width, truckLoc, assetColor,
+  motiveHasVehicleId, motiveLastUpdateMs, motiveIsFetching, onRefreshMotive,
+  onCopied,
   editMode, draftStops, dirty, isSaving,
   onMoveStop, onDeleteStop, onTapStop, onAddStop, onSplitRelay, canSplitRelay,
   onRemoveRelay, removingRelay, onOpenPartner, onViewDocuments,
@@ -950,6 +962,13 @@ function StopsTab({
 
   return (
     <ScrollView style={{ width, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      <MotiveStatusBar
+        hasVehicleId={motiveHasVehicleId}
+        truckLoc={truckLoc}
+        lastUpdateMs={motiveLastUpdateMs}
+        isFetching={motiveIsFetching}
+        onRefresh={onRefreshMotive}
+      />
       <View style={{ marginBottom: 14 }}>
         <RouteMap
           stops={combined.map((e) => e.stop)}
@@ -1655,18 +1674,24 @@ export default function LoadDetail() {
     staleTime: 10 * 60 * 1000,
   });
 
-  const { data: motiveLocations = [] } = useQuery({
+  const motiveQuery = useQuery({
     queryKey: ["motive-locations", orgId],
     queryFn:  () => fetchMotiveLocations(getToken),
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
+  const motiveLocations = motiveQuery.data ?? [];
   // Resolve the motive vehicle id off the load's asset, not the load — the
   // events/loads tables don't carry motive_vehicle_id; it lives on assets.
   const loadAsset = load ? assetsForPicker.find((a) => a.id === load.assetId) ?? null : null;
   const truckLoc = loadAsset?.motiveVehicleId
     ? motiveLocations.find((l) => l.vehicleId === loadAsset.motiveVehicleId) ?? null
     : null;
+  const refreshMotive = React.useCallback(() => {
+    // Invalidate triggers a refetch; await isn't needed — the React Query
+    // isFetching flag is what powers the spinner in MotiveStatusBar.
+    void queryClient.invalidateQueries({ queryKey: ["motive-locations", orgId] });
+  }, [queryClient, orgId]);
 
   // Tracks the wall-clock time of our most recent local save so we can ignore
   // the realtime echo of our own write. Anything within ~3s is treated as
@@ -2261,6 +2286,10 @@ export default function LoadDetail() {
           width={SCREEN_W}
           truckLoc={truckLoc}
           assetColor={loadAsset?.color}
+          motiveHasVehicleId={!!loadAsset?.motiveVehicleId}
+          motiveLastUpdateMs={motiveQuery.dataUpdatedAt || undefined}
+          motiveIsFetching={motiveQuery.isFetching}
+          onRefreshMotive={refreshMotive}
           onCopied={showToast}
           editMode={stopsEditMode}
           draftStops={stopsDraft ?? undefined}
@@ -2323,6 +2352,7 @@ export default function LoadDetail() {
             eventId={load.id}
             orgId={orgId}
             loadId={load.loadId}
+            loadNum={load.loadNum ?? undefined}
             rateConPath={load.rateConPdf ?? undefined}
             width={SCREEN_W}
           />

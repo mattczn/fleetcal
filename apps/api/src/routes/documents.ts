@@ -15,6 +15,8 @@ import { Hono } from "hono";
 import {
   type GetDocumentUrlResponse,
   type ApiErrorResponse,
+  type DocumentKind,
+  DOCUMENT_KINDS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -51,34 +53,67 @@ documents.get("/:id/url", async (c) => {
   return c.json(res);
 });
 
-// PATCH /v1/documents/:id — currently only file_name is mutable. Kind
-// rewrites would need cascading effects on the closeout checklist
-// (e.g. flipping a doc from BOL → POD changes what counts toward the
-// release gate); leaving that out until there's a user need.
+// PATCH /v1/documents/:id — rename and/or recategorize a document.
+// Either fileName or kind (or both) may be supplied; sending neither
+// returns 400. Kind changes can affect the closeout checklist (e.g.
+// flipping a doc from BOL → POD shifts what counts toward the release
+// gate); we still allow it because the user need outweighs the cost
+// of an occasionally-stale checklist read until the next refetch.
 documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
-  const body = await c.req.json<{ fileName?: string }>();
+  const body = await c.req.json<{ fileName?: string; kind?: string }>();
 
-  if (!body.fileName || !body.fileName.trim()) {
-    return c.json({ error: "validation_failed", errors: ["fileName required"] } satisfies ApiErrorResponse, 400);
+  const hasName = body.fileName !== undefined && body.fileName !== null;
+  const hasKind = body.kind !== undefined && body.kind !== null;
+  if (!hasName && !hasKind) {
+    return c.json(
+      { error: "validation_failed", errors: ["fileName or kind required"] } satisfies ApiErrorResponse,
+      400,
+    );
   }
-  // Strip path separators so a rename can't escape the storage layer.
-  // We're not touching storage_path here — only the display name on
-  // the row — so this is belt-and-suspenders.
-  const cleanName = body.fileName.trim().replace(/[/\\]/g, "_").slice(0, 200);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updates: Record<string, any> = {};
+  let cleanName: string | undefined;
+  if (hasName) {
+    if (!body.fileName!.trim()) {
+      return c.json({ error: "validation_failed", errors: ["fileName empty"] } satisfies ApiErrorResponse, 400);
+    }
+    // Strip path separators so a rename can't escape the storage layer.
+    // We're not touching storage_path here — only the display name on
+    // the row — so this is belt-and-suspenders.
+    cleanName = body.fileName!.trim().replace(/[/\\]/g, "_").slice(0, 200);
+    updates.file_name = cleanName;
+  }
+  if (hasKind) {
+    if (!DOCUMENT_KINDS.includes(body.kind as DocumentKind)) {
+      return c.json(
+        {
+          error:  "validation_failed",
+          errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`],
+        } satisfies ApiErrorResponse,
+        400,
+      );
+    }
+    updates.kind = body.kind;
+  }
+
   const { error } = await supabase
     .from("load_documents")
-    .update({ file_name: cleanName } as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update(updates as any)
     .eq("id", docId)
     .eq("org_id", orgId);
   if (error) {
     console.error("[PATCH /v1/documents/:id] update failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  return c.json({ ok: true, fileName: cleanName });
+  return c.json({
+    ok: true,
+    ...(cleanName !== undefined ? { fileName: cleanName } : {}),
+    ...(hasKind ? { kind: body.kind } : {}),
+  });
 });
 
 // DELETE /v1/documents/:id — remove the row + storage object. Orphan

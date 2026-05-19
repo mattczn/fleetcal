@@ -46,11 +46,19 @@ export function useDriverSession(): DriverSessionState {
   if (!supabaseSession) {
     return { status: "signed-out", supabaseSession: null, driver: null };
   }
-  if (driverQuery.isLoading || !driverQuery.isFetched) {
-    return { status: "loading-driver", supabaseSession, driver: null };
+  // Distinguish "query hasn't resolved yet" (undefined) from "server
+  // confirmed no matching driver" (null). The previous `!data` check
+  // conflated them, which incorrectly bounced offline users — whose
+  // query is paused, data === undefined — to the not-found screen.
+  // Now we only land on not-found when the API has actually answered
+  // with null. Paused / pending / pre-rehydrate states stay on the
+  // loading splash so the persister has a chance to restore cached
+  // driver record from a previous online launch.
+  if (driverQuery.data === null) {
+    return { status: "not-found", supabaseSession, driver: null };
   }
   if (!driverQuery.data) {
-    return { status: "not-found", supabaseSession, driver: null };
+    return { status: "loading-driver", supabaseSession, driver: null };
   }
   return { status: "matched", supabaseSession, driver: driverQuery.data };
 }
