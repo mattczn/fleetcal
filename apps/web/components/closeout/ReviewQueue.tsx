@@ -35,6 +35,7 @@ import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { displayBrokerName } from '@/lib/customerMatch';
 import PdfCanvas from '@/components/pdf/PdfCanvas';
 import DocViewer from './DocViewer';
@@ -164,6 +165,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   const loadId = current?.loadId ?? current?.id;
   const orgId  = useCalendarStore(s => s.orgId);
+  const tz     = useCalendarStore(s => s.calendarTimezone);
 
   // Per-load assets cache — docs list + signed URL for every doc +
   // rate-con URL. Populated up-front for current/next/prev so prev/next
@@ -232,7 +234,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setRateConUrl(assets.rateConUrl);
       // Default invoice selection — same heuristic as before: prior
       // saved selection wins, else PODs near delivery time.
-      const deliveredAt = current?.end ? new Date(current.end).getTime() : 0;
+      // current.end is naive ISO in the org's dispatch zone; interpret
+      // accordingly so the "POD uploaded near delivery" auto-select
+      // window stays accurate regardless of dispatcher's browser tz.
+      const deliveredAt = current?.end ? parseNaiveIsoInTz(current.end, tz) : 0;
       const presetFromDb = (current as Load).invoiceDocIds ?? [];
       const ids = new Set<string>(presetFromDb.length > 0
         ? presetFromDb

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { fetchBrokerLoads } from '@/lib/db';
+import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { Customer, CalendarEvent, CustomerContact } from '@/lib/types';
 
 const ACCENT = '#1a73e8';
@@ -44,12 +45,19 @@ const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: '
 
 type SortField = 'date' | 'loadNum' | 'status';
 
-function isInProgress(ev: CalendarEvent): boolean {
+// Status checks interpret the naive ISO start/end in the org's
+// dispatch tz; otherwise `new Date(naive)` parses as browser-local and
+// mis-buckets loads whenever the dispatcher's browser tz differs.
+function isInProgress(ev: CalendarEvent, tz: string | undefined): boolean {
   const now = Date.now();
-  return new Date(ev.start).getTime() <= now && now <= new Date(ev.end).getTime();
+  return parseNaiveIsoInTz(ev.start, tz) <= now && now <= parseNaiveIsoInTz(ev.end, tz);
 }
-function isUpcoming(ev: CalendarEvent): boolean  { return new Date(ev.start).getTime() > Date.now(); }
-function isCompleted(ev: CalendarEvent): boolean { return new Date(ev.end).getTime() < Date.now(); }
+function isUpcoming(ev: CalendarEvent, tz: string | undefined): boolean  {
+  return parseNaiveIsoInTz(ev.start, tz) > Date.now();
+}
+function isCompleted(ev: CalendarEvent, tz: string | undefined): boolean {
+  return parseNaiveIsoInTz(ev.end, tz) < Date.now();
+}
 
 function sortLoads(list: CalendarEvent[], field: SortField, dir: 'asc' | 'desc'): CalendarEvent[] {
   return [...list].sort((a, b) => {
@@ -95,6 +103,7 @@ export default function BrokerProfileModal({
   onClose: () => void;
 }) {
   const { customers, orgId, openEditModal, assets, modalOpen } = useCalendarStore();
+  const tz = useCalendarStore(s => s.calendarTimezone);
   const sorted = [...customers].sort((a, b) => a.name.localeCompare(b.name));
 
   const [selectedId, setSelectedId]         = useState<string>(initialBrokerId ?? sorted[0]?.id ?? '');
@@ -379,6 +388,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   onDirtyChange?: (dirty: boolean) => void;
 }>(function BrokerDetailPanel({ broker, loads, loading, selectedLoadId, onSelectLoad, onDirtyChange }, ref) {
   const { updateCustomer } = useCalendarStore();
+  const tz = useCalendarStore(s => s.calendarTimezone);
 
   const [shortName,           setShortName]           = useState(broker.shortName           ?? '');
   const [mcNum,               setMcNum]               = useState(broker.mcNum               ?? '');
@@ -516,9 +526,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     ? sortLoads(loads.filter(e => (e.loadNum ?? '').toLowerCase().includes(query)), sortField, sortDir)
     : null;
 
-  const inProgress   = sortLoads(loads.filter(e => isInProgress(e)),  sortField, sortDir);
-  const allUpcoming  = sortLoads(loads.filter(e => isUpcoming(e)),    sortField, sortDir === 'asc' ? 'asc' : 'desc');
-  const allCompleted = sortLoads(loads.filter(e => isCompleted(e)),   sortField, sortDir === 'desc' ? 'desc' : 'asc');
+  const inProgress   = sortLoads(loads.filter(e => isInProgress(e, tz)),  sortField, sortDir);
+  const allUpcoming  = sortLoads(loads.filter(e => isUpcoming(e, tz)),    sortField, sortDir === 'asc' ? 'asc' : 'desc');
+  const allCompleted = sortLoads(loads.filter(e => isCompleted(e, tz)),   sortField, sortDir === 'desc' ? 'desc' : 'asc');
 
   const upcomingVisible  = showAllUpcoming  ? allUpcoming  : allUpcoming.slice(0, 10);
   const completedVisible = showAllCompleted ? allCompleted : allCompleted.slice(0, 10);

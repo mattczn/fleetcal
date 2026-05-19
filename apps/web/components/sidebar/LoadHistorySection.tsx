@@ -17,6 +17,8 @@
 import { useMemo, useState } from 'react';
 import { Search, Clock, Package } from 'lucide-react';
 import type { CalendarEvent, Asset } from '@/lib/types';
+import { useCalendarStore } from '@/store/useCalendarStore';
+import { parseNaiveIsoInTz } from '@/lib/time-utils';
 
 interface Props {
   loads:    CalendarEvent[];
@@ -40,21 +42,27 @@ const STATUS_META: Record<string, { label: string; bg: string; color: string }> 
   problem:    { label: 'Problem',    bg: '#fef0e6', color: '#b85c00' },
 };
 
-function isInProgress(ev: CalendarEvent): boolean {
+// Status filters interpret the naive ISO start/end in the org's
+// dispatch timezone. `new Date(naive)` was wrong: it treats the
+// naive ISO as the BROWSER's local tz, which mis-buckets every load
+// whenever the dispatcher's browser tz differs from the dispatch tz
+// (e.g. dispatcher in ET viewing MT-stored loads sees them as ended
+// 2h before they actually do).
+function isInProgress(ev: CalendarEvent, tz: string | undefined): boolean {
   const status = ev.status ?? 'scheduled';
   if (['delivered', 'cancelled', 'tonu'].includes(status)) return false;
-  const start = new Date(ev.start).getTime();
-  const end   = new Date(ev.end).getTime();
+  const start = parseNaiveIsoInTz(ev.start, tz);
+  const end   = parseNaiveIsoInTz(ev.end,   tz);
   const now   = Date.now();
   return start <= now && end >= now - 24 * 60 * 60 * 1000; // 24h grace on the back end
 }
-function isUpcoming(ev: CalendarEvent): boolean  {
+function isUpcoming(ev: CalendarEvent, tz: string | undefined): boolean  {
   if (['delivered', 'cancelled', 'tonu'].includes(ev.status ?? '')) return false;
-  return new Date(ev.start).getTime() > Date.now();
+  return parseNaiveIsoInTz(ev.start, tz) > Date.now();
 }
-function isCompleted(ev: CalendarEvent): boolean {
+function isCompleted(ev: CalendarEvent, tz: string | undefined): boolean {
   return ['delivered', 'tonu', 'cancelled'].includes(ev.status ?? '')
-      || new Date(ev.end).getTime() < Date.now() - 24 * 60 * 60 * 1000;
+      || parseNaiveIsoInTz(ev.end, tz) < Date.now() - 24 * 60 * 60 * 1000;
 }
 
 const ACCENT = '#1a73e8';
@@ -63,13 +71,14 @@ export default function LoadHistorySection({ loads, assets, onSelect, heading = 
   const [search,           setSearch]           = useState('');
   const [showAllUpcoming,  setShowAllUpcoming]  = useState(false);
   const [showAllCompleted, setShowAllCompleted] = useState(false);
+  const tz = useCalendarStore(s => s.calendarTimezone);
 
   const groups = useMemo(() => {
-    const inProgress = loads.filter(isInProgress).sort((a, b) => a.start.localeCompare(b.start));
-    const upcoming   = loads.filter(isUpcoming).sort((a, b) => a.start.localeCompare(b.start));
-    const completed  = loads.filter(isCompleted).sort((a, b) => b.start.localeCompare(a.start));
+    const inProgress = loads.filter(ev => isInProgress(ev, tz)).sort((a, b) => a.start.localeCompare(b.start));
+    const upcoming   = loads.filter(ev => isUpcoming(ev, tz)).sort((a, b) => a.start.localeCompare(b.start));
+    const completed  = loads.filter(ev => isCompleted(ev, tz)).sort((a, b) => b.start.localeCompare(a.start));
     return { inProgress, upcoming, completed };
-  }, [loads]);
+  }, [loads, tz]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
