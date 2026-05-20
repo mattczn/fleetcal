@@ -9,7 +9,6 @@ import { Calendar, MapPin, CalendarCheck, Truck, CalendarDays, List } from "luci
 import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { EmptyState } from "@/components/EmptyState";
 import { DayView, type DayViewHandle } from "@/components/DayView";
-import { NotificationsBell } from "@/components/NotificationsBell";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { needsConfirmation } from "@/lib/loadStatus";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
@@ -291,7 +290,6 @@ export default function ScheduleScreen() {
             Schedule
           </Text>
           <View style={{ flexDirection: "row", gap: 6 }}>
-            <NotificationsBell tint="light" />
             <TouchableOpacity
               onPress={() => setMode((m) => (m === "schedule" ? "day" : "schedule"))}
               activeOpacity={0.7}

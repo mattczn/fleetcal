@@ -13,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, AlertTriangle } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
+import { NotificationsBell } from "@/components/NotificationsBell";
 import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { LoadCard } from "@/components/LoadCard";
 import { EmptyState } from "@/components/EmptyState";
@@ -142,8 +143,9 @@ export default function LoadsScreen() {
               {driver?.name ?? "Driver"}
             </Text>
           </View>
-          <View style={{ marginTop: 6 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
             <SyncStatusPill />
+            <NotificationsBell tint="light" />
           </View>
         </View>
 
