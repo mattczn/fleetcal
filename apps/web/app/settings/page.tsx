@@ -1243,6 +1243,11 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
   const [rules, setRules] = useState<NotificationRules | null>(null);
   const [busy, setBusy] = useState(false);
   const [rulesBusy, setRulesBusy] = useState(false);
+  // Visible save indicator so toggle failures aren't silent. The
+  // previous catch {} pattern caused stuck-looking toggles when the
+  // PATCH failed — the UI rolled back with no explanation.
+  const [rulesSaveState, setRulesSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [rulesSaveError, setRulesSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1284,18 +1289,36 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
     setBusy(false);
   }
 
-  // Notification rules — every edit fires a debounced full-shape save.
-  // Optimistic update with rollback on failure.
+  // Notification rules — every edit fires a full-shape save.
+  // Optimistic update with rollback on failure, plus visible save state
+  // so the user can tell whether their toggle actually persisted.
   async function saveRules(next: NotificationRules) {
     if (rules == null || rulesBusy) return;
     const prev = rules;
     setRules(next); // optimistic
     setRulesBusy(true);
+    setRulesSaveState('saving');
+    setRulesSaveError(null);
     try {
       const { railway } = await import('@/lib/railway');
-      await railway.updateOrgSettings({ notificationRules: next });
-    } catch {
+      const res = await railway.updateOrgSettings({ notificationRules: next });
+      // Trust the API's response — if the server normalized anything,
+      // reflect it back into the UI.
+      if (res.settings.notificationRules) {
+        setRules({
+          eveningConfirmSweep: { ...DEFAULT_NOTIFICATION_RULES.eveningConfirmSweep, ...(res.settings.notificationRules.eveningConfirmSweep ?? {}) },
+          prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(res.settings.notificationRules.prePickupConfirm    ?? {}) },
+          onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(res.settings.notificationRules.onAssignment        ?? {}) },
+          missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(res.settings.notificationRules.missingPodReminder  ?? {}) },
+        });
+      }
+      setRulesSaveState('saved');
+      window.setTimeout(() => setRulesSaveState((s) => (s === 'saved' ? 'idle' : s)), 1800);
+    } catch (err) {
+      console.error('[settings] notification rule save failed:', err);
       setRules(prev); // roll back
+      setRulesSaveState('error');
+      setRulesSaveError(err instanceof Error ? err.message : 'Save failed');
     }
     setRulesBusy(false);
   }
@@ -1337,6 +1360,29 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
         title="Notifications"
         description="Auto-fired pushes to drivers. Manual dispatcher nudges (Confirm load, Upload POD buttons on a load) are not affected by these rules — those always send. Drivers can opt out of any rule from their app's Notifications screen."
       >
+        {/* Visible save state for the rules below — without this a
+            failed PATCH looks like the toggle "can't turn on" because
+            the rollback is invisible. */}
+        {rulesSaveState !== 'idle' && (
+          <div style={{ marginBottom: 12 }}>
+            {rulesSaveState === 'saving' && (
+              <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#fef3c7', color: '#92400e' }}>Saving…</span>
+            )}
+            {rulesSaveState === 'saved' && (
+              <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#dcfce7', color: '#166534' }}>Saved</span>
+            )}
+            {rulesSaveState === 'error' && (
+              <>
+                <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#fee2e2', color: '#991b1b' }}>Save failed</span>
+                {rulesSaveError && (
+                  <p className="text-xs mt-2 px-2 py-1 rounded-md" style={{ background: '#fee2e2', color: '#991b1b' }}>
+                    {rulesSaveError}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {rules == null ? (
           <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
         ) : (
