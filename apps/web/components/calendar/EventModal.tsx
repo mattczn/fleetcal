@@ -3985,12 +3985,26 @@ export default function EventModal() {
             {eventKind === 'revenue' && (() => {
               // "View Docs" if ANYTHING is attached — rate con OR any
               // other uploaded doc. "Add Docs" only when both buckets
-              // are empty (the docs viewer would just be empty states
-              // either way, so prefer the simpler call-to-action).
-              // The non-rate-con doc count excludes rate_con rows so
-              // a load with only old rate_con history still counts as
-              // having a rate con (via rateConPdf, which trumps).
-              const otherDocsCount = loadDocuments.filter(d => d.kind !== 'rate_con').length;
+              // are empty.
+              //
+              // Source of truth: `event.documentCounts` — a per-kind
+              // count aggregated server-side and joined onto the load
+              // payload, so it's reliably present the moment the modal
+              // opens. We were previously reading from `loadDocuments`,
+              // which is a deferred fetch that doesn't fire until the
+              // docs viewer is opened — that made the button show
+              // "Add Docs" even when a POD existed, because the array
+              // was still empty. `loadDocuments` is used as a fallback
+              // for the rare case `documentCounts` is missing.
+              const evCur = events.find(e => e.id === modalEventId);
+              const countsTotal = evCur?.documentCounts
+                ? Object.entries(evCur.documentCounts)
+                    .filter(([k]) => k !== 'rate_con')
+                    .reduce((sum, [, n]) => sum + (n || 0), 0)
+                : null;
+              const otherDocsCount = countsTotal != null
+                ? countsTotal
+                : loadDocuments.filter(d => d.kind !== 'rate_con').length;
               const hasAnything = !!rateConPdf || otherDocsCount > 0;
               // Default tab on open: Rate Con if one exists, otherwise
               // Uploaded so the dispatcher lands on the docs that DO
@@ -4406,12 +4420,17 @@ export default function EventModal() {
                   // disable buttons whose ack condition is already met
                   // so dispatch doesn't bother sending a redundant nudge.
                   const ackState = currentEv ? {
-                    confirm:        !!currentEv.confirmedAt || ['dispatched','en_route','picked_up','delivered'].includes(currentEv.status ?? ''),
-                    mark_pickup:    ['picked_up','delivered'].includes(currentEv.status ?? ''),
-                    mark_delivery:  currentEv.status === 'delivered',
-                    upload_pod:     loadDocuments.some(d => d.kind === 'pod'),
-                    report_trailer: currentEv.trailerId != null,
-                  } : { confirm:false, mark_pickup:false, mark_delivery:false, upload_pod:false, report_trailer:false };
+                    confirm:         !!currentEv.confirmedAt || ['dispatched','en_route','picked_up','delivered'].includes(currentEv.status ?? ''),
+                    mark_pickup:     ['picked_up','delivered'].includes(currentEv.status ?? ''),
+                    mark_delivery:   currentEv.status === 'delivered',
+                    upload_pod:      loadDocuments.some(d => d.kind === 'pod'),
+                    report_trailer:  currentEv.trailerId != null,
+                    // Informational kinds — auto-acked at insert time
+                    // server-side, so the popover never needs to gray
+                    // them out client-side. Treat as always-acked.
+                    assigned:        true,
+                    reassigned_away: true,
+                  } : { confirm:false, mark_pickup:false, mark_delivery:false, upload_pod:false, report_trailer:false, assigned:true, reassigned_away:true };
                   return (
                     <div className="mt-1.5 flex items-center gap-1.5 flex-wrap" style={{ position: 'relative' }}>
                       {sel?.phone && <DriverPhoneCopy phone={sel.phone} />}
