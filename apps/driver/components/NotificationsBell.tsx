@@ -14,7 +14,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, TouchableOpacity, Modal, Pressable, ActivityIndicator, ScrollView,
+  Animated, Dimensions, Easing,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, BellOff, Check, X } from "lucide-react-native";
@@ -64,6 +66,12 @@ interface Props {
   tint?: "dark" | "light";
 }
 
+// Right-edge panel sizing: leave a small strip of backdrop visible so
+// it reads as an overlay (and gives the user an obvious tap-out zone).
+// Capped at 380 so it doesn't stretch awkwardly on tablets.
+const SCREEN_W = Dimensions.get("window").width;
+const PANEL_W  = Math.min(380, Math.round(SCREEN_W * 0.88));
+
 export function NotificationsBell({ tint = "dark" }: Props = {}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -82,6 +90,50 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
   });
   const notifications = data?.notifications ?? [];
   const pendingCount = notifications.filter(n => !n.acknowledgedAt).length;
+
+  // Side-panel slide animation: translateX from off-screen-right (PANEL_W)
+  // to 0 when opening, reversed when closing. Modal stays mounted during
+  // the closing animation via the `mounted` flag so we can animate out
+  // before unmounting.
+  const slideX = useRef(new Animated.Value(PANEL_W)).current;
+  const backdrop = useRef(new Animated.Value(0)).current;
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      Animated.parallel([
+        Animated.timing(slideX, {
+          toValue: 0,
+          duration: 240,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(backdrop, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else if (mounted) {
+      Animated.parallel([
+        Animated.timing(slideX, {
+          toValue: PANEL_W,
+          duration: 200,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(backdrop, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (finished) setMounted(false);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Refresh on open so the panel never shows stale data even between
   // polls. Cheap — the endpoint caps at 100 rows over 48h.
@@ -123,23 +175,34 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
         ) : null}
       </TouchableOpacity>
 
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <Pressable
-          onPress={() => setOpen(false)}
-          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" }}
+      <Modal visible={mounted} transparent animationType="none" onRequestClose={() => setOpen(false)} statusBarTranslucent>
+        {/* Backdrop — fades in, tap to close. */}
+        <Animated.View style={{
+          ...StyleSheetAbsoluteFill,
+          backgroundColor: "rgba(0,0,0,0.45)",
+          opacity: backdrop,
+        }}>
+          <Pressable onPress={() => setOpen(false)} style={{ flex: 1 }} />
+        </Animated.View>
+
+        {/* Right-edge panel — slides in from off-screen-right. */}
+        <Animated.View
+          style={{
+            position: "absolute",
+            top: 0, bottom: 0, right: 0,
+            width: PANEL_W,
+            backgroundColor: "#ffffff",
+            transform: [{ translateX: slideX }],
+            shadowColor: "#000",
+            shadowOffset: { width: -2, height: 0 },
+            shadowOpacity: 0.18,
+            shadowRadius: 12,
+            elevation: 16,
+          }}
         >
-          <Pressable
-            onPress={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: "#ffffff",
-              borderTopLeftRadius: 22, borderTopRightRadius: 22,
-              maxHeight: "80%",
-              minHeight: 300,
-            }}
-          >
+          <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
             {/* Header */}
             <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed" }}>
-              <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: "#e8eaed", alignSelf: "center", marginBottom: 12 }} />
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <View style={{ flex: 1 }}>
                   <Text style={[txt(800), { fontSize: 18, color: "#202124" }]}>Notifications</Text>
@@ -155,7 +218,7 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             </View>
 
             {/* List */}
-            <ScrollView contentContainerStyle={{ paddingBottom: 30 }}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 30 }}>
               {isLoading && notifications.length === 0 ? (
                 <View style={{ paddingVertical: 50, alignItems: "center" }}>
                   <ActivityIndicator size="small" color="#1a73e8" />
@@ -223,9 +286,15 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
                 })
               )}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </SafeAreaView>
+        </Animated.View>
       </Modal>
     </>
   );
 }
+
+// Helper — avoids importing StyleSheet just for absoluteFill.
+const StyleSheetAbsoluteFill = {
+  position: "absolute" as const,
+  top: 0, left: 0, right: 0, bottom: 0,
+};
