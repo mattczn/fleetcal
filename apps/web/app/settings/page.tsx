@@ -282,13 +282,20 @@ function FieldSectionCard({
 }
 
 function LoadFieldsPanel() {
-  const { fieldSettings, sectionOrder, setFieldEnabled, setSectionOrder, driverPayPct, setDriverPayPct, hasHydratedOrgSettings } = useCalendarStore();
+  const { fieldSettings, sectionOrder, setFieldEnabled, setSectionOrder, driverPayPct, setDriverPayPct, hasHydratedOrgSettings, hydrateRateConSettings } = useCalendarStore();
   const [pctInput, setPctInput] = useState(driverPayPct != null ? String(driverPayPct) : '');
   const { can } = usePermissions();
   // Load field config is org-scoped — Dispatchers can SEE the current
   // setup but only Admin/Owner can change it. Reflected as a
   // read-only banner + a dimmed/non-interactive content wrap below.
   const canEdit = can('org.settings.edit');
+
+  // Save-state indicator so the user can see when a toggle actually
+  // lands on the server (vs failing silently). 'idle' → no save in
+  // flight; 'saving' → request pending; 'saved' → confirmed by API
+  // response; 'error' → request failed (banner explains).
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Field toggles are org-scoped; write through to the server so other
   // dispatchers see the same field set.
@@ -301,7 +308,17 @@ function LoadFieldsPanel() {
   // current defaults, which silently flips fields the user never
   // touched. Writing the full set on every toggle makes the saved row
   // self-describing and immune to future defaults churn.
+  //
+  // Save flow:
+  //   1. update local store immediately (optimistic UI)
+  //   2. PATCH to server
+  //   3. on success, re-hydrate the store from the API response so
+  //      local state is provably what the DB now holds — no chance of
+  //      local/server drift
+  //   4. on failure, revert local state + show banner so the user
+  //      knows the change didn't persist
   const onFieldToggle = (id: string, on: boolean) => {
+    const prevValue = !!fieldSettings[id];
     setFieldEnabled(id, on);
     // Toggles are disabled in the UI until hydration completes (see
     // `disabled` prop on FieldSectionCard below). This guard is a
@@ -311,9 +328,24 @@ function LoadFieldsPanel() {
     const full = Object.fromEntries(
       ALL_FIELDS.map(f => [f.id, !!merged[f.id]]),
     );
+    setSaveState('saving');
+    setSaveError(null);
     void import('@/lib/railway').then(({ railway }) =>
       railway.updateOrgSettings({ rateConSettings: { fieldSettings: full } }),
-    ).catch((err) => console.error('[settings] field toggle sync failed:', err));
+    ).then((res) => {
+      // Re-hydrate from the API response so the local store reflects
+      // exactly what the DB now holds. If something silently transformed
+      // the data server-side this is where it shows up.
+      hydrateRateConSettings(res.settings.rateConSettings);
+      setSaveState('saved');
+      window.setTimeout(() => setSaveState((s) => (s === 'saved' ? 'idle' : s)), 1800);
+    }).catch((err) => {
+      console.error('[settings] field toggle sync failed:', err);
+      // Roll the toggle back so the UI matches reality.
+      setFieldEnabled(id, prevValue);
+      setSaveState('error');
+      setSaveError(err instanceof Error ? err.message : 'Save failed');
+    });
   };
 
   const dragIdx = useRef<number | null>(null);
@@ -348,12 +380,28 @@ function LoadFieldsPanel() {
       <div className="space-y-5" style={{ width: 380, flexShrink: 0 }}>
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Load Fields</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Load Fields</h2>
+              {saveState === 'saving' && (
+                <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#fef3c7', color: '#92400e' }}>Saving…</span>
+              )}
+              {saveState === 'saved' && (
+                <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#dcfce7', color: '#166534' }}>Saved</span>
+              )}
+              {saveState === 'error' && (
+                <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#fee2e2', color: '#991b1b' }}>Save failed</span>
+              )}
+            </div>
             <p className="text-sm mt-1" style={{ color: 'var(--gc-text-2)' }}>
               {hasHydratedOrgSettings
                 ? 'Toggle fields · drag sections to reorder'
                 : 'Loading saved settings…'}
             </p>
+            {saveError && (
+              <p className="text-xs mt-2 px-2 py-1 rounded-md" style={{ background: '#fee2e2', color: '#991b1b' }}>
+                {saveError}
+              </p>
+            )}
           </div>
           <button onClick={() => setSectionOrder(DEFAULT_SECTION_ORDER)}
             className="text-xs px-2.5 py-1 rounded-lg shrink-0"
