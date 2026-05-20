@@ -117,6 +117,29 @@ export const railway = {
     return req<{ ok: true }>("DELETE", `/v1/driver/documents/${id}`);
   },
 
+  // Notifications inbox — every push the driver has been sent in the
+  // last 48h (default). Includes acknowledgement state so the UI can
+  // distinguish "still pending action" from "done."
+  listMyNotifications(opts?: { hours?: number; limit?: number }) {
+    const qs = new URLSearchParams();
+    if (opts?.hours != null) qs.set("hours", String(opts.hours));
+    if (opts?.limit != null) qs.set("limit", String(opts.limit));
+    const q = qs.toString();
+    return req<{
+      notifications: {
+        id:             string;
+        eventId:        string;
+        loadId:         string | null;
+        loadNum:        string | null;
+        loadTitle:      string | null;
+        kind:           string;
+        sentAt:         string;
+        sentByName:     string;
+        acknowledgedAt: string | null;
+      }[];
+    }>("GET", `/v1/driver/notifications${q ? `?${q}` : ""}`);
+  },
+
   // Loads
   listLoads(query?: { from?: string; to?: string }) {
     const qs = new URLSearchParams(

@@ -248,6 +248,74 @@ driver.patch("/me", async (c) => {
 // Database types don't include it yet (regenerate after applying).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sbAny = supabase as any;
+
+// GET /v1/driver/notifications — recent push notifications received by
+// the calling driver. Powers the bell + dropdown in the Schedule tab
+// so the driver can see what they were nudged about, in case a push
+// got dismissed before they could read it. Joined with loads so each
+// card can show the load # + title without a per-row fetch.
+//
+// Query params:
+//   - hours: window in hours (1-720, default 48)
+//   - limit: max rows (1-200, default 100)
+driver.get("/notifications", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const url = new URL(c.req.url);
+  const hoursRaw = Number(url.searchParams.get("hours"));
+  const hours = Number.isFinite(hoursRaw) ? Math.max(1, Math.min(720, hoursRaw)) : 48;
+  const limitRaw = Number(url.searchParams.get("limit"));
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 100;
+  const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("load_notifications")
+    .select(
+      "id, event_id, load_id, kind, sent_at, sent_by_name, acknowledged_at, " +
+      // PostgREST nested-select: pull the load_num + title from the
+      // parent load row in the same query so each card can show
+      // "#45280 · Phoenix → Reno" without a per-notification refetch.
+      "loads ( load_num, title )",
+    )
+    .eq("driver_id", driverId)
+    .eq("org_id", orgId)
+    .gte("sent_at", since)
+    .order("sent_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.error("[GET /v1/driver/notifications] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+
+  type Row = {
+    id: string;
+    event_id: string;
+    load_id: string | null;
+    kind: string;
+    sent_at: string;
+    sent_by_name: string;
+    acknowledged_at: string | null;
+    loads: { load_num: string | null; title: string | null } | { load_num: string | null; title: string | null }[] | null;
+  };
+  const rows = ((data ?? []) as unknown as Row[]).map(r => {
+    // PostgREST returns the nested relation as an object when the FK
+    // is to-one, sometimes as a single-element array. Normalize.
+    const load = Array.isArray(r.loads) ? (r.loads[0] ?? null) : r.loads;
+    return {
+      id:              r.id,
+      eventId:         r.event_id,
+      loadId:          r.load_id,
+      loadNum:         load?.load_num  ?? null,
+      loadTitle:       load?.title     ?? null,
+      kind:            r.kind,
+      sentAt:          r.sent_at,
+      sentByName:      r.sent_by_name,
+      acknowledgedAt:  r.acknowledged_at,
+    };
+  });
+  return c.json({ notifications: rows });
+});
+
 driver.get("/notification-prefs", async (c) => {
   const driverId = c.get("driverId");
   const { data, error } = await sbAny
