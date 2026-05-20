@@ -102,6 +102,42 @@ export function fmtStopAppt(stop?: Stop): string {
   return `${start}-${end}`;
 }
 
+/**
+ * Time on a relay handoff stop relative to THIS driver's leg.
+ *
+ * The web app stores both times on the single relay stop row:
+ *   - apptStart → driver 1 drop time (pickup-leg driver leaves the trailer)
+ *   - apptEnd   → driver 2 pickup time (delivery-leg driver picks it up)
+ *
+ * On a load card, showing both as a range ("9a-10a") is confusing — the
+ * driver only cares about THEIR own time. This helper returns just the
+ * relevant one based on which leg the load is.
+ *
+ *   role='pickup'   (this driver is the pickup leg / driver 1) → drop time
+ *   role='delivery' (this driver is the delivery leg / driver 2) → pickup time
+ */
+export function fmtRelayHandoffTime(
+  stop: Stop | undefined,
+  role: "pickup" | "delivery",
+): string {
+  if (!stop) return "";
+  const iso = role === "pickup"
+    ? stop.apptStart
+    : (stop.apptEnd ?? stop.apptStart);
+  if (!iso) return "";
+  return fmtTimeShort(iso);
+}
+
+/**
+ * Sub-label for a relay handoff stop — "Drop" for pickup-leg drivers
+ * (they're dropping the trailer at the handoff point) and "Pickup" for
+ * delivery-leg drivers (they're picking it up). Pairs with the existing
+ * "RELAY HANDOFF" label to form e.g. "RELAY HANDOFF · DROP · 9a".
+ */
+export function relayHandoffAction(role: "pickup" | "delivery"): "Drop" | "Pickup" {
+  return role === "pickup" ? "Drop" : "Pickup";
+}
+
 /** "Mar 5" — short date for stop labels. */
 export function fmtShortDate(iso?: string): string {
   if (!iso) return "";

@@ -526,10 +526,23 @@ function StopCard({
   const accent = STOP_ACCENT[stop.type];
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
-  const window =
-    stop.apptStart && stop.apptEnd && stop.apptStart !== stop.apptEnd
-      ? `${fmtTime(stop.apptStart)} – ${fmtTime(stop.apptEnd)}`
-      : fmtTime(stop.apptStart);
+  // Relay handoff stops carry two times in one row: apptStart = the
+  // pickup-leg driver's drop, apptEnd = the delivery-leg driver's
+  // pickup. Show only the time relevant to THIS driver instead of the
+  // confusing "9a – 10a" range. Pair with a "DROP" / "PICKUP" subtype
+  // label below so the role is unambiguous.
+  const isRelayStop = stop.type === "relay" && !!relayRole;
+  const relayActionLabel = isRelayStop
+    ? (relayRole === "pickup" ? "DROP" : "PICKUP")
+    : null;
+  const relayTimeIso = isRelayStop
+    ? (relayRole === "pickup" ? stop.apptStart : (stop.apptEnd ?? stop.apptStart))
+    : null;
+  const window = isRelayStop
+    ? fmtTime(relayTimeIso ?? undefined)
+    : (stop.apptStart && stop.apptEnd && stop.apptStart !== stop.apptEnd
+        ? `${fmtTime(stop.apptStart)} – ${fmtTime(stop.apptEnd)}`
+        : fmtTime(stop.apptStart));
 
   function openMaps() {
     const target =
@@ -581,7 +594,13 @@ function StopCard({
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
             <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, backgroundColor: accent.bg }}>
               <Text style={[txt(800), { fontSize: 10, color: accent.fg, letterSpacing: 0.5 }]}>
-                {STOP_TYPE_LABEL[stop.type].toUpperCase()}
+                {/* Relay stops show "RELAY HANDOFF · DROP" or
+                    "RELAY HANDOFF · PICKUP" so the driver immediately
+                    knows what they're doing here. Non-relay stops use
+                    the standard type label (PICKUP / DELIVERY / etc.). */}
+                {isRelayStop
+                  ? `RELAY HANDOFF · ${relayActionLabel}`
+                  : STOP_TYPE_LABEL[stop.type].toUpperCase()}
               </Text>
             </View>
           </View>
@@ -602,7 +621,10 @@ function StopCard({
                 {fmtDate(stop.apptStart)} · {window}
               </Text>
             </View>
-            <ScheduleTypeChip stop={stop} size="small" />
+            {/* Hide schedule type for relay handoff — it's not a real
+                appointment, it's a fixed exchange time, so APPT/WINDOW
+                doesn't add information. */}
+            {!isRelayStop && <ScheduleTypeChip stop={stop} size="small" />}
           </View>
         </View>
       </View>

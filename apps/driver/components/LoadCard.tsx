@@ -10,6 +10,7 @@ import { useDriverSession } from "@/lib/useDriverSession";
 import {
   RelayChip, NonRevChip, StatusPill, DiagonalStripes,
   fmtTimeRangeShort, fmtStopAppt, fmtShortDate, loadNumLabel, fmtScheduleType,
+  fmtRelayHandoffTime, relayHandoffAction,
 } from "@/lib/loadCard";
 
 type Props = { load: Load };
@@ -218,8 +219,13 @@ export function LoadCard({ load }: Props) {
                   letterSpacing: 0.6,
                 }]}>
                   {originLabel(pickup, isRelayDelivery)} · {fmtShortDate(load.start)}
-                  {fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}
-                  {fmtScheduleType(pickup) ? ` · ${fmtScheduleType(pickup)}` : ""}
+                  {isRelayDelivery
+                    // Delivery leg: origin IS the relay handoff. Driver 2
+                    // picks up here at apptEnd. Show that single time
+                    // with a "PICKUP" subtype label; skip schedule-type
+                    // since the relay handoff is a fixed-time exchange.
+                    ? ` · ${relayHandoffAction("delivery").toUpperCase()}${fmtRelayHandoffTime(pickup, "delivery") ? ` · ${fmtRelayHandoffTime(pickup, "delivery")}` : ""}`
+                    : `${fmtStopAppt(pickup) ? ` · ${fmtStopAppt(pickup)}` : ""}${fmtScheduleType(pickup) ? ` · ${fmtScheduleType(pickup)}` : ""}`}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(pickup)}
@@ -233,8 +239,12 @@ export function LoadCard({ load }: Props) {
                   letterSpacing: 0.6,
                 }]}>
                   {destLabel(delivery, isRelayPickup)} · {fmtShortDate(load.end)}
-                  {fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}
-                  {fmtScheduleType(delivery) ? ` · ${fmtScheduleType(delivery)}` : ""}
+                  {isRelayPickup
+                    // Pickup leg: destination IS the relay handoff. Driver 1
+                    // drops at apptStart. Show that single time with a
+                    // "DROP" subtype label, skip schedule-type.
+                    ? ` · ${relayHandoffAction("pickup").toUpperCase()}${fmtRelayHandoffTime(delivery, "pickup") ? ` · ${fmtRelayHandoffTime(delivery, "pickup")}` : ""}`
+                    : `${fmtStopAppt(delivery) ? ` · ${fmtStopAppt(delivery)}` : ""}${fmtScheduleType(delivery) ? ` · ${fmtScheduleType(delivery)}` : ""}`}
                 </Text>
                 <Text style={[txt(700), { fontSize: 14, color: "#202124", marginTop: 2 }]} numberOfLines={2}>
                   {locLabel(delivery)}
