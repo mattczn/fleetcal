@@ -85,17 +85,6 @@ export async function deleteDocument(
   await railway.deleteDocument(doc.id);
 }
 
-/**
- * Rename and/or recategorize an existing document. Either field is
- * optional — pass only what's changing. Server validates that `kind`
- * is in the canonical DocumentKind enum.
- */
-export async function updateDocument(
-  id: string,
-  patch: { fileName?: string; kind?: DocumentKind },
-): Promise<void> {
-  await railway.updateDocument(id, patch);
-}
 
 /**
  * Resolve a viewable URL for a document. The new API surface keys on

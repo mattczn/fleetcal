@@ -11,9 +11,20 @@ export interface OrgSettings {
    *  treat that as "tz info unavailable" and avoid device-tz fallback
    *  for "now"/"today" math. */
   timezone: string | null;
+  /** Document kinds this driver may upload (and which the docs list
+   *  will surface). Resolved server-side from the org's documentTypes
+   *  config — only kinds where enabled && driverVisible appear here.
+   *  rate_con + invoice are excluded by hard policy regardless of the
+   *  org's config. */
+  driverUploadKinds: string[];
 }
 
-const DEFAULTS: OrgSettings = { showDriverPay: false, timezone: null };
+const DEFAULTS: OrgSettings = {
+  showDriverPay:     false,
+  timezone:          null,
+  // Default mirrors the server when settings haven't been fetched yet.
+  driverUploadKinds: ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"],
+};
 
 export async function fetchOrgSettings(_orgId: string): Promise<OrgSettings> {
   try {

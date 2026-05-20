@@ -165,20 +165,19 @@ export const railway = {
   getDocumentUrl(id: string) {
     return req<{ url: string }>("GET", `/v1/driver/documents/${id}/url`);
   },
-  /**
-   * Rename and/or recategorize a document. Hits the shared (non-driver-
-   * scoped) /v1/documents/:id PATCH endpoint — RLS + capability checks
-   * server-side enforce that the driver can only edit docs for their org.
-   */
-  updateDocument(id: string, body: { fileName?: string; kind?: string }) {
-    return req<{ ok: true; fileName?: string; kind?: string }>(
-      "PATCH", `/v1/documents/${id}`, body,
-    );
-  },
 
   // Org settings + assets + trailers
   getOrgSettings() {
-    return req<{ settings: { showDriverPay: boolean; timezone: string | null } }>("GET", "/v1/driver/org-settings");
+    return req<{
+      settings: {
+        showDriverPay:     boolean;
+        timezone:          string | null;
+        /** Kinds the driver app may show + accept on upload. Resolved
+         *  server-side from org_settings.document_types (enabled AND
+         *  driver_visible) with a legacy fallback. */
+        driverUploadKinds: string[];
+      };
+    }>("GET", "/v1/driver/org-settings");
   },
   listAssets() {
     return req<{

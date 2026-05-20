@@ -6,12 +6,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Plus, Trash2, X, Share2, UploadCloud, Pencil } from "lucide-react-native";
+import { FileText, Plus, Trash2, X, Share2, UploadCloud } from "lucide-react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { fetchDocuments, getSignedUrl, deleteDocument, type LoadDocument } from "@/lib/api/documents";
 import { UploadSheet } from "@/components/UploadSheet";
-import { EditDocumentSheet } from "@/components/EditDocumentSheet";
 import { subscribe as subscribeToUploadQueue, type PendingUpload } from "@/lib/uploadQueue";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -72,7 +71,7 @@ async function shareDocument(url: string, doc: LoadDocument): Promise<void> {
   }
 }
 
-function DocumentRow({ doc, onPress, onEdit, onDelete }: { doc: LoadDocument; onPress: () => void; onEdit: () => void; onDelete: () => void }) {
+function DocumentRow({ doc, onPress, onDelete }: { doc: LoadDocument; onPress: () => void; onDelete: () => void }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const tint = KIND_TINT[doc.kind] ?? KIND_TINT.other;
 
@@ -118,10 +117,6 @@ function DocumentRow({ doc, onPress, onEdit, onDelete }: { doc: LoadDocument; on
         </Text>
       </View>
 
-      <TouchableOpacity onPress={onEdit} hitSlop={10}
-        style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 4 }}>
-        <Pencil size={16} color="#5f6368" strokeWidth={2.2} />
-      </TouchableOpacity>
       <TouchableOpacity onPress={onDelete} hitSlop={10}
         style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: 4 }}>
         <Trash2 size={16} color="#9aa0a6" strokeWidth={2.2} />
@@ -235,11 +230,6 @@ export function DocumentsView({
 }: Props) {
   const queryClient = useQueryClient();
   const [viewerDoc, setViewerDoc] = useState<LoadDocument | null>(null);
-  // editDoc + editMode drive a single EditDocumentSheet. "categorize"
-  // mode opens right after an upload (kind is "other", user picks the
-  // real type); "edit" mode opens from the pencil icon on each row.
-  const [editDoc, setEditDoc] = useState<LoadDocument | null>(null);
-  const [editMode, setEditMode] = useState<"categorize" | "edit">("edit");
 
   const { data: docs = [], refetch, isLoading } = useQuery({
     queryKey: ["documents", eventId],
@@ -340,7 +330,6 @@ export function DocumentsView({
               key={doc.id}
               doc={doc}
               onPress={() => setViewerDoc(doc)}
-              onEdit={() => { setEditMode("edit"); setEditDoc(doc); }}
               onDelete={() => handleDelete(doc)}
             />
           ))
@@ -355,26 +344,8 @@ export function DocumentsView({
         driverName={driverName}
         visible={uploadVisible}
         onClose={() => setUploadVisible(false)}
-        onUploaded={(newDoc) => {
+        onUploaded={() => {
           refetch();
-          queryClient.invalidateQueries({ queryKey: ["documents", eventId] });
-          // Online uploads return the inserted document — pop the
-          // categorize sheet so the driver picks a kind. Offline /
-          // queued uploads return null; they'll be re-categorized
-          // from the list once they drain.
-          if (newDoc) {
-            setEditMode("categorize");
-            setEditDoc(newDoc);
-          }
-        }}
-      />
-
-      <EditDocumentSheet
-        doc={editDoc}
-        mode={editMode}
-        visible={!!editDoc}
-        onClose={() => setEditDoc(null)}
-        onUpdated={() => {
           queryClient.invalidateQueries({ queryKey: ["documents", eventId] });
         }}
       />

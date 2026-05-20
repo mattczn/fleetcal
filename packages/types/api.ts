@@ -388,14 +388,69 @@ export const DOCUMENT_KINDS: readonly DocumentKind[] = [
   "rate_con", "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "invoice", "relay_handoff", "other",
 ];
 
-/** Default allow-list of kinds shown to drivers when an org hasn't
- *  customized OrgSettings.driverVisibleDocKinds. Excludes rate_con
- *  (broker proprietary) and invoice (financial); these can be re-
- *  enabled per-org in Settings → Driver App. New kinds added to
- *  DocumentKind do NOT auto-appear here — admins must opt them in. */
+/** Legacy default allow-list, retained as a fallback for the small
+ *  number of code paths still reading OrgSettings.driverVisibleDocKinds.
+ *  New code should read OrgSettings.documentTypes via the helpers below. */
 export const DEFAULT_DRIVER_VISIBLE_DOC_KINDS: readonly DocumentKind[] = [
   "pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other",
 ];
+
+/** Kinds whose driverVisible flag is hard-locked to false. Server
+ *  rejects PATCH /v1/org-settings attempts that try to set these
+ *  visible. Used by the Settings UI to disable the toggle for these
+ *  rows and explain why in a tooltip. */
+export const DRIVER_HIDDEN_DOC_KINDS: readonly DocumentKind[] = [
+  "rate_con", "invoice",
+];
+
+/** Default per-kind configuration for orgs that haven't set
+ *  `documentTypes` yet (new orgs). Every kind enabled; rate_con and
+ *  invoice locked off for drivers, everything else visible. The
+ *  20260520 migration writes this same shape into every existing org
+ *  so the server fallback only kicks in for brand-new orgs. */
+export const DEFAULT_DOCUMENT_TYPES: readonly import("./domain").DocumentTypeConfig[] =
+  DOCUMENT_KINDS.map((kind) => ({
+    kind,
+    enabled:       true,
+    driverVisible: !DRIVER_HIDDEN_DOC_KINDS.includes(kind),
+  }));
+
+// ── Helpers ──────────────────────────────────────────────────────────
+// Centralized lookups so every reader (web, driver, API) gets identical
+// semantics. All three accept the OrgSettings.documentTypes field
+// (possibly null/undefined for brand-new orgs) and fall through to
+// DEFAULT_DOCUMENT_TYPES.
+
+function resolveTypes(
+  types: import("./domain").DocumentTypeConfig[] | null | undefined,
+): readonly import("./domain").DocumentTypeConfig[] {
+  return types ?? DEFAULT_DOCUMENT_TYPES;
+}
+
+/** Kinds visible in upload pickers across the whole product. */
+export function enabledDocumentKinds(
+  types: import("./domain").DocumentTypeConfig[] | null | undefined,
+): DocumentKind[] {
+  return resolveTypes(types)
+    .filter((t) => t.enabled)
+    .map((t) => t.kind as DocumentKind);
+}
+
+/** Kinds the driver app may show + accept on upload. Honors both
+ *  flags: a kind must be enabled AND driverVisible. */
+export function driverVisibleDocumentKinds(
+  types: import("./domain").DocumentTypeConfig[] | null | undefined,
+): DocumentKind[] {
+  return resolveTypes(types)
+    .filter((t) => t.enabled && t.driverVisible)
+    .map((t) => t.kind as DocumentKind);
+}
+
+/** True iff the kind is dispatcher-only by hard policy (driver
+ *  visibility cannot be toggled true). */
+export function isDriverHiddenDocKind(kind: string): boolean {
+  return (DRIVER_HIDDEN_DOC_KINDS as readonly string[]).includes(kind);
+}
 
 /**
  * Document summary shape returned by list/show endpoints. `signedUrl` is
@@ -678,10 +733,18 @@ export interface UpdateOrgSettingsRequest {
   /** Replaces the entire org-modules flags map. Use {} to reset to
    *  defaults (all-enabled); omit to leave unchanged. */
   orgModules?:       import("./domain").OrgModuleFlags;
-  /** Replaces the driver-visible-doc-kinds allow-list. Send an array
-   *  to set; omit to leave unchanged. See OrgSettings.driverVisibleDocKinds
-   *  for default semantics. */
+  /** Legacy — superseded by `documentTypes`. Replaces the driver-
+   *  visible-doc-kinds allow-list. Still accepted for one release so
+   *  older clients keep working; the server upserts the equivalent
+   *  rows into `documentTypes` when this is sent. */
   driverVisibleDocKinds?: string[] | null;
+  /** Replace the per-org document-type configuration. Send the full
+   *  array (no partial updates). Server validates:
+   *    - every entry's `kind` is in DOCUMENT_KINDS
+   *    - rate_con / invoice have driverVisible: false (rejects 400 otherwise)
+   *    - no duplicate kinds
+   *  Send null to reset to DEFAULT_DOCUMENT_TYPES; omit to leave unchanged. */
+  documentTypes?: import("./domain").DocumentTypeConfig[] | null;
   /** Replaces the per-org notification rules. Full-object replace
    *  (the UI ships the whole shape on save). Omit to leave unchanged.
    *  null clears back to the server default. */

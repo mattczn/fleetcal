@@ -612,10 +612,33 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const { mergeFilesToPdf } = await import('@/lib/pdfMerge');
       const mergedBlob = await mergeFilesToPdf(files);
       const mergedFile = new File([mergedBlob], `merged.pdf`, { type: 'application/pdf' });
-      // Kind = the most common kind among selected (or first if tied).
-      const kindCounts = new Map<string, number>();
-      for (const d of selected) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
-      const mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selected[0].kind) as import('@fleetcal/types').DocumentKind;
+      // Determine the merged kind with a security-first rule: if ANY
+      // input is dispatcher-only (rate_con / invoice / driver_sheet),
+      // the merged file inherits the most-restrictive kind among the
+      // inputs. Previously we took the "most common" kind, which would
+      // happily produce kind=pod for a merge of [rate_con, pod, pod] —
+      // hiding a rate confirmation inside a driver-visible POD. The
+      // driver-visible filter would then expose it.
+      //
+      // Order: rate_con > invoice > driver_sheet > everything else
+      // (the higher in this list, the more restrictive). Among the
+      // "everything else" kinds (all driver-visible), we fall back to
+      // most-common-kind selection because that's the original intent.
+      const DISPATCHER_ONLY_KINDS = new Set(['rate_con', 'invoice', 'driver_sheet']);
+      const RESTRICTIVENESS: Record<string, number> = { rate_con: 3, invoice: 2, driver_sheet: 1 };
+      let mergedKind: import('@fleetcal/types').DocumentKind;
+      const dispatcherKindsInSelection = selected
+        .map(d => d.kind)
+        .filter(k => DISPATCHER_ONLY_KINDS.has(k));
+      if (dispatcherKindsInSelection.length > 0) {
+        // Sort by restrictiveness descending — most restrictive wins.
+        mergedKind = dispatcherKindsInSelection
+          .sort((a, b) => (RESTRICTIVENESS[b] ?? 0) - (RESTRICTIVENESS[a] ?? 0))[0] as import('@fleetcal/types').DocumentKind;
+      } else {
+        const kindCounts = new Map<string, number>();
+        for (const d of selected) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
+        mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selected[0].kind) as import('@fleetcal/types').DocumentKind;
+      }
       useCalendarStore.getState().markLoadSelfWrite(loadId);
       const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
       // Originals are NOT deleted — the merged doc is appended.

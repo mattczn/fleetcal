@@ -545,7 +545,7 @@ driver.get("/org-settings", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings")
+    .select("show_driver_pay,rate_con_settings,document_types,driver_visible_doc_kinds")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -558,11 +558,30 @@ driver.get("/org-settings", async (c) => {
   const row = data as {
     show_driver_pay:   boolean;
     rate_con_settings: { promptVariables?: { timezone?: string } } | null;
+    document_types:    Array<{ kind: string; enabled: boolean; driverVisible: boolean }> | null;
+    driver_visible_doc_kinds: string[] | null;
   } | null;
   const showDriverPay = row?.show_driver_pay ?? false;
   const rawTz = row?.rate_con_settings?.promptVariables?.timezone ?? null;
   const timezone = sanitizeTz(rawTz);
-  return c.json({ settings: { showDriverPay, timezone } });
+  // Compute the driver's allowed upload kinds server-side from the
+  // canonical config. The driver app uses this to populate its kind
+  // picker; we send only the resolved list (not the full per-kind
+  // record) because the driver UI doesn't need the enabled/visibility
+  // breakdown — it only cares which kinds it may show.
+  let driverUploadKinds: string[];
+  if (row?.document_types && Array.isArray(row.document_types)) {
+    driverUploadKinds = row.document_types
+      .filter((t) => t.enabled && t.driverVisible)
+      .map((t) => t.kind);
+  } else if (row?.driver_visible_doc_kinds) {
+    driverUploadKinds = row.driver_visible_doc_kinds;
+  } else {
+    // Default: everything except rate_con + invoice. Matches the
+    // server-side default used by the docs-list endpoint.
+    driverUploadKinds = ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"];
+  }
+  return c.json({ settings: { showDriverPay, timezone, driverUploadKinds } });
 });
 
 // Pull the IANA portion ("America/Denver") out of values like
@@ -1132,6 +1151,13 @@ driver.post("/stops/:id/check-out", async (c) => {
 // Documents — list, upload, delete, signed URL
 // ─────────────────────────────────────────────────────────────────────────
 
+// Drivers ONLY interact with the load-documents bucket. The rate-cons
+// bucket is dispatcher-confidential by policy — even if a driver got
+// a tampered list of doc IDs that included a rate_con row, every
+// signed-URL mint here goes through load-documents and would 404 on
+// rate_con blobs (which physically live in the rate-cons bucket post-
+// Phase 3.1 split). The visibility filter (driverVisibleKinds) also
+// excludes rate_con from the list, so this is defense in depth.
 const DOC_BUCKET = "load-documents";
 
 interface DocRow {
@@ -1178,18 +1204,32 @@ driver.get("/loads/:id/documents", async (c) => {
   const found = await loadDriverEvent(id, driverId, orgId);
   if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
 
-  // Apply the org's driver-visible kinds allow-list. Default (when
-  // never customized): every kind except rate_con + invoice. Server-
-  // side filter so even a tampered client can't see hidden kinds.
+  // Apply the org's driver-visible kinds allow-list. Server-side filter
+  // so even a tampered client can't see hidden kinds. Resolution order:
+  //   1. document_types (new richer config; enabled && driverVisible)
+  //   2. driver_visible_doc_kinds (legacy fallback for orgs that haven't
+  //      been migrated yet — the 20260520 migration backfills the new
+  //      column, but the fallback keeps brand-new orgs safe.)
+  //   3. DEFAULT_DRIVER_VISIBLE_DOC_KINDS — global default
   const { data: settingsRow } = await supabase
     .from("org_settings")
-    .select("driver_visible_doc_kinds")
+    .select("driver_visible_doc_kinds, document_types")
     .eq("org_id", orgId)
     .maybeSingle();
-  const visibleKinds: string[] =
-    (settingsRow as { driver_visible_doc_kinds: string[] | null } | null)
-      ?.driver_visible_doc_kinds
-    ?? [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
+  const s = settingsRow as {
+    driver_visible_doc_kinds: string[] | null;
+    document_types: Array<{ kind: string; enabled: boolean; driverVisible: boolean }> | null;
+  } | null;
+  let visibleKinds: string[];
+  if (s?.document_types && Array.isArray(s.document_types)) {
+    visibleKinds = s.document_types
+      .filter((t) => t.enabled && t.driverVisible)
+      .map((t) => t.kind);
+  } else if (s?.driver_visible_doc_kinds) {
+    visibleKinds = s.driver_visible_doc_kinds;
+  } else {
+    visibleKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
+  }
   // Empty allow-list → short-circuit; no docs visible.
   if (visibleKinds.length === 0) return c.json({ documents: [] });
 
@@ -1262,11 +1302,27 @@ driver.post("/loads/:id/documents", async (c) => {
   if (!file || typeof file === "string") {
     return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
   }
-  // Drivers can upload any of the standardized kinds — the phone UI
-  // surfaces POD/BOL/Scale/Other today, but we accept the full set so
-  // adding more categories doesn't need an API change.
+  // Validate kind is in the canonical enum.
   if (!DOCUMENT_KINDS.includes(kind as DocumentKind)) {
     return c.json({ error: "validation_failed", errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`] }, 400);
+  }
+  // Drivers must not upload kinds that are dispatcher-confidential by
+  // policy — rate_con / invoice / driver_sheet contain broker rates,
+  // billing data, or dispatcher-side payroll context the driver app
+  // never legitimately needs to produce. Even though the driver-side
+  // /v1/driver/loads/:id/documents read endpoint filters these out on
+  // GET, an attacker controlling a driver session shouldn't be able
+  // to inject documents under those kinds (they'd be invisible to the
+  // driver but visible to dispatch, which could be used to plant
+  // misleading paperwork). Reject at the write boundary.
+  const DRIVER_ALLOWED_UPLOAD_KINDS = new Set<DocumentKind>([
+    "pod", "bol", "scale", "lumper", "receipt", "relay_handoff", "other",
+  ]);
+  if (!DRIVER_ALLOWED_UPLOAD_KINDS.has(kind as DocumentKind)) {
+    return c.json({
+      error:  "forbidden",
+      errors: [`kind '${kind}' is not allowed for driver uploads`],
+    }, 403);
   }
 
   // Resolve load_id from the event so the document is reachable from

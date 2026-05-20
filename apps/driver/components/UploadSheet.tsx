@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View, Text, TouchableOpacity, Modal, ActivityIndicator, Alert, Pressable,
 } from "react-native";
@@ -8,10 +8,12 @@ import * as Print from "expo-print";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import DocumentScanner from "react-native-document-scanner-plugin";
-import { ScanLine, Camera, Image as ImageIcon, FileText, X, Layers } from "lucide-react-native";
-import { uploadDocument, type DocumentKind, type LoadDocument } from "@/lib/api/documents";
+import { ScanLine, Camera, Image as ImageIcon, FileText, X, Check, Layers } from "lucide-react-native";
+import { uploadDocument, type DocumentKind } from "@/lib/api/documents";
+import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { enqueueUpload } from "@/lib/uploadQueue";
 import { useOnline } from "@/lib/useOnline";
+import { useQuery } from "@tanstack/react-query";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -29,14 +31,10 @@ type Props = {
   driverName?: string;
   visible:    boolean;
   onClose:    () => void;
-  /**
-   * Fires after a successful (online) upload, with the just-inserted
-   * document so the parent can pop the EditDocumentSheet for the user
-   * to pick a kind. Called with `null` when the upload was queued
-   * offline — we don't have a doc id yet in that case, and the
-   * categorize step happens later once the upload drains.
-   */
-  onUploaded: (doc: LoadDocument | null) => void;
+  /** Fires after a successful upload (live or queued). The sheet has
+   *  already auto-named the file by document type, so the caller's
+   *  job is just to refresh the docs list. */
+  onUploaded: () => void;
 };
 
 const MAX_TOTAL_BYTES = 3 * 1024 * 1024; // 3 MB final upload cap
@@ -95,18 +93,53 @@ function buildFileName(kind: DocumentKind, loadNum: string | undefined, suffix: 
 
 type Step = "idle" | "scanning" | "converting" | "uploading";
 
-// Documents are uploaded with a placeholder kind. The parent component
-// pops EditDocumentSheet immediately after a successful upload so the
-// driver picks the actual kind (POD / BOL / Scale / etc.) on the
-// just-uploaded doc rather than guessing the type before scanning.
-// "other" is the only kind that survives in the queued-offline path,
-// where there's no UI follow-up until the upload drains.
-const DEFAULT_KIND: DocumentKind = "other";
+// Per-kind label + accent — these are the kinds drivers may upload.
+// rate_con and invoice are intentionally absent (dispatcher-only). The
+// runtime list passed to the picker is filtered further by the org's
+// document_types config (Settings → Documents).
+const KIND_PRESETS: Record<DocumentKind, { label: string; tint: string }> = {
+  pod:           { label: "POD",     tint: "#15803d" },
+  bol:           { label: "BOL",     tint: "#1a73e8" },
+  scale:         { label: "Scale",   tint: "#9a3412" },
+  lumper:        { label: "Lumper",  tint: "#92400e" },
+  receipt:       { label: "Receipt", tint: "#9d174d" },
+  driver_sheet:  { label: "Sheet",   tint: "#6d28d9" },
+  relay_handoff: { label: "Handoff", tint: "#8b5cf6" },
+  other:         { label: "Other",   tint: "#5f6368" },
+  // Listed for type-completeness only. Filtered out before render.
+  rate_con:      { label: "Rate Con", tint: "#92400e" },
+  invoice:       { label: "Invoice",  tint: "#9d174d" },
+};
 
 export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, visible, onClose, onUploaded }: Props) {
   const [step, setStep] = useState<Step>("idle");
   const online = useOnline();
-  const kind = DEFAULT_KIND;
+
+  // Fetch the org's allowed driver upload kinds. Cached at the React
+  // Query layer so reopening the sheet doesn't re-fetch on every tap.
+  // While loading, fall back to the conservative default (every kind
+  // except rate_con/invoice) so a slow settings fetch doesn't gate the
+  // entire upload UI.
+  const { data: orgSettings } = useQuery({
+    queryKey: ["org-settings", orgId],
+    queryFn:  () => fetchOrgSettings(orgId),
+    staleTime: 5 * 60 * 1000,
+  });
+  const allowedKinds: DocumentKind[] = (
+    orgSettings?.driverUploadKinds ?? ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"]
+  ).filter((k): k is DocumentKind => k in KIND_PRESETS && k !== "rate_con" && k !== "invoice");
+
+  // Selected kind. Default to the first allowed kind so a tap on a
+  // source immediately works — drivers don't have to remember to pick
+  // one. They can still change it before tapping a source.
+  const [kind, setKind] = useState<DocumentKind>(allowedKinds[0] ?? "other");
+  useEffect(() => {
+    // If the allowed list changes (org settings hydrate, or admin
+    // disables a kind), snap to a still-allowed default.
+    if (!allowedKinds.includes(kind) && allowedKinds.length > 0) {
+      setKind(allowedKinds[0]);
+    }
+  }, [allowedKinds, kind]);
 
   async function scanToPdf() {
     try {
@@ -263,16 +296,15 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
     // Offline path: enqueue and exit. The file gets copied into the
     // app's document directory (so iOS can't purge it from cache) and
     // a NetInfo-driven drain in _layout.tsx picks it up on reconnect.
-    // No EditDocumentSheet pop here — we don't have a doc id yet.
     if (online === false) {
       setStep("uploading");
       try {
         await enqueueUpload({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
         Alert.alert(
           "Saved for upload",
-          "You're offline — this document will upload as Other and you can re-categorize it from the list when it finishes.",
+          "You're offline — this document will upload automatically when you reconnect.",
         );
-        onUploaded(null);
+        onUploaded();
         onClose();
       } catch (err) {
         Alert.alert("Save failed", err instanceof Error ? err.message : "Could not save for offline upload");
@@ -283,8 +315,8 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
     }
     setStep("uploading");
     try {
-      const doc = await uploadDocument({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
-      onUploaded(doc);
+      await uploadDocument({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
+      onUploaded();
       onClose();
     } catch (err) {
       // Fallback: if the live upload fails for a network-y reason
@@ -296,7 +328,7 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
         try {
           await enqueueUpload({ fileUri, fileName, mimeType, eventId, orgId, driverId, driverName, kind });
           Alert.alert("Saved for upload", "Connection dropped — we'll retry automatically.");
-          onUploaded(null);
+          onUploaded();
           onClose();
         } catch (qerr) {
           Alert.alert("Upload failed", msg);
@@ -343,9 +375,47 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
               <X size={20} color="#5f6368" strokeWidth={2.2} />
             </TouchableOpacity>
           </View>
-          <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginBottom: 18 }]}>
-            Scan it now — you'll pick the type after the upload finishes.
+          <Text style={[txt(500), { fontSize: 13, color: "#5f6368", marginBottom: 14 }]}>
+            Pick a document type, then choose a source. Your file is named for you using the load number and type.
           </Text>
+
+          {/* Document type picker — must be picked before tapping a
+              source. Filtered by the org's `driverUploadKinds` (Settings
+              → Documents). rate_con + invoice are excluded by hard
+              policy at the API too, so even a tampered list can't
+              upload as those kinds. */}
+          <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: "#5f6368", textTransform: "uppercase", marginBottom: 8 }]}>
+            Document type
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+            {allowedKinds.map((k) => {
+              const preset = KIND_PRESETS[k];
+              const active = kind === k;
+              return (
+                <TouchableOpacity
+                  key={k}
+                  onPress={() => setKind(k)}
+                  activeOpacity={0.7}
+                  style={{
+                    paddingVertical: 9,
+                    paddingHorizontal: 12,
+                    borderRadius: 10,
+                    backgroundColor: active ? `${preset.tint}15` : "#f8f9fa",
+                    borderWidth: 1.5,
+                    borderColor: active ? preset.tint : "#e8eaed",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  {active ? <Check size={12} color={preset.tint} strokeWidth={2.6} /> : null}
+                  <Text style={[txt(800), { fontSize: 12, color: active ? preset.tint : "#5f6368", letterSpacing: 0.3 }]}>
+                    {preset.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
           {/* Sources */}
           {busy ? (

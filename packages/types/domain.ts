@@ -311,6 +311,19 @@ export interface InvoiceSettings {
   invoiceNumberPrefix?: string;
 }
 
+/** One row in OrgSettings.documentTypes. `kind` is a DocumentKind from
+ *  @fleetcal/types/api; the union isn't imported here to avoid a circular
+ *  package import — runtime validators in the API check it against the
+ *  canonical enum. */
+export interface DocumentTypeConfig {
+  kind:           string;
+  /** Surface this kind in upload pickers across all apps. */
+  enabled:        boolean;
+  /** Drivers can see + upload this kind. Server-enforced false for
+   *  'rate_con' and 'invoice' regardless of what the client sends. */
+  driverVisible:  boolean;
+}
+
 export interface OrgSettings {
   showDriverPay: boolean;
   /** Per-org rate-con AI parsing config. See RateConSettings for shape. */
@@ -330,14 +343,33 @@ export interface OrgSettings {
    *  enabled until Stripe/billing flips it. See @fleetcal/types
    *  modules.ts for the enum + helper. */
   orgModules?: OrgModuleFlags;
-  /** Allow-list of DocumentKind values the driver app is permitted
-   *  to display. Server-side filter on GET /v1/driver/loads/:id/documents.
-   *  - undefined / null → server applies the default allow-list:
-   *    every kind except `rate_con` and `invoice` (financial/broker).
-   *  - [] (empty array) → drivers see no documents.
-   *  - New kinds added to DocumentKind in the future are HIDDEN by
-   *    default; the admin must opt them in via Settings → Driver App. */
+  /** Legacy. Allow-list of DocumentKind values visible to drivers.
+   *  Superseded by `documentTypes` (richer model with enable + driver-
+   *  visibility flags). Kept as a server-side fallback for one release
+   *  while consumers migrate. */
   driverVisibleDocKinds?: string[] | null;
+
+  /** Per-org document-type configuration. Drives the kind pickers
+   *  across web, dispatch, and driver, plus the driver-visible filter
+   *  on document reads. Each entry is one row in the canonical kind
+   *  list (DOCUMENT_KINDS from @fleetcal/types/api).
+   *
+   *  Server-enforced invariants — cannot be overridden by clients:
+   *    - kind 'rate_con' always has driverVisible = false (confidential)
+   *    - kind 'invoice'  always has driverVisible = false (financial)
+   *
+   *  Semantics:
+   *    - enabled = false → kind disappears from EVERY upload picker
+   *    - driverVisible = false → kind never returned by the driver app
+   *      docs endpoint, even if a doc with that kind exists. Drivers
+   *      also can't UPLOAD a kind that's not driver-visible (enforced
+   *      at the API write boundary on /v1/driver/loads/:id/documents).
+   *
+   *  undefined / null → server backfills using DEFAULT_DOCUMENT_TYPES
+   *  (every kind enabled; rate_con+invoice hidden from drivers, the
+   *  rest visible). The 20260520 migration sets a concrete value on
+   *  every existing row so this fallback is for new orgs only. */
+  documentTypes?: DocumentTypeConfig[] | null;
   /** Per-org driver-notification rules. Configured by an admin in
    *  Settings → Driver App → Notifications. See @fleetcal/types
    *  notifications.ts for the shape + defaults. null/undefined ⇒

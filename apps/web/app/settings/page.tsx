@@ -3,7 +3,7 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { parseTimeInput } from '@/lib/time-utils';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw } from 'lucide-react';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
 import {
   CAPABILITY_CATALOG,
@@ -16,6 +16,9 @@ import {
   isModuleEnabled,
   DOCUMENT_KINDS,
   DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
+  DEFAULT_DOCUMENT_TYPES,
+  DRIVER_HIDDEN_DOC_KINDS,
+  isDriverHiddenDocKind,
   DEFAULT_NOTIFICATION_RULES,
   NOTIFICATION_RULE_BLURB,
   type Capability,
@@ -25,6 +28,7 @@ import {
   type OrgModule,
   type OrgModuleFlags,
   type DocumentKind,
+  type DocumentTypeConfig,
   type NotificationRules,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
@@ -55,7 +59,7 @@ import type { InvoiceSnapshot } from '@fleetcal/types';
 
 const PREVIEW_COLOR = '#1a73e8';
 
-type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'members' | 'role-permissions' | 'modules';
+type NavItem = 'appearance' | 'timezone' | 'assets' | 'load-fields' | 'ratecon-ai' | 'invoicing' | 'integrations' | 'card-layout' | 'saved-locations' | 'dispatchers' | 'customers' | 'trailers' | 'driver-app' | 'documents' | 'members' | 'role-permissions' | 'modules';
 
 // ─── Toggle ──────────────────────────────────────────────────────────────────
 
@@ -1008,15 +1012,166 @@ const DOC_KIND_HINT: Partial<Record<DocumentKind, string>> = {
   invoice:  'Off by default — customer-facing financial doc.',
 };
 
-function DriverAppPanel() {
+/** Document Types panel — top-level org setting. Two toggles per kind:
+ *  - Enabled       (kind appears in upload pickers across web + driver + dispatch)
+ *  - Drivers can see (driver app surfaces + accepts uploads of this kind)
+ *
+ *  rate_con and invoice have the "Drivers can see" toggle locked off
+ *  by hard policy (server rejects PATCH attempts that try to flip them).
+ */
+function DocumentsPanel() {
+  // null while loading; otherwise the current per-kind config.
+  const [types, setTypes] = useState<DocumentTypeConfig[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    import('@/lib/railway').then(({ railway }) => railway.getOrgSettings())
+      .then(({ settings }) => {
+        if (cancelled) return;
+        // Server-stored value may be null for never-customized orgs;
+        // fall back to the canonical default in that case.
+        setTypes(settings.documentTypes ?? [...DEFAULT_DOCUMENT_TYPES]);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTypes([...DEFAULT_DOCUMENT_TYPES]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  /** Optimistic save — write next, roll back on failure. The server
+   *  rejects driverVisible=true on rate_con/invoice, so this should
+   *  only roll back on network / auth errors. */
+  async function save(next: DocumentTypeConfig[]) {
+    if (busy) return;
+    const prev = types;
+    setTypes(next);
+    setBusy(true);
+    try {
+      const { railway } = await import('@/lib/railway');
+      await railway.updateOrgSettings({ documentTypes: next });
+    } catch {
+      setTypes(prev);
+    }
+    setBusy(false);
+  }
+
+  function toggleEnabled(kind: DocumentKind) {
+    if (!types) return;
+    const next = types.map(t => t.kind === kind ? { ...t, enabled: !t.enabled } : t);
+    void save(next);
+  }
+  function toggleDriverVisible(kind: DocumentKind) {
+    if (!types) return;
+    // Hard policy: can't toggle on for rate_con or invoice.
+    if (isDriverHiddenDocKind(kind)) return;
+    const next = types.map(t => t.kind === kind ? { ...t, driverVisible: !t.driverVisible } : t);
+    void save(next);
+  }
+
+  return (
+    <SettingsPanel
+      title="Documents"
+      description="Define the document types your org uses and which of them drivers can see + upload. Applies across web, dispatch, and driver apps."
+      maxWidth={780}
+    >
+      <SettingsSection
+        title="Document Types"
+        description="Disable a type to remove it from every upload picker. Toggle 'Drivers can see' to control what the driver app surfaces — rate cons and invoices are confidential by policy and can't be shared."
+        first
+      >
+        {types == null ? (
+          <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
+        ) : (
+          <div>
+            {/* Header row labels for the two toggle columns */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 110px 140px',
+              alignItems: 'center',
+              gap: 12,
+              padding: '8px 12px',
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              color: SETTINGS_COLORS.textMuted,
+              borderBottom: `1px solid ${SETTINGS_COLORS.border}`,
+            }}>
+              <span>Document type</span>
+              <span style={{ textAlign: 'center' }}>Enabled</span>
+              <span style={{ textAlign: 'center' }}>Drivers can see</span>
+            </div>
+            {DOCUMENT_KINDS.map(kind => {
+              const row = types.find(t => t.kind === kind);
+              const enabled       = row?.enabled       ?? true;
+              const driverVisible = row?.driverVisible ?? !isDriverHiddenDocKind(kind);
+              const locked        = isDriverHiddenDocKind(kind);
+              return (
+                <div
+                  key={kind}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 110px 140px',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '12px',
+                    borderBottom: `1px solid ${SETTINGS_COLORS.border}`,
+                    opacity: enabled ? 1 : 0.55,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: SETTINGS_COLORS.text }}>
+                      {DOC_KIND_LABEL[kind]}
+                    </div>
+                    {DOC_KIND_HINT[kind] && (
+                      <div style={{ fontSize: 12, color: SETTINGS_COLORS.textMuted, marginTop: 2 }}>
+                        {DOC_KIND_HINT[kind]}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <SettingsToggle
+                      checked={enabled}
+                      disabled={busy}
+                      onChange={() => toggleEnabled(kind)}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
+                    {locked && (
+                      <span
+                        title="Confidential by policy — contains broker rates or financial data. Cannot be shared with drivers."
+                        style={{ display: 'inline-flex', color: SETTINGS_COLORS.textMuted }}
+                      >
+                        <Lock size={13} />
+                      </span>
+                    )}
+                    <SettingsToggle
+                      checked={driverVisible && !locked && enabled}
+                      // Disabled when:
+                      //  - kind is policy-locked (rate_con/invoice)
+                      //  - kind is disabled entirely (no point toggling visibility on a hidden kind)
+                      //  - a save is in flight
+                      disabled={busy || locked || !enabled}
+                      onChange={() => toggleDriverVisible(kind)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </SettingsSection>
+    </SettingsPanel>
+  );
+}
+
+function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
   const [showDriverPay, setShowDriverPay] = useState<boolean | null>(null);
-  // null = still loading; otherwise the current allow-list (server
-  // returns null when never customized — we render the defaults).
-  const [visibleKinds, setVisibleKinds] = useState<DocumentKind[] | null>(null);
   // Notification rules; null = still loading.
   const [rules, setRules] = useState<NotificationRules | null>(null);
   const [busy, setBusy] = useState(false);
-  const [kindsBusy, setKindsBusy] = useState(false);
   const [rulesBusy, setRulesBusy] = useState(false);
 
   useEffect(() => {
@@ -1025,8 +1180,6 @@ function DriverAppPanel() {
       .then(({ settings }) => {
         if (cancelled) return;
         setShowDriverPay(settings.showDriverPay);
-        const stored = (settings.driverVisibleDocKinds ?? null) as DocumentKind[] | null;
-        setVisibleKinds(stored ?? [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS]);
         // Notification rules: merge stored over defaults so partial DB
         // shapes still produce a fully-populated form.
         const storedRules = settings.notificationRules ?? null;
@@ -1042,7 +1195,6 @@ function DriverAppPanel() {
       .catch(() => {
         if (cancelled) return;
         setShowDriverPay(false);
-        setVisibleKinds([...DEFAULT_DRIVER_VISIBLE_DOC_KINDS]);
         setRules(DEFAULT_NOTIFICATION_RULES);
       });
     return () => { cancelled = true; };
@@ -1060,26 +1212,6 @@ function DriverAppPanel() {
       setShowDriverPay(!next); // roll back
     }
     setBusy(false);
-  }
-
-  async function toggleKind(kind: DocumentKind) {
-    if (visibleKinds == null || kindsBusy) return;
-    const has = visibleKinds.includes(kind);
-    const next = has
-      ? visibleKinds.filter(k => k !== kind)
-      // Re-add in canonical DOCUMENT_KINDS order so the saved array
-      // stays stable across saves (avoids "should I sort?" debates).
-      : DOCUMENT_KINDS.filter(k => visibleKinds.includes(k) || k === kind);
-    const prev = visibleKinds;
-    setVisibleKinds(next); // optimistic
-    setKindsBusy(true);
-    try {
-      const { railway } = await import('@/lib/railway');
-      await railway.updateOrgSettings({ driverVisibleDocKinds: next });
-    } catch {
-      setVisibleKinds(prev); // roll back
-    }
-    setKindsBusy(false);
   }
 
   // Notification rules — every edit fires a debounced full-shape save.
@@ -1118,25 +1250,17 @@ function DriverAppPanel() {
 
       <SettingsSection
         title="Visible Documents"
-        description="Pick which uploaded document kinds the driver app shows on a load. Hidden kinds are filtered server-side, so a driver can never see them even with a stale build."
+        description="Document-type visibility moved to its own panel — see Settings → Documents. Each type now has both an 'Enabled' and a 'Drivers can see' toggle there."
       >
-        {visibleKinds == null
-          ? <Loader2 size={18} className="animate-spin" style={{ color: SETTINGS_COLORS.textMuted }} />
-          : DOCUMENT_KINDS.map(kind => (
-              <SettingsField
-                key={kind}
-                inline
-                label={DOC_KIND_LABEL[kind]}
-                hint={DOC_KIND_HINT[kind]}
-              >
-                <SettingsToggle
-                  checked={visibleKinds.includes(kind)}
-                  disabled={kindsBusy}
-                  onChange={() => void toggleKind(kind)}
-                />
-              </SettingsField>
-            ))
-        }
+        <SettingsField
+          inline
+          label="Configure visibility"
+          hint="Rate cons and invoices are confidential by policy and can't be shared with drivers."
+        >
+          <SettingsButton onClick={() => setActive('documents')}>
+            Open Documents settings
+          </SettingsButton>
+        </SettingsField>
       </SettingsSection>
 
       <SettingsSection
@@ -3479,6 +3603,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'ratecon-ai',       label: 'Rate Con AI',      icon: <Bot size={15} /> },
       { id: 'invoicing',        label: 'Invoicing',        icon: <FileText size={15} /> },
       { id: 'integrations',     label: 'Integrations',     icon: <Plug size={15} /> },
+      { id: 'documents',        label: 'Documents',        icon: <FileText size={15} /> },
       { id: 'driver-app',       label: 'Driver App',       icon: <Smartphone size={15} /> },
     ],
   },
@@ -3499,6 +3624,7 @@ const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
   'modules':          'org.settings.edit',
   'invoicing':        'org.settings.edit',
   'integrations':     'org.settings.edit',
+  'documents':        'org.settings.edit',
   'driver-app':       'org.settings.edit',
   // Rate Con AI stays visible to everyone — non-admins see it
   // read-only (same pattern as Timezone + Load Fields). Useful for
@@ -3668,11 +3794,12 @@ export default function SettingsPage() {
           {active === 'ratecon-ai'   && <RateConAIPanel setActive={setActive} />}
           {active === 'invoicing'    && <InvoicingPanel />}
           {active === 'integrations'    && <IntegrationsPanel />}
+          {active === 'documents'       && <DocumentsPanel />}
           {active === 'saved-locations' && <SavedLocationsPanel />}
           {active === 'dispatchers'     && <DispatchersPanel />}
           {active === 'customers'       && <CustomersPanel />}
           {active === 'trailers'        && <TrailersPanel />}
-          {active === 'driver-app'        && <DriverAppPanel />}
+          {active === 'driver-app'        && <DriverAppPanel setActive={setActive} />}
           {active === 'members'           && <MembersPanel />}
           {active === 'role-permissions'  && <RolePermissionsPanel />}
           {active === 'modules'           && <ModulesPanel />}

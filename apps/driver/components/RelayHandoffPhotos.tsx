@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useState, useCallback } from "react";
 import {
-  View, Text, TouchableOpacity, Image, Alert, ActivityIndicator, Modal, ScrollView, Linking,
+  View, Text, TouchableOpacity, Image, Alert, ActivityIndicator, Modal, ScrollView,
 } from "react-native";
 import { Camera, Plus, X, Trash2 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
@@ -196,34 +196,33 @@ export function RelayHandoffPhotos({ loadId, reloadKey }: { loadId: string; relo
         </View>
       )}
 
-      {/* Full-screen preview with delete option. */}
+      {/* Full-screen preview with delete option. Image fills the
+       *  available area at its intrinsic aspect ratio (no forced
+       *  square) with pinch-zoom up to 3x. Removed the "Open" button
+       *  that punted to a Supabase URL — viewing inline here is the
+       *  whole point. */}
       {preview && (
         <Modal transparent animationType="fade" visible onRequestClose={() => setPreview(null)}>
           <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.92)" }}>
             <ScrollView
+              style={{ flex: 1 }}
               contentContainerStyle={{ flexGrow: 1, justifyContent: "center", padding: 16 }}
-              maximumZoomScale={3}>
+              maximumZoomScale={3}
+              minimumZoomScale={1}>
               {preview.signedUrl
-                ? <Image source={{ uri: preview.signedUrl }} style={{ width: "100%", aspectRatio: 1, resizeMode: "contain" }} />
+                ? <Image source={{ uri: preview.signedUrl }} style={{ width: "100%", height: "100%", resizeMode: "contain" }} />
                 : <Text style={[txt(600), { color: "#fff", textAlign: "center" }]}>Image not available</Text>}
-              <Text style={[txt(500), { fontSize: 12, color: "rgba(255,255,255,0.55)", textAlign: "center", marginTop: 16 }]}>
+            </ScrollView>
+            <View style={{ position: "absolute", top: 50, left: 16, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={[txt(500), { fontSize: 12, color: "rgba(255,255,255,0.75)", flex: 1 }]} numberOfLines={1}>
                 {preview.fileName}
               </Text>
-            </ScrollView>
-            <View style={{ position: "absolute", top: 50, right: 16 }}>
               <TouchableOpacity onPress={() => setPreview(null)}
-                style={{ padding: 10, borderRadius: 22, backgroundColor: "rgba(255,255,255,0.15)" }}>
+                style={{ padding: 10, borderRadius: 22, backgroundColor: "rgba(255,255,255,0.15)", marginLeft: 12 }}>
                 <X size={22} color="#fff" strokeWidth={2.4} />
               </TouchableOpacity>
             </View>
-            <View style={{ position: "absolute", bottom: 50, left: 16, right: 16, flexDirection: "row", justifyContent: "space-between" }}>
-              {preview.signedUrl && (
-                <TouchableOpacity
-                  onPress={() => void Linking.openURL(preview.signedUrl!)}
-                  style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: "#1a73e8" }}>
-                  <Text style={[txt(700), { fontSize: 13, color: "#fff" }]}>Open</Text>
-                </TouchableOpacity>
-              )}
+            <View style={{ position: "absolute", bottom: 50, left: 16, right: 16, flexDirection: "row", justifyContent: "flex-end" }}>
               <TouchableOpacity
                 onPress={() => { const p = preview; setPreview(null); void deletePhoto(p); }}
                 style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.18)", flexDirection: "row", alignItems: "center", gap: 6 }}>

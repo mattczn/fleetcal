@@ -561,19 +561,57 @@ loads.get("/:id/documents", async (c) => {
   };
   const docs = (rows ?? []) as DocRow[];
 
-  // Batch-mint signed URLs. createSignedUrls returns one entry per path in
-  // the same order; on partial failure individual entries have an error.
+  // Batch-mint signed URLs, grouped by bucket. Rate cons live in
+  // their own bucket so we can't mint them in the same call as the
+  // rest; bucketForKind decides which bucket each doc's blob lives in.
+  // Legacy rows whose rate_con blob is still in load-documents fall
+  // through the dual-bucket fallback below.
   const urlByPath = new Map<string, string>();
   if (docs.length > 0) {
-    const { data: signed, error: signErr } = await supabase.storage
-      .from("load-documents")
-      .createSignedUrls(docs.map((d) => d.storage_path), 3600);
-    if (signErr) {
-      console.error("[GET /v1/loads/:id/documents] sign failed:", signErr);
-    } else {
-      for (const u of signed ?? []) {
-        if (u.path && u.signedUrl) urlByPath.set(u.path, u.signedUrl);
+    const byBucket = new Map<string, DocRow[]>();
+    for (const d of docs) {
+      const bucket = bucketForKind(d.kind);
+      const arr = byBucket.get(bucket) ?? [];
+      arr.push(d);
+      byBucket.set(bucket, arr);
+    }
+    await Promise.all(
+      Array.from(byBucket.entries()).map(async ([bucket, group]) => {
+        const { data: signed, error: signErr } = await supabase.storage
+          .from(bucket)
+          .createSignedUrls(group.map((d) => d.storage_path), 3600);
+        if (signErr) {
+          console.error("[GET /v1/loads/:id/documents] sign failed for bucket", bucket, signErr);
+          return;
+        }
+        for (const u of signed ?? []) {
+          if (u.path && u.signedUrl) urlByPath.set(u.path, u.signedUrl);
+        }
+      }),
+    );
+    // Fallback pass — try the *other* bucket for any doc that didn't
+    // mint a URL above. Covers the legacy state where some rate_con
+    // blobs still live in load-documents pre-migration.
+    const unsigned = docs.filter((d) => !urlByPath.has(d.storage_path));
+    if (unsigned.length > 0) {
+      const fallbackByBucket = new Map<string, DocRow[]>();
+      for (const d of unsigned) {
+        const [primary, fallback] = bucketReadOrder(d.kind);
+        if (!fallback || fallback === primary) continue;
+        const arr = fallbackByBucket.get(fallback) ?? [];
+        arr.push(d);
+        fallbackByBucket.set(fallback, arr);
       }
+      await Promise.all(
+        Array.from(fallbackByBucket.entries()).map(async ([bucket, group]) => {
+          const { data: signed } = await supabase.storage
+            .from(bucket)
+            .createSignedUrls(group.map((d) => d.storage_path), 3600);
+          for (const u of signed ?? []) {
+            if (u.path && u.signedUrl) urlByPath.set(u.path, u.signedUrl);
+          }
+        }),
+      );
     }
   }
 
@@ -602,7 +640,10 @@ loads.get("/:id/documents", async (c) => {
 // event-scoped queries too (the driver app and audit log both key off
 // event_id; matching that schema keeps things consistent).
 
-const DOC_BUCKET = "load-documents";
+// Bucket constants moved to ../lib/docBuckets.ts so every route uses
+// the same kind → bucket rule. Kept as a local alias for the previous
+// occurrences in this file that referred to it bare.
+import { bucketForKind, bucketReadOrder, DOC_BUCKET, RATE_CON_BUCKET } from "../lib/docBuckets.js";
 
 loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const orgId  = c.get("orgId");
@@ -678,8 +719,13 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
     displayName = `${safeNum}_${kindLabel}${suffix}.${ext}`;
   }
 
+  // Pick the bucket by kind. Rate cons go to the dedicated rate-cons
+  // bucket so a future bucket-level policy can lock them away from
+  // any code path that mints driver-facing signed URLs. Everything
+  // else (POD/BOL/etc.) stays in load-documents.
+  const targetBucket = bucketForKind(kind);
   const { error: uploadErr } = await supabase.storage
-    .from(DOC_BUCKET)
+    .from(targetBucket)
     .upload(storagePath, bytes, {
       contentType: file.type || "application/octet-stream",
       upsert: false,
@@ -705,7 +751,7 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
     .select("id, load_id, storage_path, file_name, mime_type, size_bytes, kind, uploaded_at")
     .single();
   if (error || !data) {
-    void supabase.storage.from(DOC_BUCKET).remove([storagePath]);
+    void supabase.storage.from(targetBucket).remove([storagePath]);
     console.error("[POST /v1/loads/:id/documents] insert:", error);
     return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
@@ -776,14 +822,12 @@ loads.get("/:id/rate-con-url", async (c) => {
     return c.json(res);
   }
 
-  // Storage path → 1-hour signed URL. Rate-cons live in one of two
-  // buckets: `load-documents` (current — uploads via the docs route
-  // since 2025 doc rework) or `rate-cons` (legacy parser-flow uploads
-  // via apps/web/lib/storage.ts). The column doesn't distinguish, so
-  // try the new bucket first and fall back to legacy.
+  // Storage path → 1-hour signed URL. Rate cons live in the rate-cons
+  // bucket going forward (post-Phase 3.1 split), with legacy rows
+  // possibly still in load-documents. Try the canonical rate-cons
+  // bucket first, fall back to load-documents for legacy data.
   if (val) {
-    const tryBuckets = ["load-documents", "rate-cons"] as const;
-    for (const bucket of tryBuckets) {
+    for (const bucket of bucketReadOrder("rate_con")) {
       const { data: signed } = await supabase.storage
         .from(bucket)
         .createSignedUrl(val, 3600);
@@ -810,20 +854,22 @@ loads.get("/:id/rate-con-url", async (c) => {
     .limit(1);
   const docRow = (docs ?? [])[0] as { storage_path: string } | undefined;
   if (docRow?.storage_path) {
-    const { data: signed } = await supabase.storage
-      .from("load-documents")
-      .createSignedUrl(docRow.storage_path, 3600);
-    if (signed) {
-      // Best-effort: refresh the mirror so future requests skip the
-      // fallback. Don't block on this.
-      void supabase
-        .from("loads")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .update({ rate_con_pdf: docRow.storage_path } as any)
-        .eq("id", loadId)
-        .eq("org_id", orgId);
-      const res: GetRateConUrlResponse = { url: signed.signedUrl };
-      return c.json(res);
+    for (const bucket of bucketReadOrder("rate_con")) {
+      const { data: signed } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(docRow.storage_path, 3600);
+      if (signed) {
+        // Best-effort: refresh the mirror so future requests skip the
+        // fallback. Don't block on this.
+        void supabase
+          .from("loads")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .update({ rate_con_pdf: docRow.storage_path } as any)
+          .eq("id", loadId)
+          .eq("org_id", orgId);
+        const res: GetRateConUrlResponse = { url: signed.signedUrl };
+        return c.json(res);
+      }
     }
   }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -414,18 +414,32 @@ function UploadedDocsPanel({
   const [uploadError,   setUploadError]   = useState<string | null>(null);
   const [deletingId,    setDeletingId]    = useState<string | null>(null);
 
-  const KIND_UPLOAD_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string }> = [
-    { kind: 'pod',           label: 'POD' },
-    { kind: 'rate_con',      label: 'Rate Con' },
-    { kind: 'bol',           label: 'BOL' },
-    { kind: 'lumper',        label: 'Lumper' },
-    { kind: 'scale',         label: 'Scale' },
-    { kind: 'receipt',       label: 'Receipt' },
-    { kind: 'driver_sheet',  label: 'Driver Sheet' },
-    { kind: 'invoice',       label: 'Invoice' },
-    { kind: 'relay_handoff', label: 'Relay Handoff' },
-    { kind: 'other',         label: 'Other' },
-  ];
+  // Rate Con is intentionally NOT in the Uploaded tab's kind picker —
+  // rate cons have a dedicated upload path (the "+ Add Rate Con" CTA on
+  // the Rate Con tab) and a dedicated storage bucket. Allowing them
+  // here was the source of the misclick leaks reported earlier: a
+  // dispatcher would pick a rate-con PDF and accidentally classify it
+  // as POD or Other, which then surfaced to drivers.
+  const orgDocumentTypes = useCalendarStore((s) => s.documentTypes);
+  const KIND_UPLOAD_OPTIONS = useMemo(() => {
+    const all: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string }> = [
+      { kind: 'pod',           label: 'POD' },
+      { kind: 'bol',           label: 'BOL' },
+      { kind: 'lumper',        label: 'Lumper' },
+      { kind: 'scale',         label: 'Scale' },
+      { kind: 'receipt',       label: 'Receipt' },
+      { kind: 'driver_sheet',  label: 'Driver Sheet' },
+      { kind: 'invoice',       label: 'Invoice' },
+      { kind: 'relay_handoff', label: 'Relay Handoff' },
+      { kind: 'other',         label: 'Other' },
+    ];
+    // Filter by the org's enabled kinds (Settings → Documents). When
+    // documentTypes hasn't hydrated yet (null) we show everything so a
+    // slow settings fetch doesn't briefly hide options.
+    if (!orgDocumentTypes) return all;
+    const enabledSet = new Set(orgDocumentTypes.filter(t => t.enabled).map(t => t.kind));
+    return all.filter(opt => enabledSet.has(opt.kind));
+  }, [orgDocumentTypes]);
 
   const uploadAs = async (kind: import('@fleetcal/types').DocumentKind) => {
     if (!pendingFile || !loadId || uploading) return;
@@ -1289,6 +1303,7 @@ export default function EventModal() {
   const {
     assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
+    refetchEvent, refetchingEventIds,
     addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
     createRelayPair, splitToRelay, saveRelayBoth, removeRelay,
@@ -2056,6 +2071,28 @@ export default function EventModal() {
     setConfirmSkip(false);
     setConfirmBatchCancel(false);
   }, [modalOpen, modalEventId, batchIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-recover loads that landed in the cache with empty stops. The
+  // user reported opening a load and seeing "+ Add Stop" instead of
+  // the actual stops; we now fire a one-shot refetch in that case so
+  // the form repopulates without them having to hit the refresh button.
+  // Guarded on isEdit + a real event + non-relay (relay legs can
+  // legitimately have a leg with empty draft stops mid-creation).
+  useEffect(() => {
+    if (!modalOpen || !isEdit || !modalEventId) return;
+    const ev = events.find(e => e.id === modalEventId);
+    if (!ev) return;
+    // Only retry for revenue loads — non-revenue events have no stops
+    // by design, so an empty stops array is the correct state.
+    if (ev.eventKind === 'non_revenue') return;
+    if ((ev.stops?.length ?? 0) > 0) return;
+    // Don't stack refetches on top of an in-flight one.
+    if (refetchingEventIds.has(modalEventId)) return;
+    void refetchEvent(modalEventId).then(() => {
+      const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+      if (fresh) reinitForm(fresh);
+    });
+  }, [modalOpen, modalEventId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Force non-revenue for users without loads.create when opening the
   // modal in create mode. Maintenance has nonRevenueEvents.create only
@@ -3451,7 +3488,11 @@ export default function EventModal() {
                 </button>
               </div>
               <div className="flex items-center gap-1 flex-nowrap shrink-0">
-                {docsTab === 'rateCon' && (<>
+                {/* Rate-con-specific action buttons. Reparse / Replace /
+                 *  Delete only make sense when a rate con actually exists;
+                 *  hide them otherwise so the empty state's inline
+                 *  "+ Add Rate Con" CTA is the single obvious action. */}
+                {docsTab === 'rateCon' && rateConPdf && (<>
                 <Tooltip content="Pull just the Load # and reference numbers off this rate-con (existing fields stay intact)">
                   <button type="button" onClick={() => void handleQuickReparse()} disabled={reparsing}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
@@ -3473,13 +3514,46 @@ export default function EventModal() {
                 </Tooltip>
                 {pdfObjectUrl && (
                   <Tooltip content="Download Rate Con">
-                    <a href={pdfObjectUrl} download="rate-con.pdf"
+                    <button
+                      type="button"
+                      // Browsers ignore the <a download> attribute on
+                      // cross-origin URLs (Supabase signed URL), so
+                      // clicking the link just navigated to a viewer
+                      // tab instead of downloading. Fetch the bytes
+                      // into a blob, mint an object URL, and click a
+                      // hidden anchor with the right filename — that
+                      // forces a true download every time.
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(pdfObjectUrl);
+                          const blob = await res.blob();
+                          const objectUrl = URL.createObjectURL(blob);
+                          const safeNum = String(
+                            (events.find(e => e.id === modalEventId)?.loadNum)
+                            ?? (fieldValues['loadNum'] ?? '')
+                          ).replace(/[^A-Za-z0-9_-]/g, '');
+                          const a = document.createElement('a');
+                          a.href = objectUrl;
+                          a.download = safeNum ? `${safeNum}_RATE_CON.pdf` : 'rate-con.pdf';
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          // Revoke after a tick so the browser has
+                          // started the download before the URL dies.
+                          setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+                        } catch (err) {
+                          console.error('[rate-con] download failed', err);
+                          // Fallback: open the signed URL in a new
+                          // tab so the user can save from there.
+                          window.open(pdfObjectUrl, '_blank', 'noopener');
+                        }
+                      }}
                       className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
-                      style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
+                      style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)', background: 'transparent' }}
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                       <Download size={12} />
-                    </a>
+                    </button>
                   </Tooltip>
                 )}
                 <Tooltip content="Replace Rate Con">
@@ -3518,7 +3592,29 @@ export default function EventModal() {
             {docsTab === 'rateCon' ? (
               rateConPdf
                 ? <PdfCanvas dataUrl={pdfObjectUrl} onRetry={() => setPdfRetryKey(k => k + 1)} />
-                : <div className="flex-1 flex items-center justify-center text-sm" style={{ color: 'var(--gc-text-3)' }}>No rate con uploaded</div>
+                : (
+                  // Empty state — matches the Uploaded tab convention
+                  // (centered hint copy + a single "Add" CTA). Tapping the
+                  // button triggers the same hidden <input> the header
+                  // Replace button uses; the existing change handler
+                  // routes to POST /v1/loads/:id/documents with
+                  // kind='rate_con' (and mirrors onto loads.rate_con_pdf).
+                  <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center" style={{ background: 'var(--gc-bg)' }}>
+                    <div className="flex items-center justify-center" style={{ width: 56, height: 56, borderRadius: 14, background: `${headerColor}15`, color: headerColor }}>
+                      <FileText size={26} />
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--gc-text-2)' }}>
+                      No Rate Con uploaded for this load yet
+                    </div>
+                    <button type="button" onClick={() => attachFileInputRef.current?.click()}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                      style={{ color: 'white', background: headerColor, border: `1px solid ${headerColor}` }}
+                      onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
+                      onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+                      <Plus size={14} /> Add Rate Con
+                    </button>
+                  </div>
+                )
             ) : (
               <UploadedDocsPanel
                 docs={loadDocuments}
@@ -3688,6 +3784,44 @@ export default function EventModal() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {isEdit && modalEventId && (() => {
+              const isRefreshing = refetchingEventIds.has(modalEventId);
+              return (
+                <Tooltip content={isRefreshing ? 'Refreshing…' : 'Refresh this load from server'}>
+                  <button
+                    type="button"
+                    disabled={isRefreshing}
+                    onClick={() => {
+                      void refetchEvent(modalEventId).then(() => {
+                        // After the refetch lands, re-seed the form from the
+                        // freshly cached event so the modal reflects the
+                        // newly populated stops without forcing a close+reopen.
+                        const ev = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+                        if (ev) reinitForm(ev);
+                      });
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px',
+                      borderRadius: 8, border: `1px solid ${headerColor}40`,
+                      background: `${headerColor}10`,
+                      cursor: isRefreshing ? 'wait' : 'pointer',
+                      opacity: isRefreshing ? 0.6 : 1,
+                      transition: 'all 150ms',
+                    }}
+                    onMouseEnter={e => { if (!isRefreshing) e.currentTarget.style.background = `${headerColor}20`; }}
+                    onMouseLeave={e => { if (!isRefreshing) e.currentTarget.style.background = `${headerColor}10`; }}
+                  >
+                    <RefreshCw
+                      size={13}
+                      style={{
+                        color: headerColor,
+                        animation: isRefreshing ? 'spin 0.8s linear infinite' : 'none',
+                      }}
+                    />
+                  </button>
+                </Tooltip>
+              );
+            })()}
             <Tooltip content={priority ? 'Remove Priority' : 'Mark as Priority'}>
               <button
                 type="button"
@@ -3735,12 +3869,19 @@ export default function EventModal() {
                 <Eye size={13} /> {showPdfViewer ? 'Hide Docs' : 'View Docs'}
               </button>
             ) : (
-              <button type="button" onClick={() => attachFileInputRef.current?.click()}
+              // No rate con + no docs yet — open the docs viewer rather than
+              // jumping straight to a file picker. The empty Rate Con tab
+              // shows a styled "+ Add Rate Con" CTA, and the user can also
+              // tab over to "Uploaded" for other doc types. Old behavior
+              // (one-shot file picker labeled "Attach Rate Con") collapsed
+              // the choice and silently nudged users toward rate-con even
+              // when they had a different doc to attach.
+              <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
                 style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-                <Paperclip size={13} /> Attach Rate Con
+                <Paperclip size={13} /> {showPdfViewer ? 'Hide Docs' : 'Add Docs'}
               </button>
             ))}
             <button onClick={isBatch ? () => { clearBatch(); closeModal(); } : attemptClose} className="p-2 rounded-full transition-colors"
@@ -4597,7 +4738,23 @@ export default function EventModal() {
                     </div>
                   )}
                   {/* Stops section */}
-                  <div style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
+                  <div style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20, position: 'relative' }}>
+                    {isEdit && modalEventId && refetchingEventIds.has(modalEventId) && stops.length === 0 && (
+                      // While a refresh is in flight and we have no stops to
+                      // show, indicate progress so the user understands the
+                      // "+ Add Stop" empty state isn't the final answer.
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '8px 12px', marginBottom: 12,
+                        borderRadius: 8,
+                        background: `${headerColor}10`,
+                        border: `1px solid ${headerColor}30`,
+                        fontSize: 12, color: headerColor, fontWeight: 600,
+                      }}>
+                        <RefreshCw size={12} style={{ animation: 'spin 0.8s linear infinite' }} />
+                        Fetching stops…
+                      </div>
+                    )}
                     <StopsSection
                       stops={stops}
                       onChange={next => { setStops(next); markDirty(); }}

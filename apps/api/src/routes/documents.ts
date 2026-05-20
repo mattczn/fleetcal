@@ -20,6 +20,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { bucketReadOrder } from "../lib/docBuckets.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -31,7 +32,7 @@ documents.get("/:id/url", async (c) => {
 
   const { data, error } = await supabase
     .from("load_documents")
-    .select("storage_path")
+    .select("storage_path, kind")
     .eq("id", docId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -41,16 +42,20 @@ documents.get("/:id/url", async (c) => {
   }
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
-  const path = (data as { storage_path: string }).storage_path;
-  const { data: signed, error: signErr } = await supabase.storage
-    .from("load-documents")
-    .createSignedUrl(path, 3600);
-  if (signErr || !signed) {
-    console.error("[GET /v1/documents/:id/url] sign failed:", signErr);
-    return c.json({ error: "sign_failed", detail: signErr?.message } satisfies ApiErrorResponse, 500);
+  const row = data as { storage_path: string; kind: string };
+  // Try the canonical bucket for this kind first; fall through to the
+  // other bucket for legacy rate_con rows that haven't been migrated.
+  for (const bucket of bucketReadOrder(row.kind)) {
+    const { data: signed } = await supabase.storage
+      .from(bucket)
+      .createSignedUrl(row.storage_path, 3600);
+    if (signed) {
+      const res: GetDocumentUrlResponse = { url: signed.signedUrl };
+      return c.json(res);
+    }
   }
-  const res: GetDocumentUrlResponse = { url: signed.signedUrl };
-  return c.json(res);
+  console.error("[GET /v1/documents/:id/url] sign failed in all candidate buckets", { docId, path: row.storage_path });
+  return c.json({ error: "sign_failed" } satisfies ApiErrorResponse, 500);
 });
 
 // PATCH /v1/documents/:id — rename and/or recategorize a document.
@@ -125,7 +130,7 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
 
   const { data, error: fetchErr } = await supabase
     .from("load_documents")
-    .select("storage_path")
+    .select("storage_path, kind")
     .eq("id", docId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -135,7 +140,7 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
   }
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
-  const path = (data as { storage_path: string }).storage_path;
+  const row = data as { storage_path: string; kind: string };
   const { error: delErr } = await supabase
     .from("load_documents")
     .delete()
@@ -145,8 +150,14 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
     console.error("[DELETE /v1/documents/:id] row delete failed:", delErr);
     return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
   }
-  const { error: blobErr } = await supabase.storage.from("load-documents").remove([path]);
-  if (blobErr) console.warn("[DELETE /v1/documents/:id] storage remove failed (orphan blob ok):", blobErr);
+  // Try deleting from both candidate buckets — the actual blob lives
+  // in exactly one of them, the other returns 404 which is harmless.
+  // Orphan blobs (if both removes fail) are tolerable; we'd rather
+  // leave a stray file than block the row delete on storage.
+  for (const bucket of bucketReadOrder(row.kind)) {
+    const { error: blobErr } = await supabase.storage.from(bucket).remove([row.storage_path]);
+    if (!blobErr) break;
+  }
 
   return c.json({ ok: true });
 });

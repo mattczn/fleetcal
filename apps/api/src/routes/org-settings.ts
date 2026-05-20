@@ -22,6 +22,9 @@ import {
   type UpdateOrgSettingsRequest,
   type UpdateOrgSettingsResponse,
   type ApiErrorResponse,
+  type DocumentTypeConfig,
+  DOCUMENT_KINDS,
+  DRIVER_HIDDEN_DOC_KINDS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -34,7 +37,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,notification_rules")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -43,12 +46,13 @@ orgSettings.get("/", async (c) => {
   }
   const row = data as {
     show_driver_pay:           boolean;
-    rate_con_settings:         RateConSettings   | null;
-    invoice_settings:          InvoiceSettings   | null;
-    role_overrides:            RoleOverrides     | null;
-    modules:                   OrgModuleFlags    | null;
-    driver_visible_doc_kinds:  string[]          | null;
-    notification_rules:        NotificationRules | null;
+    rate_con_settings:         RateConSettings        | null;
+    invoice_settings:          InvoiceSettings        | null;
+    role_overrides:            RoleOverrides          | null;
+    modules:                   OrgModuleFlags         | null;
+    driver_visible_doc_kinds:  string[]               | null;
+    document_types:            DocumentTypeConfig[]   | null;
+    notification_rules:        NotificationRules      | null;
   } | null;
   const res: GetOrgSettingsResponse = {
     settings: {
@@ -58,6 +62,7 @@ orgSettings.get("/", async (c) => {
       roleOverrides:         row?.role_overrides          ?? {},
       orgModules:            row?.modules                 ?? {},
       driverVisibleDocKinds: row?.driver_visible_doc_kinds ?? null,
+      documentTypes:         row?.document_types          ?? null,
       notificationRules:     row?.notification_rules      ?? null,
     },
   };
@@ -75,26 +80,58 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     body.roleOverrides         === undefined &&
     body.orgModules            === undefined &&
     body.driverVisibleDocKinds === undefined &&
+    body.documentTypes         === undefined &&
     body.notificationRules     === undefined
   ) {
     return c.json({ error: "validation_failed", errors: ["at least one settable field required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Validate documentTypes before touching the DB. Server-enforced rules
+  // that the client cannot bypass:
+  //   - every kind in DOCUMENT_KINDS enum
+  //   - no duplicate kinds
+  //   - rate_con + invoice must have driverVisible=false (hard policy)
+  if (body.documentTypes !== undefined && body.documentTypes !== null) {
+    if (!Array.isArray(body.documentTypes)) {
+      return c.json({ error: "validation_failed", errors: ["documentTypes must be an array or null"] } satisfies ApiErrorResponse, 400);
+    }
+    const seen = new Set<string>();
+    const errs: string[] = [];
+    for (const dt of body.documentTypes) {
+      if (!dt || typeof dt !== "object") { errs.push("documentTypes entry must be an object"); continue; }
+      if (typeof dt.kind !== "string" || !(DOCUMENT_KINDS as readonly string[]).includes(dt.kind)) {
+        errs.push(`documentTypes: unknown kind '${dt.kind}'`);
+        continue;
+      }
+      if (seen.has(dt.kind)) { errs.push(`documentTypes: duplicate kind '${dt.kind}'`); continue; }
+      seen.add(dt.kind);
+      if (typeof dt.enabled !== "boolean")        errs.push(`documentTypes.${dt.kind}: enabled must be boolean`);
+      if (typeof dt.driverVisible !== "boolean")  errs.push(`documentTypes.${dt.kind}: driverVisible must be boolean`);
+      if ((DRIVER_HIDDEN_DOC_KINDS as readonly string[]).includes(dt.kind) && dt.driverVisible === true) {
+        errs.push(`documentTypes.${dt.kind}: driverVisible is locked to false for this kind`);
+      }
+    }
+    if (errs.length) {
+      return c.json({ error: "validation_failed", errors: errs } satisfies ApiErrorResponse, 400);
+    }
   }
 
   // Read existing row first so we can patch the JSONB partially without
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,notification_rules")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules")
     .eq("org_id", orgId)
     .maybeSingle();
   const existingRow = existing as {
     show_driver_pay:           boolean;
-    rate_con_settings:         RateConSettings   | null;
-    invoice_settings:          InvoiceSettings   | null;
-    role_overrides:            RoleOverrides     | null;
-    modules:                   OrgModuleFlags    | null;
-    driver_visible_doc_kinds:  string[]          | null;
-    notification_rules:        NotificationRules | null;
+    rate_con_settings:         RateConSettings        | null;
+    invoice_settings:          InvoiceSettings        | null;
+    role_overrides:            RoleOverrides          | null;
+    modules:                   OrgModuleFlags         | null;
+    driver_visible_doc_kinds:  string[]               | null;
+    document_types:            DocumentTypeConfig[]   | null;
+    notification_rules:        NotificationRules      | null;
   } | null;
 
   const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
@@ -119,12 +156,29 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   const mergedModules: OrgModuleFlags = body.orgModules === undefined
     ? (existingRow?.modules ?? {})
     : { ...(existingRow?.modules ?? {}), ...body.orgModules };
-  // driverVisibleDocKinds is a full REPLACE — the UI sends the whole
-  // toggled list every save. null clears back to the server default.
+  // driverVisibleDocKinds is a full REPLACE — kept for backwards-compat
+  // with older clients. New clients should send documentTypes instead.
   const nextDriverVisibleDocKinds: string[] | null =
     body.driverVisibleDocKinds === undefined
       ? (existingRow?.driver_visible_doc_kinds ?? null)
       : (body.driverVisibleDocKinds ?? null);
+  // documentTypes is a full REPLACE. If both documentTypes and the
+  // legacy driverVisibleDocKinds are sent, documentTypes wins (more
+  // expressive). When only documentTypes is sent we also synthesize
+  // the legacy field so any reader still on it stays consistent until
+  // the next migration drops the column.
+  let nextDocumentTypes: DocumentTypeConfig[] | null =
+    body.documentTypes === undefined
+      ? (existingRow?.document_types ?? null)
+      : (body.documentTypes ?? null);
+  // Backfill driver_visible_doc_kinds from document_types when it
+  // changed and the caller didn't explicitly set the legacy field.
+  let syncedDriverVisibleDocKinds = nextDriverVisibleDocKinds;
+  if (body.documentTypes !== undefined && body.driverVisibleDocKinds === undefined && nextDocumentTypes) {
+    syncedDriverVisibleDocKinds = nextDocumentTypes
+      .filter(t => t.enabled && t.driverVisible)
+      .map(t => t.kind);
+  }
   // notificationRules is also full REPLACE — admin saves the whole
   // shape from the UI; null resets to server defaults.
   const nextNotificationRules: NotificationRules | null =
@@ -142,7 +196,8 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
         invoice_settings:          mergedInvoice as never,
         role_overrides:            nextRoleOverrides as never,
         modules:                   mergedModules as never,
-        driver_visible_doc_kinds:  nextDriverVisibleDocKinds as never,
+        driver_visible_doc_kinds:  syncedDriverVisibleDocKinds as never,
+        document_types:            nextDocumentTypes as never,
         notification_rules:        nextNotificationRules as never,
       } as never,
       { onConflict: "org_id" },
@@ -166,7 +221,8 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       invoiceSettings:       mergedInvoice,
       roleOverrides:         nextRoleOverrides,
       orgModules:            mergedModules,
-      driverVisibleDocKinds: nextDriverVisibleDocKinds,
+      driverVisibleDocKinds: syncedDriverVisibleDocKinds,
+      documentTypes:         nextDocumentTypes,
       notificationRules:     nextNotificationRules,
     },
   };

@@ -207,6 +207,15 @@ interface CalendarStore extends ModalState {
   addEventFromRemote: (event: CalendarEvent) => void;
   updateEventFromRemote: (event: CalendarEvent) => void;
   removeEventFromRemote: (id: string) => void;
+
+  /** IDs of events currently being refetched via `refetchEvent`.
+   *  UI surfaces (e.g. the modal stops section) read this to render a
+   *  loading shimmer while fresh data lands. */
+  refetchingEventIds: Set<string>;
+  /** Force-refetch one event via /v1/events/:id and upsert the joined
+   *  result into the cache. Used by the modal's manual refresh button
+   *  and as a recovery path when an event landed with empty stops. */
+  refetchEvent: (id: string) => Promise<void>;
   restoreEvent: (id: string, auditEntry?: import('@/lib/types').LoadAuditEntry) => void;
   purgeEvent: (id: string) => void;
   clearTrash: () => void;
@@ -256,6 +265,14 @@ interface CalendarStore extends ModalState {
    *  boot. Empty map = all modules ON (the default). */
   orgModules: import('@fleetcal/types').OrgModuleFlags;
   hydrateOrgModules: (flags: import('@fleetcal/types').OrgModuleFlags | undefined) => void;
+
+  /** Per-org document-type configuration (kind → enabled + driver
+   *  visibility). Drives upload kind pickers across the app and the
+   *  driver-visible filter on document reads. null = not yet hydrated;
+   *  components reading it should fall back to DEFAULT_DOCUMENT_TYPES.
+   *  Hydrated from /v1/org-settings on app boot. */
+  documentTypes: import('@fleetcal/types').DocumentTypeConfig[] | null;
+  hydrateDocumentTypes: (types: import('@fleetcal/types').DocumentTypeConfig[] | null | undefined) => void;
 
   theme: 'light' | 'dark' | 'system';
   setTheme: (t: 'light' | 'dark' | 'system') => void;
@@ -418,13 +435,23 @@ export const useCalendarStore = create<CalendarStore>()(
     try {
       const { events, deletedEvents } = await fetchEventsInRange(orgId, start, end);
       set((state) => {
-        const existingIds    = new Set(state.events.map(e => e.id));
-        const existingDelIds = new Set(state.deletedEvents.map(e => e.id));
+        // Merge by REPLACING existing events with the fresh copy instead
+        // of skipping them. Previously we filtered out IDs already in
+        // cache, which meant a load that landed in the cache with
+        // empty/stale stops (from any earlier code path) could never
+        // be healed by a subsequent fetch — a page reload wouldn't even
+        // fix it. Upserting guarantees navigating refreshes the data.
+        const newById = new Map(events.map(e => [e.id, e]));
+        const updatedExisting = state.events.map(e => newById.get(e.id) ?? e);
+        const additions = events.filter(e => !state.events.some(s => s.id === e.id));
+        const newDelById = new Map(deletedEvents.map(e => [e.id, e]));
+        const updatedDeleted = state.deletedEvents.map(e => newDelById.get(e.id) ?? e);
+        const delAdditions = deletedEvents.filter(e => !state.deletedEvents.some(s => s.id === e.id));
         const newStart = !state.loadedStart || start < state.loadedStart ? start : state.loadedStart;
         const newEnd   = !state.loadedEnd   || end   > state.loadedEnd   ? end   : state.loadedEnd;
         return {
-          events:        [...state.events,        ...events.filter(e => !existingIds.has(e.id))],
-          deletedEvents: [...state.deletedEvents, ...deletedEvents.filter(e => !existingDelIds.has(e.id))],
+          events:        [...updatedExisting, ...additions],
+          deletedEvents: [...updatedDeleted,  ...delAdditions],
           loadedStart: newStart,
           loadedEnd:   newEnd,
         };
@@ -497,6 +524,10 @@ export const useCalendarStore = create<CalendarStore>()(
   orgModules: {},
   hydrateOrgModules: (flags) =>
     set({ orgModules: flags ?? {} }),
+
+  documentTypes: null,
+  hydrateDocumentTypes: (types) =>
+    set({ documentTypes: types ?? null }),
 
   theme: 'light',
   setTheme: (t) => {
@@ -1304,21 +1335,61 @@ export const useCalendarStore = create<CalendarStore>()(
     // our own echo bouncing back — apply the data but don't pop the
     // "another dispatcher updated" banner.
     const isSelfEcho = consumeSelfWrite(event.id);
-    set((state) => ({
-      events: state.events.map(e => {
-        if (e.id !== event.id) return e;
-        // RealtimeSync refetches via railway.getEvent which returns a
-        // fully-joined Load including fresh stops. Take the incoming
-        // stops when they look populated; only fall back to the local
-        // copy when the refetch came back empty (defensive — e.g., if
-        // a future path ever passes a partial payload).
-        const stops = (event.stops && event.stops.length > 0) ? event.stops : e.stops;
-        return { ...e, ...event, stops };
-      }),
-      modalConflict: !isSelfEcho && state.modalOpen && state.modalEventId === event.id
-        ? 'updated'
-        : state.modalConflict,
-    }));
+    set((state) => {
+      const exists = state.events.some(e => e.id === event.id);
+      if (!exists) {
+        // Upsert: realtime INSERTs flow through here too (RealtimeSync
+        // refetches every new event and feeds it to this action). The
+        // previous .map()-only logic silently dropped events that
+        // weren't already cached — a load created by another dispatcher
+        // would arrive on the wire but never land in `events`.
+        return {
+          events: [...state.events, event],
+          modalConflict: state.modalConflict,
+        };
+      }
+      return {
+        events: state.events.map(e => {
+          if (e.id !== event.id) return e;
+          // Take the incoming stops when populated; fall back to local
+          // copy only when the refetch came back empty (defensive).
+          const stops = (event.stops && event.stops.length > 0) ? event.stops : e.stops;
+          return { ...e, ...event, stops };
+        }),
+        modalConflict: !isSelfEcho && state.modalOpen && state.modalEventId === event.id
+          ? 'updated'
+          : state.modalConflict,
+      };
+    });
+  },
+
+  refetchingEventIds: new Set<string>(),
+  refetchEvent: async (id) => {
+    // Track in-flight refetches so UI can render a spinner. The set is
+    // copied on each mutation so Zustand subscribers re-render — Sets
+    // are reference-equal under mutation, which would skip updates.
+    set(state => {
+      const next = new Set(state.refetchingEventIds);
+      next.add(id);
+      return { refetchingEventIds: next };
+    });
+    try {
+      const { loads } = await railway.getEvent(id);
+      // /v1/events/:id returns the requested leg plus its relay partner
+      // if any — upsert all so a relay refresh heals both legs at once.
+      for (const load of loads) {
+        get().updateEventFromRemote(load);
+      }
+    } catch (err) {
+      console.error('refetchEvent:', err);
+      throw err;
+    } finally {
+      set(state => {
+        const next = new Set(state.refetchingEventIds);
+        next.delete(id);
+        return { refetchingEventIds: next };
+      });
+    }
   },
 
   removeEventFromRemote: (id) => {
@@ -1708,13 +1779,20 @@ export const useCalendarStore = create<CalendarStore>()(
 
     fetchEventsInRange(orgId, rs, re).then(({ events, deletedEvents }) => {
       set((state) => {
-        const existingIds = new Set(state.events.map((e) => e.id));
-        const existingDelIds = new Set(state.deletedEvents.map((e) => e.id));
+        // Same upsert merge as extendLoadedRange — replace stale cached
+        // events with the fresh fetch so navigating heals empty-stops
+        // loads rather than silently skipping them.
+        const newById = new Map(events.map(e => [e.id, e]));
+        const updatedExisting = state.events.map(e => newById.get(e.id) ?? e);
+        const additions = events.filter(e => !state.events.some(s => s.id === e.id));
+        const newDelById = new Map(deletedEvents.map(e => [e.id, e]));
+        const updatedDeleted = state.deletedEvents.map(e => newDelById.get(e.id) ?? e);
+        const delAdditions = deletedEvents.filter(e => !state.deletedEvents.some(s => s.id === e.id));
         const newStart = rs < (state.loadedStart ?? rs) ? rs : (state.loadedStart ?? rs);
         const newEnd   = re > (state.loadedEnd   ?? re) ? re : (state.loadedEnd   ?? re);
         return {
-          events:        [...state.events,        ...events.filter((e) => !existingIds.has(e.id))],
-          deletedEvents: [...state.deletedEvents, ...deletedEvents.filter((e) => !existingDelIds.has(e.id))],
+          events:        [...updatedExisting, ...additions],
+          deletedEvents: [...updatedDeleted,  ...delAdditions],
           loadedStart: newStart,
           loadedEnd:   newEnd,
         };

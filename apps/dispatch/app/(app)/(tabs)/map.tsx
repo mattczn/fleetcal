@@ -2,10 +2,10 @@ import React, { useMemo, useState } from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth, useOrganization } from "@clerk/clerk-expo";
 import WebView from "react-native-webview";
-import { ArrowLeft, Truck, Clock, Route as RouteIcon, X, ChevronDown, ChevronUp } from "lucide-react-native";
+import { ArrowLeft, Truck, Clock, Route as RouteIcon, X, ChevronDown, ChevronUp, RefreshCw } from "lucide-react-native";
 import { fetchAssets } from "@/lib/api";
 import { railway } from "@/lib/railway";
 import { fetchMotiveLocations, type MotiveLocation } from "@/lib/motive";
@@ -41,6 +41,18 @@ const STOP_COLOR: Record<string, string> = {
   stop:      "#eab308",
   relay:     "#8b5cf6",
 };
+
+// Compact "Xm ago" / "Xh ago" formatter for the Motive refresh pill.
+// 30s window for "just now" so a fast double-tap of refresh doesn't
+// flash misleading ages.
+function fmtAgo(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 30_000) return "just now";
+  if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
+  return `${Math.round(diff / 86_400_000)}d ago`;
+}
 
 // All load times are stored as naive ISO strings (YYYY-MM-DDTHH:mm) in the
 // org's dispatch zone (see packages/types/domain.ts). The mobile device may
@@ -297,12 +309,22 @@ export default function MapScreen() {
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
-  const { data: locations = [], isLoading } = useQuery({
+  const motiveQuery = useQuery({
     queryKey: ["motive-locations", orgId],
     queryFn:  () => fetchMotiveLocations(getToken),
     enabled:  !!orgId,
     staleTime: 5 * 60 * 1000,
   });
+  const locations = motiveQuery.data ?? [];
+  const isLoading = motiveQuery.isLoading;
+  // Manual refresh — invalidate triggers a refetch. The 5-minute staleTime
+  // is fine for the background trickle, but dispatchers occasionally need
+  // to confirm a truck just moved (driver claimed they left a stop, ELD
+  // hasn't pinged yet, etc.); this is the override.
+  const queryClient = useQueryClient();
+  const refreshMotive = React.useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["motive-locations", orgId] });
+  }, [queryClient, orgId]);
   // Loads currently in transit by clock time: pickup <= now <= delivery.
   // We pull a 24-hour window (now ± 12h) which covers all overnight runs
   // touching now, then filter precisely client-side. The query persists
@@ -553,6 +575,38 @@ export default function MapScreen() {
         <RouteIcon size={14} color="#ffffff" strokeWidth={2.4} />
         <Text style={[txt(800), { fontSize: 12, color: "#ffffff", letterSpacing: 0.3 }]}>
           Today's Loads ({inTransitArr.length + pickupsSoonArr.length + justDeliveredArr.length})
+        </Text>
+      </TouchableOpacity>
+
+      {/* Refresh Motive pill — directly under "Today's Loads". Shows
+          when the locations were last fetched so dispatchers know how
+          stale the pins are, and tapping forces a refetch. Spinner
+          replaces the icon while a fetch is in flight. */}
+      <TouchableOpacity
+        onPress={refreshMotive}
+        disabled={motiveQuery.isFetching}
+        hitSlop={6}
+        activeOpacity={0.85}
+        style={{
+          position: "absolute",
+          top: Math.max(insets.top, 44) + 14 + 36 + 8,
+          right: 14,
+          flexDirection: "row", alignItems: "center", gap: 6,
+          paddingHorizontal: 12, paddingVertical: 8,
+          borderRadius: 999,
+          backgroundColor: "rgba(0,0,0,0.6)",
+          opacity: motiveQuery.isFetching ? 0.7 : 1,
+        }}
+      >
+        {motiveQuery.isFetching
+          ? <ActivityIndicator size="small" color="#ffffff" />
+          : <RefreshCw size={13} color="#ffffff" strokeWidth={2.6} />}
+        <Text style={[txt(800), { fontSize: 12, color: "#ffffff", letterSpacing: 0.3 }]}>
+          {motiveQuery.isFetching
+            ? "Refreshing…"
+            : motiveQuery.dataUpdatedAt
+              ? `Updated ${fmtAgo(motiveQuery.dataUpdatedAt)}`
+              : "Refresh Motive"}
         </Text>
       </TouchableOpacity>
 
