@@ -1307,18 +1307,20 @@ driver.post("/loads/:id/documents", async (c) => {
     return c.json({ error: "validation_failed", errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`] }, 400);
   }
   // Drivers must not upload kinds that are dispatcher-confidential by
-  // policy — rate_con / invoice / driver_sheet contain broker rates,
-  // billing data, or dispatcher-side payroll context the driver app
-  // never legitimately needs to produce. Even though the driver-side
-  // /v1/driver/loads/:id/documents read endpoint filters these out on
-  // GET, an attacker controlling a driver session shouldn't be able
-  // to inject documents under those kinds (they'd be invisible to the
-  // driver but visible to dispatch, which could be used to plant
-  // misleading paperwork). Reject at the write boundary.
-  const DRIVER_ALLOWED_UPLOAD_KINDS = new Set<DocumentKind>([
-    "pod", "bol", "scale", "lumper", "receipt", "relay_handoff", "other",
+  // Drivers must not upload kinds that are dispatcher-confidential by
+  // policy — rate_con contains broker rates, invoice is the customer-
+  // facing financial doc. Both are also driverVisible=false-locked, so
+  // even if an attacker mis-allowed them server-side, the read filter
+  // would still hide them. Reject at the write boundary regardless.
+  //
+  // driver_sheet IS allowed — it's driver-visible by default and the
+  // driver legitimately uploads their pay sheet from the field. Earlier
+  // this list excluded it; that was the cause of the 403 on legitimate
+  // driver-sheet uploads.
+  const DRIVER_FORBIDDEN_UPLOAD_KINDS = new Set<DocumentKind>([
+    "rate_con", "invoice",
   ]);
-  if (!DRIVER_ALLOWED_UPLOAD_KINDS.has(kind as DocumentKind)) {
+  if (DRIVER_FORBIDDEN_UPLOAD_KINDS.has(kind as DocumentKind)) {
     return c.json({
       error:  "forbidden",
       errors: [`kind '${kind}' is not allowed for driver uploads`],

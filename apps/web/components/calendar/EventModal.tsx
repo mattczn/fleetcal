@@ -3982,30 +3982,44 @@ export default function EventModal() {
                 <MapPin size={13} /> {showMapPanel ? 'Hide Map' : 'View Map'}
               </button>
             )}
-            {eventKind === 'revenue' && (rateConPdf ? (
-              <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showPdfViewer ? `${headerColor}22` : `${headerColor}12` }}
-                onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
-                onMouseLeave={e => (e.currentTarget.style.background = showPdfViewer ? `${headerColor}22` : `${headerColor}12`)}>
-                <Eye size={13} /> {showPdfViewer ? 'Hide Docs' : 'View Docs'}
-              </button>
-            ) : (
-              // No rate con + no docs yet — open the docs viewer rather than
-              // jumping straight to a file picker. The empty Rate Con tab
-              // shows a styled "+ Add Rate Con" CTA, and the user can also
-              // tab over to "Uploaded" for other doc types. Old behavior
-              // (one-shot file picker labeled "Attach Rate Con") collapsed
-              // the choice and silently nudged users toward rate-con even
-              // when they had a different doc to attach.
-              <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-                <Paperclip size={13} /> {showPdfViewer ? 'Hide Docs' : 'Add Docs'}
-              </button>
-            ))}
+            {eventKind === 'revenue' && (() => {
+              // "View Docs" if ANYTHING is attached — rate con OR any
+              // other uploaded doc. "Add Docs" only when both buckets
+              // are empty (the docs viewer would just be empty states
+              // either way, so prefer the simpler call-to-action).
+              // The non-rate-con doc count excludes rate_con rows so
+              // a load with only old rate_con history still counts as
+              // having a rate con (via rateConPdf, which trumps).
+              const otherDocsCount = loadDocuments.filter(d => d.kind !== 'rate_con').length;
+              const hasAnything = !!rateConPdf || otherDocsCount > 0;
+              // Default tab on open: Rate Con if one exists, otherwise
+              // Uploaded so the dispatcher lands on the docs that DO
+              // exist instead of an empty Rate Con tab.
+              const openTab: 'rateCon' | 'uploaded' = rateConPdf ? 'rateCon' : 'uploaded';
+              if (hasAnything) {
+                return (
+                  <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab(openTab); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showPdfViewer ? `${headerColor}22` : `${headerColor}12` }}
+                    onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
+                    onMouseLeave={e => (e.currentTarget.style.background = showPdfViewer ? `${headerColor}22` : `${headerColor}12`)}>
+                    <Eye size={13} /> {showPdfViewer ? 'Hide Docs' : 'View Docs'}
+                  </button>
+                );
+              }
+              // No docs at all — opens the docs viewer (Rate Con tab
+              // default) where the user can either add a rate con or
+              // tab over to Uploaded and add other docs.
+              return (
+                <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
+                  <Paperclip size={13} /> {showPdfViewer ? 'Hide Docs' : 'Add Docs'}
+                </button>
+              );
+            })()}
             <button onClick={isBatch ? () => { clearBatch(); closeModal(); } : attemptClose} className="p-2 rounded-full transition-colors"
               style={{ color: 'var(--gc-text-2)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover-strong)')}
