@@ -781,13 +781,35 @@ function UploadedDocsPanel({
         </button>
         <span className="text-xs font-semibold truncate" style={{ color: 'var(--gc-text-1)', flex: 1 }}>{selected.fileName}</span>
         {signedUrl && (
-          <a href={signedUrl} target="_blank" rel="noopener noreferrer" download={selected.fileName}
+          <button type="button"
+            // <a download> is ignored by browsers when the href is
+            // cross-origin (Supabase signed URLs are), so the link
+            // was just navigating to a viewer tab. Fetch the bytes
+            // into a blob and trigger a true download via a hidden
+            // anchor — same pattern the Rate Con download uses.
+            onClick={async () => {
+              try {
+                const res = await fetch(signedUrl);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = selected.fileName;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+              } catch (err) {
+                console.error('[doc download] failed', err);
+                window.open(signedUrl, '_blank', 'noopener');
+              }
+            }}
             className="text-xs font-medium px-2 py-1 rounded transition-colors"
-            style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)' }}
+            style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border-light)', background: 'transparent', cursor: 'pointer' }}
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <Download size={11} style={{ display: 'inline', marginRight: 4 }} /> Download
-          </a>
+          </button>
         )}
         {loadId && (
           <button type="button"
@@ -3579,7 +3601,7 @@ export default function EventModal() {
                   style={docsTab === 'uploaded'
                     ? { background: LOAD_ACCENT_BG, color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}` }
                     : { color: 'var(--gc-text-3)', border: '1px solid transparent' }}>
-                  Uploaded ({loadDocuments.length + loadInvoices.length})
+                  Uploaded ({loadDocuments.filter(d => d.kind !== 'rate_con').length + loadInvoices.length})
                 </button>
               </div>
               <div className="flex items-center gap-1 flex-nowrap shrink-0">
@@ -3712,7 +3734,12 @@ export default function EventModal() {
                 )
             ) : (
               <UploadedDocsPanel
-                docs={loadDocuments}
+                // Rate cons live in their own bucket and have a
+                // dedicated tab (the canonical one renders inline +
+                // historical versions are reachable from there).
+                // Hide them from the Uploaded list so the two tabs
+                // are disjoint — one bucket per tab.
+                docs={loadDocuments.filter(d => d.kind !== 'rate_con')}
                 invoices={loadInvoices}
                 selectedId={selectedDocId}
                 onSelect={setSelectedDocId}
