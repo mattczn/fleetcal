@@ -289,7 +289,7 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
                         {acked ? (
                           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
                             <Check size={11} color="#16a34a" strokeWidth={2.6} />
-                            <Text style={[txt(700), { fontSize: 10, color: "#16a34a" }]}>Done</Text>
+                            <Text style={[txt(700), { fontSize: 10, color: "#16a34a" }]}>Acknowledged</Text>
                           </View>
                         ) : null}
                         <Text style={[txt(500), { fontSize: 11, color: "#9aa0a6", marginLeft: "auto" }]}>
