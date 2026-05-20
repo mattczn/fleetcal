@@ -1455,6 +1455,91 @@ driver.delete("/documents/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// PATCH /v1/driver/documents/:id — let a driver re-categorize a doc
+// on their load. Kind-only by design — filename is server-controlled
+// (auto-named at upload via {LOAD_NUM}_{KIND}.{ext}), so we don't let
+// drivers rename. Restricted to the org's driver-allowed upload kinds
+// so rate_con / invoice / driver_sheet are never reachable here.
+driver.patch("/documents/:id", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const driverName = c.get("driverName");
+  const id = c.req.param("id");
+
+  const body = await c.req.json<{ kind?: string }>();
+  const nextKind = body.kind;
+  if (typeof nextKind !== "string" || !nextKind) {
+    return c.json({ error: "validation_failed", errors: ["kind required"] }, 400);
+  }
+  if (!DOCUMENT_KINDS.includes(nextKind as DocumentKind)) {
+    return c.json({ error: "validation_failed", errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`] }, 400);
+  }
+  // Resolve the org's allowed driver kinds from document_types
+  // (with legacy + default fallbacks, matching the docs-list endpoint).
+  const { data: settingsRow } = await supabase
+    .from("org_settings")
+    .select("document_types, driver_visible_doc_kinds")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const s = settingsRow as {
+    document_types: Array<{ kind: string; enabled: boolean; driverVisible: boolean }> | null;
+    driver_visible_doc_kinds: string[] | null;
+  } | null;
+  let allowed: string[];
+  if (s?.document_types && Array.isArray(s.document_types)) {
+    allowed = s.document_types.filter(t => t.enabled && t.driverVisible).map(t => t.kind);
+  } else if (s?.driver_visible_doc_kinds) {
+    allowed = s.driver_visible_doc_kinds;
+  } else {
+    allowed = ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"];
+  }
+  // Hard-block dispatcher-only kinds even if the org somehow has them
+  // in the allow-list. The PATCH endpoint should never be a path that
+  // hides documents from drivers (kind=rate_con would do that) or
+  // mislabels them as invoices.
+  const DRIVER_FORBIDDEN = new Set(["rate_con", "invoice"]);
+  if (!allowed.includes(nextKind) || DRIVER_FORBIDDEN.has(nextKind)) {
+    return c.json({ error: "forbidden", errors: [`kind '${nextKind}' is not allowed for driver edits`] }, 403);
+  }
+
+  // Authorize: doc must belong to a load assigned to this driver.
+  const { data, error: fetchErr } = await supabase
+    .from("load_documents")
+    .select("*")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (fetchErr || !data) return c.json({ error: "not_found" }, 404);
+  const doc = data as DocRow;
+  const found = await loadDriverEvent(doc.event_id, driverId, orgId);
+  if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
+
+  const prevKind = doc.kind;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: updated, error: updErr } = await supabase
+    .from("load_documents")
+    .update({ kind: nextKind } as any)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .select("*")
+    .single();
+  if (updErr || !updated) {
+    console.error("[PATCH /v1/driver/documents/:id] update failed:", updErr);
+    return c.json({ error: "update_failed", detail: updErr?.message }, 500);
+  }
+
+  await appendAudit(doc.event_id, orgId, {
+    changedAt:    new Date().toISOString(),
+    changedByName: driverName,
+    // Re-use the documentUploaded shape for the audit message since
+    // there isn't a dedicated "kind changed" entry today. The fileName
+    // makes the row identifiable in the audit log.
+    documentUploaded: { fileName: doc.file_name, kind: `${prevKind} → ${nextKind}` },
+  });
+
+  return c.json({ document: rowToDoc(updated as DocRow) });
+});
+
 // GET /v1/driver/documents/:id/url — short-lived signed URL for viewing.
 // Same authorization as DELETE — must be the driver's load.
 driver.get("/documents/:id/url", async (c) => {

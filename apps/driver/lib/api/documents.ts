@@ -85,6 +85,14 @@ export async function deleteDocument(
   await railway.deleteDocument(doc.id);
 }
 
+/** Change a document's kind. Filename is left alone — the server
+ *  controls it via {LOAD_NUM}_{KIND} auto-naming. Server enforces the
+ *  driver-allowed kind list; pass a forbidden kind (rate_con/invoice
+ *  or one disabled in org settings) and you get a 403. */
+export async function updateDocumentKind(id: string, kind: DocumentKind): Promise<void> {
+  await railway.updateDocumentKind(id, kind);
+}
+
 
 /**
  * Resolve a viewable URL for a document. The new API surface keys on
