@@ -142,8 +142,20 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
 
   // Refresh on open so the panel never shows stale data even between
   // polls. Cheap — the endpoint caps at 100 rows over 48h.
-  function handleOpen() {
+  //
+  // Also fire mark-viewed so informational pings (assigned /
+  // reassigned_away) clear from the red badge — the user has now seen
+  // them. Action-required pings (confirm, upload_pod, ...) stay
+  // pending until the driver does the actual action server-side. The
+  // refetch after mark-viewed makes the cleared state appear in the UI
+  // immediately without waiting for the next 30s poll.
+  async function handleOpen() {
     setOpen(true);
+    try {
+      await railway.markNotificationsViewed();
+    } catch (err) {
+      console.error("[NotificationsBell] mark-viewed:", err);
+    }
     void refetch();
   }
 

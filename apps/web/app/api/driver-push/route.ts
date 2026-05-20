@@ -99,13 +99,17 @@ async function recordNotification(
 
   // Map ruleKey + data.type onto a LoadNotificationKind (table check
   // constraint). Defensive: if we can't classify it, skip.
+  //
+  // All kinds are inserted with acknowledged_at = null so they count
+  // toward the bell's red badge. Action-required kinds (confirm,
+  // upload_pod, etc.) clear when the driver does the action. The
+  // informational kinds (assigned, reassigned_away) clear when the
+  // driver opens the bell — see POST /v1/driver/notifications/mark-viewed.
   let kind: string | null = null;
   let label = 'Auto';
-  let autoAck = false;
   if (ruleKey === 'on_assignment') {
     kind = 'assigned';
     label = dataType === 'last_minute_assign' ? 'Auto: assignment (last-minute)' : 'Auto: assignment';
-    autoAck = true; // informational
   } else if (ruleKey === 'evening_confirm_sweep' || ruleKey === 'pre_pickup_confirm') {
     kind = 'confirm';
     label = ruleKey === 'evening_confirm_sweep' ? 'Auto: evening sweep' : 'Auto: pre-pickup reminder';
@@ -115,18 +119,16 @@ async function recordNotification(
   } else if (dataType === 'reassigned_away') {
     kind = 'reassigned_away';
     label = 'Auto: load reassigned';
-    autoAck = true; // informational
   }
   if (!kind) return;
 
   const { error } = await db.from('load_notifications').insert({
-    org_id:          orgId,
-    event_id:        eventId,
-    load_id:         loadId,
-    driver_id:       driverId,
+    org_id:       orgId,
+    event_id:     eventId,
+    load_id:      loadId,
+    driver_id:    driverId,
     kind,
-    sent_by_name:    label,
-    acknowledged_at: autoAck ? new Date().toISOString() : null,
+    sent_by_name: label,
   } as never);
   if (error) console.error('[driver-push] load_notifications insert:', error);
 }

@@ -117,6 +117,15 @@ export const railway = {
     return req<{ ok: true }>("DELETE", `/v1/driver/documents/${id}`);
   },
 
+  // Mark all informational notifications (assigned, reassigned_away)
+  // as viewed. Called when the driver opens the bell so the red badge
+  // clears for pings they've now seen. Action-required pings (confirm,
+  // upload_pod) are left pending — those clear when the driver does
+  // the actual action.
+  markNotificationsViewed() {
+    return req<{ ok: true }>("POST", "/v1/driver/notifications/mark-viewed");
+  },
+
   // Notifications inbox — every push the driver has been sent in the
   // last 48h (default). Includes acknowledgement state so the UI can
   // distinguish "still pending action" from "done."

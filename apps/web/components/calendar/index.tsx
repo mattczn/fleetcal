@@ -169,9 +169,21 @@ export default function CalendarView() {
       if (ds) {
         const { updateEvent, openEditModal, setDragState, calendarTimezone } = useCalendarStore.getState();
         if (ds.hasMoved) {
-          const { driverPrefs, drivers } = useCalendarStore.getState();
-          const prefDriverId = driverPrefs[ds.targetAssetId];
-          const prefDriver   = prefDriverId != null ? drivers.find(d => d.id === prefDriverId) : undefined;
+          const { driverPrefs, driverPrefsSecondary, drivers } = useCalendarStore.getState();
+          // On drag, the column's preferred driver wins over the old
+          // driver — otherwise the load ends up with a driver who
+          // doesn't match the new asset. Primary pref first; secondary
+          // is a fallback for trucks that share a driver pair (e.g.
+          // sleeper team). If neither is set, the existing driver is
+          // kept (no change), since clearing the driver on every drag
+          // would be more disruptive than leaving a mismatch the
+          // dispatcher can correct in the modal.
+          const primaryId   = driverPrefs[ds.targetAssetId];
+          const secondaryId = driverPrefsSecondary[ds.targetAssetId];
+          const prefDriverId = primaryId ?? secondaryId;
+          const prefDriver = prefDriverId != null
+            ? drivers.find(d => d.id === prefDriverId)
+            : undefined;
           // ds.newStart/newEnd are in view-tz space (drag operates on
           // view-positioned blocks — see CalendarEvent.tsx). Convert
           // back to HOME_TZ before persisting so the round-trip is

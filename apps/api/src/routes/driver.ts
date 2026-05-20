@@ -317,6 +317,32 @@ driver.get("/notifications", async (c) => {
   return c.json({ notifications: rows });
 });
 
+// POST /v1/driver/notifications/mark-viewed — ack all the driver's
+// pending informational notifications (assigned, reassigned_away).
+// Action-required kinds (confirm, upload_pod, mark_pickup, etc.) are
+// intentionally NOT touched here — those auto-ack server-side when the
+// driver does the thing, so clearing them on bell open would falsely
+// signal "handled" when the driver hasn't actually confirmed / uploaded.
+//
+// Called by the driver bell when the panel is opened so the red badge
+// clears for informational pings the user has now seen.
+driver.post("/notifications/mark-viewed", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const { error } = await supabase
+    .from("load_notifications")
+    .update({ acknowledged_at: new Date().toISOString() } as never)
+    .eq("driver_id", driverId)
+    .eq("org_id", orgId)
+    .in("kind", ["assigned", "reassigned_away"])
+    .is("acknowledged_at", null);
+  if (error) {
+    console.error("[POST /v1/driver/notifications/mark-viewed] failed:", error);
+    return c.json({ error: "ack_failed", detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 driver.get("/notification-prefs", async (c) => {
   const driverId = c.get("driverId");
   const { data, error } = await sbAny
