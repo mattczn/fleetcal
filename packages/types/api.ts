@@ -380,7 +380,7 @@ export interface GetAuditLogResponse {
  *   lumper       — lumper receipt (required when load has lumper
  *                  accessorial)
  *   receipt      — generic receipt (fuel, layover, etc.)
- *   driver_sheet — driver pay sheet / trip sheet
+ *   driver_sheet — driver / trip sheet (load summary handed to the driver)
  *   invoice      — already-built invoice for this load
  *   other        — anything else
  */

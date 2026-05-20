@@ -1072,7 +1072,7 @@ const DOC_KIND_LABEL: Record<DocumentKind, string> = {
   scale:         'Scale Ticket',
   lumper:        'Lumper Receipt',
   receipt:       'Receipt',
-  driver_sheet:  'Driver Pay Sheet',
+  driver_sheet:  'Driver Sheet',
   invoice:       'Invoice',
   relay_handoff: 'Relay Handoff Photos',
   other:         'Other',
