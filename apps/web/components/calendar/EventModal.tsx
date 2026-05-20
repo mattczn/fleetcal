@@ -475,6 +475,9 @@ function UploadedDocsPanel({
     setDeletingId(docId);
     try {
       const { railway } = await import('@/lib/railway');
+      // Suppress realtime echo so the dispatcher who just deleted
+      // doesn't see "updated by another dispatcher" pop on themselves.
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       await railway.deleteDocument(docId);
       onSelect(null);
       onChange?.();
@@ -2621,6 +2624,11 @@ export default function EventModal() {
       const evNow = events.find(e => e.id === modalEventId);
       if (evNow?.loadId) {
         const loadId = evNow.loadId;
+        // Suppress the realtime echo of this load write so the
+        // dispatcher running cancel doesn't get "updated by another
+        // dispatcher" pop on themselves while the modal is still
+        // closing.
+        useCalendarStore.getState().markLoadSelfWrite(loadId);
         import('@/lib/railway').then(({ railway }) =>
           railway.updateLoad(loadId, { loadPrice: 0 }),
         ).catch((err) =>

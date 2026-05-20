@@ -965,6 +965,10 @@ function PriorityToggle({
     setBusy(true);
     try {
       const targetId = load.loadId ?? load.id;
+      // Suppress the realtime echo of this load-level write so the
+      // dispatcher doing the toggle doesn't get "updated by another
+      // dispatcher" pop on themselves.
+      useCalendarStore.getState().markLoadSelfWrite(targetId);
       await railway.updateLoadCloseout(targetId, {
         action: on ? 'clear_priority' : 'set_priority',
         actorName,

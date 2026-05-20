@@ -18,6 +18,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import type { Load } from '@/lib/types';
 import { railway } from '@/lib/railway';
+import { useCalendarStore } from '@/store/useCalendarStore';
 
 interface Props {
   load: Load;
@@ -44,6 +45,10 @@ export default function InternalNotesModal({
     setSaving(true);
     try {
       const targetId = load.loadId ?? load.id;
+      // Suppress the realtime echo of this internal-note append so
+      // the dispatcher saving the note doesn't get "updated by
+      // another dispatcher" pop on themselves.
+      useCalendarStore.getState().markLoadSelfWrite(targetId);
       await railway.updateLoadCloseout(targetId, {
         action:    'append_note',
         noteText:  trimmed,

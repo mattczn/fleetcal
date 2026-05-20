@@ -332,6 +332,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   async function persistInvoiceDocs() {
     if (!current) return;
     const targetId = (current as Load).loadId ?? current.id;
+    // markLoadSelfWrite suppresses the realtime echo from popping the
+    // "updated by another dispatcher" banner on the dispatcher who
+    // just made the change. Stamping the same loadId we're about to
+    // write to is sufficient — markLoadSelfWrite finds every cached
+    // event sharing that loadId (both relay legs included).
+    useCalendarStore.getState().markLoadSelfWrite(targetId);
     await railway.updateLoadCloseout(targetId, {
       action: 'set_invoice_docs',
       invoiceDocIds: Array.from(includedDocIds),
@@ -351,6 +357,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const targetId = (current as Load).loadId ?? current.id;
       const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
       await persistInvoiceDocs();
+      // Re-stamp because persistInvoiceDocs above already consumed
+      // the 5-second window; the verify call also fires a realtime
+      // echo and needs its own suppression.
+      useCalendarStore.getState().markLoadSelfWrite(targetId);
       await railway.updateLoadCloseout(targetId, { action: 'verify', actorName });
       setResolved(prev => new Set(prev).add(targetId));
       onLoadResolved?.(targetId, 'verified');
@@ -370,6 +380,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     try {
       const targetId = (current as Load).loadId ?? current.id;
       const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
+      useCalendarStore.getState().markLoadSelfWrite(targetId);
       await railway.updateLoadCloseout(targetId, { action: 'flag', flagReason: reason, flagNote: note, actorName });
       setResolved(prev => new Set(prev).add(targetId));
       onLoadResolved?.(targetId, 'flagged');
@@ -424,6 +435,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     if (!renameDraft.trim() || nextName === target.fileName) { cancelRename(); return; }
     setRenameSaving(true);
     try {
+      // Document mutations bump load_documents.updated_at, which the
+      // realtime channel echoes via parent-load refetch. Suppress
+      // before the write so the dispatcher doing the rename doesn't
+      // see "updated by another dispatcher".
+      if (loadId) useCalendarStore.getState().markLoadSelfWrite(loadId);
       await railway.renameDocument(renamingDocId, nextName);
       // Optimistic update in the local docs list + the prefetch cache
       // so the new name shows up immediately and survives the next
@@ -456,6 +472,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const handleDeleteDoc = async (docId: string) => {
     if (!loadId) return;
     try {
+      // Suppress the realtime echo from popping the conflict banner
+      // on the dispatcher who just deleted.
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
       await railway.deleteDocument(docId);
       const removedIdx = docs.findIndex(d => d.id === docId);
       const nextDocs   = docs.filter(d => d.id !== docId);
