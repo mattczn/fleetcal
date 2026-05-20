@@ -16,7 +16,7 @@ import {
   View, Text, TouchableOpacity, Modal, Pressable, ActivityIndicator, ScrollView,
   Animated, Dimensions, Easing,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, BellOff, Check, X } from "lucide-react-native";
@@ -74,6 +74,7 @@ const PANEL_W  = Math.min(380, Math.round(SCREEN_W * 0.88));
 
 export function NotificationsBell({ tint = "dark" }: Props = {}) {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const iconColorIdle    = tint === "light" ? "rgba(255,255,255,0.8)" : "#5f6368";
   const iconColorActive  = tint === "light" ? "#ffffff" : "#202124";
@@ -200,9 +201,10 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             elevation: 16,
           }}
         >
-          <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
-            {/* Header */}
-            <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed" }}>
+          <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom }}>
+            {/* Header — paddingTop above already clears the status bar /
+                Dynamic Island, so the title/close button sit below it. */}
+            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed" }}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <View style={{ flex: 1 }}>
                   <Text style={[txt(800), { fontSize: 18, color: "#202124" }]}>Notifications</Text>
@@ -286,7 +288,7 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
                 })
               )}
             </ScrollView>
-          </SafeAreaView>
+          </View>
         </Animated.View>
       </Modal>
     </>

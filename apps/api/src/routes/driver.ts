@@ -272,10 +272,11 @@ driver.get("/notifications", async (c) => {
     .from("load_notifications")
     .select(
       "id, event_id, load_id, kind, sent_at, sent_by_name, acknowledged_at, " +
-      // PostgREST nested-select: pull the load_num + title from the
-      // parent load row in the same query so each card can show
-      // "#45280 · Phoenix → Reno" without a per-notification refetch.
-      "loads ( load_num, title )",
+      // PostgREST nested-select: title + load_num live on the events
+      // table (loads has load_num too but no title). Join through
+      // event_id so each card can show "#45280 · Phoenix → Reno"
+      // without a per-notification refetch.
+      "events ( load_num, title )",
     )
     .eq("driver_id", driverId)
     .eq("org_id", orgId)
@@ -295,18 +296,18 @@ driver.get("/notifications", async (c) => {
     sent_at: string;
     sent_by_name: string;
     acknowledged_at: string | null;
-    loads: { load_num: string | null; title: string | null } | { load_num: string | null; title: string | null }[] | null;
+    events: { load_num: string | null; title: string | null } | { load_num: string | null; title: string | null }[] | null;
   };
   const rows = ((data ?? []) as unknown as Row[]).map(r => {
     // PostgREST returns the nested relation as an object when the FK
     // is to-one, sometimes as a single-element array. Normalize.
-    const load = Array.isArray(r.loads) ? (r.loads[0] ?? null) : r.loads;
+    const ev = Array.isArray(r.events) ? (r.events[0] ?? null) : r.events;
     return {
       id:              r.id,
       eventId:         r.event_id,
       loadId:          r.load_id,
-      loadNum:         load?.load_num  ?? null,
-      loadTitle:       load?.title     ?? null,
+      loadNum:         ev?.load_num ?? null,
+      loadTitle:       ev?.title    ?? null,
       kind:            r.kind,
       sentAt:          r.sent_at,
       sentByName:      r.sent_by_name,
