@@ -292,12 +292,27 @@ function LoadFieldsPanel() {
 
   // Field toggles are org-scoped; write through to the server so other
   // dispatchers see the same field set.
+  //
+  // We normalize the saved object so EVERY field in ALL_FIELDS is
+  // present with an explicit boolean — not just the keys currently in
+  // local state. Without this, a saved snapshot from before a new field
+  // was added (e.g. commodity / weight added 2026-05-04) would be
+  // missing those keys; on re-hydrate the store fills the gap from
+  // current defaults, which silently flips fields the user never
+  // touched. Writing the full set on every toggle makes the saved row
+  // self-describing and immune to future defaults churn.
   const onFieldToggle = (id: string, on: boolean) => {
     setFieldEnabled(id, on);
-    if (!hasHydratedOrgSettings) return; // pre-hydration toggles are noise
-    const next = { ...fieldSettings, [id]: on };
+    // Toggles are disabled in the UI until hydration completes (see
+    // `disabled` prop on FieldSectionCard below). This guard is a
+    // belt-and-braces safety net for any indirect call site.
+    if (!hasHydratedOrgSettings) return;
+    const merged = { ...fieldSettings, [id]: on };
+    const full = Object.fromEntries(
+      ALL_FIELDS.map(f => [f.id, !!merged[f.id]]),
+    );
     void import('@/lib/railway').then(({ railway }) =>
-      railway.updateOrgSettings({ rateConSettings: { fieldSettings: next } }),
+      railway.updateOrgSettings({ rateConSettings: { fieldSettings: full } }),
     ).catch((err) => console.error('[settings] field toggle sync failed:', err));
   };
 
@@ -317,7 +332,12 @@ function LoadFieldsPanel() {
   };
   const handleDragEnd = () => { dragIdx.current = null; setOverIdx(null); };
 
-  const atLimit = false; // no cap — toggle any field freely
+  // Disable the toggles until org settings have hydrated from the
+  // server. Otherwise a click before the GET returns would update local
+  // state but the `onFieldToggle` save would be skipped (see guard
+  // above), so the user's change silently never reaches the DB. Once
+  // hasHydratedOrgSettings flips to true the toggles become live.
+  const atLimit = !hasHydratedOrgSettings;
 
   return (
     <div>
@@ -330,7 +350,9 @@ function LoadFieldsPanel() {
           <div>
             <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Load Fields</h2>
             <p className="text-sm mt-1" style={{ color: 'var(--gc-text-2)' }}>
-              Toggle fields · drag sections to reorder
+              {hasHydratedOrgSettings
+                ? 'Toggle fields · drag sections to reorder'
+                : 'Loading saved settings…'}
             </p>
           </div>
           <button onClick={() => setSectionOrder(DEFAULT_SECTION_ORDER)}
