@@ -4,6 +4,9 @@ import { getSupabase } from '@/lib/supabase';
 import { sendPushToDriver, sendAutoPushToDriver } from '@/lib/push';
 import { NOTIFICATION_RULE_KEYS, type NotificationRuleKey } from '@fleetcal/types';
 
+const RAILWAY_URL =
+  process.env.NEXT_PUBLIC_RAILWAY_URL ?? 'https://fleetcalapi-production.up.railway.app';
+
 interface SendBody {
   driverId: number;
   title:    string;
@@ -20,7 +23,7 @@ interface SendBody {
 }
 
 export async function POST(req: Request) {
-  const { orgId } = await auth();
+  const { orgId, getToken } = await auth();
   if (!orgId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const payload = (await req.json().catch(() => null)) as SendBody | null;
@@ -48,48 +51,41 @@ export async function POST(req: Request) {
       { title: payload.title, body: payload.body, data: payload.data },
       { eventStart: payload.eventStart ?? null },
     );
-    // Record into load_notifications so the driver's bell shows the
-    // historical entry. Only auto-fire paths land here — the manual
-    // dispatcher nudge popover records via /v1/events/:id/notify
-    // already (so we'd double-insert if we touched the non-ruleKey
-    // branch below). Assignment / reassign-away rows are auto-acked
-    // since they're informational and shouldn't count toward the
-    // pending badge.
+    // Record into load_notifications so the bell history captures it.
+    // We can't insert directly here — the web only has anon Supabase
+    // access. Delegate to Railway (which has the service-role key) via
+    // the dedicated record-auto-notification endpoint, authenticated
+    // with the dispatcher's Clerk JWT.
     if (sent) {
-      await recordNotification(
-        db, orgId, payload.driverId, payload.ruleKey as NotificationRuleKey, payload.data,
-      );
+      await recordViaRailway(getToken, payload.ruleKey as NotificationRuleKey, payload.driverId, payload.data);
     }
     return NextResponse.json({ ok: true, sent });
   }
   // Direct (unconditional) — used for protective notifications like
-  // reassign-away. Still record so the new driver and the bumped
-  // driver both have a history entry.
+  // reassign-away. Still record so the bumped driver gets a history
+  // entry on their bell.
   await sendPushToDriver(orgId, payload.driverId, {
     title: payload.title,
     body:  payload.body,
     data:  payload.data,
   });
-  await recordNotification(db, orgId, payload.driverId, null, payload.data);
+  await recordViaRailway(getToken, null, payload.driverId, payload.data);
   return NextResponse.json({ ok: true, sent: true });
 }
 
 /**
- * Insert a load_notifications row that mirrors a push that was just
- * sent. The bell on the driver app reads this table — without an insert
- * here, drivers see push toasts but nothing in their history.
+ * Map (ruleKey, data) onto a LoadNotificationKind and POST to Railway
+ * so the row lands in load_notifications under service-role auth.
  *
- * Maps the rule key + data.type onto the LoadNotificationKind union.
- * Informational kinds (assigned, reassigned_away) are auto-acked since
- * the driver isn't expected to do anything in response. Action-required
- * kinds (confirm, upload_pod, mark_pickup…) are left pending so the
- * badge counter reflects them.
+ * Why not write directly from here? The web Supabase client is anon-
+ * keyed and writes to load_notifications fail silently — that bug is
+ * what caused the bell history to be empty even though pushes were
+ * landing on drivers' phones.
  */
-async function recordNotification(
-  db: ReturnType<typeof getSupabase>,
-  orgId: string,
-  driverId: number,
+async function recordViaRailway(
+  getToken: () => Promise<string | null>,
   ruleKey: NotificationRuleKey | null,
+  driverId: number,
   data: Record<string, unknown> | undefined,
 ): Promise<void> {
   const eventId = typeof data?.eventId === 'string' ? data.eventId : null;
@@ -97,14 +93,7 @@ async function recordNotification(
   const loadId  = typeof data?.loadId  === 'string' ? data.loadId  : null;
   const dataType = typeof data?.type === 'string' ? data.type : null;
 
-  // Map ruleKey + data.type onto a LoadNotificationKind (table check
-  // constraint). Defensive: if we can't classify it, skip.
-  //
-  // All kinds are inserted with acknowledged_at = null so they count
-  // toward the bell's red badge. Action-required kinds (confirm,
-  // upload_pod, etc.) clear when the driver does the action. The
-  // informational kinds (assigned, reassigned_away) clear when the
-  // driver opens the bell — see POST /v1/driver/notifications/mark-viewed.
+  // Map ruleKey + data.type onto a LoadNotificationKind.
   let kind: string | null = null;
   let label = 'Auto';
   if (ruleKey === 'on_assignment') {
@@ -122,13 +111,27 @@ async function recordNotification(
   }
   if (!kind) return;
 
-  const { error } = await db.from('load_notifications').insert({
-    org_id:       orgId,
-    event_id:     eventId,
-    load_id:      loadId,
-    driver_id:    driverId,
-    kind,
-    sent_by_name: label,
-  } as never);
-  if (error) console.error('[driver-push] load_notifications insert:', error);
+  try {
+    const token = await getToken();
+    if (!token) {
+      console.error('[driver-push] no Clerk token, skipping record');
+      return;
+    }
+    const res = await fetch(
+      `${RAILWAY_URL}/v1/events/${eventId}/record-auto-notification`,
+      {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({ kind, driverId, loadId, sentByName: label }),
+      },
+    );
+    if (!res.ok) {
+      console.error('[driver-push] record-auto-notification failed:', res.status, await res.text().catch(() => ''));
+    }
+  } catch (err) {
+    console.error('[driver-push] record-auto-notification error:', err);
+  }
 }

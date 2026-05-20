@@ -217,13 +217,7 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             elevation: 16,
           }}
         >
-          <View style={{ flex: 1, paddingBottom: insets.bottom, backgroundColor: "#ffffff" }}>
-            {/* Top-of-panel safe-area fill: blue strip covering the
-                Dynamic Island / status bar zone so it matches the app's
-                primary header treatment. Sits behind the actual header
-                content (which has white background) so only the strip
-                above the title is blue. */}
-            <View style={{ height: insets.top, backgroundColor: "#1a73e8" }} />
+          <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom, backgroundColor: "#ffffff" }}>
             {/* Header */}
             <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed", backgroundColor: "#ffffff" }}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>

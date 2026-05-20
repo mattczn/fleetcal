@@ -664,4 +664,81 @@ events.post("/:id/notify", requireCapability("loads.edit"), async (c) => {
   return c.json({ notification: rowToLoadNotification(inserted as LoadNotificationRow) });
 });
 
+// POST /v1/events/:id/record-auto-notification
+//
+// Records a row in load_notifications for an *auto-fired* push (driver
+// assignment, reassign-away, etc.) — i.e. pushes that originate from
+// the dispatcher web's /api/driver-push surface, NOT a dispatcher
+// clicking a button in the notify popover.
+//
+// Differs from POST /:id/notify in three ways:
+//   - takes an explicit driverId in the body (so reassign-away can
+//     record against the OLD driver, not the event's current one).
+//   - doesn't require the event to currently have a driver assigned.
+//   - kinds accepted include the informational 'assigned' /
+//     'reassigned_away' rows that the notify popover never emits.
+//
+// Service-role insert — the web's /api/driver-push only has anon
+// supabase access, so it can't do this itself.
+events.post("/:id/record-auto-notification", requireCapability("loads.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const eventId = c.req.param("id");
+  const body = await c.req.json<{
+    kind:        string;
+    driverId:    number;
+    loadId?:     string | null;
+    sentByName:  string;
+  }>();
+
+  if (!LOAD_NOTIFICATION_KINDS.includes(body.kind as LoadNotificationKind)) {
+    return c.json(
+      { error: "validation_failed", errors: [`invalid kind: ${body.kind}`] } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+  if (typeof body.driverId !== "number" || !Number.isFinite(body.driverId)) {
+    return c.json(
+      { error: "validation_failed", errors: ["driverId required (number)"] } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+  if (!body.sentByName?.trim()) {
+    return c.json(
+      { error: "validation_failed", errors: ["sentByName required"] } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+
+  // Verify the event belongs to this org so a malicious client can't
+  // record notifications against arbitrary events.
+  const { data: ev, error: evErr } = await supabase
+    .from("events")
+    .select("id,load_id")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (evErr) {
+    console.error("[POST /v1/events/:id/record-auto-notification] event read:", evErr);
+    return c.json({ error: "fetch_failed", detail: evErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!ev) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const evRow = ev as { id: string; load_id: string | null };
+
+  const { error: insErr } = await supabase
+    .from("load_notifications")
+    .insert({
+      org_id:       orgId,
+      event_id:     eventId,
+      load_id:      body.loadId ?? evRow.load_id,
+      driver_id:    body.driverId,
+      kind:         body.kind,
+      sent_by_name: body.sentByName.trim(),
+    } as never);
+  if (insErr) {
+    console.error("[POST /v1/events/:id/record-auto-notification] insert:", insErr);
+    return c.json({ error: "insert_failed", detail: insErr.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ ok: true });
+});
+
 export default events;
