@@ -1377,6 +1377,15 @@ export const useCalendarStore = create<CalendarStore>()(
       const { loads } = await railway.getEvent(id);
       // /v1/events/:id returns the requested leg plus its relay partner
       // if any — upsert all so a relay refresh heals both legs at once.
+      // Mark each returned event as a self-write BEFORE the upsert so
+      // the conflict banner ("updated by another dispatcher") doesn't
+      // pop on a refresh we ourselves triggered. updateEventFromRemote
+      // calls consumeSelfWrite(event.id) — a recent stamp suppresses
+      // the banner. Without this, every modal open would pop the
+      // banner via the auto-recover refetch in EventModal.
+      for (const load of loads) {
+        markSelfWrite(load.id);
+      }
       for (const load of loads) {
         get().updateEventFromRemote(load);
       }

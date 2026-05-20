@@ -8,6 +8,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
 import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
+import { NotificationsBell } from '@/components/toolbar/NotificationsBell';
 import Tooltip from '@/components/ui/Tooltip';
 import { Authorize } from '@/components/Authorize';
 import DatePicker from '@/components/calendar/DatePicker';
@@ -911,8 +912,15 @@ export default function CalendarToolbar() {
           )}
         </div>
 
+        {/* Notifications bell — driver nudges + scheduled-push log
+            for the last 48h. Sits before the org/user group so the
+            badge isn't visually competing with the avatars. */}
+        <div className="flex items-center ml-1 pl-3" style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
+          <NotificationsBell />
+        </div>
+
         {/* Org + User — icon-only avatars to save toolbar space */}
-        <div className="flex items-center gap-1.5 ml-1 pl-3" style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
+        <div className="flex items-center gap-1.5 pl-3" style={{ borderLeft: '1px solid var(--gc-border-light)' }}>
           <OrganizationSwitcher
             hidePersonal
             afterCreateOrganizationUrl="/calendar"

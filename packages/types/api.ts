@@ -335,6 +335,19 @@ export interface GetRateConUrlResponse {
   url: string | null;
 }
 
+// ── /v1/notifications ────────────────────────────────────────────────────
+
+/**
+ * Org-scoped recent-notifications log. Returns every load_notifications
+ * row within the requested time window (default 48h), newest first.
+ * Powers the dispatcher notifications bell in the calendar header so
+ * pending nudges are visible at a glance and scheduled-push activity
+ * can be audited without diving into individual loads.
+ */
+export interface ListOrgNotificationsResponse {
+  notifications: import("./domain").LoadNotification[];
+}
+
 // ── GET /v1/events/:id/audit-log ────────────────────────────────────────
 
 /**

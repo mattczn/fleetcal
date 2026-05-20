@@ -60,10 +60,11 @@ documents.get("/:id/url", async (c) => {
 
 // PATCH /v1/documents/:id — rename and/or recategorize a document.
 // Either fileName or kind (or both) may be supplied; sending neither
-// returns 400. Kind changes can affect the closeout checklist (e.g.
-// flipping a doc from BOL → POD shifts what counts toward the release
-// gate); we still allow it because the user need outweighs the cost
-// of an occasionally-stale checklist read until the next refetch.
+// returns 400. When ONLY kind changes, the server also auto-renames
+// the display fileName to match the new kind (matching the auto-
+// naming applied at upload time) — flipping POD → BOL takes
+// "45280_POD.pdf" to "45280_BOL.pdf" without forcing the caller to
+// recompute the name client-side.
 documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
@@ -78,6 +79,33 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
     );
   }
 
+  if (hasKind && !DOCUMENT_KINDS.includes(body.kind as DocumentKind)) {
+    return c.json(
+      {
+        error:  "validation_failed",
+        errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`],
+      } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+
+  // Read the current row so we can (a) check if the kind actually
+  // changed and (b) compute a new filename matching the upload-time
+  // convention. Without this we'd silently apply a no-op kind update
+  // and miss the auto-rename opportunity.
+  const { data: existing, error: readErr } = await supabase
+    .from("load_documents")
+    .select("file_name, kind, load_id")
+    .eq("id", docId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (readErr) {
+    console.error("[PATCH /v1/documents/:id] read failed:", readErr);
+    return c.json({ error: "fetch_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const row = existing as { file_name: string; kind: string; load_id: string | null };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {};
   let cleanName: string | undefined;
@@ -85,23 +113,46 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
     if (!body.fileName!.trim()) {
       return c.json({ error: "validation_failed", errors: ["fileName empty"] } satisfies ApiErrorResponse, 400);
     }
-    // Strip path separators so a rename can't escape the storage layer.
-    // We're not touching storage_path here — only the display name on
-    // the row — so this is belt-and-suspenders.
+    // Strip path separators so a rename can't escape the storage
+    // layer. We only touch the display name on the row, not the
+    // storage_path itself.
     cleanName = body.fileName!.trim().replace(/[/\\]/g, "_").slice(0, 200);
     updates.file_name = cleanName;
   }
   if (hasKind) {
-    if (!DOCUMENT_KINDS.includes(body.kind as DocumentKind)) {
-      return c.json(
-        {
-          error:  "validation_failed",
-          errors: [`kind must be one of ${DOCUMENT_KINDS.join("|")}`],
-        } satisfies ApiErrorResponse,
-        400,
-      );
-    }
     updates.kind = body.kind;
+    // Auto-rename when the caller changed kind but didn't pass an
+    // explicit fileName. Matches the {LOAD_NUM}_{KIND}{_N}.{ext}
+    // convention used by both upload routes (loads.ts + driver.ts).
+    // Skipped when kind didn't actually change (no-op PATCH).
+    if (!hasName && body.kind !== row.kind && row.load_id) {
+      const { data: loadInfo } = await supabase
+        .from("loads")
+        .select("load_num")
+        .eq("id", row.load_id)
+        .eq("org_id", orgId)
+        .maybeSingle();
+      const loadNum = (loadInfo as { load_num: string | null } | null)?.load_num ?? null;
+      const ext = row.file_name.includes(".") ? row.file_name.split(".").pop()! : "pdf";
+      if (loadNum) {
+        const safeNum = loadNum.replace(/[^A-Za-z0-9_-]/g, "");
+        const kindLabel = String(body.kind).toUpperCase();
+        // Suffix _N when the load already has another doc of the
+        // new kind so the rename doesn't clobber the display name
+        // of an existing row. Excludes the doc being updated from
+        // the count.
+        const { count: priorCount } = await supabase
+          .from("load_documents")
+          .select("id", { head: true, count: "exact" })
+          .eq("load_id", row.load_id)
+          .eq("org_id", orgId)
+          .eq("kind", body.kind as string)
+          .neq("id", docId);
+        const suffix = (priorCount ?? 0) > 0 ? `_${(priorCount ?? 0) + 1}` : "";
+        cleanName = `${safeNum}_${kindLabel}${suffix}.${ext}`;
+        updates.file_name = cleanName;
+      }
+    }
   }
 
   const { error } = await supabase

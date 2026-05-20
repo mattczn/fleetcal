@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play } from 'lucide-react';
+import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useUser } from '@clerk/nextjs';
@@ -413,6 +413,12 @@ function UploadedDocsPanel({
   const [uploading,     setUploading]     = useState(false);
   const [uploadError,   setUploadError]   = useState<string | null>(null);
   const [deletingId,    setDeletingId]    = useState<string | null>(null);
+  // Inline kind editor — when the user clicks the pencil on a row,
+  // an inline chip picker appears under that row. Server auto-renames
+  // the fileName when kind changes (PATCH /v1/documents/:id), so a
+  // 45280_POD.pdf flipped to BOL becomes 45280_BOL.pdf in one action.
+  const [editingDocId,  setEditingDocId]  = useState<string | null>(null);
+  const [savingEdit,    setSavingEdit]    = useState(false);
 
   // Rate Con is intentionally NOT in the Uploaded tab's kind picker —
   // rate cons have a dedicated upload path (the "+ Add Rate Con" CTA on
@@ -477,6 +483,28 @@ function UploadedDocsPanel({
       alert(`Delete failed: ${(err as Error).message ?? 'Unknown error'}`);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  // Save a kind change for the doc currently being edited. PATCH auto-
+  // renames the fileName to match the new kind, so we don't compute the
+  // name client-side. After saving we mark the load as a self-write so
+  // the realtime echo from this PATCH doesn't pop the conflict banner,
+  // then onChange? to refetch the docs list.
+  const saveKindEdit = async (docId: string, nextKind: import('@fleetcal/types').DocumentKind) => {
+    if (savingEdit) return;
+    setSavingEdit(true);
+    try {
+      const { railway } = await import('@/lib/railway');
+      if (loadId) useCalendarStore.getState().markLoadSelfWrite(loadId);
+      await railway.updateDocumentKind(docId, nextKind);
+      setEditingDocId(null);
+      onChange?.();
+    } catch (err) {
+      console.error('[UploadedDocsPanel] kind update failed:', err);
+      alert(`Update failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -652,24 +680,83 @@ function UploadedDocsPanel({
         {docs.map((d) => {
           const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
           return (
-            <button key={d.id} type="button" onClick={() => onSelect(d.id)}
-              className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors"
-              style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <div className="flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 8, background: tint.bg, flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
-                <FileText size={16} style={{ color: tint.fg }} />
+            <div key={d.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              <div className="w-full flex items-center gap-3 px-4 py-3 transition-colors" style={{ background: 'var(--gc-surface)' }}>
+                <button type="button" onClick={() => onSelect(d.id)}
+                  className="flex items-center gap-3 text-left flex-1 min-w-0"
+                  style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  <div className="flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 8, background: tint.bg, flexShrink: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                    <FileText size={16} style={{ color: tint.fg }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: tint.fg, background: tint.bg, padding: '2px 7px', borderRadius: 999 }}>
+                        {KIND_LABEL[d.kind] ?? d.kind}
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</div>
+                    <div className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>{fmt(d.uploadedAt)}</div>
+                  </div>
+                </button>
+                {/* Edit kind — toggles the inline picker below. Hidden
+                    when no loadId (create-mode rendering of the panel,
+                    docs aren't yet attached anywhere). */}
+                {loadId && (
+                  <Tooltip content={editingDocId === d.id ? 'Cancel' : 'Change type'}>
+                    <button type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingDocId(prev => prev === d.id ? null : d.id);
+                      }}
+                      className="flex items-center justify-center transition-colors"
+                      style={{
+                        width: 28, height: 28, borderRadius: 8,
+                        color: editingDocId === d.id ? LOAD_ACCENT : 'var(--gc-text-3)',
+                        background: editingDocId === d.id ? LOAD_ACCENT_BG : 'transparent',
+                        border: `1px solid ${editingDocId === d.id ? LOAD_ACCENT_BORDER : 'var(--gc-border-light)'}`,
+                      }}
+                      onMouseEnter={e => { if (editingDocId !== d.id) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      onMouseLeave={e => { if (editingDocId !== d.id) e.currentTarget.style.background = 'transparent'; }}>
+                      <Pencil size={12} />
+                    </button>
+                  </Tooltip>
+                )}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: tint.fg, background: tint.bg, padding: '2px 7px', borderRadius: 999 }}>
-                    {KIND_LABEL[d.kind] ?? d.kind}
-                  </span>
+              {editingDocId === d.id && (
+                <div style={{ padding: '8px 14px 12px', background: 'var(--gc-bg)', borderTop: '1px solid var(--gc-border-light)' }}>
+                  <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', marginBottom: 6 }}>
+                    Change document type
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {KIND_UPLOAD_OPTIONS.map(opt => {
+                      const active = opt.kind === d.kind;
+                      return (
+                        <button key={opt.kind} type="button"
+                          disabled={savingEdit || active}
+                          onClick={() => void saveKindEdit(d.id, opt.kind)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                          style={{
+                            color: active ? 'var(--gc-text-3)' : LOAD_ACCENT,
+                            background: active ? 'var(--gc-bg)' : LOAD_ACCENT_BG,
+                            border: `1px solid ${active ? 'var(--gc-border-light)' : LOAD_ACCENT_BORDER}`,
+                            opacity: savingEdit ? 0.5 : 1,
+                            cursor: active ? 'default' : 'pointer',
+                          }}
+                          onMouseEnter={e => { if (!active && !savingEdit) e.currentTarget.style.background = LOAD_ACCENT_BG_HOVER; }}
+                          onMouseLeave={e => { if (!active && !savingEdit) e.currentTarget.style.background = LOAD_ACCENT_BG; }}>
+                          {active && <CheckCircle2 size={11} />}
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                    {savingEdit && <Loader2 size={14} className="animate-spin" style={{ color: 'var(--gc-text-3)', marginLeft: 4 }} />}
+                  </div>
+                  <div className="text-[10px]" style={{ color: 'var(--gc-text-3)', marginTop: 6 }}>
+                    Filename will be renamed to match the new type.
+                  </div>
                 </div>
-                <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</div>
-                <div className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>{fmt(d.uploadedAt)}</div>
-              </div>
-            </button>
+              )}
+            </div>
           );
         })}
         </div>
