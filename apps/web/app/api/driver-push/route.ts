@@ -48,12 +48,85 @@ export async function POST(req: Request) {
       { title: payload.title, body: payload.body, data: payload.data },
       { eventStart: payload.eventStart ?? null },
     );
+    // Record into load_notifications so the driver's bell shows the
+    // historical entry. Only auto-fire paths land here — the manual
+    // dispatcher nudge popover records via /v1/events/:id/notify
+    // already (so we'd double-insert if we touched the non-ruleKey
+    // branch below). Assignment / reassign-away rows are auto-acked
+    // since they're informational and shouldn't count toward the
+    // pending badge.
+    if (sent) {
+      await recordNotification(
+        db, orgId, payload.driverId, payload.ruleKey as NotificationRuleKey, payload.data,
+      );
+    }
     return NextResponse.json({ ok: true, sent });
   }
+  // Direct (unconditional) — used for protective notifications like
+  // reassign-away. Still record so the new driver and the bumped
+  // driver both have a history entry.
   await sendPushToDriver(orgId, payload.driverId, {
     title: payload.title,
     body:  payload.body,
     data:  payload.data,
   });
+  await recordNotification(db, orgId, payload.driverId, null, payload.data);
   return NextResponse.json({ ok: true, sent: true });
+}
+
+/**
+ * Insert a load_notifications row that mirrors a push that was just
+ * sent. The bell on the driver app reads this table — without an insert
+ * here, drivers see push toasts but nothing in their history.
+ *
+ * Maps the rule key + data.type onto the LoadNotificationKind union.
+ * Informational kinds (assigned, reassigned_away) are auto-acked since
+ * the driver isn't expected to do anything in response. Action-required
+ * kinds (confirm, upload_pod, mark_pickup…) are left pending so the
+ * badge counter reflects them.
+ */
+async function recordNotification(
+  db: ReturnType<typeof getSupabase>,
+  orgId: string,
+  driverId: number,
+  ruleKey: NotificationRuleKey | null,
+  data: Record<string, unknown> | undefined,
+): Promise<void> {
+  const eventId = typeof data?.eventId === 'string' ? data.eventId : null;
+  if (!eventId) return; // can't anchor the row to anything
+  const loadId  = typeof data?.loadId  === 'string' ? data.loadId  : null;
+  const dataType = typeof data?.type === 'string' ? data.type : null;
+
+  // Map ruleKey + data.type onto a LoadNotificationKind (table check
+  // constraint). Defensive: if we can't classify it, skip.
+  let kind: string | null = null;
+  let label = 'Auto';
+  let autoAck = false;
+  if (ruleKey === 'on_assignment') {
+    kind = 'assigned';
+    label = dataType === 'last_minute_assign' ? 'Auto: assignment (last-minute)' : 'Auto: assignment';
+    autoAck = true; // informational
+  } else if (ruleKey === 'evening_confirm_sweep' || ruleKey === 'pre_pickup_confirm') {
+    kind = 'confirm';
+    label = ruleKey === 'evening_confirm_sweep' ? 'Auto: evening sweep' : 'Auto: pre-pickup reminder';
+  } else if (ruleKey === 'missing_pod_reminder') {
+    kind = 'upload_pod';
+    label = 'Auto: missing POD reminder';
+  } else if (dataType === 'reassigned_away') {
+    kind = 'reassigned_away';
+    label = 'Auto: load reassigned';
+    autoAck = true; // informational
+  }
+  if (!kind) return;
+
+  const { error } = await db.from('load_notifications').insert({
+    org_id:          orgId,
+    event_id:        eventId,
+    load_id:         loadId,
+    driver_id:       driverId,
+    kind,
+    sent_by_name:    label,
+    acknowledged_at: autoAck ? new Date().toISOString() : null,
+  } as never);
+  if (error) console.error('[driver-push] load_notifications insert:', error);
 }

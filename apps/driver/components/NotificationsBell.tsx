@@ -34,19 +34,23 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
 // LoadNotificationKind union in packages/types (no direct import to
 // avoid cross-package types at the driver runtime).
 const KIND_LABEL: Record<string, string> = {
-  confirm:        "Confirm load",
-  mark_pickup:    "Mark picked up",
-  mark_delivery:  "Mark delivered",
-  upload_pod:     "Upload POD",
-  report_trailer: "Report trailer",
+  confirm:          "Confirm load",
+  mark_pickup:      "Mark picked up",
+  mark_delivery:    "Mark delivered",
+  upload_pod:       "Upload POD",
+  report_trailer:   "Report trailer",
+  assigned:         "Load assigned",
+  reassigned_away:  "Load reassigned",
 };
 
 const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-  confirm:        { bg: "#dbeafe", fg: "#1e3a8a" },
-  mark_pickup:    { bg: "#fef3c7", fg: "#92400e" },
-  mark_delivery:  { bg: "#dcfce7", fg: "#166534" },
-  upload_pod:     { bg: "#ede9fe", fg: "#5b21b6" },
-  report_trailer: { bg: "#fee2e2", fg: "#991b1b" },
+  confirm:          { bg: "#dbeafe", fg: "#1e3a8a" },
+  mark_pickup:      { bg: "#fef3c7", fg: "#92400e" },
+  mark_delivery:    { bg: "#dcfce7", fg: "#166534" },
+  upload_pod:       { bg: "#ede9fe", fg: "#5b21b6" },
+  report_trailer:   { bg: "#fee2e2", fg: "#991b1b" },
+  assigned:         { bg: "#e0f2fe", fg: "#075985" },
+  reassigned_away:  { bg: "#fef3c7", fg: "#92400e" },
 };
 
 function relativeTime(iso: string): string {
@@ -201,10 +205,15 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
             elevation: 16,
           }}
         >
-          <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom }}>
-            {/* Header — paddingTop above already clears the status bar /
-                Dynamic Island, so the title/close button sit below it. */}
-            <View style={{ paddingHorizontal: 18, paddingTop: 18, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed" }}>
+          <View style={{ flex: 1, paddingBottom: insets.bottom, backgroundColor: "#ffffff" }}>
+            {/* Top-of-panel safe-area fill: blue strip covering the
+                Dynamic Island / status bar zone so it matches the app's
+                primary header treatment. Sits behind the actual header
+                content (which has white background) so only the strip
+                above the title is blue. */}
+            <View style={{ height: insets.top, backgroundColor: "#1a73e8" }} />
+            {/* Header */}
+            <View style={{ paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: "#e8eaed", backgroundColor: "#ffffff" }}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <View style={{ flex: 1 }}>
                   <Text style={[txt(800), { fontSize: 18, color: "#202124" }]}>Notifications</Text>

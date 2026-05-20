@@ -23,19 +23,23 @@ import type { LoadNotification, LoadNotificationKind } from '@fleetcal/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
 const KIND_LABEL: Record<LoadNotificationKind, string> = {
-  confirm:        'Confirm load',
-  mark_pickup:    'Mark picked up',
-  mark_delivery:  'Mark delivered',
-  upload_pod:     'Upload POD',
-  report_trailer: 'Report trailer',
+  confirm:          'Confirm load',
+  mark_pickup:      'Mark picked up',
+  mark_delivery:    'Mark delivered',
+  upload_pod:       'Upload POD',
+  report_trailer:   'Report trailer',
+  assigned:         'Load assigned',
+  reassigned_away:  'Load reassigned',
 };
 
 const KIND_TINT: Record<LoadNotificationKind, { bg: string; fg: string }> = {
-  confirm:        { bg: '#dbeafe', fg: '#1e3a8a' },
-  mark_pickup:    { bg: '#fef3c7', fg: '#92400e' },
-  mark_delivery:  { bg: '#dcfce7', fg: '#166534' },
-  upload_pod:     { bg: '#ede9fe', fg: '#5b21b6' },
-  report_trailer: { bg: '#fee2e2', fg: '#991b1b' },
+  confirm:          { bg: '#dbeafe', fg: '#1e3a8a' },
+  mark_pickup:      { bg: '#fef3c7', fg: '#92400e' },
+  mark_delivery:    { bg: '#dcfce7', fg: '#166534' },
+  upload_pod:       { bg: '#ede9fe', fg: '#5b21b6' },
+  report_trailer:   { bg: '#fee2e2', fg: '#991b1b' },
+  assigned:         { bg: '#e0f2fe', fg: '#075985' },
+  reassigned_away:  { bg: '#fef3c7', fg: '#92400e' },
 };
 
 function relativeTime(iso: string): string {
