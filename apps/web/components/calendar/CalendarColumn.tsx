@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
 import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
-import type { MovementCard as MovementCardData } from '@/lib/railway';
+import { clusterMovements, type MovementCluster } from '@/lib/clusterMovements';
 
 import CalendarEvent from './CalendarEvent';
 import MovementCardView from './MovementCard';
@@ -94,16 +94,20 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, vi
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
   const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, assetColumnMode, movementsByVehicle } = useCalendarStore();
-  const [openMovement, setOpenMovement] = useState<MovementCardData | null>(null);
+  const [openCluster, setOpenCluster] = useState<MovementCluster | null>(null);
   const dateStr = localDateStr(currentDate);
   const mode = assetColumnMode[asset.id] ?? 'loads';
 
   // Movements mode — render Motive driving-period cards instead of
   // load events. Movements come keyed by Motive vehicleId (numeric)
   // so we map our asset's motive_vehicle_id (text) into that key.
-  const movementsForThisAsset = mode === 'movements' && asset.motiveVehicleId
+  // Clustering folds noisy short periods together (see clusterMovements
+  // for the rules) so the column reads cleanly instead of as a column
+  // of unreadable 2-pixel slivers.
+  const rawMovements = mode === 'movements' && asset.motiveVehicleId
     ? (movementsByVehicle[String(asset.motiveVehicleId)] ?? [])
     : [];
+  const movementClusters = clusterMovements(rawMovements);
 
   const colEvents = mode === 'movements' ? [] : events.filter((e) => {
     if (e.assetId !== asset.id) return false;
@@ -199,13 +203,12 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
     >
       <div className="absolute inset-0 group-hover:bg-blue-50/20 transition-colors pointer-events-none" />
       {mode === 'movements' ? (
-        // Telemetry view — render Motive driving periods. Read-only;
-        // no overlap algorithm needed since periods don't conflict in
-        // time (one period ends, next begins). Asset color is
-        // applied with dashed border + 50% opacity in MovementCard
-        // so it reads as "same truck, different layer."
-        movementsForThisAsset.map(m => (
-          <MovementCardView key={m.id} movement={m} assetColor={asset.color} onClick={() => setOpenMovement(m)} />
+        // Telemetry view — render Motive driving periods, clustered.
+        // No overlap algorithm needed since clusters don't conflict in
+        // time. Asset color + dashed/solid border + 50% opacity in
+        // MovementCard so it reads as "same truck, different layer."
+        movementClusters.map(c => (
+          <MovementCardView key={c.id} cluster={c} assetColor={asset.color} onClick={() => setOpenCluster(c)} />
         ))
       ) : triageLayout
         ? triageLayout.map(({ event, colIdx, totalCols, top }) => (
@@ -225,11 +228,11 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
             <CalendarEvent key={event.id} event={event} asset={asset} colIdx={colIdx} totalCols={totalCols} onSmartAssign={onSmartAssign} />
           ))
       }
-      {openMovement && (
+      {openCluster && (
         <MovementDetailPanel
-          movement={openMovement}
+          cluster={openCluster}
           asset={{ name: asset.name, color: asset.color, unit: asset.unit ?? undefined }}
-          onClose={() => setOpenMovement(null)}
+          onClose={() => setOpenCluster(null)}
         />
       )}
     </div>
