@@ -7,6 +7,7 @@ import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { buildBrokerRules } from '@/lib/customerMatch';
+import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import EditAssetDialog from './EditAssetDialog';
 import DriversModal from './DriversModal';
 import AssetsModal from './AssetsModal';
@@ -38,7 +39,17 @@ export default function AssetSidebar() {
   // affordances on rows fire railway.updateAsset / railway.reorderAssets
   // which the API would 403. Hide them at the UI tier.
   const canEditAssets = canDo('assets.edit');
-  const assets = allAssets.filter(a => a.id !== unassignedAssetId);
+  // Filter out the special 'Unassigned' bucket AND any asset that's
+  // currently retired (activeTo before today) or not yet active
+  // (activeFrom after today). Retired trucks still exist in the
+  // directory (AssetsModal lists them with a 'Retired' pill), but they
+  // shouldn't take up a calendar column in the live dispatcher view.
+  // Historical loads attached to retired assets remain accessible via
+  // the closeout / load-history flows.
+  const today = dateKeyOf(new Date());
+  const assets = allAssets.filter(a =>
+    a.id !== unassignedAssetId && isActiveOn(a, today),
+  );
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   const { organization } = useOrganization();
   const [showDrivers, setShowDrivers] = useState(false);
