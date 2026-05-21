@@ -48,6 +48,7 @@ import { StatusPickerSheet } from "@/components/StatusPickerSheet";
 import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/RelayHandoffPhotos";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap } from "@/components/RouteMap";
+import { AssignedTruckCard } from "@/components/AssignedTruckCard";
 import { Toast } from "@/components/Toast";
 import { DocumentsView } from "@/components/DocumentsView";
 import { ExpandableInstructions } from "@/components/ExpandableInstructions";
@@ -767,6 +768,11 @@ export default function LoadDetailScreen() {
   // this screen — passed to the gallery so it re-fetches.
   const [relayPhotosReloadKey,  setRelayPhotosReloadKey] = useState(0);
   const pagerRef = React.useRef<ScrollView>(null);
+  // Outer ScrollView of the Stops tab + Y offset of the embedded route
+  // map block. Wired together so the AssignedTruckCard's "View on Map"
+  // action can scroll the map into view from above the fold.
+  const stopsScrollRef = React.useRef<ScrollView>(null);
+  const [routeMapY, setRouteMapY] = useState<number>(0);
   const SCREEN_W = Dimensions.get("window").width;
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = React.useCallback((msg: string) => {
@@ -1031,7 +1037,12 @@ export default function LoadDetailScreen() {
         style={{ flex: 1 }}
       >
       {/* Stops tab — route map + timeline */}
-      <ScrollView style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }} contentContainerStyle={{ padding: 16, paddingBottom: 120 }} nestedScrollEnabled>
+      <ScrollView
+        ref={stopsScrollRef}
+        style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
+        nestedScrollEnabled
+      >
         {/* Pending dispatcher nudges — surfaces every kind the dispatcher
             has asked for that's still unacknowledged. Driver sees a
             clear list of what's needed without having to remember the
@@ -1135,13 +1146,46 @@ export default function LoadDetailScreen() {
           </View>
         ) : null}
 
+        {/* Assigned truck card — shown only while the load is still
+            pre-pickup (status = scheduled). Once status moves to
+            dispatched/en_route/etc, the driver is already in the truck
+            and doesn't need to be reminded which one or how to find it.
+            Surfaces the truck name, last-known location, View on Map +
+            Navigate quick actions, and the standard "double-check with
+            dispatch" disclaimer. */}
+        {load.status === "scheduled" && load.assetName && load.eventKind !== "non_revenue" && (
+          <AssignedTruckCard
+            assetName={load.assetName}
+            assetColor={truckLoc?.color}
+            truck={truckLoc ? {
+              lat:          truckLoc.lat,
+              lon:          truckLoc.lon,
+              locatedAt:    truckLoc.locatedAt,
+              description:  truckLoc.description,
+            } : null}
+            onViewOnMap={() => {
+              stopsScrollRef.current?.scrollTo({
+                // Pull the map up to ~24px from the top of the scroll
+                // viewport so the title above it stays visible.
+                y: Math.max(0, routeMapY - 24),
+                animated: true,
+              });
+            }}
+          />
+        )}
+
         {/* Route map */}
-        <View style={{ marginBottom: 14 }}>
+        <View
+          style={{ marginBottom: 14 }}
+          onLayout={(e) => setRouteMapY(e.nativeEvent.layout.y)}
+        >
           <RouteMap
             stops={load.stops}
             truckLat={truckLoc?.lat}
             truckLng={truckLoc?.lon}
             assetColor={truckLoc?.color}
+            truckDescription={truckLoc?.description}
+            truckLocatedAt={truckLoc?.locatedAt}
           />
         </View>
 

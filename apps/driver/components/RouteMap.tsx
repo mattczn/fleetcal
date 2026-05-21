@@ -43,7 +43,15 @@ const STOP_LABEL: Record<StopType, string> = {
 
 const GOOGLE_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
 
-interface TruckPos { lat: number; lon: number; color: string }
+interface TruckPos {
+  lat: number; lon: number; color: string;
+  /** Optional descriptive label and last-seen ISO timestamp — rendered
+   *  inside a Google Maps InfoWindow when the driver taps the truck
+   *  pin. Falls back to "Location available" + relative time when the
+   *  description is missing. */
+  description?: string;
+  locatedAt?: string;
+}
 
 function fmtTime(iso?: string): string {
   if (!iso) return "";
@@ -197,11 +205,47 @@ function buildMapHtml(
       }
     });
 
-    // Live truck marker — colored circle (asset color) with a white truck
-    // glyph. Sits above stops so a co-located pin doesn't fully hide it.
+    // Live truck marker — colored circle (asset color) with a white
+    // truck glyph. Sits above stops so a co-located pin doesn't fully
+    // hide it. Tap opens an InfoWindow showing the truck's last-known
+    // street/city + a relative timestamp so the driver can decide
+    // whether to trust the position (4 min ago vs 6 hours ago).
     if (truck) {
       const truckHtml = '<div class="truck-pin" style="--c:' + truck.color + '">' + truckSvg + '</div>';
-      makeOverlay({ lat: truck.lat, lng: truck.lon }, truckHtml, null);
+      const truckPos  = { lat: truck.lat, lng: truck.lon };
+      const truckOv   = makeOverlay(truckPos, truckHtml, null);
+      // Build "5m ago" from the ISO timestamp inside the WebView so
+      // the bubble shows real-time data without a re-render.
+      const relTime = (iso) => {
+        if (!iso) return '';
+        const t = new Date(iso).getTime();
+        if (!isFinite(t)) return iso;
+        const d = Date.now() - t;
+        if (d < 60000)      return 'just now';
+        if (d < 3600000)    return Math.round(d / 60000) + 'm ago';
+        if (d < 86400000)   return Math.round(d / 3600000) + 'h ago';
+        return Math.round(d / 86400000) + 'd ago';
+      };
+      const descSafe = (truck.description || 'Location available')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const stampSafe = truck.locatedAt ? relTime(truck.locatedAt) : '';
+      const bubbleHtml =
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:2px 4px;min-width:160px">' +
+        '<div style="font-size:11px;color:#5f6368;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:2px">Assigned Truck</div>' +
+        '<div style="font-size:14px;color:#202124;font-weight:600;margin-bottom:4px">' + descSafe + '</div>' +
+        (stampSafe ? '<div style="font-size:11px;color:#9aa0a6">Last seen ' + stampSafe + '</div>' : '') +
+        '</div>';
+      const info = new google.maps.InfoWindow({ content: bubbleHtml });
+      // Attach click directly to the overlay DOM element so the tap
+      // anchors the InfoWindow at the truck position.
+      const truckEl = truckOv.getElement && truckOv.getElement();
+      if (truckEl) {
+        truckEl.style.cursor = 'pointer';
+        truckEl.addEventListener('click', function() {
+          info.setPosition(truckPos);
+          info.open({ map });
+        });
+      }
     }
 
     if (stops.length >= 2) {
@@ -270,9 +314,14 @@ type Props = {
   truckLng?:    number | null;
   /** Asset color used to tint the truck pin. Falls back to brand blue. */
   assetColor?:  string | null;
+  /** Human-readable last-known location label + ISO timestamp — used
+   *  by the InfoWindow that opens when the driver taps the truck pin
+   *  so they can see where it was last seen and how fresh that is. */
+  truckDescription?: string | null;
+  truckLocatedAt?:   string | null;
 };
 
-export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }: Props) {
+export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor, truckDescription, truckLocatedAt }: Props) {
   const [fullscreen, setFullscreen]   = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const insets = useSafeAreaInsets();
@@ -285,17 +334,25 @@ export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor }
 
   const thumbnailHtml = useMemo(() => {
     const truck: TruckPos | null = (truckLat != null && truckLng != null)
-      ? { lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8" }
+      ? {
+          lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8",
+          description: truckDescription ?? undefined,
+          locatedAt:   truckLocatedAt   ?? undefined,
+        }
       : null;
     return buildMapHtml(stops, GOOGLE_KEY, false, truck);
-  }, [stops, truckLat, truckLng, assetColor]);
+  }, [stops, truckLat, truckLng, assetColor, truckDescription, truckLocatedAt]);
 
   const fullscreenHtml = useMemo(() => {
     const truck: TruckPos | null = (truckLat != null && truckLng != null)
-      ? { lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8" }
+      ? {
+          lat: truckLat, lon: truckLng, color: assetColor ?? "#1a73e8",
+          description: truckDescription ?? undefined,
+          locatedAt:   truckLocatedAt   ?? undefined,
+        }
       : null;
     return buildMapHtml(stops, GOOGLE_KEY, true, truck);
-  }, [stops, truckLat, truckLng, assetColor]);
+  }, [stops, truckLat, truckLng, assetColor, truckDescription, truckLocatedAt]);
 
   function focusStopInWebview(index: number) {
     const js = `document.dispatchEvent(new CustomEvent('rn:focus-stop',{detail:{index:${index}}})); true;`;
