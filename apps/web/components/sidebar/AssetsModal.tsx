@@ -8,6 +8,7 @@ import { usePermissions } from '@/lib/usePermissions';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
 import LifecycleEditor from './LifecycleEditor';
+import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import type { Asset, CalendarEvent, Driver } from '@/lib/types';
 
 const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
@@ -252,9 +253,27 @@ function NavAssetRow({ asset, selected, onSelect }: {
         <Truck size={13} color="white" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate"
-          style={{ color: selected ? 'var(--gc-blue)' : 'var(--gc-text-1)' }}>
-          {asset.name}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="text-sm font-medium truncate"
+            style={{ color: selected ? 'var(--gc-blue)' : 'var(--gc-text-1)' }}>
+            {asset.name}
+          </div>
+          {/* Retired pill — asset.activeTo has been set to a date that's
+              already in the past. Shown inline next to the name so the
+              dispatcher can scan the directory and immediately tell
+              which trucks are no longer on the calendar. Future-dated
+              activeTo (scheduled retirement) is intentionally NOT
+              flagged here — the asset is still in service until that
+              date. */}
+          {!isActiveOn(asset, dateKeyOf(new Date())) && (
+            <span
+              className="shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-[1px] rounded"
+              style={{ background: '#fee2e2', color: '#991b1b', letterSpacing: '0.5px' }}
+              title={asset.activeTo ? `Retired ${asset.activeTo}` : 'Retired'}
+            >
+              Retired
+            </span>
+          )}
         </div>
         {asset.unit && (
           <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
