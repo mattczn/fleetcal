@@ -188,6 +188,18 @@ export const railway = {
     );
   },
 
+  /** Relay handoff: pickup-leg driver pins the actual trailer-drop
+   *  location with their phone GPS. The delivery-leg driver then reads
+   *  it back via partnerTrailerDropoff* on the load detail. Endpoint
+   *  rejects with 400 if the event isn't a relay pickup. */
+  saveTrailerDropoff(eventId: string, body: { lat: number; lng: number }) {
+    return req<{ trailerDropoffLat: number; trailerDropoffLng: number; trailerDropoffAt: string }>(
+      "POST",
+      `/v1/driver/events/${eventId}/trailer-dropoff`,
+      body,
+    );
+  },
+
   // Documents
   listDocuments(loadId: string) {
     return req<{ documents: unknown[] }>("GET", `/v1/driver/loads/${loadId}/documents`);

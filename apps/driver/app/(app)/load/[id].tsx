@@ -46,6 +46,7 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
 import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/RelayHandoffPhotos";
+import { RelayTrailerLocation } from "@/components/RelayTrailerLocation";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
 import { AssignedTruckCard } from "@/components/AssignedTruckCard";
@@ -1401,6 +1402,24 @@ export default function LoadDetailScreen() {
               </View>
             </View>
             <RelayHandoffPhotos loadId={load.id} reloadKey={relayPhotosReloadKey} />
+            {load.relayRole && (
+              <RelayTrailerLocation
+                eventId={load.id}
+                relayRole={load.relayRole}
+                trailerDropoffLat={load.trailerDropoffLat}
+                trailerDropoffLng={load.trailerDropoffLng}
+                trailerDropoffAt={load.trailerDropoffAt}
+                partnerTrailerDropoffLat={load.partnerTrailerDropoffLat}
+                partnerTrailerDropoffLng={load.partnerTrailerDropoffLng}
+                partnerTrailerDropoffAt={load.partnerTrailerDropoffAt}
+                onSaved={() => {
+                  // Refetch so the new pin shows immediately AND so
+                  // the relay partner (if they're also looking) gets
+                  // the update on their next refresh / poll.
+                  void queryClient.invalidateQueries({ queryKey: ["load", id] });
+                }}
+              />
+            )}
           </View>
         ) : null}
 

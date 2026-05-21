@@ -93,6 +93,9 @@ export function joinEventLoadToApp(
     confirmedAt:           (e.confirmed_at as string | null) ?? undefined,
     confirmedBy:           (e.confirmed_by as number | null) ?? undefined,
     confirmReminderSentAt: (e.confirm_reminder_sent_at as string | null) ?? undefined,
+    trailerDropoffLat:     (e.trailer_dropoff_lat as number | null) ?? undefined,
+    trailerDropoffLng:     (e.trailer_dropoff_lng as number | null) ?? undefined,
+    trailerDropoffAt:      (e.trailer_dropoff_at  as string | null) ?? undefined,
 
     // ── Load-level (from loads row when revenue, else undefined) ────────
     loadId:         (l?.id as string | undefined) ?? undefined,

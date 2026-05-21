@@ -38,7 +38,8 @@ const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
-  "confirmed_at,confirmed_by,confirm_reminder_sent_at";
+  "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
+  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
@@ -433,7 +434,7 @@ driver.get("/loads", async (c) => {
     console.error("[GET /v1/driver/loads] failed:", error);
     return c.json({ error: "list_failed", detail: error.message }, 500);
   }
-  const rows = (events ?? []) as Record<string, unknown>[];
+  const rows = (events ?? []) as unknown as Record<string, unknown>[];
   if (rows.length === 0) return c.json({ loads: [] });
 
   const eventIds = rows.map((r) => r.id as string);
@@ -540,7 +541,7 @@ driver.get("/loads/:id", async (c) => {
   }
   if (!row) return c.json({ error: "not_found" }, 404);
 
-  const ev = row as Record<string, unknown> & {
+  const ev = row as unknown as Record<string, unknown> & {
     asset_id: number;
     trailer_id: number | null;
     relay_role: string | null;
@@ -572,18 +573,25 @@ driver.get("/loads/:id", async (c) => {
 
   // Relay partner — same load_id, different event id. Surface stops + driver
   // name so the driver knows where their leg hands off (or starts from).
+  // Also surface the partner's trailer-dropoff pin so the delivery driver
+  // can find the trailer at the handoff lot.
   if (loadRow && (loadRow as { id?: string }).id && ev.relay_role) {
     const partnerLoadId = (loadRow as { id: string }).id;
     const { data: partner } = await supabase
       .from("events")
-      .select("id, driver_name")
+      .select("id, driver_name, trailer_dropoff_lat, trailer_dropoff_lng, trailer_dropoff_at")
       .eq("load_id", partnerLoadId)
       .eq("org_id", orgId)
       .neq("id", id)
       .is("deleted_at", null)
       .maybeSingle();
     if (partner) {
-      const partnerEv = partner as { id: string; driver_name: string | null };
+      const partnerEv = partner as unknown as {
+        id: string; driver_name: string | null;
+        trailer_dropoff_lat: number | null;
+        trailer_dropoff_lng: number | null;
+        trailer_dropoff_at:  string | null;
+      };
       const { data: partnerStops } = await supabase
         .from("stops")
         .select(STOP_COLS)
@@ -593,6 +601,9 @@ driver.get("/loads/:id", async (c) => {
       load.partnerStops      = ((partnerStops ?? []) as unknown as StopRow[])
         .map(rowToStop)
         .sort((a, b) => a.sequence - b.sequence);
+      load.partnerTrailerDropoffLat = partnerEv.trailer_dropoff_lat ?? undefined;
+      load.partnerTrailerDropoffLng = partnerEv.trailer_dropoff_lng ?? undefined;
+      load.partnerTrailerDropoffAt  = partnerEv.trailer_dropoff_at  ?? undefined;
     }
   }
 
@@ -1779,6 +1790,70 @@ driver.get("/loads/:id/truck-location", async (c) => {
     locatedAt:   loc.locatedAt,
     description: loc.description,
     color:       assetRow?.color ?? null,
+  });
+});
+
+// POST /v1/driver/events/:id/trailer-dropoff — pickup-leg driver
+// stores their phone's GPS coords as the actual trailer-drop location
+// at a relay handoff. The delivery-leg driver reads this back via the
+// partnerTrailerDropoff* fields on their load detail.
+//
+// Body: { lat: number, lng: number }
+//
+// Authorization: the event must be assigned to the calling driver
+// AND have relay_role='pickup' — delivery-leg drivers can't save a
+// dropoff because they're not the one dropping anything. Non-relay
+// events get the same forbidden response; this endpoint is
+// relay-pickup-only.
+driver.post("/events/:id/trailer-dropoff", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id       = c.req.param("id");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "validation_failed", errors: ["invalid JSON"] }, 400); }
+
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return c.json({ error: "validation_failed", errors: ["lat and lng required (numbers)"] }, 400);
+  }
+
+  // Verify the event belongs to this driver + is a relay pickup leg.
+  const { data: ev } = await supabase
+    .from("events")
+    .select("id, driver_id, relay_role")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const evRow = ev as { id: string; driver_id: number | null; relay_role: string | null } | null;
+  if (!evRow) return c.json({ error: "not_found" }, 404);
+  if (evRow.driver_id !== driverId) return c.json({ error: "forbidden" }, 403);
+  if (evRow.relay_role !== "pickup") {
+    return c.json({ error: "not_relay_pickup", detail: "Trailer dropoff is only saved on relay pickup legs." }, 400);
+  }
+
+  const now = new Date().toISOString();
+  const { error: upErr } = await supabase
+    .from("events")
+    .update({
+      trailer_dropoff_lat: lat,
+      trailer_dropoff_lng: lng,
+      trailer_dropoff_at:  now,
+    } as never)
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (upErr) {
+    console.error("[POST /v1/driver/events/:id/trailer-dropoff] update:", upErr);
+    return c.json({ error: "update_failed", detail: upErr.message }, 500);
+  }
+
+  return c.json({
+    trailerDropoffLat: lat,
+    trailerDropoffLng: lng,
+    trailerDropoffAt:  now,
   });
 });
 

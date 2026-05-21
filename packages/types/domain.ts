@@ -659,6 +659,19 @@ export interface Load {
    *  show pickup + delivery driver pay side-by-side. */
   partnerDriverPay?: number;
 
+  /** Trailer-drop pin saved by THIS event's driver (pickup leg only —
+   *  delivery legs don't drop). Captured by the "Save Trailer Location"
+   *  button on the relay handoff section of the driver app. */
+  trailerDropoffLat?: number;
+  trailerDropoffLng?: number;
+  trailerDropoffAt?:  string;
+  /** Same fields as above but mirrored from the relay partner's event.
+   *  The delivery-leg driver reads these to find where the pickup-leg
+   *  driver left the trailer. */
+  partnerTrailerDropoffLat?: number;
+  partnerTrailerDropoffLng?: number;
+  partnerTrailerDropoffAt?:  string;
+
   // Audit
   auditLog?: LoadAuditEntry[];
 
