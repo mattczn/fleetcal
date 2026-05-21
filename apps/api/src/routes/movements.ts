@@ -273,6 +273,16 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     .not("driver_id", "is", null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { count: dbEligibleCount } = await (supabase as any)
+    .from("motive_driving_periods")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleIdNum)
+    .eq("display_eligible", true)
+    .gte("start_time", startDate.toISOString())
+    .lte("start_time", endDate.toISOString());
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: dbSample } = await (supabase as any)
     .from("motive_driving_periods")
     .select("id, vehicle_id, start_time, end_time, miles, display_eligible, driver_id, source")
@@ -291,6 +301,7 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     db: {
       rowsForQueriedVehicle: dbCount ?? 0,
       assignedRowsInWindow:  dbAssignedCount ?? 0,
+      eligibleRowsInWindow:  dbEligibleCount ?? 0,
       sample: dbSample ?? [],
     },
   });

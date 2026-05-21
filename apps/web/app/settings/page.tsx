@@ -2972,8 +2972,8 @@ function IntegrationsPanel() {
                   <DebugProbeBlock title="/v1/driving_periods?assigned_to_driver=false (unidentified)" probe={debugResult.unidentifiedDriving} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
                   <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--gc-border-light)' }}>
                     Rows in our DB for this vehicle (in window): {debugResult.db.rowsForQueriedVehicle}
-                    {' · '}
-                    of which assigned to driver: {debugResult.db.assignedRowsInWindow}
+                    {' · '}assigned to driver: {debugResult.db.assignedRowsInWindow}
+                    {' · '}display-eligible (≥ 1 mi): {debugResult.db.eligibleRowsInWindow}
                   </div>
                 </div>
               )}

@@ -467,7 +467,7 @@ class RailwayClient {
       pagesCapAt: number;
       drivingPeriods:      MovementProbeSummary;
       unidentifiedDriving: MovementProbeSummary;
-      db: { rowsForQueriedVehicle: number; assignedRowsInWindow: number; sample: unknown[] };
+      db: { rowsForQueriedVehicle: number; assignedRowsInWindow: number; eligibleRowsInWindow: number; sample: unknown[] };
     }>('GET', `/v1/movements/debug?${qs.toString()}`);
   }
 
