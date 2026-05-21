@@ -13,7 +13,7 @@
  */
 
 import React from "react";
-import { View, Text, TouchableOpacity, Linking } from "react-native";
+import { View, Text, TouchableOpacity, Linking, Platform, ActionSheetIOS, Alert } from "react-native";
 import { Truck, MapPin, Navigation, AlertTriangle } from "lucide-react-native";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -59,14 +59,45 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap }:
   const color = assetColor ?? "#1a73e8";
   const hasLocation = truck != null;
 
-  /** Universal directions URL that works on both iOS (opens Google
-   *  Maps app if installed, else Apple Maps via system handler) and
-   *  Android. Using the daddr= shape lets the system pick the user's
-   *  preferred maps app. */
+  /** Picks between Google Maps and Apple Maps. On iOS we surface a
+   *  native action sheet; Android shows an Alert with the same two
+   *  options (Apple Maps obviously won't install but the URL scheme
+   *  is still a valid option label — left out for Android). */
   const handleNavigate = () => {
     if (!hasLocation) return;
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${truck.lat},${truck.lon}`;
-    void Linking.openURL(url);
+    const dest = `${truck.lat},${truck.lon}`;
+    const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+    // Apple Maps uses ?daddr=lat,lng for driving directions. Falls
+    // through to mobile Safari's Apple Maps fallback on iPhone, and
+    // opens Apple Maps app if installed.
+    const appleUrl  = `https://maps.apple.com/?daddr=${dest}&dirflg=d`;
+
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title:               "Navigate to truck",
+          options:             ["Google Maps", "Apple Maps", "Cancel"],
+          cancelButtonIndex:   2,
+          userInterfaceStyle:  "light",
+        },
+        (idx) => {
+          if (idx === 0) void Linking.openURL(googleUrl);
+          if (idx === 1) void Linking.openURL(appleUrl);
+        },
+      );
+      return;
+    }
+    // Android — no Apple Maps but keep parity by offering the choice.
+    // Apple Maps URL on Android opens in browser (still usable).
+    Alert.alert(
+      "Navigate to truck",
+      "Open in which app?",
+      [
+        { text: "Google Maps", onPress: () => void Linking.openURL(googleUrl) },
+        { text: "Apple Maps",  onPress: () => void Linking.openURL(appleUrl) },
+        { text: "Cancel", style: "cancel" },
+      ],
+    );
   };
 
   return (

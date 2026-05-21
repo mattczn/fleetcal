@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { forwardRef, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { View, Text, TouchableOpacity, Modal, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
@@ -213,7 +213,7 @@ function buildMapHtml(
     if (truck) {
       const truckHtml = '<div class="truck-pin" style="--c:' + truck.color + '">' + truckSvg + '</div>';
       const truckPos  = { lat: truck.lat, lng: truck.lon };
-      const truckOv   = makeOverlay(truckPos, truckHtml, null);
+      window.truckPosRef = truckPos; // exposed for the focus-truck event below
       // Build "5m ago" from the ISO timestamp inside the WebView so
       // the bubble shows real-time data without a re-render.
       const relTime = (iso) => {
@@ -235,17 +235,27 @@ function buildMapHtml(
         '<div style="font-size:14px;color:#202124;font-weight:600;margin-bottom:4px">' + descSafe + '</div>' +
         (stampSafe ? '<div style="font-size:11px;color:#9aa0a6">Last seen ' + stampSafe + '</div>' : '') +
         '</div>';
-      const info = new google.maps.InfoWindow({ content: bubbleHtml });
-      // Attach click directly to the overlay DOM element so the tap
-      // anchors the InfoWindow at the truck position.
-      const truckEl = truckOv.getElement && truckOv.getElement();
-      if (truckEl) {
-        truckEl.style.cursor = 'pointer';
-        truckEl.addEventListener('click', function() {
-          info.setPosition(truckPos);
-          info.open({ map });
-        });
-      }
+      window.truckInfoWindow = new google.maps.InfoWindow({ content: bubbleHtml });
+      // Pass the click through makeOverlay's onAdd hook — that's
+      // when the div actually exists in the DOM. Attaching after
+      // setMap() returns is too early; the overlay's onAdd() runs
+      // asynchronously and the div is still null at that point.
+      makeOverlay(truckPos, truckHtml, function() {
+        window.truckInfoWindow.setPosition(truckPos);
+        window.truckInfoWindow.open({ map });
+      });
+
+      // Allow React Native to programmatically pan + zoom to the
+      // truck and pop its InfoWindow open. Used by the AssignedTruck
+      // card's "View on Map" button so a single tap fullscreens the
+      // map and centers on the truck.
+      document.addEventListener('rn:focus-truck', function() {
+        if (!window.truckPosRef || !mapInstance) return;
+        mapInstance.panTo(window.truckPosRef);
+        mapInstance.setZoom(13);
+        window.truckInfoWindow.setPosition(window.truckPosRef);
+        window.truckInfoWindow.open({ map: mapInstance });
+      });
     }
 
     if (stops.length >= 2) {
@@ -321,11 +331,35 @@ type Props = {
   truckLocatedAt?:   string | null;
 };
 
-export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor, truckDescription, truckLocatedAt }: Props) {
+export interface RouteMapHandle {
+  /** Open the fullscreen map and pan + zoom to the truck pin,
+   *  then pop its InfoWindow open. No-op when no truck location
+   *  is currently known. Used by AssignedTruckCard's
+   *  "View on Map" button. */
+  openOnTruck: () => void;
+}
+
+export const RouteMap = forwardRef<RouteMapHandle, Props>(function RouteMap(
+  { stops, height = 220, truckLat, truckLng, assetColor, truckDescription, truckLocatedAt }: Props,
+  ref,
+) {
   const [fullscreen, setFullscreen]   = useState(false);
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const insets = useSafeAreaInsets();
   const fullscreenWebRef = useRef<WebView | null>(null);
+
+  // Tracks whether the parent has asked us to center on the truck on
+  // next fullscreen open. Cleared after the focus-truck event fires
+  // so a subsequent manual-open returns to the default stops-fit view.
+  const focusTruckOnOpenRef = useRef(false);
+
+  useImperativeHandle(ref, () => ({
+    openOnTruck: () => {
+      if (truckLat == null || truckLng == null) return;
+      focusTruckOnOpenRef.current = true;
+      setFullscreen(true);
+    },
+  }), [truckLat, truckLng]);
 
   const geocoded = useMemo(
     () => stops.filter((s) => typeof s.lat === "number" && typeof s.lng === "number"),
@@ -359,9 +393,24 @@ export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor, 
     fullscreenWebRef.current?.injectJavaScript(js);
   }
 
+  function focusTruckInWebview() {
+    const js = `document.dispatchEvent(new CustomEvent('rn:focus-truck')); true;`;
+    fullscreenWebRef.current?.injectJavaScript(js);
+  }
+
   React.useEffect(() => {
     if (fullscreen) {
-      const t = setTimeout(() => focusStopInWebview(selectedIdx), 350);
+      // Give the WebView time to mount + Google Maps to load before
+      // we dispatch the focus event. 350ms matches the existing
+      // stop-focus delay.
+      const t = setTimeout(() => {
+        if (focusTruckOnOpenRef.current) {
+          focusTruckInWebview();
+          focusTruckOnOpenRef.current = false;
+        } else {
+          focusStopInWebview(selectedIdx);
+        }
+      }, 350);
       return () => clearTimeout(t);
     }
   }, [fullscreen, selectedIdx]);
@@ -563,4 +612,4 @@ export function RouteMap({ stops, height = 220, truckLat, truckLng, assetColor, 
       </Modal>
     </>
   );
-}
+});

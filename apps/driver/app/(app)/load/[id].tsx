@@ -47,7 +47,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
 import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/RelayHandoffPhotos";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
-import { RouteMap } from "@/components/RouteMap";
+import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
 import { AssignedTruckCard } from "@/components/AssignedTruckCard";
 import { Toast } from "@/components/Toast";
 import { DocumentsView } from "@/components/DocumentsView";
@@ -773,6 +773,10 @@ export default function LoadDetailScreen() {
   // action can scroll the map into view from above the fold.
   const stopsScrollRef = React.useRef<ScrollView>(null);
   const [routeMapY, setRouteMapY] = useState<number>(0);
+  // Imperative handle for the RouteMap — lets AssignedTruckCard's
+  // "View on Map" button open fullscreen + pan to the truck pin in
+  // a single tap, rather than just scrolling to the thumbnail.
+  const routeMapRef = React.useRef<RouteMapHandle | null>(null);
   const SCREEN_W = Dimensions.get("window").width;
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = React.useCallback((msg: string) => {
@@ -1164,12 +1168,16 @@ export default function LoadDetailScreen() {
               description:  truckLoc.description,
             } : null}
             onViewOnMap={() => {
+              // Two-step open: scroll the route map into view so the
+              // user sees the transition, then expand it fullscreen and
+              // pan onto the truck pin (and pop its info bubble open
+              // via the focus-truck event). Falls back to plain scroll
+              // when no live location is known.
               stopsScrollRef.current?.scrollTo({
-                // Pull the map up to ~24px from the top of the scroll
-                // viewport so the title above it stays visible.
                 y: Math.max(0, routeMapY - 24),
                 animated: true,
               });
+              routeMapRef.current?.openOnTruck();
             }}
           />
         )}
@@ -1180,6 +1188,7 @@ export default function LoadDetailScreen() {
           onLayout={(e) => setRouteMapY(e.nativeEvent.layout.y)}
         >
           <RouteMap
+            ref={routeMapRef}
             stops={load.stops}
             truckLat={truckLoc?.lat}
             truckLng={truckLoc?.lon}
