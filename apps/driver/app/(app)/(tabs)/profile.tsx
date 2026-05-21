@@ -111,6 +111,10 @@ export default function ProfileScreen() {
   const [docs,       setDocs]       = useState<DriverDocument[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Captures the most recent /me fetch failure so the UI can render a
+  // visible error state instead of empty form fields (which the
+  // driver was reading as "I need to fill all of these in").
+  const [loadError,  setLoadError]  = useState<string | null>(null);
 
   // Org tz read-only display. Query is gated on `me` being loaded so
   // it doesn't fire before auth context is ready.
@@ -149,8 +153,12 @@ export default function ProfileScreen() {
       setLicenseExp(meRes.licenseExp);
       setMedCardExp(meRes.medicalCardExp);
       setDob(meRes.dob);
+      setLoadError(null);
     } catch (err) {
       console.warn("[profile] load:", err);
+      // Surface the failure so the form doesn't render as a blank
+      // canvas the driver mistakes for "incomplete profile, fill it in".
+      setLoadError((err as Error).message || "Could not load your profile.");
     } finally {
       setLoading(false);
     }
@@ -158,14 +166,35 @@ export default function ProfileScreen() {
 
   useEffect(() => { void loadAll(); }, [loadAll]);
 
-  async function saveFields(patch: DriverProfileUpdate, refresh = false) {
+  /**
+   * Save a partial patch to /me. On failure, rolls local form state
+   * back from the last known-good `me` so the field doesn't keep
+   * showing the rejected value (which made drivers walk away thinking
+   * they'd saved when they hadn't).
+   *
+   * Caller passes `revert` describing how to reset the relevant local
+   * state from `me` — keeps this function generic across the ~10
+   * field-level blur handlers that call it.
+   */
+  async function saveFields(
+    patch: DriverProfileUpdate,
+    opts: { refresh?: boolean; revert?: (last: DriverMeResponse) => void } = {},
+  ) {
     try {
       await railway.updateMe(patch);
       // Refresh after name changes so the header reflects the
       // computed full name (server combines first + last).
-      if (refresh) await loadAll();
+      if (opts.refresh) await loadAll();
     } catch (err) {
-      Alert.alert("Save failed", (err as Error).message);
+      const msg = (err as Error).message ?? "Save failed";
+      Alert.alert(
+        "Save failed",
+        `${msg}\n\nThe field has been reverted.`,
+        [{ text: "OK" }],
+      );
+      // Roll the form back to the last-known server value so the
+      // driver isn't staring at a value the server already rejected.
+      if (opts.revert && me) opts.revert(me);
     }
   }
 
@@ -315,6 +344,26 @@ export default function ProfileScreen() {
             <View style={{ padding: 40, alignItems: "center" }}>
               <ActivityIndicator />
             </View>
+          ) : loadError ? (
+            // The /me fetch failed — render an explicit error state
+            // instead of blank inputs. Blank inputs were being read as
+            // "your profile is incomplete, fill it in" and drivers
+            // would start re-entering data over top of values that
+            // were still on the server.
+            <View style={{ padding: 24, alignItems: "center" }}>
+              <Text style={[txt(700), { fontSize: 15, color: "#b91c1c", marginBottom: 8, textAlign: "center" }]}>
+                Could not load your profile
+              </Text>
+              <Text style={[txt(500), { fontSize: 13, color: "#6b7280", textAlign: "center", marginBottom: 16 }]}>
+                {loadError}
+              </Text>
+              <TouchableOpacity
+                onPress={() => { setLoading(true); void loadAll(); }}
+                style={{ backgroundColor: "#1a73e8", paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8 }}
+              >
+                <Text style={[txt(700), { color: "#fff", fontSize: 13 }]}>Retry</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <>
               {/* Account */}
@@ -325,21 +374,33 @@ export default function ProfileScreen() {
                     <FieldLabel label="First Name" />
                     <TextField value={firstName} onChangeText={setFirstName}
                       autoCapitalize="words"
-                      onBlur={() => saveFields({ firstName: firstName.trim() || null }, /* refresh */ true)} />
+                      onBlur={() => saveFields(
+                        { firstName: firstName.trim() || null },
+                        { refresh: true, revert: (last) => setFirstName(last.firstName ?? "") },
+                      )} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="Last Name" />
                     <TextField value={lastName} onChangeText={setLastName}
                       autoCapitalize="words"
-                      onBlur={() => saveFields({ lastName: lastName.trim() || null }, /* refresh */ true)} />
+                      onBlur={() => saveFields(
+                        { lastName: lastName.trim() || null },
+                        { refresh: true, revert: (last) => setLastName(last.lastName ?? "") },
+                      )} />
                   </FormCol>
                 </FormGrid>
                 <FieldLabel label="Phone" />
                 <TextField value={phone} onChangeText={setPhone} keyboardType="phone-pad"
-                  onBlur={() => saveFields({ phone: phone.trim() || null })} />
+                  onBlur={() => saveFields(
+                    { phone: phone.trim() || null },
+                    { revert: (last) => setPhone(last.phone ?? "") },
+                  )} />
                 <FieldLabel label="Email" />
                 <TextField value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none"
-                  onBlur={() => saveFields({ email: email.trim() || null })} />
+                  onBlur={() => saveFields(
+                    { email: email.trim() || null },
+                    { revert: (last) => setEmail(last.email ?? "") },
+                  )} />
               </Card>
 
               {/* Address */}
@@ -347,10 +408,16 @@ export default function ProfileScreen() {
               <Card>
                 <FieldLabel label="Street" />
                 <TextField value={addr.street} onChangeText={(v) => setAddr({ ...addr, street: v })}
-                  onBlur={() => saveFields({ address: joinAddress(addr) })} />
+                  onBlur={() => saveFields(
+                    { address: joinAddress(addr) },
+                    { revert: (last) => setAddr(parseAddress(last.address)) },
+                  )} />
                 <FieldLabel label="City" />
                 <TextField value={addr.city} onChangeText={(v) => setAddr({ ...addr, city: v })}
-                  onBlur={() => saveFields({ address: joinAddress(addr) })} />
+                  onBlur={() => saveFields(
+                    { address: joinAddress(addr) },
+                    { revert: (last) => setAddr(parseAddress(last.address)) },
+                  )} />
                 <FormGrid>
                   <FormCol>
                     <FieldLabel label="State" />
@@ -360,7 +427,10 @@ export default function ProfileScreen() {
                       onChange={(s) => {
                         const next = { ...addr, state: s };
                         setAddr(next);
-                        void saveFields({ address: joinAddress(next) });
+                        void saveFields(
+                          { address: joinAddress(next) },
+                          { revert: (last) => setAddr(parseAddress(last.address)) },
+                        );
                       }}
                     />
                   </FormCol>
@@ -368,7 +438,10 @@ export default function ProfileScreen() {
                     <FieldLabel label="Zip" />
                     <TextField value={addr.zip} onChangeText={(v) => setAddr({ ...addr, zip: v.replace(/[^\d-]/g, "").slice(0, 10) })}
                       keyboardType="number-pad"
-                      onBlur={() => saveFields({ address: joinAddress(addr) })} />
+                      onBlur={() => saveFields(
+                        { address: joinAddress(addr) },
+                        { revert: (last) => setAddr(parseAddress(last.address)) },
+                      )} />
                   </FormCol>
                 </FormGrid>
               </Card>
@@ -381,7 +454,10 @@ export default function ProfileScreen() {
                     <FieldLabel label="License #" />
                     <TextField value={licenseNumber} onChangeText={setLicenseNumber}
                       autoCapitalize="characters"
-                      onBlur={() => saveFields({ licenseNumber: licenseNumber.trim() || null })} />
+                      onBlur={() => saveFields(
+                        { licenseNumber: licenseNumber.trim() || null },
+                        { revert: (last) => setLicenseNumber(last.licenseNumber ?? "") },
+                      )} />
                   </FormCol>
                   <FormCol>
                     <FieldLabel label="State" />
@@ -390,7 +466,10 @@ export default function ProfileScreen() {
                       setOpen={(v) => setStatePickerOpen(v ? 'license' : null)}
                       onChange={(s) => {
                         setLicenseState(s);
-                        void saveFields({ licenseState: s || null });
+                        void saveFields(
+                          { licenseState: s || null },
+                          { revert: (last) => setLicenseState(last.licenseState ?? "") },
+                        );
                       }}
                     />
                   </FormCol>
@@ -398,7 +477,13 @@ export default function ProfileScreen() {
                 <FieldLabel label="Expiration" />
                 <DateField
                   value={licenseExp}
-                  onChange={(iso) => { setLicenseExp(iso); void saveFields({ licenseExp: iso ?? null }); }}
+                  onChange={(iso) => {
+                    setLicenseExp(iso);
+                    void saveFields(
+                      { licenseExp: iso ?? null },
+                      { revert: (last) => setLicenseExp(last.licenseExp) },
+                    );
+                  }}
                   open={pickerOpen === 'licenseExp'}
                   setOpen={(v) => setPickerOpen(v ? 'licenseExp' : null)}
                 />
@@ -410,14 +495,26 @@ export default function ProfileScreen() {
                 <FieldLabel label="Medical Card Expiration" />
                 <DateField
                   value={medCardExp}
-                  onChange={(iso) => { setMedCardExp(iso); void saveFields({ medicalCardExp: iso ?? null }); }}
+                  onChange={(iso) => {
+                    setMedCardExp(iso);
+                    void saveFields(
+                      { medicalCardExp: iso ?? null },
+                      { revert: (last) => setMedCardExp(last.medicalCardExp) },
+                    );
+                  }}
                   open={pickerOpen === 'medicalCardExp'}
                   setOpen={(v) => setPickerOpen(v ? 'medicalCardExp' : null)}
                 />
                 <FieldLabel label="Date of Birth" />
                 <DateField
                   value={dob}
-                  onChange={(iso) => { setDob(iso); void saveFields({ dob: iso ?? null }); }}
+                  onChange={(iso) => {
+                    setDob(iso);
+                    void saveFields(
+                      { dob: iso ?? null },
+                      { revert: (last) => setDob(last.dob) },
+                    );
+                  }}
                   open={pickerOpen === 'dob'}
                   setOpen={(v) => setPickerOpen(v ? 'dob' : null)}
                   /* DOB is bounded — no future dates. */

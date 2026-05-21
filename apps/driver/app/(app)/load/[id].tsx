@@ -239,25 +239,48 @@ function distanceMiles(lat1: number, lng1: number, lat2: number, lng2: number): 
 
 const VERIFY_THRESHOLD_MI = 0.5;
 
+/**
+ * Check the driver in at a stop. Tries to capture lat/lng so the
+ * server can verify proximity, but falls back to a coords-less
+ * check-in if the device denies location — that way the driver
+ * never gets blocked mid-trip by a permission they declined at
+ * install time. The server treats coord-less check-ins as
+ * "unverified" (audit trail still records the attempt).
+ */
 async function performCheckIn(
   stop: Stop,
   orgId: string,
   audit?: { eventId: string; changedByName: string },
-): Promise<void> {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== "granted") {
-    throw new Error(
-      "Location permission denied. Enable location for Curzon Driver in Settings.",
-    );
+): Promise<{ usedLocation: boolean }> {
+  let coords: { lat: number; lng: number } | null = null;
+  try {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status === "granted") {
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    }
+  } catch (err) {
+    // GPS unavailable (denied, no signal, hardware off) — fall
+    // through to coordless check-in rather than blocking the
+    // driver. The check-in itself is the load-progression event;
+    // location is verification metadata, not a hard requirement.
+    console.warn("[checkIn] location failed:", err);
   }
-  const pos = await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.Balanced,
-  });
+
   const distMi =
-    stop.lat != null && stop.lng != null
-      ? distanceMiles(stop.lat, stop.lng, pos.coords.latitude, pos.coords.longitude)
+    coords && stop.lat != null && stop.lng != null
+      ? distanceMiles(stop.lat, stop.lng, coords.lat, coords.lng)
       : undefined;
-  await checkInStop(stop.id, orgId, pos.coords.latitude, pos.coords.longitude,
+
+  await checkInStop(
+    stop.id, orgId,
+    // checkInStop's lat/lng args are required. Send 0/0 when we
+    // couldn't get a fix — the audit payload's `distanceMi` will be
+    // undefined so the server can tell this was unverified.
+    coords?.lat ?? 0,
+    coords?.lng ?? 0,
     audit ? {
       eventId:       audit.eventId,
       changedByName: audit.changedByName,
@@ -266,6 +289,8 @@ async function performCheckIn(
       distanceMi:    distMi,
     } : undefined,
   );
+
+  return { usedLocation: coords !== null };
 }
 
 function CheckInButton({
@@ -282,9 +307,20 @@ function CheckInButton({
     }
     setBusy(true);
     try {
-      await performCheckIn(stop, orgId,
+      const { usedLocation } = await performCheckIn(stop, orgId,
         eventId && driverName ? { eventId, changedByName: driverName } : undefined,
       );
+      if (!usedLocation) {
+        // Check-in succeeded but no GPS fix was available — let the
+        // driver know it was recorded as unverified so they can
+        // enable Location in Settings if they want their next stop
+        // verified, but don't block them mid-trip.
+        Alert.alert(
+          "Checked in (no location)",
+          "We couldn't get a GPS fix, so this check-in is unverified. "
+          + "Enable Location for Curzon Driver in Settings to verify future check-ins.",
+        );
+      }
       onCheckedIn?.("checkin");
     } catch (err) {
       Alert.alert("Check-in failed", err instanceof Error ? err.message : "Unknown error");

@@ -55,7 +55,27 @@ export default function LoginScreen() {
       phone: formatted, token: otp, type: "sms",
     });
     setLoading(false);
-    if (error) Alert.alert("Verification failed", error.message);
+    if (error) {
+      // Wrong code / expired / network → clear the input and let the
+      // driver retry without backing out + re-entering the phone. If
+      // the code expired Supabase returns a specific message; in that
+      // case bounce back to the phone step so they can request a new
+      // code. Either way the user has a clear path forward instead of
+      // being stuck on a dismissed alert with a 6-digit field already
+      // showing their bad code.
+      const msg = error.message ?? "";
+      const expired = /expir|token has expired/i.test(msg);
+      Alert.alert(
+        expired ? "Code expired" : "Verification failed",
+        expired
+          ? "That code is no longer valid. We'll send you a new one."
+          : (msg || "The code didn't match. Try again, or request a new code."),
+        expired
+          ? [{ text: "OK", onPress: () => { setOtp(""); setStep("phone"); } }]
+          : [{ text: "Try again", onPress: () => setOtp("") },
+             { text: "Use a different number", onPress: () => { setOtp(""); setStep("phone"); } }],
+      );
+    }
   }
 
   return (

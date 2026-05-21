@@ -48,7 +48,7 @@ export default function LoadsScreen() {
   const session = useDriverSession();
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
-  usePushRegistration(driver?.driverId, driver?.orgId);
+  const pushStatus = usePushRegistration(driver?.driverId, driver?.orgId);
 
   const [activeTab, setActiveTab] = useState<TabIdx>(0);
   const pagerRef = useRef<ScrollView>(null);
@@ -193,6 +193,25 @@ export default function LoadsScreen() {
           })}
         </View>
       </View>
+
+      {(pushStatus === "denied" || pushStatus === "failed") && (
+        // Visible banner so the driver knows push isn't working — silent
+        // failure was leaving drivers with no pings + no way to tell.
+        // 'denied' usually means iOS notification permission was declined
+        // (Settings → Notifications → Curzon). 'failed' means
+        // permission's fine but token registration with the server
+        // didn't go through after retries.
+        <View style={{ backgroundColor: "#fef3c7", paddingHorizontal: 16, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#fde68a" }}>
+          <Text style={[txt(700), { fontSize: 12, color: "#92400e" }]}>
+            {pushStatus === "denied" ? "Push notifications are off" : "Push registration failed"}
+          </Text>
+          <Text style={[txt(500), { fontSize: 11, color: "#92400e", marginTop: 2 }]}>
+            {pushStatus === "denied"
+              ? "Enable notifications in Settings → Notifications → Curzon so dispatch can reach you."
+              : "We couldn't register this device for push. Pull down to retry, or restart the app."}
+          </Text>
+        </View>
+      )}
 
       {isLoading ? (
         <View style={{ flex: 1, backgroundColor: "#f8f9fa", alignItems: "center", justifyContent: "center" }}>

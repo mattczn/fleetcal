@@ -90,6 +90,10 @@ export default function FuelScreen() {
   const [submitting,     setSubmitting]     = useState(false);
   const [recent,         setRecent]         = useState<FuelReport[]>([]);
   const [refreshing,     setRefreshing]     = useState(false);
+  // Tracks whether the initial asset fetch failed so we can surface a
+  // retry button instead of leaving the picker stuck on "Loading…" or
+  // silently empty. Driver can't submit fuel without picking a truck.
+  const [assetsError,    setAssetsError]    = useState<string | null>(null);
 
   // Track GPS coords so they're attached to the submission for later
   // verification (e.g. dispute resolution if the state looks wrong).
@@ -104,31 +108,40 @@ export default function FuelScreen() {
     }
   }, []);
 
+  // Loads the asset list + the server's pre-selected suggested truck.
+  // Pulled out so a retry button can call it after a network failure.
+  // Uses allSettled so the suggestion failing doesn't block the assets
+  // (and vice-versa) — the assets list is the only critical piece;
+  // missing suggestion just means no pre-fill.
+  const loadAssets = useCallback(async () => {
+    setAssetsLoading(true);
+    setAssetsError(null);
+    const [assetsRes, suggestedRes] = await Promise.allSettled([
+      railway.listAssets(),
+      railway.suggestedAsset(),
+    ]);
+    setAssetsLoading(false);
+    if (assetsRes.status === "rejected") {
+      console.warn("[fuel] list assets failed:", assetsRes.reason);
+      setAssetsError(
+        assetsRes.reason instanceof Error
+          ? assetsRes.reason.message
+          : "Couldn't load truck list.",
+      );
+      return;
+    }
+    setAssets(assetsRes.value.assets);
+    if (suggestedRes.status === "fulfilled" && suggestedRes.value.assetId != null
+        && assetsRes.value.assets.some(a => a.id === suggestedRes.value.assetId)) {
+      setAssetId(suggestedRes.value.assetId);
+    }
+  }, []);
+
   // Initial load: assets + recent submissions + GPS-state detection.
   useEffect(() => {
     let alive = true;
 
-    void (async () => {
-      try {
-        // Race the asset list + the server's suggestion. The
-        // suggestion comes from recent/upcoming dispatch events (±6h)
-        // or the driver's saved preference, so 90% of the time the
-        // driver opens the form and the right truck is already picked.
-        const [{ assets }, suggested] = await Promise.all([
-          railway.listAssets(),
-          railway.suggestedAsset().catch(() => ({ assetId: null, source: null as null })),
-        ]);
-        if (!alive) return;
-        setAssets(assets);
-        if (suggested.assetId != null && assets.some(a => a.id === suggested.assetId)) {
-          setAssetId(suggested.assetId);
-        }
-      } catch (err) {
-        console.warn("[fuel] list assets failed:", err);
-      } finally {
-        if (alive) setAssetsLoading(false);
-      }
-    })();
+    void loadAssets();
 
     void refreshRecent();
 
@@ -161,7 +174,7 @@ export default function FuelScreen() {
     })();
 
     return () => { alive = false; };
-  }, [refreshRecent]);
+  }, [refreshRecent, loadAssets]);
 
   const selectedAsset = useMemo(
     () => assets.find(a => a.id === assetId) ?? null,
@@ -326,12 +339,26 @@ export default function FuelScreen() {
             {/* Asset */}
             <FieldLabel Icon={Truck} label="Asset" required />
             <PickerRow
-              placeholder={assetsLoading ? "Loading…" : "Select asset"}
+              placeholder={assetsLoading ? "Loading…" : assetsError ? "Couldn't load trucks" : "Select asset"}
               value={selectedAsset
                 ? formatAssetLabel(selectedAsset)
                 : null}
-              onPress={() => { if (!assetsLoading) setAssetPickerOpen(o => !o); }}
+              onPress={() => { if (!assetsLoading && !assetsError) setAssetPickerOpen(o => !o); }}
             />
+            {assetsError && (
+              // Visible error + retry so the driver can recover. Without
+              // this the picker just stays empty and Submit stays
+              // disabled with no explanation.
+              <View style={{ marginTop: 6, padding: 10, backgroundColor: "#fef2f2", borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Text style={{ flex: 1, fontSize: 12, color: "#991b1b" }}>{assetsError}</Text>
+                <TouchableOpacity
+                  onPress={() => void loadAssets()}
+                  style={{ backgroundColor: "#dc2626", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}
+                >
+                  <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             {assetPickerOpen && (
               <PickerList
                 items={assets.map(a => ({ key: String(a.id), label: formatAssetLabel(a), value: a.id }))}

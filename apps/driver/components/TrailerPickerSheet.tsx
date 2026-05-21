@@ -29,7 +29,7 @@ type Props = {
 };
 
 export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelect, title, onSkip }: Props) {
-  const { data: trailers, isLoading } = useQuery({
+  const { data: trailers, isLoading, isError, refetch } = useQuery({
     queryKey: ["trailers", orgId],
     queryFn:  () => fetchTrailers(orgId),
     enabled:  visible,
@@ -124,6 +124,24 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
             <View style={{ paddingVertical: 50, alignItems: "center" }}>
               <ActivityIndicator color="#1a73e8" />
             </View>
+          ) : isError ? (
+            // Fetch failed (network blip mid-drive, server hiccup, etc).
+            // Without this branch the picker collapses to the "No
+            // trailers configured" message — wrong and misleading.
+            <View style={{ paddingVertical: 30, paddingHorizontal: 24, alignItems: "center" }}>
+              <Text style={[txt(700), { fontSize: 14, color: "#b91c1c", marginBottom: 6, textAlign: "center" }]}>
+                Could not load trailers
+              </Text>
+              <Text style={[txt(500), { fontSize: 12, color: "#5f6368", textAlign: "center", marginBottom: 14 }]}>
+                Check your connection and try again. {onSkip ? "Or continue without a trailer." : ""}
+              </Text>
+              <TouchableOpacity
+                onPress={() => void refetch()}
+                style={{ backgroundColor: "#1a73e8", paddingHorizontal: 18, paddingVertical: 10, borderRadius: 8 }}
+              >
+                <Text style={[txt(700), { color: "#fff", fontSize: 13 }]}>Retry</Text>
+              </TouchableOpacity>
+            </View>
           ) : (trailers ?? []).length === 0 ? (
             <View style={{ paddingVertical: 50, alignItems: "center" }}>
               <Text style={[txt(600), { fontSize: 13, color: "#9aa0a6" }]}>
@@ -215,7 +233,28 @@ export function TrailerPickerSheet({ visible, orgId, currentId, onClose, onSelec
                 Clear trailer
               </Text>
             </TouchableOpacity>
-          ) : null}
+          ) : (
+            // Fallback footer — always give the driver a clearly
+            // labelled exit so the sheet doesn't feel like a dead end
+            // when the list is empty or errored. The header X also
+            // closes but it's a small target on cab-mounted phones.
+            <TouchableOpacity
+              onPress={onClose}
+              style={{
+                marginTop: 8,
+                marginHorizontal: 18,
+                paddingVertical: 12,
+                alignItems: "center",
+                backgroundColor: "#f1f3f4",
+                borderRadius: 10,
+                borderWidth: 1, borderColor: "#dadce0",
+              }}
+            >
+              <Text style={[txt(700), { fontSize: 13, color: "#3c4043" }]}>
+                Close
+              </Text>
+            </TouchableOpacity>
+          )}
         </Pressable>
         </KeyboardAvoidingView>
       </Pressable>

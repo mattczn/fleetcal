@@ -57,35 +57,51 @@ export default function MaintenanceScreen() {
   const [history,        setHistory]        = useState<MaintenanceReport[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [refreshing,     setRefreshing]     = useState(false);
+  // Tracks whether trucks AND trailers loaded so we can show a retry
+  // affordance instead of empty pickers. Previously a network failure
+  // left both pickers blank with no indication of why.
+  const [optsError,      setOptsError]      = useState<string | null>(null);
 
   // GPS captured silently for the audit trail. Not user-visible.
   const gpsRef = useRef<{ latitude: number; longitude: number; state?: string } | null>(null);
 
-  // Initial load: trucks + trailers + GPS.
+  // Initial load: trucks + trailers + GPS. Uses allSettled so a
+  // failure on one doesn't poison the other; the user gets whatever
+  // we could load and a retry button for what failed.
+  const loadOpts = useCallback(async () => {
+    setOptsLoading(true);
+    setOptsError(null);
+    const [a, t, suggested] = await Promise.allSettled([
+      railway.listAssets(),
+      railway.listTrailers(),
+      railway.suggestedAsset(),
+    ]);
+    setOptsLoading(false);
+    if (a.status === "rejected" && t.status === "rejected") {
+      console.warn("[maint] both lists failed:", a.reason, t.reason);
+      setOptsError("Couldn't load trucks or trailers.");
+      return;
+    }
+    if (a.status === "fulfilled") setAssets(a.value.assets);
+    if (t.status === "fulfilled") setTrailers(t.value.trailers);
+    if (a.status === "rejected" || t.status === "rejected") {
+      setOptsError(
+        a.status === "rejected"
+          ? "Couldn't load trucks. Trailers loaded."
+          : "Couldn't load trailers. Trucks loaded.",
+      );
+    }
+    if (a.status === "fulfilled"
+        && suggested.status === "fulfilled"
+        && suggested.value.assetId != null
+        && a.value.assets.some(x => x.id === suggested.value.assetId)) {
+      setAssetId(suggested.value.assetId);
+    }
+  }, []);
+
   useEffect(() => {
     let alive = true;
-    void (async () => {
-      try {
-        // Asset suggestion is only used for the truck path (we don't
-        // store trailer assignments the same way). Drivers can still
-        // override by tapping the picker.
-        const [a, t, suggested] = await Promise.all([
-          railway.listAssets(),
-          railway.listTrailers(),
-          railway.suggestedAsset().catch(() => ({ assetId: null, source: null as null })),
-        ]);
-        if (!alive) return;
-        setAssets(a.assets);
-        setTrailers(t.trailers);
-        if (suggested.assetId != null && a.assets.some(x => x.id === suggested.assetId)) {
-          setAssetId(suggested.assetId);
-        }
-      } catch (err) {
-        console.warn("[maint] load assets/trailers:", err);
-      } finally {
-        if (alive) setOptsLoading(false);
-      }
-    })();
+    void loadOpts();
 
     void (async () => {
       try {
@@ -108,7 +124,7 @@ export default function MaintenanceScreen() {
     })();
 
     return () => { alive = false; };
-  }, []);
+  }, [loadOpts]);
 
   const loadHistory = useCallback(async () => {
     const id = targetKind === 'asset' ? assetId : trailerId;
@@ -310,6 +326,20 @@ export default function MaintenanceScreen() {
               </Text>
               <ChevronDown size={16} color="#5f6368" />
             </TouchableOpacity>
+            {optsError && (
+              // Surface load failure + offer retry. Without this the
+              // picker just stays empty and the driver has no way to
+              // recover except to leave + come back.
+              <View style={{ marginTop: 6, padding: 10, backgroundColor: "#fef2f2", borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Text style={{ flex: 1, fontSize: 12, color: "#991b1b" }}>{optsError}</Text>
+                <TouchableOpacity
+                  onPress={() => void loadOpts()}
+                  style={{ backgroundColor: "#dc2626", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 }}
+                >
+                  <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             {pickerOpen && (
               <View style={{
                 marginTop: 6, backgroundColor: '#fff', borderRadius: 10,

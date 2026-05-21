@@ -109,11 +109,37 @@ export async function enqueueUpload(args: {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const ext = args.fileName.includes(".") ? args.fileName.slice(args.fileName.lastIndexOf(".")) : "";
   const copyUri = `${COPY_DIR}${id}${ext}`;
-  try {
-    await FileSystem.copyAsync({ from: args.fileUri, to: copyUri });
-  } catch (err) {
-    console.warn("uploadQueue: copy failed, falling back to original uri", err);
+
+  // Persist the file into a directory we control before adding it to
+  // the queue. iOS aggressively purges the cache dir (where camera
+  // captures and ImagePicker outputs land) — if we ever fall back to
+  // the source URI and then OS evicts it before the queue drains, the
+  // upload row points at a file that no longer exists and the photo
+  // is lost silently.
+  //
+  // Retry the copy with backoff, then HARD FAIL if it still doesn't
+  // land. Caller must surface the error to the driver so they can
+  // re-pick the file rather than silently losing it.
+  let copied = false;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await FileSystem.copyAsync({ from: args.fileUri, to: copyUri });
+      copied = true;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
   }
+  if (!copied) {
+    console.error("uploadQueue: copy failed after 3 attempts", lastErr);
+    throw new Error(
+      "Could not save the file for upload. " +
+      "If this keeps happening, restart the app and try again.",
+    );
+  }
+
   const entry: PendingUpload = {
     id,
     fileUri:    copyUri,
