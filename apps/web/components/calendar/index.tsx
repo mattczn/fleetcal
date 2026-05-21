@@ -184,6 +184,17 @@ export default function CalendarView() {
           const prefDriver = prefDriverId != null
             ? drivers.find(d => d.id === prefDriverId)
             : undefined;
+          // Build the canonical display name (firstName + lastName)
+          // since that's what EventModal and the rest of the calendar
+          // use. The legacy `.name` field can be empty or stale on
+          // drivers whose record was created after the firstName/
+          // lastName split — sending it would result in an
+          // unresolvable name, so the load drag would silently lose
+          // the driver. We also pass driverId directly so the store
+          // doesn't have to round-trip via name resolution.
+          const canonicalName = prefDriver
+            ? (`${prefDriver.firstName ?? ''} ${prefDriver.lastName ?? ''}`.trim() || prefDriver.name)
+            : undefined;
           // ds.newStart/newEnd are in view-tz space (drag operates on
           // view-positioned blocks — see CalendarEvent.tsx). Convert
           // back to HOME_TZ before persisting so the round-trip is
@@ -192,7 +203,9 @@ export default function CalendarView() {
             assetId:    ds.targetAssetId,
             start:      naiveViewToHome(ds.newStart, calendarTimezone),
             end:        naiveViewToHome(ds.newEnd,   calendarTimezone),
-            ...(prefDriver ? { driverName: prefDriver.name } : {}),
+            ...(prefDriver && canonicalName
+              ? { driverName: canonicalName, driverId: prefDriver.id }
+              : {}),
           });
           // Prevent the upcoming click from firing the column create handler
           document.addEventListener('click', (ce) => { ce.stopPropagation(); }, {

@@ -103,12 +103,23 @@ function db() { return getSupabase(); }
 
 // Resolve event.driverId from event.driverName against the current drivers list.
 // Called at every event write so the FK stays in sync with the denormalized name.
+//
+// Matches against canonical name (firstName + lastName) AND the legacy
+// `.name` field, case-insensitive, so loads saved either before or
+// after the firstName/lastName split resolve correctly. Without the
+// canonical match the calendar drag-to-reassign would silently drop
+// the driver for any driver record whose legacy .name is empty.
 function withResolvedDriverId<T extends { driverName?: string; driverId?: number }>(
   ev: T,
   drivers: Driver[],
 ): T {
   if (!ev.driverName) return { ...ev, driverId: undefined };
-  const match = drivers.find(d => d.name === ev.driverName);
+  const target = ev.driverName.trim().toLowerCase();
+  const match = drivers.find(d => {
+    if (d.name && d.name.trim().toLowerCase() === target) return true;
+    const canonical = `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim().toLowerCase();
+    return !!canonical && canonical === target;
+  });
   return { ...ev, driverId: match?.id };
 }
 
