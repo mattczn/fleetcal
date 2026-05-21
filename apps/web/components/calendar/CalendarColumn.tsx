@@ -94,10 +94,10 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, vi
 }
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
-  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, assetColumnMode, movementsByVehicle, movementsLoading } = useCalendarStore();
+  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, calendarMode, movementsByVehicle, movementsLoading } = useCalendarStore();
   const [openCluster, setOpenCluster] = useState<MovementCluster | null>(null);
   const dateStr = localDateStr(currentDate);
-  const mode = assetColumnMode[asset.id] ?? 'loads';
+  const mode = calendarMode;
 
   // Movements mode — render Motive driving-period cards instead of
   // load events. Movements come keyed by Motive vehicleId (numeric)

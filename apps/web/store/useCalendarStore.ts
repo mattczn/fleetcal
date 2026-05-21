@@ -327,12 +327,12 @@ interface CalendarStore extends ModalState {
   setCalendarTimezone: (tz: string) => void;
 
   // ── Motive movements (per-asset column "Movements" mode) ────────────
-  /** Per-asset toggle: 'loads' (default) renders the existing load
-   *  events; 'movements' renders Motive driving-period cards. Stored
-   *  per dispatcher via the zustand persist below so the layout
-   *  survives reloads. */
-  assetColumnMode: Record<number, 'loads' | 'movements'>;
-  setAssetColumnMode: (assetId: number, mode: 'loads' | 'movements') => void;
+  /** Calendar-wide view toggle. 'loads' (default) renders the existing
+   *  load events for every asset column; 'movements' switches every
+   *  column over to Motive driving-period cards. Stored per dispatcher
+   *  via the zustand persist below so the choice survives reloads. */
+  calendarMode: 'loads' | 'movements';
+  setCalendarMode: (mode: 'loads' | 'movements') => void;
   /** Most recent /v1/movements response, keyed by Motive vehicleId. */
   movementsByVehicle: Record<string, import('@/lib/railway').MovementCard[]>;
   /** True while a fetchMovements call is in flight. UI shows a spinner. */
@@ -647,9 +647,8 @@ export const useCalendarStore = create<CalendarStore>()(
   calendarTimezone: 'America/Denver',
   setCalendarTimezone: (tz) => set({ calendarTimezone: tz }),
 
-  assetColumnMode: {},
-  setAssetColumnMode: (assetId, mode) =>
-    set((state) => ({ assetColumnMode: { ...state.assetColumnMode, [assetId]: mode } })),
+  calendarMode: 'loads',
+  setCalendarMode: (mode) => set({ calendarMode: mode }),
   movementsByVehicle: {},
   movementsLoading: false,
   fetchMovements: async (start, end) => {
@@ -1986,7 +1985,7 @@ export const useCalendarStore = create<CalendarStore>()(
         showBillingOverlay:  state.showBillingOverlay,
         showUnassigned:     state.showUnassigned,
         calendarTimezone:   state.calendarTimezone,
-        assetColumnMode:    state.assetColumnMode,
+        calendarMode:       state.calendarMode,
         cardFields:         state.cardFields,
         unassignedAssetId:  state.unassignedAssetId,
         lastKnownAssetCount: state.lastKnownAssetCount,

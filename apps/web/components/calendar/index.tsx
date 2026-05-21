@@ -31,7 +31,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function CalendarView() {
-  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked, currentDate, viewMode, calendarTimezone, assetColumnMode, fetchMovements } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, rowHeight, dragState, activeCategoryFilter, showUnassigned, unassignedAssetId, resourceWidthLocked, currentDate, viewMode, calendarTimezone, calendarMode, fetchMovements } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range the calendar is currently displaying, computed in the
   // ORG'S tz — not the browser's — so the day boundary matches what
@@ -71,14 +71,13 @@ export default function CalendarView() {
   // Keep ref in sync with store (without re-subscribing the drag effect)
   useEffect(() => { dragStateRef.current = dragState; }, [dragState]);
 
-  // Fetch Motive movements whenever any asset column is in 'movements'
+  // Fetch Motive movements whenever the calendar is in 'movements'
   // mode and the visible date range changes. The API is filtered by
   // display_eligible so this just paints whatever the cron has synced.
-  const anyMovementsMode = Object.values(assetColumnMode).some(m => m === 'movements');
   useEffect(() => {
-    if (!anyMovementsMode) return;
+    if (calendarMode !== 'movements') return;
     void fetchMovements(viewRange.start, viewRange.end);
-  }, [anyMovementsMode, viewRange.start, viewRange.end, fetchMovements]);
+  }, [calendarMode, viewRange.start, viewRange.end, fetchMovements]);
 
   // Fill the container width: recompute column width whenever the container, asset count, or lock state changes.
   // Skips update if the user has manually locked the width via the slider.
