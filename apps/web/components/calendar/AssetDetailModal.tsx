@@ -1,35 +1,37 @@
 /**
  * AssetDetailModal — combined "current location + movement history"
- * view for a single asset. Opens when a dispatcher clicks the asset's
- * column header (or the live-location chip beneath it).
+ * view for a single asset.
  *
- * Layout (1100 × 720):
- *   ┌─────────────────────────────────────┬───────────────────────┐
- *   │ Range chips · totals                │ CURRENT LOCATION      │
- *   │ ─ Movement history (scroll) ─       │ ┌───────────────────┐ │
- *   │   Day group                          │ │      [map]        │ │
- *   │     [row] [row] [row] ...            │ │                   │ │
- *   │   Day group                          │ └───────────────────┘ │
- *   │     ...                              │                       │
- *   └─────────────────────────────────────┴───────────────────────┘
+ * Layout (1200 × 720):
+ *   ┌─────────────────────────────────┬───────────────────┐
+ *   │                                 │  Range chips      │
+ *   │                                 │  Totals           │
+ *   │         MAP (left, 60%)         │  ─────            │
+ *   │   - Truck marker when no card   │  May 21           │
+ *   │     selected (zoomed in)        │   [card]          │
+ *   │   - Road route when a card is   │   [card]          │
+ *   │     selected                    │  May 20           │
+ *   │                                 │   [card]          │
+ *   │   Floating overlay (bottom):    │   [card]          │
+ *   │   - Last seen info OR           │                   │
+ *   │   - Movement details + ← →      │                   │
+ *   └─────────────────────────────────┴───────────────────┘
  *
- * Movements are clustered with the same rules used in the calendar
- * (15-min gap merge, overlap merge), so the list stays readable.
- * Clicking a row opens MovementDetailPanel on top, reusing the same
- * road-route map / metadata grid for individual periods.
+ * Clicking a movement card on the right paints its road route on the
+ * same map and shows a details overlay. ← → step through clusters in
+ * chronological order. No nested modal.
  */
 'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { X, MapPin, Loader2, ChevronRight, ExternalLink } from 'lucide-react';
+import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
 import type { Asset } from '@/lib/types';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import { railway, type MovementCard } from '@/lib/railway';
 import { clusterMovements, extractCity, type MovementCluster } from '@/lib/clusterMovements';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
-import MovementDetailPanel from './MovementDetailPanel';
 import DatePicker from './DatePicker';
 
 interface Props {
@@ -46,7 +48,6 @@ const PRESETS = [
 type PresetKey = typeof PRESETS[number]['key'];
 type RangeKey  = PresetKey | 'custom';
 
-/** Format YYYY-MM-DD for the custom-day chip ("May 19, 2026"). */
 function fmtDayChip(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('en-US', {
@@ -63,23 +64,82 @@ function fmtDuration(min: number): string {
   return `${h}h ${m}m`;
 }
 
+function fmtTime(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+}
+
+function fmtDateTime(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  }).format(new Date(iso));
+}
+
+/** Build the colored-truck DOM element used as the live-location
+ *  marker on the map. Same Lucide Truck SVG used elsewhere in the
+ *  app, set in white over the asset color. */
+function makeTruckMarker(color: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:relative;width:48px;height:48px;';
+  const pulse = document.createElement('div');
+  pulse.style.cssText = `position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.25;animation:truck-pulse 2s ease-out infinite;`;
+  const badge = document.createElement('div');
+  badge.style.cssText = `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:38px;height:38px;border-radius:50%;background:${color};border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;`;
+  badge.innerHTML = `
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/>
+      <path d="M15 18H9"/>
+      <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/>
+      <circle cx="17" cy="18" r="2"/>
+      <circle cx="7" cy="18" r="2"/>
+    </svg>
+  `;
+  if (!document.getElementById('truck-pulse-style')) {
+    const style = document.createElement('style');
+    style.id = 'truck-pulse-style';
+    style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
+    document.head.appendChild(style);
+  }
+  el.appendChild(pulse);
+  el.appendChild(badge);
+  return el;
+}
+
+/** Small labeled dot used for Start / End / waypoint markers. */
+function makeDotMarker(color: string, label: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = `position:relative;width:16px;height:16px;border-radius:50%;background:${color};border:2.5px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
+  if (label) {
+    const tag = document.createElement('div');
+    tag.style.cssText = 'position:absolute;top:-22px;left:50%;transform:translateX(-50%);font-size:10px;font-weight:700;color:#111;background:rgba(255,255,255,0.95);padding:1px 5px;border-radius:3px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,0.15);';
+    tag.textContent = label;
+    el.appendChild(tag);
+  }
+  return el;
+}
+
 export default function AssetDetailModal({ asset, location, onClose }: Props) {
-  const overlayRef   = useRef<HTMLDivElement>(null);
-  const mapContainer = useRef<HTMLDivElement>(null);
+  const overlayRef        = useRef<HTMLDivElement>(null);
+  const mapContainer      = useRef<HTMLDivElement>(null);
+  const mapRef            = useRef<google.maps.Map | null>(null);
+  // Imperative refs for layer cleanup between selection changes.
+  const markersRef        = useRef<google.maps.marker.AdvancedMarkerElement[]>([]);
+  const directionsRef     = useRef<google.maps.DirectionsRenderer | null>(null);
+  const polylineRef       = useRef<google.maps.Polyline | null>(null);
   const { calendarTimezone } = useCalendarStore();
 
   const [range, setRange]               = useState<RangeKey>('7d');
-  const [customDate, setCustomDate]     = useState<string>(''); // YYYY-MM-DD
+  const [customDate, setCustomDate]     = useState<string>('');
   const [movements, setMovements]       = useState<MovementCard[]>([]);
   const [loading, setLoading]           = useState(false);
   const [backfilling, setBackfilling]   = useState(false);
   const [error, setError]               = useState<string | null>(null);
-  const [openCluster, setOpenCluster]   = useState<MovementCluster | null>(null);
+  /** Index into the chronologically-ascending clusters array. null =
+   *  show current location instead. */
+  const [selectedIdx, setSelectedIdx]   = useState<number | null>(null);
 
   const linkedToMotive = !!asset.motiveVehicleId;
 
-  // How many days back the chosen range covers. Used to decide if we
-  // need to fire a backfill before fetching (cron only covers ~7d).
   const lookbackDays = (() => {
     if (range === 'custom' && customDate) {
       const todayMs = new Date().setHours(0, 0, 0, 0);
@@ -89,27 +149,31 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     return PRESETS.find(p => p.key === range)?.days ?? 7;
   })();
 
-  // Close on Escape — but only when no inner detail panel is open
-  // (otherwise the inner panel handles it).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !openCluster) onClose();
+      if (e.key === 'Escape') {
+        // Esc deselects first, then closes on second press.
+        if (selectedIdx !== null) setSelectedIdx(null);
+        else onClose();
+      } else if (e.key === 'ArrowRight' && selectedIdx !== null) {
+        setSelectedIdx(i => i !== null && i < (clustersRef.current.length - 1) ? i + 1 : i);
+      } else if (e.key === 'ArrowLeft' && selectedIdx !== null) {
+        setSelectedIdx(i => i !== null && i > 0 ? i - 1 : i);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, openCluster]);
+  }, [onClose, selectedIdx]);
 
-  // Fetch movements when range changes. For ranges > 7 days, fire an
-  // auto-backfill first so the DB actually has the data — the cron's
-  // incremental sync only catches what Motive has *updated* since the
-  // cursor, not the full lookback.
+  // Fetch + auto-backfill on range change.
   useEffect(() => {
     if (!linkedToMotive) return;
-    if (range === 'custom' && !customDate) return; // wait for date pick
+    if (range === 'custom' && !customDate) return;
     let cancelled = false;
     (async () => {
       setError(null);
       setLoading(true);
+      setSelectedIdx(null); // reset selection when range changes
       try {
         if (lookbackDays > 7) {
           setBackfilling(true);
@@ -121,14 +185,10 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
             if (!cancelled) setBackfilling(false);
           }
         }
-
-        // Compute the UTC window to query. Custom day pulls ±12h
-        // around the chosen day so we catch periods that straddle
-        // midnight in org tz; we filter back down client-side.
         let fromIso: string;
         let toIso:   string;
         if (range === 'custom' && customDate) {
-          const dayMs = 86_400_000;
+          const dayMs  = 86_400_000;
           const baseMs = new Date(`${customDate}T00:00:00Z`).getTime();
           fromIso = new Date(baseMs - dayMs / 2).toISOString();
           toIso   = new Date(baseMs + 1.5 * dayMs).toISOString();
@@ -137,7 +197,6 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
           fromIso = new Date(nowMs - lookbackDays * 86_400_000).toISOString();
           toIso   = new Date(nowMs).toISOString();
         }
-
         const res = await railway.listMovements(fromIso, toIso);
         if (cancelled) return;
         setMovements(res.byVehicle[String(asset.motiveVehicleId)] ?? []);
@@ -150,10 +209,8 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     return () => { cancelled = true; };
   }, [range, customDate, lookbackDays, asset.motiveVehicleId, linkedToMotive]);
 
-  // Cluster the fetched movements (same rules as the calendar column).
-  // When in custom-day mode, also trim clusters whose start isn't on
-  // the picked day in org tz (the ±12h fetch overshoots so we need to
-  // filter client-side).
+  // Clusters in chronological-ascending order (oldest → newest). This
+  // is what selectedIdx indexes into.
   const clusters = useMemo(() => {
     const all = clusterMovements(movements);
     if (range !== 'custom' || !customDate) return all;
@@ -163,19 +220,30 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     return all.filter(c => dayInTz(c.startTime) === customDate);
   }, [movements, range, customDate, calendarTimezone]);
 
-  // Group by day (in org tz) for the list header rows.
+  // Mirror clusters into a ref so the keydown handler can see the
+  // latest array without re-subscribing.
+  const clustersRef = useRef<MovementCluster[]>(clusters);
+  useEffect(() => { clustersRef.current = clusters; }, [clusters]);
+
+  const selectedCluster = selectedIdx !== null ? clusters[selectedIdx] : null;
+
+  // Groups for the right-hand list. Days reversed (newest first) and
+  // each day's clusters reversed too — dispatchers expect recent
+  // activity at the top.
   const groups = useMemo(() => {
-    const map = new Map<string, MovementCluster[]>();
-    for (const c of clusters) {
+    const map = new Map<string, { cluster: MovementCluster; idx: number }[]>();
+    clusters.forEach((c, idx) => {
       const day = new Intl.DateTimeFormat('en-US', {
         timeZone: calendarTimezone,
         weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
       }).format(new Date(c.startTime));
       const arr = map.get(day) ?? [];
-      arr.push(c);
+      arr.push({ cluster: c, idx });
       map.set(day, arr);
-    }
-    return [...map.entries()];
+    });
+    return [...map.entries()].reverse().map(([day, items]) =>
+      [day, items.slice().reverse()] as const,
+    );
   }, [clusters, calendarTimezone]);
 
   const totals = useMemo(() => {
@@ -188,41 +256,139 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     return { count: clusters.length, totalPeriods: periods, miles, minutes };
   }, [clusters]);
 
-  // Render the current-location map once when the modal mounts (and
-  // location data exists). Same pulsing-blue-dot pattern as
-  // VehicleMapPanel so the two reads "feel" identical.
+  // Initialize the Map once, then drive it imperatively from a second
+  // effect that responds to selection changes. Avoids re-mounting.
   useEffect(() => {
-    if (!mapContainer.current || !location) return;
+    if (!mapContainer.current) return;
+    if (mapRef.current) return;
     let cancelled = false;
     loadGoogleMaps().then(google => {
-      if (cancelled || !mapContainer.current) return;
-      const map = new google.maps.Map(mapContainer.current, {
-        center: { lat: location.lat, lng: location.lon },
-        zoom: 12, mapId: MAP_ID,
+      if (cancelled || !mapContainer.current || mapRef.current) return;
+      const center = location
+        ? { lat: location.lat, lng: location.lon }
+        : { lat: 39.5, lng: -98.35 }; // continental US fallback
+      mapRef.current = new google.maps.Map(mapContainer.current, {
+        center, zoom: 14, mapId: MAP_ID,
         disableDefaultUI: false, clickableIcons: false,
         gestureHandling: 'greedy',
-      });
-      const wrapper = document.createElement('div');
-      wrapper.style.cssText = 'position:relative;width:22px;height:22px;';
-      const pulse = document.createElement('div');
-      pulse.style.cssText = 'position:absolute;inset:0;border-radius:50%;background:rgba(59,130,246,0.25);animation:truck-pulse 2s ease-out infinite;';
-      const dot = document.createElement('div');
-      dot.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid white;box-shadow:0 1px 6px rgba(59,130,246,0.6);';
-      if (!document.getElementById('truck-pulse-style')) {
-        const style = document.createElement('style');
-        style.id = 'truck-pulse-style';
-        style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
-        document.head.appendChild(style);
-      }
-      wrapper.appendChild(pulse);
-      wrapper.appendChild(dot);
-      new google.maps.marker.AdvancedMarkerElement({
-        map, position: { lat: location.lat, lng: location.lon }, content: wrapper,
       });
     });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-paint the map's layer whenever selection changes.
+  useEffect(() => {
+    if (!mapRef.current) return;
+    let cancelled = false;
+    (async () => {
+      const google = await loadGoogleMaps();
+      if (cancelled || !mapRef.current) return;
+      const map = mapRef.current;
+
+      // Clear previous layer
+      for (const m of markersRef.current) m.map = null;
+      markersRef.current = [];
+      if (directionsRef.current) { directionsRef.current.setMap(null); directionsRef.current = null; }
+      if (polylineRef.current)   { polylineRef.current.setMap(null);   polylineRef.current   = null; }
+
+      if (selectedCluster) {
+        // Route view — DirectionsService with optional cluster waypoints
+        const firstWithOrigin = selectedCluster.members.find(m => m.originLat != null && m.originLon != null);
+        const lastWithDest    = [...selectedCluster.members].reverse().find(m => m.destinationLat != null && m.destinationLon != null);
+        const startPos = firstWithOrigin
+          ? { lat: firstWithOrigin.originLat as number, lng: firstWithOrigin.originLon as number }
+          : null;
+        const endPos = lastWithDest
+          ? { lat: lastWithDest.destinationLat as number, lng: lastWithDest.destinationLon as number }
+          : null;
+
+        const isCluster = selectedCluster.members.length > 1;
+        const waypoints: google.maps.DirectionsWaypoint[] = [];
+        if (isCluster) {
+          selectedCluster.members.forEach((m, idx) => {
+            if (idx === 0) return;
+            if (m.originLat != null && m.originLon != null) {
+              waypoints.push({ location: { lat: m.originLat, lng: m.originLon }, stopover: true });
+              const marker = new google.maps.marker.AdvancedMarkerElement({
+                map, position: { lat: m.originLat, lng: m.originLon }, content: makeDotMarker(asset.color, `${idx + 1}`),
+              });
+              markersRef.current.push(marker);
+            }
+          });
+        }
+        if (startPos) {
+          markersRef.current.push(new google.maps.marker.AdvancedMarkerElement({
+            map, position: startPos, content: makeDotMarker('#16a34a', isCluster ? '1' : 'Start'),
+          }));
+        }
+        if (endPos) {
+          markersRef.current.push(new google.maps.marker.AdvancedMarkerElement({
+            map, position: endPos, content: makeDotMarker('#dc2626', 'End'),
+          }));
+        }
+
+        if (startPos && endPos) {
+          const directionsService  = new google.maps.DirectionsService();
+          const directionsRenderer = new google.maps.DirectionsRenderer({
+            map, suppressMarkers: true,
+            polylineOptions: { strokeColor: asset.color, strokeOpacity: 0.85, strokeWeight: 4 },
+            preserveViewport: false,
+          });
+          directionsRef.current = directionsRenderer;
+          directionsService.route(
+            { origin: startPos, destination: endPos, waypoints, travelMode: google.maps.TravelMode.DRIVING, optimizeWaypoints: false },
+            (result, status) => {
+              if (cancelled) return;
+              if (status === google.maps.DirectionsStatus.OK && result) {
+                directionsRenderer.setDirections(result);
+              } else {
+                // Fallback: dashed straight polyline through all points.
+                const path: google.maps.LatLngLiteral[] = [];
+                if (startPos) path.push(startPos);
+                for (const wp of waypoints) path.push(wp.location as google.maps.LatLngLiteral);
+                if (endPos) path.push(endPos);
+                if (path.length >= 2) {
+                  polylineRef.current = new google.maps.Polyline({
+                    path, map, strokeColor: asset.color, strokeOpacity: 0.6, strokeWeight: 3, geodesic: true,
+                    icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '12px' }],
+                  });
+                }
+                const bounds = new google.maps.LatLngBounds();
+                if (startPos) bounds.extend(startPos);
+                if (endPos)   bounds.extend(endPos);
+                waypoints.forEach(wp => bounds.extend(wp.location as google.maps.LatLngLiteral));
+                map.fitBounds(bounds, 60);
+              }
+            },
+          );
+        } else if (startPos || endPos) {
+          map.setCenter((startPos ?? endPos)!);
+          map.setZoom(13);
+        }
+      } else if (location) {
+        // Current-location view — zoomed in colored truck
+        const marker = new google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: location.lat, lng: location.lon },
+          content: makeTruckMarker(asset.color),
+        });
+        markersRef.current.push(marker);
+        map.setCenter({ lat: location.lat, lng: location.lon });
+        map.setZoom(15);
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIdx, location, asset.color, asset.motiveVehicleId]);
+
+  // Auto-scroll the right list to keep the selected card visible.
+  const cardRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  useEffect(() => {
+    if (selectedIdx === null) return;
+    const el = cardRefs.current.get(selectedIdx);
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedIdx]);
 
   if (typeof document === 'undefined') return null;
 
@@ -235,7 +401,7 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     >
       <div
         className="relative flex flex-col rounded-2xl overflow-hidden"
-        style={{ width: 1100, height: 720, maxWidth: '95vw', maxHeight: '92vh', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        style={{ width: 1200, height: 720, maxWidth: '96vw', maxHeight: '92vh', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -259,10 +425,117 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
           </button>
         </div>
 
-        {/* Body: history (left) + location (right) */}
+        {/* Body */}
         <div className="flex-1 flex min-h-0">
-          {/* Left: movement history */}
-          <div className="flex-1 flex flex-col min-h-0" style={{ borderRight: '1px solid var(--gc-border-light)' }}>
+          {/* Left: full-height map (~60%) */}
+          <div className="relative flex-1 min-w-0" style={{ borderRight: '1px solid var(--gc-border-light)' }}>
+            <div ref={mapContainer} className="absolute inset-0" />
+
+            {/* Bottom overlay — swaps between "last seen" and movement details */}
+            <div className="absolute bottom-3 left-3 right-3 rounded-xl px-3 py-2.5 flex items-center gap-3"
+              style={{ background: 'rgba(255,255,255,0.96)', backdropFilter: 'blur(6px)', border: '1px solid var(--gc-border)', boxShadow: 'var(--shadow-2)' }}>
+              {selectedCluster ? (
+                <>
+                  {/* Movement details */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                        {(() => {
+                          const o = extractCity(selectedCluster.origin);
+                          const d = extractCity(selectedCluster.destination);
+                          const same = o && d && o.toLowerCase() === d.toLowerCase();
+                          return o && d ? (same ? `around ${o}` : `${o} → ${d}`) : (o ?? d ?? '—');
+                        })()}
+                      </span>
+                      {selectedCluster.members.length > 1 && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded shrink-0"
+                          style={{ background: asset.color, color: 'white' }}>
+                          {selectedCluster.members.length} moves
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--gc-text-3)' }}>
+                      {fmtDateTime(selectedCluster.startTime, calendarTimezone)} – {fmtTime(selectedCluster.endTime, calendarTimezone)}
+                      {' · '}{selectedCluster.miles.toFixed(1)} mi · {fmtDuration(selectedCluster.durationMin)}
+                    </div>
+                  </div>
+                  {/* Prev / Next / Close */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setSelectedIdx(i => i !== null && i > 0 ? i - 1 : i)}
+                      disabled={selectedIdx === 0}
+                      className="p-1.5 rounded-full transition-colors disabled:opacity-30"
+                      style={{ color: 'var(--gc-text-2)' }}
+                      onMouseEnter={e => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                      title="Earlier (← key)"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <span className="text-[10px] font-mono tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                      {selectedIdx !== null ? selectedIdx + 1 : 0} / {clusters.length}
+                    </span>
+                    <button
+                      onClick={() => setSelectedIdx(i => i !== null && i < clusters.length - 1 ? i + 1 : i)}
+                      disabled={selectedIdx !== null && selectedIdx === clusters.length - 1}
+                      className="p-1.5 rounded-full transition-colors disabled:opacity-30"
+                      style={{ color: 'var(--gc-text-2)' }}
+                      onMouseEnter={e => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                      title="Later (→ key)"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                    <button
+                      onClick={() => setSelectedIdx(null)}
+                      className="p-1.5 rounded-full transition-colors ml-1"
+                      style={{ color: 'var(--gc-text-3)' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                      title="Back to current location (Esc)"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Last seen */}
+                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: asset.color }} />
+                  <div className="flex-1 min-w-0">
+                    {location ? (
+                      <>
+                        <div className="flex items-center gap-1">
+                          <MapPin size={11} style={{ color: 'var(--gc-text-2)', flexShrink: 0 }} />
+                          <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>{location.description}</span>
+                        </div>
+                        <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                          Last seen {fmtDateTime(location.locatedAt, calendarTimezone)}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                        {linkedToMotive ? 'No telemetry yet' : 'Asset not linked to Motive'}
+                      </span>
+                    )}
+                  </div>
+                  {location && (
+                    <a
+                      href={`https://www.google.com/maps?q=${location.lat},${location.lon}`}
+                      target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-[11px] font-medium shrink-0"
+                      style={{ color: 'var(--gc-blue)', textDecoration: 'none' }}
+                    >
+                      <ExternalLink size={10} /> Maps
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Right: history list */}
+          <div className="flex flex-col shrink-0" style={{ width: 460 }}>
             <div className="px-4 py-3 shrink-0">
               <div className="flex items-center gap-1 mb-2.5 flex-wrap">
                 {PRESETS.map(p => {
@@ -282,8 +555,6 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
                     </button>
                   );
                 })}
-                {/* Custom day picker — selecting a date flips range to
-                    'custom' so the rest of the modal scopes to that day. */}
                 <DatePicker
                   value={customDate}
                   onChange={(v) => { setCustomDate(v); setRange('custom'); }}
@@ -303,9 +574,6 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
               </div>
               <div className="flex items-center gap-2 text-[11px] flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
                 <span><strong style={{ color: 'var(--gc-text-2)' }}>{totals.count}</strong> {totals.count === 1 ? 'block' : 'blocks'}</span>
-                {totals.count !== totals.totalPeriods && (
-                  <span>({totals.totalPeriods} raw periods)</span>
-                )}
                 <span>·</span>
                 <span><strong style={{ color: 'var(--gc-text-2)' }}>{totals.miles.toFixed(0)}</strong> mi</span>
                 <span>·</span>
@@ -318,9 +586,7 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
                 <div className="text-center py-8 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
                   This asset isn&apos;t linked to a Motive vehicle yet.
                   <br />
-                  <a href="/settings" className="font-medium" style={{ color: 'var(--gc-blue)' }}>
-                    Link it in Settings → Integrations
-                  </a>
+                  <a href="/settings" className="font-medium" style={{ color: 'var(--gc-blue)' }}>Link it in Settings</a>
                 </div>
               )}
               {linkedToMotive && backfilling && (
@@ -342,45 +608,49 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
                   No movements in this period.
                 </div>
               )}
-              {linkedToMotive && groups.map(([day, dayClusters]) => (
+              {linkedToMotive && groups.map(([day, dayItems]) => (
                 <div key={day} className="mb-3">
                   <div className="sticky top-0 z-10 text-[10px] font-semibold uppercase tracking-wide py-1.5 mb-1.5"
                     style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-3)' }}>
                     {day}
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    {dayClusters.map(c => {
+                    {dayItems.map(({ cluster: c, idx }) => {
                       const o = extractCity(c.origin);
                       const d = extractCity(c.destination);
                       const sameCity = o && d && o.toLowerCase() === d.toLowerCase();
                       const route = o && d
                         ? (sameCity ? `around ${o}` : `${o} → ${d}`)
                         : (o ?? d ?? '—');
-                      const time = new Intl.DateTimeFormat('en-US', {
-                        timeZone: calendarTimezone,
-                        hour: 'numeric', minute: '2-digit',
-                      }).format(new Date(c.startTime));
+                      const time = fmtTime(c.startTime, calendarTimezone);
+                      const selected = selectedIdx === idx;
                       return (
                         <button
                           key={c.id}
-                          onClick={() => setOpenCluster(c)}
+                          ref={(el) => {
+                            if (el) cardRefs.current.set(idx, el);
+                            else    cardRefs.current.delete(idx);
+                          }}
+                          onClick={() => setSelectedIdx(idx)}
                           className="flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors"
-                          style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = 'var(--gc-bg)'; }}
+                          style={{
+                            background: selected ? 'var(--gc-blue-light)' : 'var(--gc-bg)',
+                            border: `1px solid ${selected ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+                          }}
+                          onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = selected ? 'var(--gc-blue-light)' : 'var(--gc-bg)'; }}
                         >
-                          <div className="text-[12px] font-mono tabular-nums shrink-0" style={{ color: 'var(--gc-text-2)', minWidth: 64 }}>
+                          <div className="text-[12px] font-mono tabular-nums shrink-0" style={{ color: selected ? 'var(--gc-blue)' : 'var(--gc-text-2)', minWidth: 56 }}>
                             {time}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="text-[12px] font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>
-                              {c.members.length > 1 ? `${c.members.length} moves · ` : ''}{route}
+                              {c.members.length > 1 ? `${c.members.length} · ` : ''}{route}
                             </div>
                             <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
                               {c.miles.toFixed(1)} mi · {fmtDuration(c.durationMin)}
                             </div>
                           </div>
-                          <ChevronRight size={12} style={{ color: 'var(--gc-text-3)' }} />
                         </button>
                       );
                     })}
@@ -389,60 +659,8 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
               ))}
             </div>
           </div>
-
-          {/* Right: current location map */}
-          <div className="flex flex-col shrink-0" style={{ width: 440 }}>
-            <div className="px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-              <div className="text-[10px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--gc-text-3)' }}>
-                Current location
-              </div>
-              {location ? (
-                <>
-                  <div className="flex items-center gap-1">
-                    <MapPin size={11} style={{ color: 'var(--gc-text-2)' }} />
-                    <span className="text-[12px] truncate" style={{ color: 'var(--gc-text-1)' }}>{location.description}</span>
-                  </div>
-                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                    Last update: {new Date(location.locatedAt).toLocaleString('en-US', { timeZone: calendarTimezone, month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                  </div>
-                </>
-              ) : (
-                <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                  {linkedToMotive ? 'No telemetry yet' : 'Asset not linked to Motive'}
-                </div>
-              )}
-            </div>
-            <div className="flex-1 relative">
-              {location ? (
-                <>
-                  <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
-                  <a
-                    href={`https://www.google.com/maps?q=${location.lat},${location.lon}`}
-                    target="_blank" rel="noopener noreferrer"
-                    className="absolute bottom-2 right-2 flex items-center gap-1 text-[11px] font-medium rounded-md px-2 py-1"
-                    style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(4px)', border: '1px solid var(--gc-border)', color: 'var(--gc-blue)', textDecoration: 'none' }}
-                  >
-                    <ExternalLink size={10} /> Open in Maps
-                  </a>
-                </>
-              ) : (
-                <div className="flex items-center justify-center h-full text-[12px]" style={{ color: 'var(--gc-text-3)', background: 'var(--gc-bg)' }}>
-                  No location available
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       </div>
-
-      {/* Inner detail panel for a single cluster — renders at higher z. */}
-      {openCluster && (
-        <MovementDetailPanel
-          cluster={openCluster}
-          asset={{ name: asset.name, color: asset.color, unit: asset.unit ?? undefined }}
-          onClose={() => setOpenCluster(null)}
-        />
-      )}
     </div>
   );
 
