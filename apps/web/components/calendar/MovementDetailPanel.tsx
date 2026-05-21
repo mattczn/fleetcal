@@ -12,8 +12,9 @@
  */
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { X, MapPin, ExternalLink, Clock, Activity, User, Layers } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { X, MapPin, ExternalLink, Clock, Activity, Layers } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import type { MovementCard } from '@/lib/railway';
 import { extractCity, type MovementCluster } from '@/lib/clusterMovements';
@@ -24,12 +25,6 @@ interface Props {
   asset:   { name: string; color: string; unit?: string };
   onClose: () => void;
 }
-
-const SOURCE_LABEL: Record<number, string> = {
-  1: 'gateway',
-  2: 'edited in Motive',
-  3: 'unidentified driver',
-};
 
 function fmtTime(iso: string | null, tz: string): string {
   if (!iso) return '—';
@@ -226,13 +221,20 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
   }, []);
 
   const inProgress  = !isCluster && (single.status === 'in_progress' || single.endTime == null);
-  const sourceLabel = !isCluster && single.source != null ? SOURCE_LABEL[single.source] ?? `source ${single.source}` : null;
 
-  return (
+  // Portal to document.body so the fixed-positioned overlay isn't
+  // constrained by some ancestor that creates a containing block
+  // (transform, filter, contain). Without this, the dim background
+  // gets clipped to the calendar grid instead of covering the page.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+
+  const content = (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.45)' }}
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)', zIndex: 1000 }}
       onClick={e => { if (e.target === overlayRef.current) onClose(); }}
     >
       <div
@@ -282,7 +284,7 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
 
         {/* Body — map on top, metadata/member list below */}
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="relative" style={{ height: 320 }}>
+          <div className="relative" style={{ height: 420 }}>
             {hasAnyCoords ? (
               <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
             ) : (
@@ -308,19 +310,21 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
             {isCluster ? (
               <ClusterBody cluster={cluster} tz={calendarTimezone} />
             ) : (
-              <SingleBody movement={single} tz={calendarTimezone} sourceLabel={sourceLabel} inProgress={inProgress} />
+              <SingleBody movement={single} tz={calendarTimezone} inProgress={inProgress} />
             )}
           </div>
         </div>
       </div>
     </div>
   );
+
+  return createPortal(content, document.body);
 }
 
 // ── Single-period body ────────────────────────────────────────────────────
 
-function SingleBody({ movement, tz, sourceLabel, inProgress }: {
-  movement: MovementCard; tz: string; sourceLabel: string | null; inProgress: boolean;
+function SingleBody({ movement, tz, inProgress }: {
+  movement: MovementCard; tz: string; inProgress: boolean;
 }) {
   return (
     <>
@@ -335,9 +339,6 @@ function SingleBody({ movement, tz, sourceLabel, inProgress }: {
         <Field icon={<Clock size={12} />} label="Duration">{fmtDuration(movement.durationMin)}</Field>
         <Field icon={<MapPin size={12} />} label="Origin">{movement.origin ?? '—'}</Field>
         <Field icon={<MapPin size={12} />} label="Destination">{movement.destination ?? '—'}</Field>
-        {movement.type   && <Field icon={<Activity size={12} />} label="Type">{movement.type}</Field>}
-        {movement.status && <Field icon={<Activity size={12} />} label="Status">{movement.status.replace(/_/g, ' ')}</Field>}
-        {sourceLabel     && <Field icon={<User size={12} />} label="Source">{sourceLabel}</Field>}
       </div>
       <div className="mt-3 pt-3 text-[10px] font-mono" style={{ color: 'var(--gc-text-3)', borderTop: '1px solid var(--gc-border-light)' }}>
         Motive driving_period #{movement.id} · vehicle {movement.vehicleNumber ?? movement.vehicleId}
