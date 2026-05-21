@@ -81,7 +81,7 @@ interface MotiveDrivingPeriodsPage {
 /** Resolve the org's Motive key. Matches the pattern the existing
  *  /v1/vehicle_locations cache uses — keys live in org_settings so
  *  multi-org doesn't require a redeploy. */
-async function getOrgMotiveKey(orgId: string): Promise<string | null> {
+export async function getOrgMotiveKey(orgId: string): Promise<string | null> {
   const { data, error } = await supabase
     .from("org_settings")
     .select("motive_api_key")

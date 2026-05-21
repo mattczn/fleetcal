@@ -2662,6 +2662,28 @@ function IntegrationsPanel() {
     }
   };
 
+  // ── Debug: hit Motive directly for one vehicle ────────────────────────────
+  const [debugVehicleId, setDebugVehicleId] = useState('');
+  const [debugRunning,   setDebugRunning]   = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [debugResult,    setDebugResult]    = useState<any>(null);
+  const [debugError,     setDebugError]     = useState('');
+
+  const handleDebugMotive = async () => {
+    if (!debugVehicleId.trim()) return;
+    setDebugRunning(true);
+    setDebugError('');
+    setDebugResult(null);
+    try {
+      const r = await railway.debugMovements(debugVehicleId.trim(), 14);
+      setDebugResult(r);
+    } catch (e) {
+      setDebugError(e instanceof Error ? e.message : 'Debug call failed');
+    } finally {
+      setDebugRunning(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: 680 }}>
       <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Integrations</h2>
@@ -2906,6 +2928,60 @@ function IntegrationsPanel() {
                 {' · '}{movementsSyncResult.at.toLocaleTimeString()}
               </p>
             )}
+
+            {/* ── Debug: verify Motive returns data for one vehicle ──
+                Useful when "this truck is moving on Motive's dashboard
+                but no rows in our DB" — calls /v1/driving_periods
+                directly and reports whether Motive returns the vehicle
+                at all. */}
+            <div className="mt-4 pt-4" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+              <div className="text-xs font-semibold mb-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                Verify a vehicle directly against Motive
+              </div>
+              <p className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                Calls Motive&apos;s /driving_periods for the last 14 days. Tells you whether the issue is
+                upstream (Motive returns nothing) or downstream (we have it but didn&apos;t paint it).
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  value={debugVehicleId}
+                  onChange={e => setDebugVehicleId(e.target.value)}
+                  placeholder="Motive vehicle id (e.g. 431985)"
+                  className="flex-1 text-xs rounded-lg px-2.5 py-1.5 outline-none"
+                  style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+                  onKeyDown={e => { if (e.key === 'Enter') handleDebugMotive(); }}
+                />
+                <button
+                  onClick={handleDebugMotive}
+                  disabled={debugRunning || !debugVehicleId.trim()}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                  style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-border)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                >
+                  {debugRunning ? <Loader2 size={12} className="animate-spin inline" /> : 'Run debug'}
+                </button>
+              </div>
+              {debugError && (
+                <p className="text-[11px] mt-2" style={{ color: '#d93025' }}>{debugError}</p>
+              )}
+              {debugResult && !debugError && (
+                <div className="mt-2 rounded-lg px-3 py-2 text-[11px] font-mono whitespace-pre-wrap" style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
+                  <div style={{ color: debugResult.motive.includesQueriedVehicle ? '#15803d' : '#b45309', fontWeight: 600, marginBottom: 4 }}>
+                    {debugResult.motive.includesQueriedVehicle
+                      ? `✓ Motive returns ${debugResult.motive.periodsForQueriedVehicle} period(s) for vehicle ${debugResult.queriedVehicleId}`
+                      : `✗ Motive returned ZERO periods for vehicle ${debugResult.queriedVehicleId} in the last ${debugResult.queriedDays} days`}
+                  </div>
+                  <div>Pages fetched: {debugResult.motive.pagesFetched} (cap {debugResult.motive.pagesCapAt})</div>
+                  <div>Total periods returned across all vehicles: {debugResult.motive.totalPeriodsReturned}</div>
+                  <div>Vehicle ids in Motive&apos;s response: [{debugResult.motive.uniqueVehicleIdsInResponse.join(', ') || '(none)'}]</div>
+                  <div>Rows in our DB for this vehicle: {debugResult.db.rowsForQueriedVehicle}</div>
+                  {debugResult.motive.error && (
+                    <div style={{ color: '#d93025', marginTop: 4 }}>Motive error: {debugResult.motive.error}</div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

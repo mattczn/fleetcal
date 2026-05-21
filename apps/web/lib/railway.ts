@@ -440,6 +440,28 @@ class RailwayClient {
       'GET', `/v1/movements?${qs.toString()}`,
     );
   }
+  /** Debug helper — hits Motive's /v1/driving_periods directly for one
+   *  vehicle and reports back what Motive's API actually has. Useful
+   *  when our DB shows no rows for a truck but the dashboard does. */
+  debugMovements(vehicleId: string | number, days = 14) {
+    const qs = new URLSearchParams({ vehicleId: String(vehicleId), days: String(days) });
+    return this.req<{
+      queriedVehicleId: number;
+      queriedDays: number;
+      queriedStartTime: string;
+      motive: {
+        pagesFetched: number;
+        pagesCapAt: number;
+        totalPeriodsReturned: number;
+        uniqueVehicleIdsInResponse: number[];
+        includesQueriedVehicle: boolean;
+        periodsForQueriedVehicle: number;
+        sampleForQueriedVehicle: unknown[];
+        error: string | null;
+      };
+      db: { rowsForQueriedVehicle: number; sample: unknown[] };
+    }>('GET', `/v1/movements/debug?${qs.toString()}`);
+  }
 
   // ── Invoices ──────────────────────────────────────────────────────────
   createInvoice(body: CreateInvoiceRequest) {
