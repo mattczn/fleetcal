@@ -5,7 +5,7 @@ import { MapPin, Loader2, RefreshCw, Truck } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W } from '@/lib/time-utils';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
-import VehicleMapPanel from './VehicleMapPanel';
+import AssetDetailModal from './AssetDetailModal';
 import type { Asset } from '@/lib/types';
 import { tzAbbr } from '@/lib/time-utils';
 import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
@@ -127,7 +127,7 @@ export default function CalendarHeader() {
   const hasMotiveAssets = visibleAssets.some(a => !!a.motiveVehicleId);
   const { locations, loading, lastFetched, refresh } = useMotiveLocations(hasMotiveAssets);
 
-  const [mapPanel, setMapPanel] = useState<{ asset: Asset; location: MotiveLocation } | null>(null);
+  const [detailPanel, setDetailPanel] = useState<{ asset: Asset; location: MotiveLocation | null } | null>(null);
 
   return (
     <div
@@ -188,10 +188,18 @@ export default function CalendarHeader() {
               borderRight: '1px solid var(--gc-border-light)',
             }}
           >
-            {/* Icon + stacked name/unit — centered, icon height matches text block */}
-            <div className="flex items-center gap-2 min-w-0 max-w-full">
+            {/* Icon + stacked name/unit — clickable to open the asset
+                detail modal (combined current-location + movement
+                history). */}
+            <button
+              className="flex items-center gap-2 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
+              onClick={() => setDetailPanel({ asset, location: loc ?? null })}
+              title="View location + movement history"
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
               <Truck size={28} style={{ color: asset.color, flexShrink: 0 }} />
-              <div className="flex flex-col min-w-0" style={{ gap: 1 }}>
+              <div className="flex flex-col min-w-0 text-left" style={{ gap: 1 }}>
                 <span
                   className="text-[13px] font-semibold truncate leading-tight"
                   style={{ color: 'var(--gc-text-1)' }}
@@ -205,19 +213,14 @@ export default function CalendarHeader() {
                   {asset.unit ? `#${asset.unit}` : asset.type}
                 </span>
               </div>
-              {/* Triage/compress button + SmartAssignDrawer removed
-                  for now. Store state (triageMode, smartAssignEventId)
-                  + the drawer component are preserved so we can
-                  re-enable by uncommenting in CalendarHeader +
-                  calendar/index.tsx. */}
-            </div>
+            </button>
 
             {loc && age ? (
               <button
                 className="flex flex-col items-center w-full rounded transition-colors"
                 style={{ gap: 1, marginTop: 3, padding: '2px 4px', background: 'transparent' }}
-                title="View on map"
-                onClick={() => setMapPanel({ asset, location: loc })}
+                title="View location + movement history"
+                onClick={() => setDetailPanel({ asset, location: loc })}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
               >
@@ -248,11 +251,11 @@ export default function CalendarHeader() {
         );
       })}
 
-      {mapPanel && (
-        <VehicleMapPanel
-          asset={mapPanel.asset}
-          location={mapPanel.location}
-          onClose={() => setMapPanel(null)}
+      {detailPanel && (
+        <AssetDetailModal
+          asset={detailPanel.asset}
+          location={detailPanel.location}
+          onClose={() => setDetailPanel(null)}
         />
       )}
     </div>
