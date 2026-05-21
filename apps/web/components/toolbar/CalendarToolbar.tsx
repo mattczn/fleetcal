@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Fuel, Wrench, Activity, CalendarDays } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Fuel, Wrench } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -59,7 +59,6 @@ export default function CalendarToolbar() {
     events, assets, openEditModal, openCreateModal, mergeEvents,
     deletedEvents, restoreEvent, purgeEvent, clearTrash,
     viewMode, setViewMode,
-    calendarMode, setCalendarMode, movementsLoading,
     batchParseProgress, batchParseTotal, batchMinimized, batchItems, modalOpen, clearBatch, requestBatchCancel,
     calendarTimezone,
     showStatusOverlay,    setShowStatusOverlay,
@@ -270,40 +269,6 @@ export default function CalendarToolbar() {
           }}
         />
       </div>
-
-      {/* Loads ↔ Movements segmented toggle. One global control — every
-          column flips together. Only useful when there's at least one
-          Motive-linked asset (otherwise Movements mode has no data). */}
-      {assets.some(a => !!a.motiveVehicleId) && (
-        <div
-          className="hidden md:flex items-center rounded-lg p-0.5 shrink-0"
-          style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}
-        >
-          {(['loads', 'movements'] as const).map((m) => {
-            const active = calendarMode === m;
-            const label  = m === 'loads' ? 'Loads' : 'Movements';
-            const Icon   = m === 'loads' ? CalendarDays : Activity;
-            return (
-              <button
-                key={m}
-                onClick={() => setCalendarMode(m)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[12px] font-medium transition-colors"
-                style={{
-                  background: active ? 'var(--gc-surface)' : 'transparent',
-                  color: active ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-                  boxShadow: active ? 'var(--shadow-1)' : 'none',
-                }}
-                title={m === 'movements' ? 'Show Motive driving periods' : 'Show load events'}
-              >
-                {m === 'movements' && movementsLoading && active
-                  ? <Loader2 size={12} className="animate-spin" />
-                  : <Icon size={12} />}
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       {/* Command Center */}
       <Link

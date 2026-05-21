@@ -221,11 +221,6 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
               <span className="text-[11px] font-medium">Loading movements…</span>
             </div>
           )}
-          {!movementsLoading && movementClusters.length === 0 && (
-            <div className="absolute inset-x-0 top-12 flex flex-col items-center gap-1 pointer-events-none" style={{ color: 'var(--gc-text-3)' }}>
-              <span className="text-[11px] font-medium">No movements today</span>
-            </div>
-          )}
         </>
       ) : triageLayout
         ? triageLayout.map(({ event, colIdx, totalCols, top }) => (

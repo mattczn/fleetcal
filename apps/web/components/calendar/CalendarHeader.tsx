@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MapPin, Loader2, RefreshCw, Truck } from 'lucide-react';
+import { MapPin, Loader2, RefreshCw, Truck, Activity } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W } from '@/lib/time-utils';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
@@ -97,7 +97,7 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 }
 
 export default function CalendarHeader() {
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, calendarMode, setCalendarMode, movementsLoading } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range that matches the calendar grid below — same logic +
   // same org-tz interpretation, so header chips align with columns.
@@ -145,25 +145,48 @@ export default function CalendarHeader() {
           borderRight: '1px solid var(--gc-border-light)',
         }}
       >
-        {/* Refresh button — only when Motive is active */}
-        {hasMotiveAssets ? (
-          <button
-            onClick={refresh}
-            disabled={loading}
-            title="Refresh locations"
-            className="p-1 rounded-full transition-colors disabled:opacity-40"
-            style={{ color: 'var(--gc-text-3)' }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}
-          >
-            {loading
-              ? <Loader2 size={11} className="animate-spin" />
-              : <RefreshCw size={11} />
-            }
-          </button>
-        ) : (
-          <div />
-        )}
+        {/* Top stack: refresh + movements toggle */}
+        <div className="flex flex-col items-end gap-1">
+          {hasMotiveAssets ? (
+            <button
+              onClick={refresh}
+              disabled={loading}
+              title="Refresh locations"
+              className="p-1 rounded-full transition-colors disabled:opacity-40"
+              style={{ color: 'var(--gc-text-3)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-blue)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}
+            >
+              {loading
+                ? <Loader2 size={11} className="animate-spin" />
+                : <RefreshCw size={11} />
+              }
+            </button>
+          ) : null}
+
+          {hasMotiveAssets && (
+            <button
+              onClick={() => setCalendarMode(calendarMode === 'loads' ? 'movements' : 'loads')}
+              title={calendarMode === 'movements' ? 'Showing Motive movements (click for loads)' : 'Showing loads (click for movements)'}
+              className="p-1 rounded-full transition-colors"
+              style={{
+                color: calendarMode === 'movements' ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                background: calendarMode === 'movements' ? 'var(--gc-blue-light)' : 'transparent',
+              }}
+              onMouseEnter={e => {
+                if (calendarMode !== 'movements') e.currentTarget.style.background = 'var(--gc-hover)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = calendarMode === 'movements' ? 'var(--gc-blue-light)' : 'transparent';
+              }}
+            >
+              {calendarMode === 'movements' && movementsLoading
+                ? <Loader2 size={11} className="animate-spin" />
+                : <Activity size={11} />
+              }
+            </button>
+          )}
+        </div>
 
         {/* Timezone label */}
         <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
