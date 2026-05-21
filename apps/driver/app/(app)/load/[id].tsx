@@ -1011,6 +1011,7 @@ export default function LoadDetailScreen() {
             mark_delivery:  "Check in at delivery + upload POD",
             upload_pod:     "Upload POD",
             report_trailer: "Report trailer",
+            upload_handoff: "Upload trailer handoff photos + pin location",
           };
           return (
             <View style={{

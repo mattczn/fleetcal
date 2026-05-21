@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell, BellRing, CheckCircle2, ChevronDown, FileSignature,
-  Loader2, MapPin, PackageCheck, Truck, X,
+  Loader2, MapPin, MapPinned, PackageCheck, Truck, X,
 } from 'lucide-react';
 import type { CalendarEvent, LoadNotification, LoadNotificationKind } from '@/lib/types';
 import { railway } from '@/lib/railway';
@@ -43,6 +43,10 @@ interface ActionDef {
   icon:        React.ComponentType<{ size?: number }>;
   /** Title + body of the push that goes out for this kind. */
   push: (load: CalendarEvent | undefined) => { title: string; body: string };
+  /** Optional gate — hide this action from the popover when it doesn't
+   *  apply to the current event. Used for upload_handoff which only
+   *  makes sense on a relay pickup leg. */
+  showFor?: (load: CalendarEvent | undefined) => boolean;
 }
 
 /** `[route]` per the notification copy spec — the event title field,
@@ -116,6 +120,19 @@ const ACTIONS: ActionDef[] = [
     push: (load) => ({
       title: 'Which trailer?',
       body:  `${routeLabel(load)} — Tell us which trailer you\'re pulling.`,
+    }),
+  },
+  {
+    kind: 'upload_handoff', label: 'Report handoff',
+    description: 'Prompt driver to upload trailer/paperwork photos + drop a pin.',
+    icon: MapPinned,
+    // Relay pickup leg only — that's the driver who's about to drop
+    // the trailer at the handoff point. The relay delivery leg
+    // (downstream driver) doesn't have a trailer to report.
+    showFor: (load) => load?.relayRole === 'pickup',
+    push: (load) => ({
+      title: 'Trailer Handoff',
+      body:  `${routeLabel(load)} — Upload photos and pin where you left the trailer.`,
     }),
   },
 ];
@@ -282,7 +299,7 @@ export default function NotifyDriverPopover({
 
           {/* Action grid */}
           <div className="flex flex-col py-1.5">
-            {ACTIONS.map(action => {
+            {ACTIONS.filter(a => !a.showFor || a.showFor(event)).map(action => {
               const ack = ackState[action.kind];
               const sending = sendingKind === action.kind;
               const isPending = (notifs ?? []).some(n => n.kind === action.kind && !n.acknowledgedAt);

@@ -4425,13 +4425,18 @@ export default function EventModal() {
                     mark_delivery:   currentEv.status === 'delivered',
                     upload_pod:      loadDocuments.some(d => d.kind === 'pod'),
                     report_trailer:  currentEv.trailerId != null,
+                    // Acks when at least one relay_handoff doc lands —
+                    // the driver has uploaded photos of the trailer
+                    // drop. The popover greys the button so dispatch
+                    // doesn't double-nudge.
+                    upload_handoff:  loadDocuments.some(d => d.kind === 'relay_handoff'),
                     // Informational kinds — popover never needs to gray
                     // them out client-side. Treat as always-acked so the
                     // type satisfies Record<LoadNotificationKind, bool>.
                     assigned:        true,
                     reassigned_away: true,
                     load_cancelled:  true,
-                  } : { confirm:false, mark_pickup:false, mark_delivery:false, upload_pod:false, report_trailer:false, assigned:true, reassigned_away:true, load_cancelled:true };
+                  } : { confirm:false, mark_pickup:false, mark_delivery:false, upload_pod:false, report_trailer:false, upload_handoff:false, assigned:true, reassigned_away:true, load_cancelled:true };
                   return (
                     <div className="mt-1.5 flex items-center gap-1.5 flex-wrap" style={{ position: 'relative' }}>
                       {sel?.phone && <DriverPhoneCopy phone={sel.phone} />}

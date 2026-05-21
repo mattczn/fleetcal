@@ -1022,6 +1022,11 @@ export type LoadNotificationKind =
   | 'mark_delivery'
   | 'upload_pod'
   | 'report_trailer'
+  // Relay-specific: driver dropped the trailer at the relay handoff
+  // point, dispatcher prompts them to upload photos + pin the spot.
+  // Surfaced only for relay PICKUP legs (the leg ending at the
+  // handoff). Acks when a relay_handoff document gets uploaded.
+  | 'upload_handoff'
   // Informational — driver doesn't need to act. Cleared from the
   // pending badge when the driver opens the bell (mark-viewed).
   | 'assigned'
@@ -1030,6 +1035,7 @@ export type LoadNotificationKind =
 
 export const LOAD_NOTIFICATION_KINDS: readonly LoadNotificationKind[] = [
   'confirm', 'mark_pickup', 'mark_delivery', 'upload_pod', 'report_trailer',
+  'upload_handoff',
   'assigned', 'reassigned_away', 'load_cancelled',
 ];
 
