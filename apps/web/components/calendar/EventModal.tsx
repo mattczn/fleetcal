@@ -10,6 +10,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import { isActiveOn } from '@/lib/lifecycle';
+import { AssetSelect } from './AssetSelect';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
 import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
@@ -4472,10 +4473,11 @@ export default function EventModal() {
               <Field label="Asset *">
                 <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <StyledSelect value={assetId}
-                      onChange={e => {
+                    <AssetSelect
+                      value={assetId}
+                      options={assets.filter(a => isActiveOn(a, startDate) || a.id === assetId)}
+                      onChange={(aid) => {
                         markDirty();
-                        const aid = +e.target.value;
                         setAssetId(aid);
                         // User explicitly picked an asset — drop any
                         // stale "use suggested asset" chip.
@@ -4494,11 +4496,9 @@ export default function EventModal() {
                         // silently overwriting the load's driver.
                         setSuggestDriverSwap(suggested);
                       }}
-                      style={{ ...iStyle, cursor: 'pointer' }} onFocus={focusH} onBlur={blurColor}>
-                      {assets
-                        .filter(a => isActiveOn(a, startDate) || a.id === assetId)
-                        .map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
-                    </StyledSelect>
+                      style={iStyle}
+                      focusColor={headerColor}
+                    />
                   </div>
                   {/* Asset-side chip — shown when the user picked a
                       driver whose preferred asset differs from this
@@ -4815,9 +4815,10 @@ export default function EventModal() {
                             <Field label="Delivery Asset *">
                               <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                  <StyledSelect value={relayDelivAssetId}
-                                    onChange={e => {
-                                      const aid = +e.target.value;
+                                  <AssetSelect
+                                    value={relayDelivAssetId}
+                                    options={assets.filter(a => isActiveOn(a, startDate) || a.id === relayDelivAssetId)}
+                                    onChange={(aid) => {
                                       setRelayDelivAssetId(aid);
                                       setSuggestRelayDelivAssetSwap(null);
                                       const suggested = preferredDriverName(aid);
@@ -4832,11 +4833,9 @@ export default function EventModal() {
                                       }
                                       setSuggestRelayDelivDriverSwap(suggested);
                                     }}
-                                    style={{ ...rStyle, cursor: 'pointer' }} onFocus={focusR} onBlur={blurColor}>
-                                    {assets
-                                      .filter(a => isActiveOn(a, startDate) || a.id === relayDelivAssetId)
-                                      .map(a => <option key={a.id} value={a.id}>{assetLabel(a)}</option>)}
-                                  </StyledSelect>
+                                    style={rStyle}
+                                    focusColor={RELAY_COLOR}
+                                  />
                                 </div>
                                 {/* Asset-side chip — offers to swap
                                     the delivery asset to the truck
