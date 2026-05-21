@@ -452,3 +452,123 @@ export async function syncIncrementalAllOrgs(): Promise<SyncResult[]> {
   }
   return results;
 }
+
+// ── Odometer snapshot ──────────────────────────────────────────────────
+//
+// Records each vehicle's current odometer reading once per day. Hits
+// /v1/vehicle_locations (the same endpoint the live-location card uses)
+// and pulls current_location.odometer + true_odometer for every truck
+// returned. Idempotent per (vehicle_id, calendar_day) so re-running
+// within the same day is a no-op.
+
+export interface OdometerSnapshotResult {
+  orgId:        string;
+  vehiclesSeen: number;
+  rowsInserted: number;
+  rowsSkipped:  number;
+  durationMs:   number;
+}
+
+interface MotiveVehicleLocationRow {
+  vehicle: {
+    id:     number;
+    number: string | null;
+    current_location: {
+      located_at:     string | null;
+      odometer:       number | null;
+      true_odometer:  number | null;
+    } | null;
+  };
+}
+
+export async function snapshotOdometers(orgId: string): Promise<OdometerSnapshotResult> {
+  const t0 = Date.now();
+  const apiKey = await getOrgMotiveKey(orgId);
+  if (!apiKey) throw new Error(`org ${orgId} has no motive_api_key configured`);
+
+  // Paginate /v1/vehicle_locations — same pagination shape as
+  // driving_periods. Per-page 100 keeps the response under control.
+  const allVehicles: MotiveVehicleLocationRow[] = [];
+  let pageNo = 1;
+  while (pageNo <= 50) {
+    const url = `https://api.gomotive.com/v1/vehicle_locations?per_page=100&page_no=${pageNo}`;
+    const body = await motiveFetch(url, apiKey) as { vehicles?: MotiveVehicleLocationRow[]; pagination?: { total: number; per_page: number; page_no: number } };
+    const items = body.vehicles ?? [];
+    for (const v of items) allVehicles.push(v);
+    if (!body.pagination || pageNo * (body.pagination.per_page ?? 100) >= (body.pagination.total ?? items.length)) break;
+    pageNo++;
+  }
+
+  // Build snapshot rows for vehicles whose ELDs reported an odometer.
+  const today = new Date().toISOString().slice(0, 10); // UTC day for idempotency probe
+  const rows: Array<{
+    org_id: string; vehicle_id: number; vehicle_number: string | null;
+    odometer_miles: number | null; true_odometer_miles: number | null;
+    located_at: string | null;
+  }> = [];
+  for (const v of allVehicles) {
+    const loc = v.vehicle.current_location;
+    if (!loc) continue;
+    if (loc.odometer == null && loc.true_odometer == null) continue;
+    rows.push({
+      org_id:              orgId,
+      vehicle_id:          v.vehicle.id,
+      vehicle_number:      v.vehicle.number ?? null,
+      odometer_miles:      loc.odometer ?? null,
+      true_odometer_miles: loc.true_odometer ?? null,
+      located_at:          loc.located_at ?? null,
+    });
+  }
+
+  // Idempotency: skip vehicles that already have a snapshot for today.
+  // Pull existing UTC-day rows for these vehicles in one query, then
+  // filter before insert.
+  const vehicleIds = rows.map(r => r.vehicle_id);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: existing } = await (supabase as any)
+    .from("motive_odometer_readings")
+    .select("vehicle_id, captured_at")
+    .eq("org_id", orgId)
+    .in("vehicle_id", vehicleIds.length ? vehicleIds : [0])
+    .gte("captured_at", `${today}T00:00:00Z`)
+    .lt("captured_at",  `${today}T23:59:59Z`);
+
+  const alreadyToday = new Set<number>(
+    ((existing ?? []) as Array<{ vehicle_id: number }>).map(r => r.vehicle_id),
+  );
+  const toInsert = rows.filter(r => !alreadyToday.has(r.vehicle_id));
+
+  if (toInsert.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from("motive_odometer_readings").insert(toInsert);
+    if (error) {
+      console.error("[motiveIngest] odometer insert failed:", error);
+      throw new Error(`odometer insert failed: ${error.message}`);
+    }
+  }
+
+  return {
+    orgId,
+    vehiclesSeen: rows.length,
+    rowsInserted: toInsert.length,
+    rowsSkipped:  rows.length - toInsert.length,
+    durationMs:   Date.now() - t0,
+  };
+}
+
+export async function snapshotOdometersAllOrgs(): Promise<OdometerSnapshotResult[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: orgs } = await (supabase as any)
+    .from("org_settings")
+    .select("org_id, motive_api_key")
+    .not("motive_api_key", "is", null);
+  const results: OdometerSnapshotResult[] = [];
+  for (const row of (orgs ?? []) as Array<{ org_id: string }>) {
+    try {
+      results.push(await snapshotOdometers(row.org_id));
+    } catch (err) {
+      console.error(`[motiveIngest] odometer snapshot failed for org ${row.org_id}:`, err);
+    }
+  }
+  return results;
+}

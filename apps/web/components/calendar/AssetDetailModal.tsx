@@ -25,7 +25,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink, Truck } from 'lucide-react';
+import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink, Truck, Gauge } from 'lucide-react';
 import type { Asset } from '@/lib/types';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import { railway, type MovementCard } from '@/lib/railway';
@@ -33,6 +33,9 @@ import { clusterMovements, extractCity, type MovementCluster } from '@/lib/clust
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import DatePicker from './DatePicker';
+import OdometerChart from './OdometerChart';
+
+type Tab = 'movements' | 'odometer';
 
 interface Props {
   asset:    Asset;
@@ -142,6 +145,7 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
   const polylineRef       = useRef<google.maps.Polyline | null>(null);
   const { calendarTimezone } = useCalendarStore();
 
+  const [tab, setTab]                   = useState<Tab>('movements');
   const [range, setRange]               = useState<RangeKey>('7d');
   const [customDate, setCustomDate]     = useState<string>('');
   const [movements, setMovements]       = useState<MovementCard[]>([]);
@@ -567,8 +571,34 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
             </div>
           </div>
 
-          {/* Right: history list */}
+          {/* Right: movements list OR odometer chart, depending on tab */}
           <div className="flex flex-col shrink-0" style={{ width: 460 }}>
+            {/* Tab toggle — Movements (default) / Odometer */}
+            <div className="flex items-center gap-1 px-4 pt-3" style={{ color: 'var(--gc-text-3)' }}>
+              {([
+                { key: 'movements', label: 'Movements', icon: <ChevronRight size={11} /> },
+                { key: 'odometer',  label: 'Odometer',  icon: <Gauge size={11} /> },
+              ] as const).map(t => {
+                const active = tab === t.key;
+                return (
+                  <button
+                    key={t.key}
+                    onClick={() => setTab(t.key)}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors"
+                    style={{
+                      background: active ? hexToRgba(asset.color, 0.12) : 'transparent',
+                      color:      active ? asset.color : 'var(--gc-text-3)',
+                      border:     active ? `1px solid ${hexToRgba(asset.color, 0.3)}` : '1px solid transparent',
+                    }}
+                  >
+                    {t.icon}
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {tab === 'movements' && (
             <div className="px-4 py-3 shrink-0">
               <div className="flex items-center gap-1 mb-2.5 flex-wrap">
                 {PRESETS.map(p => {
@@ -613,7 +643,9 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
                 <span><strong style={{ color: 'var(--gc-text-2)' }}>{fmtDuration(totals.minutes)}</strong> driving</span>
               </div>
             </div>
+            )}
 
+            {tab === 'movements' && (
             <div className="flex-1 overflow-y-auto px-4 pb-4">
               {!linkedToMotive && (
                 <div className="text-center py-8 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -687,6 +719,20 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
                 </div>
               ))}
             </div>
+            )}
+
+            {tab === 'odometer' && asset.motiveVehicleId && (
+              <OdometerChart
+                vehicleId={Number(asset.motiveVehicleId)}
+                color={asset.color}
+                days={lookbackDays}
+              />
+            )}
+            {tab === 'odometer' && !asset.motiveVehicleId && (
+              <div className="flex-1 flex items-center justify-center text-[12px] px-4 text-center" style={{ color: 'var(--gc-text-3)' }}>
+                Link this asset to a Motive vehicle in Settings to see odometer history.
+              </div>
+            )}
           </div>
         </div>
       </div>

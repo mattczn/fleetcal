@@ -44,7 +44,7 @@ import driverDocumentsRoute from "./routes/driver-documents.js";
 import reportsRoute from "./routes/reports.js";
 import internalRoute from "./routes/internal.js";
 import movementsRoute from "./routes/movements.js";
-import { syncIncrementalAllOrgs } from "./lib/motiveIngest.js";
+import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import pkg from "../package.json" with { type: "json" };
@@ -265,3 +265,33 @@ async function fireMovementsSync(label: string): Promise<void> {
 }
 setTimeout(() => void fireMovementsSync("startup pass"), MOTIVE_SYNC_STARTUP_DELAY).unref();
 setInterval(() => void fireMovementsSync("tick"), MOTIVE_SYNC_INTERVAL_MS).unref();
+
+// ── Daily odometer snapshot ────────────────────────────────────────────
+//
+// Records one row per Motive-linked vehicle per day. The snapshot
+// function itself is idempotent (it skips vehicles that already have
+// a row for today UTC), so we can fire-and-forget every hour and miss
+// at most one hour of accuracy across DST changes / startup timing.
+//
+// Default cadence: every hour, gated by the in-snapshot "did we
+// already capture today" check. We DON'T do a strict 24h interval
+// because container restarts would reset the timer and could skip a
+// day entirely.
+
+const ODOMETER_CHECK_INTERVAL_MS = Number(process.env.ODOMETER_CHECK_INTERVAL_MS ?? 60 * 60 * 1000);
+const ODOMETER_STARTUP_DELAY_MS  = Number(process.env.ODOMETER_STARTUP_DELAY_MS  ?? 90_000);
+
+async function fireOdometerSnapshot(label: string): Promise<void> {
+  try {
+    const results = await snapshotOdometersAllOrgs();
+    const inserted = results.reduce((s, r) => s + r.rowsInserted, 0);
+    const skipped  = results.reduce((s, r) => s + r.rowsSkipped,  0);
+    if (inserted > 0 || results.length > 0) {
+      console.log(`[api] odometer snapshot (${label}): ${results.length} org(s), ${inserted} inserted, ${skipped} skipped (already had today)`);
+    }
+  } catch (err) {
+    console.error("[api] odometer snapshot failed:", err);
+  }
+}
+setTimeout(() => void fireOdometerSnapshot("startup pass"), ODOMETER_STARTUP_DELAY_MS).unref();
+setInterval(() => void fireOdometerSnapshot("hourly tick"), ODOMETER_CHECK_INTERVAL_MS).unref();

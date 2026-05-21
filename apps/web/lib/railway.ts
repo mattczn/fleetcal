@@ -455,6 +455,27 @@ class RailwayClient {
       'GET', `/v1/movements?${qs.toString()}`,
     );
   }
+  /** Time series of daily odometer snapshots for one vehicle. */
+  listOdometer(vehicleId: string | number, from?: string, to?: string) {
+    const qs = new URLSearchParams({ vehicleId: String(vehicleId) });
+    if (from) qs.set("from", from);
+    if (to)   qs.set("to", to);
+    return this.req<{
+      vehicleId: number;
+      readings: Array<{
+        captured_at:         string;
+        located_at:          string | null;
+        odometer_miles:      number | null;
+        true_odometer_miles: number | null;
+      }>;
+    }>('GET', `/v1/movements/odometer?${qs.toString()}`);
+  }
+  /** Manually fire the daily odometer snapshot for this org. */
+  snapshotOdometer() {
+    return this.req<{ ok: true; result: { vehiclesSeen: number; rowsInserted: number; rowsSkipped: number } }>(
+      'POST', '/v1/movements/odometer/snapshot', {},
+    );
+  }
   /** Per-vehicle completeness check: pulls Motive's driving_periods
    *  for [from, to) and compares to what's in our DB. */
   verifyMovements(from: string, to: string) {

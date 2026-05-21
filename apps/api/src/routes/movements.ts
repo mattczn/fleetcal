@@ -14,7 +14,7 @@ import { Hono } from "hono";
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
-import { syncBackfill, syncIncremental, getOrgMotiveKey } from "../lib/motiveIngest.js";
+import { syncBackfill, syncIncremental, getOrgMotiveKey, snapshotOdometers } from "../lib/motiveIngest.js";
 
 const movements = new Hono<{ Variables: AuthVariables }>();
 
@@ -446,6 +446,58 @@ movements.get("/verify", requireCapability("org.settings.edit"), async (c) => {
     summary,
     rows,
   });
+});
+
+// ── Odometer time-series ────────────────────────────────────────────────
+//
+// Per-vehicle odometer history for the asset-profile line chart. The
+// daily cron writes one row per vehicle per day; this route returns
+// them in chronological order for plotting.
+
+movements.get("/odometer", async (c) => {
+  const orgId = c.get("orgId");
+  const url   = new URL(c.req.url);
+  const vehicleIdStr = url.searchParams.get("vehicleId");
+  const from = url.searchParams.get("from"); // optional ISO
+  const to   = url.searchParams.get("to");   // optional ISO
+  if (!vehicleIdStr) return c.json({ error: "vehicleId required" }, 400);
+  const vehicleIdNum = Number(vehicleIdStr);
+  if (!Number.isFinite(vehicleIdNum)) return c.json({ error: "vehicleId must be numeric" }, 400);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let q = (supabase as any)
+    .from("motive_odometer_readings")
+    .select("captured_at, located_at, odometer_miles, true_odometer_miles")
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleIdNum)
+    .order("captured_at", { ascending: true });
+  if (from) q = q.gte("captured_at", from);
+  if (to)   q = q.lte("captured_at", to);
+
+  const { data, error } = await q;
+  if (error) {
+    console.error("[GET /v1/movements/odometer] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+
+  return c.json({
+    vehicleId: vehicleIdNum,
+    readings:  data ?? [],
+  });
+});
+
+// ── Manual odometer snapshot (admin) — useful for testing + first-load
+// before the daily cron has had a chance to run.
+
+movements.post("/odometer/snapshot", requireCapability("org.settings.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  try {
+    const result = await snapshotOdometers(orgId);
+    return c.json({ ok: true, result });
+  } catch (err) {
+    console.error("[POST /v1/movements/odometer/snapshot] failed:", err);
+    return c.json({ ok: false, error: (err as Error).message }, 500);
+  }
 });
 
 export default movements;
