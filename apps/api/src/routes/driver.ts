@@ -579,7 +579,7 @@ driver.get("/loads/:id", async (c) => {
     const partnerLoadId = (loadRow as { id: string }).id;
     const { data: partner } = await supabase
       .from("events")
-      .select("id, driver_name, trailer_dropoff_lat, trailer_dropoff_lng, trailer_dropoff_at")
+      .select("id, driver_name, trailer_dropoff_lat, trailer_dropoff_lng, trailer_dropoff_at, trailer_dropoff_address")
       .eq("load_id", partnerLoadId)
       .eq("org_id", orgId)
       .neq("id", id)
@@ -591,6 +591,7 @@ driver.get("/loads/:id", async (c) => {
         trailer_dropoff_lat: number | null;
         trailer_dropoff_lng: number | null;
         trailer_dropoff_at:  string | null;
+        trailer_dropoff_address: string | null;
       };
       const { data: partnerStops } = await supabase
         .from("stops")
@@ -601,9 +602,10 @@ driver.get("/loads/:id", async (c) => {
       load.partnerStops      = ((partnerStops ?? []) as unknown as StopRow[])
         .map(rowToStop)
         .sort((a, b) => a.sequence - b.sequence);
-      load.partnerTrailerDropoffLat = partnerEv.trailer_dropoff_lat ?? undefined;
-      load.partnerTrailerDropoffLng = partnerEv.trailer_dropoff_lng ?? undefined;
-      load.partnerTrailerDropoffAt  = partnerEv.trailer_dropoff_at  ?? undefined;
+      load.partnerTrailerDropoffLat     = partnerEv.trailer_dropoff_lat ?? undefined;
+      load.partnerTrailerDropoffLng     = partnerEv.trailer_dropoff_lng ?? undefined;
+      load.partnerTrailerDropoffAt      = partnerEv.trailer_dropoff_at  ?? undefined;
+      load.partnerTrailerDropoffAddress = partnerEv.trailer_dropoff_address ?? undefined;
     }
   }
 

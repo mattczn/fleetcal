@@ -69,7 +69,8 @@ const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
-  "confirmed_at,confirmed_by,confirm_reminder_sent_at";
+  "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
+  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
@@ -374,7 +375,7 @@ loads.get("/", async (c) => {
   const rows = events ?? [];
 
   // Fetch stops in one query for all events
-  const eventIds = (rows as Array<Record<string, unknown>>).map((r) => r.id as string);
+  const eventIds = (rows as unknown as Array<Record<string, unknown>>).map((r) => r.id as string);
   const stopsByEvent = new Map<string, Stop[]>();
   if (eventIds.length) {
     const { data: stopRows } = await supabase
@@ -391,7 +392,7 @@ loads.get("/", async (c) => {
   // Document counts by kind — drives the green POD icon overlay on
   // the calendar card. Batched once across all visible loads.
   const loadIds = Array.from(new Set(
-    (rows as Array<Record<string, unknown>>)
+    (rows as unknown as Array<Record<string, unknown>>)
       .map(r => (r.load_id as string | null))
       .filter((id): id is string => !!id),
   ));
@@ -411,7 +412,7 @@ loads.get("/", async (c) => {
   }
 
   const result: Load[] = rows.map((e) => {
-    const ev = e as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
+    const ev = e as unknown as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
     const loadRow = Array.isArray(ev.load) ? (ev.load[0] ?? null) : (ev.load ?? null);
     const joined = joinEventLoadToApp(ev, loadRow);
     joined.stops = (stopsByEvent.get(joined.id) ?? []).slice().sort((a, b) => a.sequence - b.sequence);
@@ -972,6 +973,8 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
   if ("loadedMiles" in body) update.loaded_miles = body.loadedMiles ?? null;
   if ("eventNotes"  in body) update.notes        = body.eventNotes  ?? null;
   if ("priority"    in body) update.priority     = body.priority    ?? false;
+  if ("trailerDropoffAddress" in body)
+    update.trailer_dropoff_address = (body.trailerDropoffAddress as string | null | undefined) ?? null;
 
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);

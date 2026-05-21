@@ -1412,6 +1412,7 @@ export default function LoadDetailScreen() {
                 partnerTrailerDropoffLat={load.partnerTrailerDropoffLat}
                 partnerTrailerDropoffLng={load.partnerTrailerDropoffLng}
                 partnerTrailerDropoffAt={load.partnerTrailerDropoffAt}
+                partnerTrailerDropoffAddress={load.partnerTrailerDropoffAddress}
                 onSaved={() => {
                   // Refetch so the new pin shows immediately AND so
                   // the relay partner (if they're also looking) gets

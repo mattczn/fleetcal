@@ -52,9 +52,12 @@ interface Props {
   trailerDropoffLng?: number;
   trailerDropoffAt?:  string;
   /** Partner's dropoff (rendered when relayRole='delivery'). */
-  partnerTrailerDropoffLat?: number;
-  partnerTrailerDropoffLng?: number;
-  partnerTrailerDropoffAt?:  string;
+  partnerTrailerDropoffLat?:     number;
+  partnerTrailerDropoffLng?:     number;
+  partnerTrailerDropoffAt?:      string;
+  /** Dispatcher-set address from the relay partner (pickup leg).
+   *  Primary location source — shown above the driver's GPS pin. */
+  partnerTrailerDropoffAddress?: string;
   /** Fired after a successful save so the parent can refetch the
    *  load and refresh the partner's view in real time. */
   onSaved?: () => void;
@@ -178,14 +181,21 @@ function PickupView({ eventId, trailerDropoffLat, trailerDropoffLng, trailerDrop
 // + Navigate + View on Map actions. When the partner hasn't pinned
 // yet, shows a 'waiting' hint instead of empty space.
 
-function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, partnerTrailerDropoffAt }: Props) {
-  const hasPin = partnerTrailerDropoffLat != null && partnerTrailerDropoffLng != null;
+function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, partnerTrailerDropoffAt, partnerTrailerDropoffAddress }: Props) {
+  const hasPin     = partnerTrailerDropoffLat != null && partnerTrailerDropoffLng != null;
+  const hasAddress = !!(partnerTrailerDropoffAddress?.trim());
 
   function handleNavigate() {
-    if (!hasPin) return;
-    const dest = `${partnerTrailerDropoffLat},${partnerTrailerDropoffLng}`;
-    const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
-    const appleUrl  = `https://maps.apple.com/?daddr=${dest}&dirflg=d`;
+    if (!hasPin && !hasAddress) return;
+    // Prefer the address-based directions URL when dispatch has set
+    // one — it's the source of truth. Fall back to the GPS pin when
+    // we only have the driver's coords.
+    const googleUrl = hasAddress
+      ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(partnerTrailerDropoffAddress!.trim())}`
+      : `https://www.google.com/maps/dir/?api=1&destination=${partnerTrailerDropoffLat},${partnerTrailerDropoffLng}`;
+    const appleUrl  = hasAddress
+      ? `https://maps.apple.com/?daddr=${encodeURIComponent(partnerTrailerDropoffAddress!.trim())}&dirflg=d`
+      : `https://maps.apple.com/?daddr=${partnerTrailerDropoffLat},${partnerTrailerDropoffLng}&dirflg=d`;
 
     if (Platform.OS === "ios") {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -221,19 +231,46 @@ function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, part
         </Text>
       </View>
 
-      {hasPin ? (
+      {(hasAddress || hasPin) ? (
         <View style={{
           backgroundColor: "#faf5ff", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "#e9d5ff",
         }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Pin size={14} color="#6b21a8" strokeWidth={2.4} />
-            <Text style={[txt(700), { flex: 1, fontSize: 13, color: "#581c87" }]}>
-              Pinned by pickup driver · {relTime(partnerTrailerDropoffAt)}
-            </Text>
-          </View>
-          <Text style={[txt(500), { fontSize: 11, color: "#7e22ce", marginTop: 4, paddingLeft: 22 }]}>
-            {partnerTrailerDropoffLat?.toFixed(5)}, {partnerTrailerDropoffLng?.toFixed(5)}
-          </Text>
+          {/* Address — primary source of truth (set by dispatch). */}
+          {hasAddress && (
+            <>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <MapPin size={14} color="#6b21a8" strokeWidth={2.4} />
+                <Text style={[txt(700), { flex: 1, fontSize: 13, color: "#581c87" }]}>
+                  Drop address
+                </Text>
+              </View>
+              <Text style={[txt(600), { fontSize: 13, color: "#581c87", marginTop: 4, paddingLeft: 22 }]}>
+                {partnerTrailerDropoffAddress}
+              </Text>
+            </>
+          )}
+
+          {/* Driver pin — secondary verification layer. Below the
+              address when both exist; standalone when no address yet. */}
+          {hasPin && (
+            <View style={{
+              marginTop: hasAddress ? 10 : 0,
+              padding: hasAddress ? 8 : 0,
+              backgroundColor: hasAddress ? "#f5f3ff" : undefined,
+              borderRadius: hasAddress ? 6 : 0,
+            }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Pin size={12} color="#6b21a8" strokeWidth={2.4} />
+                <Text style={[txt(700), { flex: 1, fontSize: 12, color: "#581c87" }]}>
+                  {hasAddress ? "Driver pin" : "Pinned by pickup driver"} · {relTime(partnerTrailerDropoffAt)}
+                </Text>
+              </View>
+              <Text style={[txt(500), { fontSize: 11, color: "#7e22ce", marginTop: 2, paddingLeft: 20 }]}>
+                {partnerTrailerDropoffLat?.toFixed(5)}, {partnerTrailerDropoffLng?.toFixed(5)}
+              </Text>
+            </View>
+          )}
+
           <TouchableOpacity
             onPress={handleNavigate}
             activeOpacity={0.85}
@@ -260,7 +297,7 @@ function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, part
           }}>
             <AlertTriangle size={11} color="#a16207" strokeWidth={2.2} style={{ marginTop: 1 }} />
             <Text style={[txt(500), { flex: 1, fontSize: 11, color: "#854d0e", lineHeight: 16 }]}>
-              This pin is the pickup driver's reported drop spot. Confirm the trailer is where you expect before assuming it hasn't moved.
+              The address is from dispatch{hasPin ? "; the pin is the pickup driver's reported drop spot" : ""}. Confirm the trailer is where you expect before assuming it hasn't moved.
             </Text>
           </View>
         </View>
@@ -271,7 +308,7 @@ function DeliveryView({ partnerTrailerDropoffLat, partnerTrailerDropoffLng, part
         }}>
           <MapPin size={14} color="#9ca3af" strokeWidth={2.2} />
           <Text style={[txt(500), { flex: 1, fontSize: 12, color: "#6b7280", lineHeight: 16 }]}>
-            Waiting on the pickup driver to save the trailer location. Check back once they've dropped.
+            Waiting on the trailer drop location — dispatch sets the address, the pickup driver pins the spot.
           </Text>
         </View>
       )}

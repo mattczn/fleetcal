@@ -1083,6 +1083,193 @@ function AutoResizeTextarea({ value, onChange, placeholder, style, onFocus, onBl
   );
 }
 
+/** "5m ago" / "2h ago" / "yesterday" style — used by ShareLocationRow
+ *  to surface how fresh a Motive / driver ping is in the share blob. */
+function relTime(iso: string | undefined): string {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return iso;
+  const diff = Date.now() - t;
+  if (diff < 60_000)      return 'just now';
+  if (diff < 3_600_000)   return `${Math.round(diff / 60_000)}m ago`;
+  if (diff < 86_400_000)  return `${Math.round(diff / 3_600_000)}h ago`;
+  return `${Math.round(diff / 86_400_000)}d ago`;
+}
+
+/** Compact "copy to clipboard" button used for sharing location blobs.
+ *  Shows the label normally and flips to "Copied!" for 1.5s after a
+ *  successful copy. Falls back to a manual prompt if the Clipboard
+ *  API isn't available (older browsers / insecure contexts). */
+function ShareLocationRow({ label, text, color }: { label: string; text: string; color?: string }) {
+  const tint = color ?? '#1a73e8';
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Synchronous fallback for environments without the async API.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('[ShareLocationRow] copy failed:', err);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors"
+      style={{
+        color: copied ? '#15803d' : tint,
+        background: copied ? '#dcfce7' : `${tint}14`,
+        border: `1px solid ${copied ? '#15803d' : tint}33`,
+        cursor: 'pointer',
+      }}
+    >
+      <Copy size={11} />
+      <span>{copied ? 'Copied!' : label}</span>
+    </button>
+  );
+}
+
+/** Inline card used by the relay purple block to show + edit the
+ *  dispatcher-set trailer drop ADDRESS as the primary handoff
+ *  location, with the driver's GPS pin (when present) shown
+ *  underneath as a secondary verification layer. Both have copy-to-
+ *  clipboard share buttons that build Google Maps URLs.
+ *
+ *  - Pickup-leg view (editable=true): address input the dispatcher
+ *    types into. Saves on blur via onAddressChange.
+ *  - Delivery-leg view (editable=false): read-only display of the
+ *    partner pickup event's address + pin (the data already lives on
+ *    the partner event row, surfaced via the events store).
+ */
+function TrailerLocationCard({
+  editable,
+  address,
+  onAddressChange,
+  pinLat,
+  pinLng,
+  pinAt,
+}: {
+  editable:         boolean;
+  address?:         string;
+  onAddressChange?: (v: string) => void;
+  pinLat?:          number;
+  pinLng?:          number;
+  pinAt?:           string;
+}) {
+  const [draft, setDraft] = useState(address ?? '');
+  // Keep the draft synced when the parent props update (e.g. after a
+  // save round-trip). Don't fight the user mid-typing.
+  useEffect(() => { setDraft(address ?? ''); }, [address]);
+
+  const trimmed   = draft.trim();
+  const hasPin    = pinLat != null && pinLng != null;
+  const addrUrl   = trimmed
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(trimmed)}`
+    : null;
+  const pinUrl    = hasPin
+    ? `https://www.google.com/maps?q=${pinLat},${pinLng}`
+    : null;
+
+  const shareBlob = (() => {
+    const lines: string[] = ['📍 Trailer Drop Location'];
+    if (trimmed) lines.push(trimmed);
+    if (hasPin) {
+      lines.push(`Pin (driver-verified): ${pinLat?.toFixed(5)}, ${pinLng?.toFixed(5)}${pinAt ? ` · ${relTime(pinAt)}` : ''}`);
+    }
+    // Prefer the address-based URL when set; fall back to the pin URL.
+    if (addrUrl) lines.push(addrUrl);
+    else if (pinUrl) lines.push(pinUrl);
+    return lines.join('\n');
+  })();
+
+  return (
+    <div style={{
+      background: '#fafaff',
+      border: '1px dashed #c4b5fd',
+      borderRadius: 10,
+      padding: '12px 14px',
+    }}>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <span style={{ fontSize: 11, fontWeight: 700, color: RELAY_COLOR, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Trailer Drop Location
+        </span>
+      </div>
+
+      {editable ? (
+        <input
+          type="text"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={() => {
+            const next = draft.trim();
+            if ((next || '') !== (address ?? '')) onAddressChange?.(next);
+          }}
+          placeholder="e.g. 123 Industrial Blvd, Denver CO"
+          className="w-full rounded-md text-sm"
+          style={{
+            border: '1px solid var(--gc-border)',
+            background: '#ffffff',
+            padding: '8px 10px',
+            color: 'var(--gc-text-1)',
+            outline: 'none',
+          }}
+          onFocus={e => (e.currentTarget.style.borderColor = RELAY_COLOR)}
+          onBlurCapture={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+        />
+      ) : (
+        <div style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: trimmed ? '#5b21b6' : '#9aa0a6',
+          background: '#ede9fe',
+          borderRadius: 6,
+          padding: '8px 10px',
+        }}>
+          {trimmed || 'Pickup-leg dispatcher hasn\'t set an address yet.'}
+        </div>
+      )}
+
+      {/* Driver pin — secondary layer. Always rendered as read-only,
+          regardless of which leg is being viewed. */}
+      {hasPin && (
+        <div style={{
+          marginTop: 8,
+          padding: '8px 10px',
+          background: '#f5f3ff',
+          border: '1px solid #ede9fe',
+          borderRadius: 6,
+          fontSize: 12,
+          color: '#6b21a8',
+        }}>
+          <div style={{ fontWeight: 600 }}>
+            Driver pin · {pinAt ? relTime(pinAt) : 'recently'}
+          </div>
+          <div style={{ marginTop: 2, color: '#7e22ce', fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: 11 }}>
+            {pinLat?.toFixed(5)}, {pinLng?.toFixed(5)}
+          </div>
+        </div>
+      )}
+
+      {(trimmed || hasPin) && (
+        <ShareLocationRow label="Share location" text={shareBlob} color={RELAY_COLOR} />
+      )}
+    </div>
+  );
+}
+
 function StyledSelect({ value, onChange, onFocus, onBlur, style, children }: {
   value: string | number;
   onChange: React.ChangeEventHandler<HTMLSelectElement>;
@@ -4515,6 +4702,20 @@ export default function EventModal() {
                     );
                   })()}
                 </div>
+                {/* Share-truck-location row. Builds a Google Maps URL
+                    around the truck's current ELD ping and copies a
+                    short paste-ready block to the clipboard so the
+                    dispatcher can drop it into Slack / SMS / email. */}
+                {selectedAsset && truckLoc && (
+                  <ShareLocationRow
+                    label="Share truck location"
+                    text={[
+                      `🚛 ${assetLabel(selectedAsset)}`,
+                      `${truckLoc.description || 'Location available'}${truckLoc.locatedAt ? ` · ${relTime(truckLoc.locatedAt)}` : ''}`,
+                      `https://www.google.com/maps?q=${truckLoc.lat},${truckLoc.lon}`,
+                    ].join('\n')}
+                  />
+                )}
               </Field>
             </div>
 
@@ -4719,6 +4920,19 @@ export default function EventModal() {
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#5b21b6', background: '#ede9fe', borderRadius: 6, padding: '6px 10px' }}>{delivAssetName}</div>
                               </div>
                             </div>
+                            {/* Delivery-leg view of the trailer drop —
+                                read-only. The address comes from the
+                                partner pickup event; the GPS pin is what
+                                the pickup driver captured on their
+                                mobile app's "Save trailer location"
+                                button. */}
+                            <TrailerLocationCard
+                              editable={false}
+                              address={relayPartner?.trailerDropoffAddress}
+                              pinLat={relayPartner?.trailerDropoffLat}
+                              pinLng={relayPartner?.trailerDropoffLng}
+                              pinAt={relayPartner?.trailerDropoffAt}
+                            />
                           </div>
                         );
                       })()}
@@ -4891,6 +5105,28 @@ export default function EventModal() {
                                   />
                                 )}
                               </div>
+                            );
+                          })()}
+                          {/* Dispatcher-set trailer drop address (primary
+                              location) + driver's GPS pin (secondary
+                              verification layer). Pickup-leg dispatcher
+                              edits the address; driver fills the pin
+                              from the mobile app's "Save trailer
+                              location" button. */}
+                          {(() => {
+                            const currentEv = events.find(e => e.id === modalEventId);
+                            return (
+                              <TrailerLocationCard
+                                editable
+                                address={currentEv?.trailerDropoffAddress}
+                                onAddressChange={(next) => {
+                                  if (!modalEventId) return;
+                                  updateEvent(modalEventId, { trailerDropoffAddress: next || undefined });
+                                }}
+                                pinLat={currentEv?.trailerDropoffLat}
+                                pinLng={currentEv?.trailerDropoffLng}
+                                pinAt={currentEv?.trailerDropoffAt}
+                              />
                             );
                           })()}
                         </div>

@@ -295,6 +295,11 @@ export interface UpdateEventByIdRequest {
   eventNotes?:   string | null;
   priority?:     boolean;
   nonRevenueType?: string | null;     // only meaningful when event_kind='non_revenue'
+  /** Dispatcher-set street address for a relay trailer drop. Only
+   *  meaningful on relay_role='pickup' events. The matching lat/lng
+   *  pin is captured by the driver on the mobile app and stored in
+   *  separate columns. */
+  trailerDropoffAddress?: string | null;
 }
 
 export interface UpdateEventByIdResponse {

@@ -51,6 +51,7 @@ const EVENT_LEVEL_KEYS = [
   'loadedMiles',
   'priority',
   'relayRole',
+  'trailerDropoffAddress',
 ] as const;
 
 // ── Create ──────────────────────────────────────────────────────────────

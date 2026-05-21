@@ -16,9 +16,16 @@
 -- itself. A new pin overwrites the old one; we don't need history.
 
 ALTER TABLE events
-  ADD COLUMN IF NOT EXISTS trailer_dropoff_lat  double precision,
-  ADD COLUMN IF NOT EXISTS trailer_dropoff_lng  double precision,
-  ADD COLUMN IF NOT EXISTS trailer_dropoff_at   timestamptz;
+  ADD COLUMN IF NOT EXISTS trailer_dropoff_lat      double precision,
+  ADD COLUMN IF NOT EXISTS trailer_dropoff_lng      double precision,
+  ADD COLUMN IF NOT EXISTS trailer_dropoff_at       timestamptz,
+  -- Dispatcher-set street address for the trailer drop point. This is
+  -- the PRIMARY source of truth for where the trailer will end up at
+  -- the handoff — the dispatcher knows the lot/staging area ahead of
+  -- time. The lat/lng captured by the driver's "Save trailer location"
+  -- button is a SECONDARY verification layer once they've actually
+  -- parked + dropped.
+  ADD COLUMN IF NOT EXISTS trailer_dropoff_address  text;
 
 -- Index isn't worth it — these columns are only read on the
 -- single-row driver load-detail query that already filters by event

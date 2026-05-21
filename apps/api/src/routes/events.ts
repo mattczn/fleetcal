@@ -55,7 +55,8 @@ const EVENT_COLS =
   "id,asset_id,driver_id,driver_name,title,start,end,status,priority," +
   "notes,driver_pay,loaded_miles,relay_role,event_kind,non_revenue_type,trailer_id," +
   "trailer_type,deleted_at,load_id,created_at,updated_at," +
-  "confirmed_at,confirmed_by,confirm_reminder_sent_at";
+  "confirmed_at,confirmed_by,confirm_reminder_sent_at," +
+  "trailer_dropoff_lat,trailer_dropoff_lng,trailer_dropoff_at,trailer_dropoff_address";
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
@@ -127,7 +128,7 @@ async function fetchEventJoined(
     .maybeSingle();
   if (evErr || !ev) return null;
 
-  const evRow = ev as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
+  const evRow = ev as unknown as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null };
   const loadRow = Array.isArray(evRow.load) ? (evRow.load[0] ?? null) : (evRow.load ?? null);
 
   const { data: stopRowsRaw } = await supabase
@@ -192,7 +193,7 @@ events.get("/:id", async (c) => {
       .is("deleted_at", null)
       .maybeSingle();
     if (partnerRowsRaw) {
-      const pRow = partnerRowsRaw as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null; id: string };
+      const pRow = partnerRowsRaw as unknown as Record<string, unknown> & { load?: Record<string, unknown>[] | Record<string, unknown> | null; id: string };
       const pLoadRow = Array.isArray(pRow.load) ? (pRow.load[0] ?? null) : (pRow.load ?? null);
       const partnerJoined = joinEventLoadToApp(pRow, pLoadRow);
       const { data: pStopsRaw } = await supabase
@@ -351,6 +352,8 @@ events.patch("/:id", async (c) => {
   if ("eventNotes"     in body) update.notes             = body.eventNotes     ?? null;
   if ("priority"       in body) update.priority          = body.priority       ?? false;
   if ("nonRevenueType" in body) update.non_revenue_type  = body.nonRevenueType ?? null;
+  if ("trailerDropoffAddress" in body)
+    update.trailer_dropoff_address = (body.trailerDropoffAddress as string | null | undefined) ?? null;
 
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);

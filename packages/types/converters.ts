@@ -96,6 +96,7 @@ export function joinEventLoadToApp(
     trailerDropoffLat:     (e.trailer_dropoff_lat as number | null) ?? undefined,
     trailerDropoffLng:     (e.trailer_dropoff_lng as number | null) ?? undefined,
     trailerDropoffAt:      (e.trailer_dropoff_at  as string | null) ?? undefined,
+    trailerDropoffAddress: (e.trailer_dropoff_address as string | null) ?? undefined,
 
     // ── Load-level (from loads row when revenue, else undefined) ────────
     loadId:         (l?.id as string | undefined) ?? undefined,

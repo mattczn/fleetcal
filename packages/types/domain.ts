@@ -665,12 +665,18 @@ export interface Load {
   trailerDropoffLat?: number;
   trailerDropoffLng?: number;
   trailerDropoffAt?:  string;
+  /** Dispatcher-set street address for the trailer drop point. This is
+   *  the PRIMARY source of truth — dispatch knows the lot ahead of
+   *  time; the lat/lng above is a secondary verification layer set by
+   *  the driver after they've parked + dropped. */
+  trailerDropoffAddress?: string;
   /** Same fields as above but mirrored from the relay partner's event.
    *  The delivery-leg driver reads these to find where the pickup-leg
    *  driver left the trailer. */
-  partnerTrailerDropoffLat?: number;
-  partnerTrailerDropoffLng?: number;
-  partnerTrailerDropoffAt?:  string;
+  partnerTrailerDropoffLat?:     number;
+  partnerTrailerDropoffLng?:     number;
+  partnerTrailerDropoffAt?:      string;
+  partnerTrailerDropoffAddress?: string;
 
   // Audit
   auditLog?: LoadAuditEntry[];
