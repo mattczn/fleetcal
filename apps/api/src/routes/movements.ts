@@ -153,47 +153,70 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
   if (!apiKey) return c.json({ error: "no motive api key configured for this org" }, 400);
 
   const startTime = new Date(Date.now() - days * 86_400_000).toISOString();
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const allPeriods: any[] = [];
   const MAX_PAGES = 50;
-  let pagesFetched = 0;
-  let nextUrl: string | null = `https://api.gomotive.com/v1/driving_periods?start_time=${encodeURIComponent(startTime)}&per_page=100`;
-  let motiveError: string | null = null;
 
-  try {
-    while (nextUrl && pagesFetched < MAX_PAGES) {
-      const res = await fetch(nextUrl, { headers: { "x-api-key": apiKey, "Accept": "application/json" } });
-      if (!res.ok) {
-        motiveError = `Motive HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`;
-        break;
+  // Probe both endpoints — driver-attributed driving_periods (what
+  // we ingest today) AND unidentified driving events (which Motive's
+  // dashboard shows but is a separate API surface). The user will see
+  // which one actually contains the missing vehicle.
+  const probe = async (path: string, listKey: string, wrapKey: string | null) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items: any[] = [];
+    let pagesFetched = 0;
+    let nextUrl: string | null = `https://api.gomotive.com${path}?start_time=${encodeURIComponent(startTime)}&per_page=100`;
+    let httpStatus: number | null = null;
+    let error: string | null = null;
+    let firstRawSample: unknown = null;
+    try {
+      while (nextUrl && pagesFetched < MAX_PAGES) {
+        const res = await fetch(nextUrl, { headers: { "x-api-key": apiKey, "Accept": "application/json" } });
+        httpStatus = res.status;
+        if (!res.ok) {
+          error = `HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`;
+          break;
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data: any = await res.json();
+        if (pagesFetched === 0) firstRawSample = data;
+        const wrappers = data?.[listKey] ?? [];
+        for (const w of wrappers) items.push(wrapKey && w[wrapKey] ? w[wrapKey] : w);
+        pagesFetched++;
+        const pagination = data?.pagination;
+        if (pagination && pagination.per_page && pagination.total &&
+            pagination.page * pagination.per_page < pagination.total) {
+          const next: URL = new URL(nextUrl);
+          next.searchParams.set("page_no", String(pagination.page + 1));
+          nextUrl = next.toString();
+        } else {
+          nextUrl = null;
+        }
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any = await res.json();
-      const wrappers = data?.driving_periods ?? [];
-      for (const w of wrappers) allPeriods.push(w.driving_period ?? w);
-      pagesFetched++;
-
-      const pagination = data?.pagination;
-      if (pagination && pagination.per_page && pagination.total &&
-          pagination.page * pagination.per_page < pagination.total) {
-        const nextUrlObj: URL = new URL(nextUrl);
-        nextUrlObj.searchParams.set("page_no", String(pagination.page + 1));
-        nextUrl = nextUrlObj.toString();
-      } else {
-        nextUrl = null;
-      }
+    } catch (e) {
+      error = (e as Error).message;
     }
-  } catch (e) {
-    motiveError = (e as Error).message;
-  }
+    return { items, pagesFetched, httpStatus, error, firstRawSample };
+  };
+
+  const driving      = await probe("/v1/driving_periods",              "driving_periods",              "driving_period");
+  const unidentified = await probe("/v1/unidentified_driving_events",  "unidentified_driving_events",  "unidentified_driving_event");
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const vehicleOf = (p: any): number | null => p?.vehicle?.id ?? null;
-  const uniqueVehicleIds = [...new Set(allPeriods.map(vehicleOf).filter((v): v is number => v != null))].sort((a, b) => a - b);
-  const periodsForVehicle = allPeriods.filter(p => vehicleOf(p) === vehicleIdNum);
+  const vehicleOf = (p: any): number | null => p?.vehicle?.id ?? p?.vehicle_id ?? null;
+  const summarize = (probeRes: typeof driving) => {
+    const ids = [...new Set(probeRes.items.map(vehicleOf).filter((v): v is number => v != null))].sort((a, b) => a - b);
+    return {
+      httpStatus: probeRes.httpStatus,
+      pagesFetched: probeRes.pagesFetched,
+      totalReturned: probeRes.items.length,
+      uniqueVehicleIds: ids,
+      includesQueriedVehicle: ids.includes(vehicleIdNum),
+      periodsForQueriedVehicle: probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum).length,
+      sampleForQueriedVehicle: probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum).slice(0, 2),
+      firstRawSample: probeRes.firstRawSample,
+      error: probeRes.error,
+    };
+  };
 
-  // DB rows for this vehicle
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: dbRows } = await (supabase as any)
     .from("motive_driving_periods")
@@ -207,16 +230,9 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     queriedVehicleId: vehicleIdNum,
     queriedDays:      days,
     queriedStartTime: startTime,
-    motive: {
-      pagesFetched,
-      pagesCapAt: MAX_PAGES,
-      totalPeriodsReturned: allPeriods.length,
-      uniqueVehicleIdsInResponse: uniqueVehicleIds,
-      includesQueriedVehicle:    uniqueVehicleIds.includes(vehicleIdNum),
-      periodsForQueriedVehicle:  periodsForVehicle.length,
-      sampleForQueriedVehicle:   periodsForVehicle.slice(0, 3),
-      error: motiveError,
-    },
+    pagesCapAt:       MAX_PAGES,
+    drivingPeriods:        summarize(driving),
+    unidentifiedDriving:   summarize(unidentified),
     db: {
       rowsForQueriedVehicle: dbRows?.length ?? 0,
       sample: dbRows ?? [],

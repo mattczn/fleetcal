@@ -102,6 +102,18 @@ export interface MovementCard {
   destinationLon: number | null;
 }
 
+export interface MovementProbeSummary {
+  httpStatus:               number | null;
+  pagesFetched:             number;
+  totalReturned:            number;
+  uniqueVehicleIds:         number[];
+  includesQueriedVehicle:   boolean;
+  periodsForQueriedVehicle: number;
+  sampleForQueriedVehicle:  unknown[];
+  firstRawSample:           unknown;
+  error:                    string | null;
+}
+
 export class RailwayError extends Error {
   constructor(public status: number, public detail: unknown, message?: string) {
     super(message ?? `Railway request failed: ${status}`);
@@ -440,25 +452,18 @@ class RailwayClient {
       'GET', `/v1/movements?${qs.toString()}`,
     );
   }
-  /** Debug helper — hits Motive's /v1/driving_periods directly for one
-   *  vehicle and reports back what Motive's API actually has. Useful
-   *  when our DB shows no rows for a truck but the dashboard does. */
+  /** Debug helper — probes both Motive endpoints (driver-attributed
+   *  driving_periods AND unidentified_driving_events) for one vehicle
+   *  and reports back what Motive's API actually has. */
   debugMovements(vehicleId: string | number, days = 14) {
     const qs = new URLSearchParams({ vehicleId: String(vehicleId), days: String(days) });
     return this.req<{
       queriedVehicleId: number;
       queriedDays: number;
       queriedStartTime: string;
-      motive: {
-        pagesFetched: number;
-        pagesCapAt: number;
-        totalPeriodsReturned: number;
-        uniqueVehicleIdsInResponse: number[];
-        includesQueriedVehicle: boolean;
-        periodsForQueriedVehicle: number;
-        sampleForQueriedVehicle: unknown[];
-        error: string | null;
-      };
+      pagesCapAt: number;
+      drivingPeriods:      MovementProbeSummary;
+      unidentifiedDriving: MovementProbeSummary;
       db: { rowsForQueriedVehicle: number; sample: unknown[] };
     }>('GET', `/v1/movements/debug?${qs.toString()}`);
   }

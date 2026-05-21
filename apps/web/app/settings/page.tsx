@@ -2967,24 +2967,44 @@ function IntegrationsPanel() {
               )}
               {debugResult && !debugError && (
                 <div className="mt-2 rounded-lg px-3 py-2 text-[11px] font-mono whitespace-pre-wrap" style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
-                  <div style={{ color: debugResult.motive.includesQueriedVehicle ? '#15803d' : '#b45309', fontWeight: 600, marginBottom: 4 }}>
-                    {debugResult.motive.includesQueriedVehicle
-                      ? `✓ Motive returns ${debugResult.motive.periodsForQueriedVehicle} period(s) for vehicle ${debugResult.queriedVehicleId}`
-                      : `✗ Motive returned ZERO periods for vehicle ${debugResult.queriedVehicleId} in the last ${debugResult.queriedDays} days`}
+                  <DebugProbeBlock title="/v1/driving_periods (driver-attributed)" probe={debugResult.drivingPeriods} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
+                  <div style={{ height: 6 }} />
+                  <DebugProbeBlock title="/v1/unidentified_driving_events" probe={debugResult.unidentifiedDriving} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
+                  <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--gc-border-light)' }}>
+                    Rows in our DB for this vehicle: {debugResult.db.rowsForQueriedVehicle}
                   </div>
-                  <div>Pages fetched: {debugResult.motive.pagesFetched} (cap {debugResult.motive.pagesCapAt})</div>
-                  <div>Total periods returned across all vehicles: {debugResult.motive.totalPeriodsReturned}</div>
-                  <div>Vehicle ids in Motive&apos;s response: [{debugResult.motive.uniqueVehicleIdsInResponse.join(', ') || '(none)'}]</div>
-                  <div>Rows in our DB for this vehicle: {debugResult.db.rowsForQueriedVehicle}</div>
-                  {debugResult.motive.error && (
-                    <div style={{ color: '#d93025', marginTop: 4 }}>Motive error: {debugResult.motive.error}</div>
-                  )}
                 </div>
               )}
             </div>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Movements debug helper (Motive probe block) ─────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function DebugProbeBlock({ title, probe, vehicleId, days }: { title: string; probe: any; vehicleId: number; days: number }) {
+  if (!probe) return null;
+  const ok        = probe.includesQueriedVehicle;
+  const httpFail  = probe.httpStatus && probe.httpStatus >= 400;
+  return (
+    <div>
+      <div style={{ fontWeight: 700, color: 'var(--gc-text-1)' }}>{title}</div>
+      <div style={{ color: httpFail ? '#d93025' : (ok ? '#15803d' : '#b45309'), fontWeight: 600 }}>
+        {httpFail
+          ? `✗ HTTP ${probe.httpStatus} — ${probe.error ?? 'request failed'}`
+          : ok
+            ? `✓ Returns ${probe.periodsForQueriedVehicle} record(s) for vehicle ${vehicleId}`
+            : `✗ ZERO records for vehicle ${vehicleId} in the last ${days} days`}
+      </div>
+      <div>Pages fetched: {probe.pagesFetched} · Total across all vehicles: {probe.totalReturned}</div>
+      <div>Vehicle ids in response: [{probe.uniqueVehicleIds.join(', ') || '(none)'}]</div>
+      {probe.error && !httpFail && (
+        <div style={{ color: '#d93025' }}>Error: {probe.error}</div>
+      )}
     </div>
   );
 }
