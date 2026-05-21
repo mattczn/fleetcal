@@ -652,7 +652,14 @@ export const useCalendarStore = create<CalendarStore>()(
   fetchMovements: async (start, end) => {
     try {
       const { railway } = await import('@/lib/railway');
-      const res = await railway.listMovements(start, end);
+      // Expand the YYYY-MM-DD inputs to a UTC window that covers the
+      // whole calendar day regardless of org tz (overshoots by ±12h —
+      // MovementCard already filters down to visible periods on the
+      // current day, so over-fetching is harmless).
+      const dayMs = 86_400_000;
+      const fromIso = new Date(new Date(`${start}T00:00:00Z`).getTime() - dayMs / 2).toISOString();
+      const toIso   = new Date(new Date(`${end}T00:00:00Z`).getTime()   + 1.5 * dayMs).toISOString();
+      const res = await railway.listMovements(fromIso, toIso);
       set({ movementsByVehicle: res.byVehicle ?? {} });
     } catch (err) {
       console.error('[useCalendarStore] fetchMovements:', err);
