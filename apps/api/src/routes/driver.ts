@@ -1932,6 +1932,72 @@ function rowToMaintReportDriver(r: MaintReportRowDriver) {
   };
 }
 
+interface MaintPhotoRowDriver {
+  id:           string;
+  report_id:    string;
+  storage_path: string;
+  file_name:    string;
+  mime_type:    string | null;
+  size_bytes:   number | null;
+  uploaded_at:  string;
+}
+
+/**
+ * Fetch maintenance_report_photos for every reportId in `ids` and
+ * mint signed read URLs for each in a single bucket batch. Returns a
+ * map keyed by reportId → photo array, ready to attach to the
+ * caller's response shape. Photo URLs expire after an hour — clients
+ * are expected to re-fetch the list if they outlive the TTL.
+ *
+ * Used by /maintenance-reports/mine and /history so drivers can
+ * actually SEE the photos they (or co-drivers) attached, not just
+ * see that some were uploaded.
+ */
+async function fetchMaintReportPhotosMap(
+  ids: string[],
+): Promise<Map<string, Array<{
+  id: string; fileName: string; mimeType?: string; sizeBytes?: number;
+  uploadedAt: string; signedUrl?: string;
+}>>> {
+  const out = new Map<string, Array<{
+    id: string; fileName: string; mimeType?: string; sizeBytes?: number;
+    uploadedAt: string; signedUrl?: string;
+  }>>();
+  if (ids.length === 0) return out;
+  const { data, error } = await supabase
+    .from("maintenance_report_photos")
+    .select("id, report_id, storage_path, file_name, mime_type, size_bytes, uploaded_at")
+    .in("report_id", ids)
+    .order("uploaded_at", { ascending: true });
+  if (error) {
+    console.error("[fetchMaintReportPhotosMap] photos:", error);
+    return out;
+  }
+  const rows = (data ?? []) as MaintPhotoRowDriver[];
+  if (rows.length === 0) return out;
+  const paths = rows.map(r => r.storage_path);
+  const { data: signed } = await supabase.storage
+    .from(MAINT_PHOTO_BUCKET_DRIVER)
+    .createSignedUrls(paths, 60 * 60);
+  const urlByPath = new Map<string, string>();
+  for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+    urlByPath.set(s.path, s.signedUrl);
+  }
+  for (const r of rows) {
+    const arr = out.get(r.report_id) ?? [];
+    arr.push({
+      id:         r.id,
+      fileName:   r.file_name,
+      mimeType:   r.mime_type ?? undefined,
+      sizeBytes:  r.size_bytes ?? undefined,
+      uploadedAt: r.uploaded_at,
+      signedUrl:  urlByPath.get(r.storage_path),
+    });
+    out.set(r.report_id, arr);
+  }
+  return out;
+}
+
 driver.post("/maintenance-reports", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
@@ -2072,8 +2138,13 @@ driver.get("/maintenance-reports/mine", async (c) => {
     .order("reported_at", { ascending: false })
     .limit(limit);
   if (error) return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  const rows = (data ?? []) as unknown as MaintReportRowDriver[];
+  const photosByReport = await fetchMaintReportPhotosMap(rows.map(r => r.id));
   return c.json({
-    reports: (data ?? []).map(r => rowToMaintReportDriver(r as unknown as MaintReportRowDriver)),
+    reports: rows.map(r => ({
+      ...rowToMaintReportDriver(r),
+      photos: photosByReport.get(r.id) ?? [],
+    })),
   });
 });
 
@@ -2105,8 +2176,13 @@ driver.get("/maintenance-reports/history", async (c) => {
 
   const { data, error } = await q;
   if (error) return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  const rows = (data ?? []) as MaintReportRowDriver[];
+  const photosByReport = await fetchMaintReportPhotosMap(rows.map(r => r.id));
   return c.json({
-    reports: (data ?? []).map((r: unknown) => rowToMaintReportDriver(r as MaintReportRowDriver)),
+    reports: rows.map(r => ({
+      ...rowToMaintReportDriver(r),
+      photos: photosByReport.get(r.id) ?? [],
+    })),
   });
 });
 

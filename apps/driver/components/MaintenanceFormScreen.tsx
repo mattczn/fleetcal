@@ -17,6 +17,7 @@ import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
 import type { MaintenanceReport } from "@fleetcal/types";
+import { MaintenanceReportDetailSheet } from "@/components/MaintenanceReportDetailSheet";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -57,6 +58,13 @@ export default function MaintenanceScreen() {
   const [history,        setHistory]        = useState<MaintenanceReport[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [refreshing,     setRefreshing]     = useState(false);
+  /** Driver's own recent reports across every asset/trailer — shown
+   *  in a separate section so the driver can review what they've
+   *  submitted regardless of which truck is currently picked. */
+  const [myReports,       setMyReports]       = useState<MaintenanceReport[]>([]);
+  const [myReportsLoading, setMyReportsLoading] = useState(false);
+  /** Selected report for the detail sheet. null = sheet closed. */
+  const [detailReport,    setDetailReport]    = useState<MaintenanceReport | null>(null);
   // Tracks whether trucks AND trailers loaded so we can show a retry
   // affordance instead of empty pickers. Previously a network failure
   // left both pickers blank with no indication of why.
@@ -99,9 +107,25 @@ export default function MaintenanceScreen() {
     }
   }, []);
 
+  /** Load the driver's own recent reports (across every asset/trailer)
+   *  so the new "Your recent reports" section can render without
+   *  depending on truck selection. Used on mount + pull-to-refresh. */
+  const loadMyReports = useCallback(async () => {
+    setMyReportsLoading(true);
+    try {
+      const res = await railway.listMyMaintenanceReports(20);
+      setMyReports(res.reports);
+    } catch (err) {
+      console.warn("[maint] my reports:", err);
+    } finally {
+      setMyReportsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let alive = true;
     void loadOpts();
+    void loadMyReports();
 
     void (async () => {
       try {
@@ -124,7 +148,7 @@ export default function MaintenanceScreen() {
     })();
 
     return () => { alive = false; };
-  }, [loadOpts]);
+  }, [loadOpts, loadMyReports]);
 
   const loadHistory = useCallback(async () => {
     const id = targetKind === 'asset' ? assetId : trailerId;
@@ -274,13 +298,18 @@ export default function MaintenanceScreen() {
   }
 
   return (
+    <>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: '#f8f9fa' }}>
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
           keyboardShouldPersistTaps="handled"
           refreshControl={
             <RefreshControl refreshing={refreshing}
-              onRefresh={async () => { setRefreshing(true); await loadHistory(); setRefreshing(false); }} />
+              onRefresh={async () => {
+                setRefreshing(true);
+                await Promise.all([loadHistory(), loadMyReports()]);
+                setRefreshing(false);
+              }} />
           }>
 
           {/* Form card */}
@@ -456,7 +485,9 @@ export default function MaintenanceScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* History rail */}
+          {/* Per-asset history rail — only shows when a truck/trailer is
+              selected. Surfaces reports from any driver against the
+              same vehicle so they don't double-report. */}
           <View style={{ marginTop: 24 }}>
             <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 1.1, marginBottom: 8 }]}>
               {selectedLabel ? `RECENT REPORTS · ${selectedLabel.toUpperCase()}` : 'RECENT REPORTS'}
@@ -474,12 +505,60 @@ export default function MaintenanceScreen() {
                 No prior reports.
               </Text>
             ) : (
-              history.map(r => <HistoryRow key={r.id} report={r} />)
+              history.map(r => (
+                <HistoryRow key={r.id} report={r} onPress={() => setDetailReport(r)} />
+              ))
+            )}
+          </View>
+
+          {/* Driver's own recent reports — surfaced regardless of
+              truck/trailer selection so they can scroll back through
+              everything they've filed across assets and review photos. */}
+          <View style={{ marginTop: 24 }}>
+            <Text style={[txt(800), { fontSize: 11, color: '#202124', letterSpacing: 1.1, marginBottom: 8 }]}>
+              YOUR RECENT REPORTS
+            </Text>
+            {myReportsLoading ? (
+              <View style={{ padding: 16, alignItems: 'center' }}>
+                <ActivityIndicator />
+              </View>
+            ) : myReports.length === 0 ? (
+              <Text style={[txt(500), { fontSize: 13, color: '#9aa0a6', padding: 12 }]}>
+                You haven't submitted any reports yet.
+              </Text>
+            ) : (
+              myReports.map(r => (
+                <HistoryRow key={r.id} report={r} onPress={() => setDetailReport(r)} />
+              ))
             )}
           </View>
 
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Detail viewer for any tapped report — driver gets full text,
+          location, status, AND attached photos with a full-screen
+          gallery. Resolves the report's assetId/trailerId against
+          loaded lists so the row label is human-readable. */}
+      <MaintenanceReportDetailSheet
+        visible={detailReport !== null}
+        report={detailReport}
+        targetKind={detailReport?.assetId != null ? 'asset' : 'trailer'}
+        targetLabel={(() => {
+          if (!detailReport) return undefined;
+          if (detailReport.assetId != null) {
+            const a = assets.find(x => x.id === detailReport.assetId);
+            return a ? formatAssetLabel(a) : `#${detailReport.assetId}`;
+          }
+          if (detailReport.trailerId != null) {
+            const t = trailers.find(x => x.id === detailReport.trailerId);
+            return t ? formatTrailerLabel(t) : `#${detailReport.trailerId}`;
+          }
+          return undefined;
+        })()}
+        onClose={() => setDetailReport(null)}
+      />
+    </>
   );
 }
 
@@ -519,7 +598,7 @@ function FieldLabel({ label, required }: { label: string; required?: boolean }) 
   );
 }
 
-function HistoryRow({ report }: { report: MaintenanceReport }) {
+function HistoryRow({ report, onPress }: { report: MaintenanceReport; onPress?: () => void }) {
   const date = new Date(report.reportedAt);
   const dateLabel = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   const statusColor =
@@ -527,8 +606,13 @@ function HistoryRow({ report }: { report: MaintenanceReport }) {
     report.status === 'reviewed'    ? { bg: '#dbeafe', fg: '#1e40af', label: 'Reviewed' } :
     report.status === 'converted'   ? { bg: '#dcfce7', fg: '#15803d', label: 'Scheduled' } :
                                       { bg: '#f3f4f6', fg: '#4b5563', label: 'Dismissed' };
+  const photoCount = report.photos?.length ?? 0;
   return (
-    <View style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+    <TouchableOpacity
+      activeOpacity={0.75}
+      onPress={onPress}
+      style={{ backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 8 }}
+    >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Text style={[txt(600), { fontSize: 12, color: '#202124' }]}>{dateLabel}</Text>
         <View style={{
@@ -541,7 +625,12 @@ function HistoryRow({ report }: { report: MaintenanceReport }) {
       <Text style={[txt(600), { fontSize: 14, color: '#202124', marginTop: 4 }]} numberOfLines={3}>
         {report.description}
       </Text>
-    </View>
+      {photoCount > 0 && (
+        <Text style={[txt(500), { fontSize: 11, color: '#5f6368', marginTop: 6 }]}>
+          📎 {photoCount} {photoCount === 1 ? 'photo' : 'photos'} — tap to view
+        </Text>
+      )}
+    </TouchableOpacity>
   );
 }
 
