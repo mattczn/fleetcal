@@ -10,7 +10,7 @@
 'use client';
 
 import React from 'react';
-import type { MovementCluster } from '@/lib/clusterMovements';
+import { extractCity, type MovementCluster } from '@/lib/clusterMovements';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, timeToPixels } from '@/lib/time-utils';
 
@@ -57,6 +57,18 @@ export default function MovementCardView({ cluster, assetColor, onClick }: Props
   const isClustered = count > 1;
   const isPaddedShort = realBottom - top < minPixelHeight;
 
+  // Title = cities, not full addresses. The detail panel keeps the
+  // raw strings for dispatchers who need the exact destination.
+  const oCity = extractCity(cluster.origin);
+  const dCity = extractCity(cluster.destination);
+  const sameCity = oCity && dCity && oCity.toLowerCase() === dCity.toLowerCase();
+  const route = oCity && dCity
+    ? (sameCity ? oCity : `${oCity} → ${dCity}`)
+    : (oCity ?? dCity ?? '');
+  const title = isClustered
+    ? (route ? `${count} moves · ${sameCity ? `around ${oCity}` : route}` : `${count} short moves`)
+    : route;
+
   return (
     <div
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
@@ -80,15 +92,7 @@ export default function MovementCardView({ cluster, assetColor, onClick }: Props
         }}
       >
         <div className="flex items-center gap-1 min-w-0">
-          <span className="truncate flex-1">
-            {isClustered
-              ? `${count} short moves`
-              : <>
-                  {cluster.origin ?? ''}
-                  {cluster.origin && cluster.destination ? ' → ' : ''}
-                  {cluster.destination ?? ''}
-                </>}
-          </span>
+          <span className="truncate flex-1">{title}</span>
         </div>
         {meta && <span className="text-[10px] opacity-90 truncate">{meta}</span>}
       </div>

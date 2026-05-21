@@ -16,7 +16,7 @@ import { useEffect, useRef } from 'react';
 import { X, MapPin, ExternalLink, Clock, Activity, User, Layers } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import type { MovementCard } from '@/lib/railway';
-import type { MovementCluster } from '@/lib/clusterMovements';
+import { extractCity, type MovementCluster } from '@/lib/clusterMovements';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
 interface Props {
@@ -201,9 +201,13 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
               )}
             </div>
             <div className="text-[12px] truncate mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-              {cluster.origin ?? '—'}
-              {cluster.origin && cluster.destination ? ' → ' : ' '}
-              {cluster.destination ?? ''}
+              {(() => {
+                const o = extractCity(cluster.origin);
+                const d = extractCity(cluster.destination);
+                if (o && d && o.toLowerCase() === d.toLowerCase()) return `around ${o}`;
+                if (o && d) return `${o} → ${d}`;
+                return o ?? d ?? '—';
+              })()}
             </div>
           </div>
           <button
@@ -329,10 +333,10 @@ function ClusterBody({ cluster, tz }: { cluster: MovementCluster; tz: string }) 
                   </span>
                 </div>
                 {(m.origin || m.destination) && (
-                  <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-                    {m.origin ?? '—'}
+                  <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }} title={[m.origin, m.destination].filter(Boolean).join(' → ')}>
+                    {extractCity(m.origin) ?? '—'}
                     {m.origin && m.destination ? ' → ' : ' '}
-                    {m.destination ?? ''}
+                    {extractCity(m.destination) ?? ''}
                   </div>
                 )}
               </div>

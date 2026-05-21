@@ -46,6 +46,42 @@ function newClusterFrom(m: MovementCard): MovementCluster {
   };
 }
 
+/**
+ * Pulls the city out of a Motive origin/destination string.
+ *
+ * Motive returns formatted addresses like:
+ *   "123 Main St, Denver, CO 80202, USA"
+ *   "I-70 W, Aurora, CO"
+ *   "Truckee, CA"
+ *   "Wyoming"
+ *
+ * Strategy: split on commas, drop a trailing country, then look for a
+ * "ST" or "ST 12345" tail — the segment immediately before that is the
+ * city. Falls back to the last remaining segment if the tail doesn't
+ * look like a state.
+ */
+export function extractCity(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+
+  // Drop a trailing country word — only full words, never the bare "CA"
+  // since that collides with the state of California.
+  const last = parts[parts.length - 1];
+  if (/^(USA|United States|Canada|Mexico)$/i.test(last)) {
+    parts.pop();
+  }
+
+  if (parts.length >= 2) {
+    const tail = parts[parts.length - 1];
+    if (/^[A-Z]{2}(\s+\d{5}(-\d{4})?)?$/.test(tail)) {
+      return parts[parts.length - 2];
+    }
+  }
+  return parts[parts.length - 1];
+}
+
 export function clusterMovements(movements: MovementCard[]): MovementCluster[] {
   if (movements.length === 0) return [];
 
