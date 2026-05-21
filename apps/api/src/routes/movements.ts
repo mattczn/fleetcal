@@ -228,30 +228,58 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vehicleOf = (p: any): number | null => p?.vehicle?.id ?? p?.vehicle_id ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasDriver = (p: any): boolean => p?.driver?.id != null;
   const summarize = (probeRes: typeof driving) => {
     const ids = [...new Set(probeRes.items.map(vehicleOf).filter((v): v is number => v != null))].sort((a, b) => a - b);
+    const periodsForVehicle = probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum);
+    const assignedCount   = periodsForVehicle.filter(hasDriver).length;
+    const unassignedCount = periodsForVehicle.length - assignedCount;
     return {
       httpStatus: probeRes.httpStatus,
       pagesFetched: probeRes.pagesFetched,
       totalReturned: probeRes.items.length,
       uniqueVehicleIds: ids,
       includesQueriedVehicle: ids.includes(vehicleIdNum),
-      periodsForQueriedVehicle: probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum).length,
-      sampleForQueriedVehicle: probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum).slice(0, 2),
+      periodsForQueriedVehicle: periodsForVehicle.length,
+      assignedToDriver:   assignedCount,
+      unassignedToDriver: unassignedCount,
+      sampleForQueriedVehicle: periodsForVehicle.slice(0, 2),
       firstRawSample: probeRes.firstRawSample,
       firstUrl: probeRes.firstUrl,
       error: probeRes.error,
     };
   };
 
+  // True row count over the same date window — using head:true so we
+  // don't pay for the rows. We also pull a 3-row sample to eyeball.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: dbRows } = await (supabase as any)
+  const { count: dbCount } = await (supabase as any)
     .from("motive_driving_periods")
-    .select("id, vehicle_id, vehicle_number, start_time, end_time, miles, display_eligible")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleIdNum)
+    .gte("start_time", startDate.toISOString())
+    .lte("start_time", endDate.toISOString());
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { count: dbAssignedCount } = await (supabase as any)
+    .from("motive_driving_periods")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleIdNum)
+    .gte("start_time", startDate.toISOString())
+    .lte("start_time", endDate.toISOString())
+    .not("driver_id", "is", null);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: dbSample } = await (supabase as any)
+    .from("motive_driving_periods")
+    .select("id, vehicle_id, start_time, end_time, miles, display_eligible, driver_id, source")
     .eq("org_id", orgId)
     .eq("vehicle_id", vehicleIdNum)
     .order("start_time", { ascending: false })
-    .limit(5);
+    .limit(3);
 
   return c.json({
     queriedVehicleId: vehicleIdNum,
@@ -261,8 +289,9 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     drivingPeriods:        summarize(driving),
     unidentifiedDriving:   summarize(unidentified),
     db: {
-      rowsForQueriedVehicle: dbRows?.length ?? 0,
-      sample: dbRows ?? [],
+      rowsForQueriedVehicle: dbCount ?? 0,
+      assignedRowsInWindow:  dbAssignedCount ?? 0,
+      sample: dbSample ?? [],
     },
   });
 });

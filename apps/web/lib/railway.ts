@@ -109,8 +109,11 @@ export interface MovementProbeSummary {
   uniqueVehicleIds:         number[];
   includesQueriedVehicle:   boolean;
   periodsForQueriedVehicle: number;
+  assignedToDriver:         number;
+  unassignedToDriver:       number;
   sampleForQueriedVehicle:  unknown[];
   firstRawSample:           unknown;
+  firstUrl?:                string;
   error:                    string | null;
 }
 
@@ -464,7 +467,7 @@ class RailwayClient {
       pagesCapAt: number;
       drivingPeriods:      MovementProbeSummary;
       unidentifiedDriving: MovementProbeSummary;
-      db: { rowsForQueriedVehicle: number; sample: unknown[] };
+      db: { rowsForQueriedVehicle: number; assignedRowsInWindow: number; sample: unknown[] };
     }>('GET', `/v1/movements/debug?${qs.toString()}`);
   }
 

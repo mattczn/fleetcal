@@ -2971,7 +2971,9 @@ function IntegrationsPanel() {
                   <div style={{ height: 6 }} />
                   <DebugProbeBlock title="/v1/driving_periods?assigned_to_driver=false (unidentified)" probe={debugResult.unidentifiedDriving} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
                   <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--gc-border-light)' }}>
-                    Rows in our DB for this vehicle: {debugResult.db.rowsForQueriedVehicle}
+                    Rows in our DB for this vehicle (in window): {debugResult.db.rowsForQueriedVehicle}
+                    {' · '}
+                    of which assigned to driver: {debugResult.db.assignedRowsInWindow}
                   </div>
                 </div>
               )}
@@ -3002,6 +3004,7 @@ function DebugProbeBlock({ title, probe, vehicleId, days }: { title: string; pro
       </div>
       <div>Pages fetched: {probe.pagesFetched} · Total across all vehicles: {probe.totalReturned}</div>
       <div>Vehicle ids in response: [{probe.uniqueVehicleIds.join(', ') || '(none)'}]</div>
+      <div>Of records for this vehicle: {probe.assignedToDriver} assigned · {probe.unassignedToDriver} unassigned</div>
       {probe.firstUrl && (
         <div style={{ wordBreak: 'break-all', color: 'var(--gc-text-3)' }}>URL: {probe.firstUrl}</div>
       )}
