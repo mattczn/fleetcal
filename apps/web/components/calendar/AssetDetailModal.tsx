@@ -30,6 +30,7 @@ import { clusterMovements, extractCity, type MovementCluster } from '@/lib/clust
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import MovementDetailPanel from './MovementDetailPanel';
+import DatePicker from './DatePicker';
 
 interface Props {
   asset:    Asset;
@@ -37,13 +38,21 @@ interface Props {
   onClose:  () => void;
 }
 
-const RANGES = [
+const PRESETS = [
   { key: 'today', label: 'Today',    days: 1  },
   { key: '7d',    label: 'Last 7d',  days: 7  },
   { key: '30d',   label: 'Last 30d', days: 30 },
-  { key: '90d',   label: 'Last 90d', days: 90 },
 ] as const;
-type RangeKey = typeof RANGES[number]['key'];
+type PresetKey = typeof PRESETS[number]['key'];
+type RangeKey  = PresetKey | 'custom';
+
+/** Format YYYY-MM-DD for the custom-day chip ("May 19, 2026"). */
+function fmtDayChip(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
+}
 
 function fmtDuration(min: number): string {
   if (min < 1) return '0m';
@@ -60,14 +69,25 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
   const { calendarTimezone } = useCalendarStore();
 
   const [range, setRange]               = useState<RangeKey>('7d');
+  const [customDate, setCustomDate]     = useState<string>(''); // YYYY-MM-DD
   const [movements, setMovements]       = useState<MovementCard[]>([]);
   const [loading, setLoading]           = useState(false);
   const [backfilling, setBackfilling]   = useState(false);
   const [error, setError]               = useState<string | null>(null);
   const [openCluster, setOpenCluster]   = useState<MovementCluster | null>(null);
 
-  const rangeDays = RANGES.find(r => r.key === range)?.days ?? 7;
   const linkedToMotive = !!asset.motiveVehicleId;
+
+  // How many days back the chosen range covers. Used to decide if we
+  // need to fire a backfill before fetching (cron only covers ~7d).
+  const lookbackDays = (() => {
+    if (range === 'custom' && customDate) {
+      const todayMs = new Date().setHours(0, 0, 0, 0);
+      const pickMs  = new Date(`${customDate}T00:00:00`).getTime();
+      return Math.max(1, Math.ceil((todayMs - pickMs) / 86_400_000) + 1);
+    }
+    return PRESETS.find(p => p.key === range)?.days ?? 7;
+  })();
 
   // Close on Escape — but only when no inner detail panel is open
   // (otherwise the inner panel handles it).
@@ -85,25 +105,40 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
   // cursor, not the full lookback.
   useEffect(() => {
     if (!linkedToMotive) return;
+    if (range === 'custom' && !customDate) return; // wait for date pick
     let cancelled = false;
     (async () => {
       setError(null);
       setLoading(true);
       try {
-        if (rangeDays > 7) {
+        if (lookbackDays > 7) {
           setBackfilling(true);
           try {
-            await railway.syncMovements({ mode: 'backfill', windowDays: rangeDays });
+            await railway.syncMovements({ mode: 'backfill', windowDays: lookbackDays });
           } catch (e) {
             console.warn('[AssetDetailModal] auto-backfill failed', e);
           } finally {
             if (!cancelled) setBackfilling(false);
           }
         }
-        const nowMs   = Date.now();
-        const fromIso = new Date(nowMs - rangeDays * 86_400_000).toISOString();
-        const toIso   = new Date(nowMs).toISOString();
-        const res     = await railway.listMovements(fromIso, toIso);
+
+        // Compute the UTC window to query. Custom day pulls ±12h
+        // around the chosen day so we catch periods that straddle
+        // midnight in org tz; we filter back down client-side.
+        let fromIso: string;
+        let toIso:   string;
+        if (range === 'custom' && customDate) {
+          const dayMs = 86_400_000;
+          const baseMs = new Date(`${customDate}T00:00:00Z`).getTime();
+          fromIso = new Date(baseMs - dayMs / 2).toISOString();
+          toIso   = new Date(baseMs + 1.5 * dayMs).toISOString();
+        } else {
+          const nowMs = Date.now();
+          fromIso = new Date(nowMs - lookbackDays * 86_400_000).toISOString();
+          toIso   = new Date(nowMs).toISOString();
+        }
+
+        const res = await railway.listMovements(fromIso, toIso);
         if (cancelled) return;
         setMovements(res.byVehicle[String(asset.motiveVehicleId)] ?? []);
       } catch (e) {
@@ -113,10 +148,20 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [range, rangeDays, asset.motiveVehicleId, linkedToMotive]);
+  }, [range, customDate, lookbackDays, asset.motiveVehicleId, linkedToMotive]);
 
   // Cluster the fetched movements (same rules as the calendar column).
-  const clusters = useMemo(() => clusterMovements(movements), [movements]);
+  // When in custom-day mode, also trim clusters whose start isn't on
+  // the picked day in org tz (the ±12h fetch overshoots so we need to
+  // filter client-side).
+  const clusters = useMemo(() => {
+    const all = clusterMovements(movements);
+    if (range !== 'custom' || !customDate) return all;
+    const dayInTz = (iso: string) => new Intl.DateTimeFormat('en-CA', {
+      timeZone: calendarTimezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(iso));
+    return all.filter(c => dayInTz(c.startTime) === customDate);
+  }, [movements, range, customDate, calendarTimezone]);
 
   // Group by day (in org tz) for the list header rows.
   const groups = useMemo(() => {
@@ -134,13 +179,14 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
   }, [clusters, calendarTimezone]);
 
   const totals = useMemo(() => {
-    let miles = 0, minutes = 0;
-    for (const m of movements) {
-      miles   += m.miles ?? 0;
-      minutes += m.durationMin ?? 0;
+    let miles = 0, minutes = 0, periods = 0;
+    for (const c of clusters) {
+      miles   += c.miles;
+      minutes += c.durationMin;
+      periods += c.members.length;
     }
-    return { count: clusters.length, totalPeriods: movements.length, miles, minutes };
-  }, [movements, clusters.length]);
+    return { count: clusters.length, totalPeriods: periods, miles, minutes };
+  }, [clusters]);
 
   // Render the current-location map once when the modal mounts (and
   // location data exists). Same pulsing-blue-dot pattern as
@@ -218,13 +264,13 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
           {/* Left: movement history */}
           <div className="flex-1 flex flex-col min-h-0" style={{ borderRight: '1px solid var(--gc-border-light)' }}>
             <div className="px-4 py-3 shrink-0">
-              <div className="flex items-center gap-1 mb-2.5">
-                {RANGES.map(r => {
-                  const active = range === r.key;
+              <div className="flex items-center gap-1 mb-2.5 flex-wrap">
+                {PRESETS.map(p => {
+                  const active = range === p.key;
                   return (
                     <button
-                      key={r.key}
-                      onClick={() => setRange(r.key)}
+                      key={p.key}
+                      onClick={() => setRange(p.key)}
                       className="px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors"
                       style={{
                         background: active ? 'var(--gc-blue-light)' : 'transparent',
@@ -232,10 +278,28 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
                         border:     active ? '1px solid var(--gc-blue-light)' : '1px solid transparent',
                       }}
                     >
-                      {r.label}
+                      {p.label}
                     </button>
                   );
                 })}
+                {/* Custom day picker — selecting a date flips range to
+                    'custom' so the rest of the modal scopes to that day. */}
+                <DatePicker
+                  value={customDate}
+                  onChange={(v) => { setCustomDate(v); setRange('custom'); }}
+                  headerColor="var(--gc-blue)"
+                  displayText={range === 'custom' && customDate ? fmtDayChip(customDate) : 'Pick a day…'}
+                  buttonStyle={{
+                    width: 'auto',
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    fontWeight: 500,
+                    borderRadius: 6,
+                    background: range === 'custom' ? 'var(--gc-blue-light)' : 'transparent',
+                    color:      range === 'custom' ? 'var(--gc-blue)'       : 'var(--gc-text-3)',
+                    border:     range === 'custom' ? '1px solid var(--gc-blue-light)' : '1px solid transparent',
+                  }}
+                />
               </div>
               <div className="flex items-center gap-2 text-[11px] flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
                 <span><strong style={{ color: 'var(--gc-text-2)' }}>{totals.count}</strong> {totals.count === 1 ? 'block' : 'blocks'}</span>
