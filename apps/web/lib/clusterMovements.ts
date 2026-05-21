@@ -22,6 +22,11 @@ import type { MovementCard } from './railway';
 const SHORT_MS         = 30 * 60_000;
 const MERGE_GAP_MS     = 15 * 60_000;
 const MIN_DISPLAY_MS   = 30 * 60_000;
+/** A cluster's total miles must reach this to survive — drops yard
+ *  shuffles and tiny GPS jiggle clusters that aren't useful to paint.
+ *  Applied AFTER merging fragments, so a 150-mile trip composed of
+ *  50 sub-mile Motive records still passes. */
+const MIN_CLUSTER_MILES = 1.0;
 
 export interface MovementCluster {
   /** Synthetic key — stable for keying in React. */
@@ -142,20 +147,26 @@ export function clusterMovements(movements: MovementCard[]): MovementCluster[] {
     }
   }
 
+  // Cluster-level miles filter — Motive's API returns long trips as
+  // many sub-mile fragments, so we filter AFTER clustering. A 150-mile
+  // trip composed of 50 fragments passes; a 0.5-mile yard shuffle
+  // alone does not.
+  const filtered = result.filter(c => c.miles >= MIN_CLUSTER_MILES);
+
   // displayEndTime pass — pad each cluster up to the 30-min visual
   // minimum, but cap so the padding can never collide with the next
   // cluster's real start time.
-  for (let i = 0; i < result.length; i++) {
-    const c        = result[i];
+  for (let i = 0; i < filtered.length; i++) {
+    const c        = filtered[i];
     const realEnd  = new Date(c.endTime).getTime();
     const start    = new Date(c.startTime).getTime();
     const minEnd   = start + MIN_DISPLAY_MS;
-    const nextCap  = i + 1 < result.length
-      ? new Date(result[i + 1].startTime).getTime()
+    const nextCap  = i + 1 < filtered.length
+      ? new Date(filtered[i + 1].startTime).getTime()
       : Number.POSITIVE_INFINITY;
     const display  = Math.min(Math.max(realEnd, minEnd), nextCap);
     c.displayEndTime = new Date(display).toISOString();
   }
 
-  return result;
+  return filtered;
 }

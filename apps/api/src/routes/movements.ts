@@ -86,10 +86,14 @@ movements.get("/", async (c) => {
       "id, vehicle_id, vehicle_number, start_time, end_time, miles, duration, origin, destination, type, status, source, origin_lat, origin_lon, destination_lat, destination_lon",
     )
     .eq("org_id", orgId)
-    .eq("display_eligible", true)
     .gte("start_time", from)
     .lte("start_time", to)
     .order("start_time", { ascending: true });
+  // Note: no display_eligible filter. Motive's API fragments long
+  // trips into many sub-mile driving_periods (one per light, one per
+  // duty-status change). The client's clusterMovements merges them
+  // back together, and the cluster-level miles threshold lives there
+  // — so a 150-mile trip composed of 50 tiny records survives.
   if (error) {
     console.error("[GET /v1/movements] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message }, 500);
