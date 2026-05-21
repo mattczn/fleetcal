@@ -203,16 +203,35 @@ interface DrivingPeriodRow {
   motive_updated_at:   string | null;
 }
 
+/** Parse Motive's pre-formatted distance string ("206.8 mi", "12 km",
+ *  "1,234.5 mi") into a number of miles. Returns null when unparseable.
+ *  This is the most reliable source — Motive's start/end_kilometers
+ *  fields are often null for unidentified driving even on long trips. */
+function parseDistance(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const m = s.trim().match(/^([\d,]+\.?\d*)\s*(mi|km)?$/i);
+  if (!m) return null;
+  const value = parseFloat(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(value)) return null;
+  const unit = (m[2] ?? "mi").toLowerCase();
+  return unit === "km" ? value * KM_TO_MI : value;
+}
+
 function rowFromMotive(p: MotiveDrivingPeriodInner, orgId: string): DrivingPeriodRow | null {
   // Drop rows we can't anchor on the calendar — no start time means
   // nothing useful to render.
   if (!p.id || !p.start_time) return null;
 
-  const km =
+  // Prefer the pre-formatted distance string when present — Motive
+  // populates it consistently while leaving start/end_kilometers null
+  // for unidentified driving. Fall back to the kilometer delta only
+  // when the string isn't there.
+  const milesFromDistance = parseDistance(p.distance);
+  const milesFromKm =
     p.start_kilometers != null && p.end_kilometers != null
-      ? p.end_kilometers - p.start_kilometers
+      ? (p.end_kilometers - p.start_kilometers) * KM_TO_MI
       : null;
-  const miles = km != null ? km * KM_TO_MI : null;
+  const miles = milesFromDistance ?? milesFromKm;
 
   return {
     id:                p.id,
