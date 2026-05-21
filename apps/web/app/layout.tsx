@@ -14,8 +14,8 @@ const font = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: 'FleetCal',
-  description: 'Fleet dispatch scheduling',
+  title: 'Curzon Dispatch',
+  description: 'Curzon Trucking dispatch scheduling',
 };
 
 const darkModeCSS = `

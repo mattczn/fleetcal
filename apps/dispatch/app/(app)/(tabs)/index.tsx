@@ -66,7 +66,7 @@ export default function HomeScreen() {
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 2 }}>
               <Text style={[txt(800), { fontSize: 22, color: "#ffffff", letterSpacing: -0.3 }]}>
-                DispatchGo
+                Curzon Dispatch
               </Text>
               <View style={{
                 flexDirection: "row", alignItems: "center", gap: 5,

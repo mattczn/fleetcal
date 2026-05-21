@@ -20,7 +20,7 @@ interface OnboardingStore {
 export const TOUR_STEPS = [
   {
     target: null,
-    title: 'Welcome to FleetCal',
+    title: 'Welcome to Curzon Dispatch',
     body: "We've loaded some demo data so you can see how it works. Take a quick tour to get familiar, then set up your real fleet.",
     cta: "Let's go →",
   },

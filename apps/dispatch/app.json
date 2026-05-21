@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "DispatchGo",
-    "slug": "dispatchgo",
+    "name": "Curzon Dispatch",
+    "slug": "curzon-dispatch",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "dispatchgo",
+    "scheme": "curzon-dispatch",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -53,14 +53,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow DispatchGo to access your photos so you can attach paperwork to loads.",
-          "cameraPermission": "Allow DispatchGo to use your camera to capture paperwork."
+          "photosPermission": "Allow Curzon Dispatch to access your photos so you can attach paperwork to loads.",
+          "cameraPermission": "Allow Curzon Dispatch to use your camera to capture paperwork."
         }
       ],
       [
         "react-native-document-scanner-plugin",
         {
-          "cameraPermission": "Allow DispatchGo to scan paperwork documents."
+          "cameraPermission": "Allow Curzon Dispatch to scan paperwork documents."
         }
       ]
     ],
