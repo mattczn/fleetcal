@@ -159,11 +159,12 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
   // we ingest today) AND unidentified driving events (which Motive's
   // dashboard shows but is a separate API surface). The user will see
   // which one actually contains the missing vehicle.
-  const probe = async (path: string, listKey: string, wrapKey: string | null) => {
+  const probe = async (path: string, listKey: string, wrapKey: string | null, extraParams: Record<string, string> = {}) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const items: any[] = [];
     let pagesFetched = 0;
-    let nextUrl: string | null = `https://api.gomotive.com${path}?start_time=${encodeURIComponent(startTime)}&per_page=100`;
+    const baseParams = new URLSearchParams({ start_time: startTime, per_page: "100", ...extraParams });
+    let nextUrl: string | null = `https://api.gomotive.com${path}?${baseParams.toString()}`;
     let httpStatus: number | null = null;
     let error: string | null = null;
     let firstRawSample: unknown = null;
@@ -197,8 +198,13 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     return { items, pagesFetched, httpStatus, error, firstRawSample };
   };
 
-  const driving      = await probe("/v1/driving_periods",              "driving_periods",              "driving_period");
-  const unidentified = await probe("/v1/unidentified_driving_events",  "unidentified_driving_events",  "unidentified_driving_event");
+  // Motive's /v1/driving_periods defaults to "assigned periods only"
+  // — unidentified ones (driver=null until reassigned in Motive) come
+  // back only when the request opts in with assigned_to_driver=false.
+  // Probe both flavors so we know if the missing trucks are hidden in
+  // the unassigned bucket.
+  const driving      = await probe("/v1/driving_periods", "driving_periods", "driving_period");
+  const unidentified = await probe("/v1/driving_periods", "driving_periods", "driving_period", { assigned_to_driver: "false" });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vehicleOf = (p: any): number | null => p?.vehicle?.id ?? p?.vehicle_id ?? null;

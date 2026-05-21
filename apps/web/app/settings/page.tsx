@@ -2967,9 +2967,9 @@ function IntegrationsPanel() {
               )}
               {debugResult && !debugError && (
                 <div className="mt-2 rounded-lg px-3 py-2 text-[11px] font-mono whitespace-pre-wrap" style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
-                  <DebugProbeBlock title="/v1/driving_periods (driver-attributed)" probe={debugResult.drivingPeriods} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
+                  <DebugProbeBlock title="/v1/driving_periods (default — assigned only)" probe={debugResult.drivingPeriods} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
                   <div style={{ height: 6 }} />
-                  <DebugProbeBlock title="/v1/unidentified_driving_events" probe={debugResult.unidentifiedDriving} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
+                  <DebugProbeBlock title="/v1/driving_periods?assigned_to_driver=false (unidentified)" probe={debugResult.unidentifiedDriving} vehicleId={debugResult.queriedVehicleId} days={debugResult.queriedDays} />
                   <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--gc-border-light)' }}>
                     Rows in our DB for this vehicle: {debugResult.db.rowsForQueriedVehicle}
                   </div>
