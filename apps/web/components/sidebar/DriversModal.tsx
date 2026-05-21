@@ -213,11 +213,24 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
           <div className="flex flex-col shrink-0"
             style={{ width: 240, borderRight: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
 
-            <div className="shrink-0 px-4 pt-5 pb-1">
+            {/* Section header — title on the left, + button inline on
+                the right (matches AssetsModal). */}
+            <div className="shrink-0 flex items-center justify-between px-4 pt-5 pb-1">
               <span className="text-[10px] font-bold uppercase tracking-widest"
                 style={{ color: 'var(--gc-text-3)' }}>
                 Drivers
               </span>
+              <button
+                onClick={() => void handleAdd()}
+                disabled={adding}
+                title="Add driver"
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
+                style={{ color: ACCENT, background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
+                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                <Plus size={12} />
+                {adding ? 'Adding…' : 'Driver'}
+              </button>
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -235,17 +248,6 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
                   onSelect={() => setSelected(d.id)}
                 />
               ))}
-
-              <button
-                onClick={() => void handleAdd()}
-                disabled={adding}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold mt-1 transition-colors disabled:opacity-50"
-                style={{ color: ACCENT, background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
-                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <Plus size={13} />
-                {adding ? 'Adding…' : 'Add Driver'}
-              </button>
             </div>
 
             {/* Asset Preferences nav item */}
