@@ -1083,8 +1083,10 @@ function AutoResizeTextarea({ value, onChange, placeholder, style, onFocus, onBl
   );
 }
 
-/** "5m ago" / "2h ago" / "yesterday" style — used by ShareLocationRow
- *  to surface how fresh a Motive / driver ping is in the share blob. */
+/** "5m ago" / "2h ago" / "yesterday" — used by in-modal card
+ *  displays (TrailerLocationCard) where the page is alive and
+ *  the relative form is the most readable. Share blobs use
+ *  fmtShareTime below instead, since chat pastes go stale. */
 function relTime(iso: string | undefined): string {
   if (!iso) return '';
   const t = new Date(iso).getTime();
@@ -1096,13 +1098,41 @@ function relTime(iso: string | undefined): string {
   return `${Math.round(diff / 86_400_000)}d ago`;
 }
 
-/** Compact "copy to clipboard" button used for sharing location blobs.
- *  Shows the label normally and flips to "Copied!" for 1.5s after a
- *  successful copy. Falls back to a manual prompt if the Clipboard
- *  API isn't available (older browsers / insecure contexts). */
-function ShareLocationRow({ label, text, color }: { label: string; text: string; color?: string }) {
-  const tint = color ?? '#1a73e8';
+/** Absolute "5/21 5:30am MDT" format in the org's configured
+ *  timezone (calendarTimezone). Used by share-to-clipboard blobs —
+ *  drivers + dispatchers read those in chat tools where a relative
+ *  "5m ago" string goes stale the moment it's pasted. */
+function fmtShareTime(iso: string | undefined, tz: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone:     tz,
+    month:        'numeric',
+    day:          'numeric',
+    hour:         'numeric',
+    minute:       '2-digit',
+    hour12:       true,
+    timeZoneName: 'short',
+  }).formatToParts(d);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
+  const m   = get('month');
+  const day = get('day');
+  const hr  = get('hour');
+  const min = get('minute');
+  const ap  = get('dayPeriod').toLowerCase();
+  const tzn = get('timeZoneName');
+  return `${m}/${day} ${hr}:${min}${ap} ${tzn}`;
+}
+
+/** Compact "copy to clipboard" button. Matches the row of small
+ *  inline action buttons under the Driver picker (Driver Summary /
+ *  Notify Driver) so the row of buttons under Asset reads the same
+ *  way. Flips to "Copied!" for 1.5s after a successful copy. */
+function ShareLocationRow({ label, text, accentColor }: { label: string; text: string; accentColor?: string }) {
+  const tint = accentColor ?? '#1a73e8';
   const [copied, setCopied] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   const onCopy = async () => {
     try {
@@ -1124,15 +1154,18 @@ function ShareLocationRow({ label, text, color }: { label: string; text: string;
     }
   };
 
+  const active = copied || hovered;
   return (
     <button
       type="button"
       onClick={onCopy}
-      className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="mt-1.5 text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
       style={{
-        color: copied ? '#15803d' : tint,
-        background: copied ? '#dcfce7' : `${tint}14`,
-        border: `1px solid ${copied ? '#15803d' : tint}33`,
+        color: active ? tint : 'var(--gc-text-3)',
+        background: active ? `${tint}14` : 'transparent',
+        border: 'none',
         cursor: 'pointer',
       }}
     >
@@ -1161,6 +1194,7 @@ function TrailerLocationCard({
   pinLat,
   pinLng,
   pinAt,
+  tz,
 }: {
   editable:         boolean;
   address?:         string;
@@ -1168,6 +1202,9 @@ function TrailerLocationCard({
   pinLat?:          number;
   pinLng?:          number;
   pinAt?:           string;
+  /** Org timezone — used to format the absolute "Last updated"
+   *  stamp inside the share-to-clipboard blob. */
+  tz:               string;
 }) {
   const [draft, setDraft] = useState(address ?? '');
   // Keep the draft synced when the parent props update (e.g. after a
@@ -1184,10 +1221,11 @@ function TrailerLocationCard({
     : null;
 
   const shareBlob = (() => {
-    const lines: string[] = ['📍 Trailer Drop Location'];
+    const lines: string[] = ['Trailer Drop Location'];
     if (trimmed) lines.push(trimmed);
     if (hasPin) {
-      lines.push(`Pin (driver-verified): ${pinLat?.toFixed(5)}, ${pinLng?.toFixed(5)}${pinAt ? ` · ${relTime(pinAt)}` : ''}`);
+      lines.push(`Pin (driver-verified): ${pinLat?.toFixed(5)}, ${pinLng?.toFixed(5)}`);
+      if (pinAt) lines.push(`Last updated ${fmtShareTime(pinAt, tz)}`);
     }
     // Prefer the address-based URL when set; fall back to the pin URL.
     if (addrUrl) lines.push(addrUrl);
@@ -1264,7 +1302,7 @@ function TrailerLocationCard({
       )}
 
       {(trimmed || hasPin) && (
-        <ShareLocationRow label="Share location" text={shareBlob} color={RELAY_COLOR} />
+        <ShareLocationRow label="Share location" text={shareBlob} accentColor={RELAY_COLOR} />
       )}
     </div>
   );
@@ -1614,6 +1652,7 @@ export default function EventModal() {
     driverPayPct,
     eldLocations,
     mergeEvents,
+    calendarTimezone,
   } = useCalendarStore();
 
   const { user } = useUser();
@@ -4705,15 +4744,19 @@ export default function EventModal() {
                 {/* Share-truck-location row. Builds a Google Maps URL
                     around the truck's current ELD ping and copies a
                     short paste-ready block to the clipboard so the
-                    dispatcher can drop it into Slack / SMS / email. */}
+                    dispatcher can drop it into Slack / SMS / email.
+                    Timestamp is absolute in the org tz — chat pastes
+                    outlive any "X min ago" string. */}
                 {selectedAsset && truckLoc && (
                   <ShareLocationRow
                     label="Share truck location"
                     text={[
-                      `🚛 ${assetLabel(selectedAsset)}`,
-                      `${truckLoc.description || 'Location available'}${truckLoc.locatedAt ? ` · ${relTime(truckLoc.locatedAt)}` : ''}`,
+                      assetLabel(selectedAsset),
+                      truckLoc.description || 'Location available',
+                      ...(truckLoc.locatedAt ? [`Last updated ${fmtShareTime(truckLoc.locatedAt, calendarTimezone)}`] : []),
                       `https://www.google.com/maps?q=${truckLoc.lat},${truckLoc.lon}`,
                     ].join('\n')}
+                    accentColor={headerColor}
                   />
                 )}
               </Field>
@@ -4921,18 +4964,21 @@ export default function EventModal() {
                               </div>
                             </div>
                             {/* Delivery-leg view of the trailer drop —
-                                read-only. The address comes from the
-                                partner pickup event; the GPS pin is what
-                                the pickup driver captured on their
-                                mobile app's "Save trailer location"
-                                button. */}
-                            <TrailerLocationCard
-                              editable={false}
-                              address={relayPartner?.trailerDropoffAddress}
-                              pinLat={relayPartner?.trailerDropoffLat}
-                              pinLng={relayPartner?.trailerDropoffLng}
-                              pinAt={relayPartner?.trailerDropoffAt}
-                            />
+                                read-only, mirrored from the partner
+                                pickup event. Only rendered once the
+                                pickup driver has actually pinned the
+                                trailer; before then there's nothing
+                                real for the delivery driver to see. */}
+                            {relayPartner?.trailerDropoffLat != null && (
+                              <TrailerLocationCard
+                                editable={false}
+                                address={relayPartner?.trailerDropoffAddress}
+                                pinLat={relayPartner?.trailerDropoffLat}
+                                pinLng={relayPartner?.trailerDropoffLng}
+                                pinAt={relayPartner?.trailerDropoffAt}
+                                tz={calendarTimezone}
+                              />
+                            )}
                           </div>
                         );
                       })()}
@@ -5107,14 +5153,17 @@ export default function EventModal() {
                               </div>
                             );
                           })()}
-                          {/* Dispatcher-set trailer drop address (primary
-                              location) + driver's GPS pin (secondary
-                              verification layer). Pickup-leg dispatcher
-                              edits the address; driver fills the pin
-                              from the mobile app's "Save trailer
-                              location" button. */}
+                          {/* Trailer drop section — ONLY rendered after
+                              the driver has captured a GPS pin from
+                              the mobile app. Until then there's nothing
+                              real to show. Once the pin lands, the
+                              section appears and the dispatcher can
+                              type the street address that pairs with
+                              the pin (primary), with the pin shown
+                              underneath as the verification layer. */}
                           {(() => {
                             const currentEv = events.find(e => e.id === modalEventId);
+                            if (currentEv?.trailerDropoffLat == null) return null;
                             return (
                               <TrailerLocationCard
                                 editable
@@ -5126,6 +5175,7 @@ export default function EventModal() {
                                 pinLat={currentEv?.trailerDropoffLat}
                                 pinLng={currentEv?.trailerDropoffLng}
                                 pinAt={currentEv?.trailerDropoffAt}
+                                tz={calendarTimezone}
                               />
                             );
                           })()}
