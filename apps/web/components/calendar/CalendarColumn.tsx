@@ -179,6 +179,7 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (compact) return; // clicks handled by individual events in triage mode
+    if (mode === 'movements') return; // movements column is read-only
     const rect = e.currentTarget.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const rawHours  = Math.max(0, Math.min(23.75, y / rowHeight));
@@ -197,11 +198,13 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
 
   return (
     <div
-      className="relative border-r border-gray-100 shrink-0 cursor-pointer group"
+      className={`relative border-r border-gray-100 shrink-0 group ${mode === 'movements' ? '' : 'cursor-pointer'}`}
       style={{ width: rw, minWidth: rw, height: 24 * rowHeight }}
       onClick={handleClick}
     >
-      <div className="absolute inset-0 group-hover:bg-blue-50/20 transition-colors pointer-events-none" />
+      {mode !== 'movements' && (
+        <div className="absolute inset-0 group-hover:bg-blue-50/20 transition-colors pointer-events-none" />
+      )}
       {mode === 'movements' ? (
         // Telemetry view — render Motive driving periods, clustered.
         // No overlap algorithm needed since clusters don't conflict in

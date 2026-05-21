@@ -21,6 +21,7 @@ export function loadGoogleMaps(): Promise<typeof google> {
   loadPromise = Promise.all([
     importLibrary('maps'),
     importLibrary('marker'),
+    importLibrary('routes'),
   ]).then(() => google);
   return loadPromise;
 }

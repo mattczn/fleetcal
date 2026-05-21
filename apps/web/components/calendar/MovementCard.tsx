@@ -14,8 +14,6 @@ import { extractCity, type MovementCluster } from '@/lib/clusterMovements';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, timeToPixels } from '@/lib/time-utils';
 
-const MIN_HEIGHT_MIN = 30;
-
 interface Props {
   cluster: MovementCluster;
   assetColor: string;
@@ -27,26 +25,29 @@ export default function MovementCardView({ cluster, assetColor, onClick }: Props
   const dateStr = localDateStr(currentDate);
 
   // Convert start/end (UTC ISO) → view-tz YYYY-MM-DDTHH:mm so the same
-  // timeToPixels math used by load cards lines up exactly.
-  const startNaive = isoToNaiveTz(cluster.startTime, calendarTimezone);
-  const endNaive   = cluster.endTime && cluster.endTime !== cluster.startTime
-    ? isoToNaiveTz(cluster.endTime, calendarTimezone)
-    : startNaive;
+  // timeToPixels math used by load cards lines up exactly. We use the
+  // cluster's displayEndTime (padded but capped at next cluster's
+  // start) for the rendered bottom, so blocks never overlap.
+  const startNaive   = isoToNaiveTz(cluster.startTime, calendarTimezone);
+  const displayNaive = isoToNaiveTz(cluster.displayEndTime, calendarTimezone);
+  const realEndNaive = isoToNaiveTz(cluster.endTime, calendarTimezone);
 
   if (!startNaive) return null;
 
   const startDay = startNaive.split('T')[0];
-  const endDay   = endNaive.split('T')[0];
+  const endDay   = displayNaive.split('T')[0];
   if (endDay < dateStr || startDay > dateStr) return null;
 
-  const top     = startDay < dateStr ? 0 : timeToPixels(startNaive, rowHeight);
-  const realBottom = endDay > dateStr ? 24 * rowHeight : timeToPixels(endNaive, rowHeight);
-  // Floor at 30 min so short blocks stay legible. We anchor to the
-  // real start time and extend downward — the dispatcher knows the
-  // start is accurate; the displayed end may be padded.
-  const minPixelHeight = (MIN_HEIGHT_MIN / 60) * rowHeight;
-  const bottom = Math.max(realBottom, top + minPixelHeight);
+  const top    = startDay < dateStr ? 0 : timeToPixels(startNaive, rowHeight);
+  const bottom = endDay > dateStr ? 24 * rowHeight : timeToPixels(displayNaive, rowHeight);
   const height = Math.max(20, bottom - top);
+
+  // realBottom (un-padded) used purely to render the "padded short"
+  // visual hint — slightly more transparent so dispatchers know the
+  // block was inflated for legibility.
+  const realBottom = realEndNaive
+    ? (realEndNaive.split('T')[0] > dateStr ? 24 * rowHeight : timeToPixels(realEndNaive, rowHeight))
+    : bottom;
 
   const miles    = cluster.miles ? `${cluster.miles.toFixed(1)} mi` : '';
   const duration = cluster.durationMin
@@ -55,7 +56,7 @@ export default function MovementCardView({ cluster, assetColor, onClick }: Props
   const meta = [miles, duration].filter(Boolean).join(' · ');
   const count = cluster.members.length;
   const isClustered = count > 1;
-  const isPaddedShort = realBottom - top < minPixelHeight;
+  const isPaddedShort = realBottom < bottom - 1;
 
   // Title = cities, not full addresses. The detail panel keeps the
   // raw strings for dispatchers who need the exact destination.

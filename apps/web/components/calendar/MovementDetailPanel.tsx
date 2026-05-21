@@ -123,43 +123,102 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
         return el;
       };
 
-      if (!isCluster) {
-        // Single period: classic Start → End markers + one polyline
-        const origin = hasOrigin ? { lat: single.originLat as number, lng: single.originLon as number } : null;
-        const dest   = hasDest   ? { lat: single.destinationLat as number, lng: single.destinationLon as number } : null;
-        if (origin) new google.maps.marker.AdvancedMarkerElement({ map, position: origin, content: dot('#16a34a', 'Start') });
-        if (dest)   new google.maps.marker.AdvancedMarkerElement({ map, position: dest,   content: dot('#dc2626', 'End') });
-        if (origin && dest) {
-          new google.maps.Polyline({ path: [origin, dest], map, strokeColor: asset.color, strokeOpacity: 0.85, strokeWeight: 3.5, geodesic: true });
-        }
-      } else {
-        // Cluster: drop a numbered dot at each member's start and
-        // thread them with a polyline in time order so the dispatcher
-        // sees the order of the moves at a glance.
-        const path: google.maps.LatLngLiteral[] = [];
+      // Resolve origin (first member's start), destination (last
+      // member's end), and any intermediate stops as waypoints. Used
+      // for both single-period and cluster renders.
+      const firstWithOrigin = cluster.members.find(m => m.originLat != null && m.originLon != null);
+      const lastWithDest    = [...cluster.members].reverse().find(m => m.destinationLat != null && m.destinationLon != null);
+      const startPos = firstWithOrigin
+        ? { lat: firstWithOrigin.originLat as number, lng: firstWithOrigin.originLon as number }
+        : null;
+      const endPos = lastWithDest
+        ? { lat: lastWithDest.destinationLat as number, lng: lastWithDest.destinationLon as number }
+        : null;
+
+      // For clusters, intermediate member starts (except the first)
+      // become waypoints. Drop the dots regardless so dispatchers see
+      // the order of the moves.
+      const waypoints: google.maps.DirectionsWaypoint[] = [];
+      if (isCluster) {
         cluster.members.forEach((m, idx) => {
+          if (idx === 0) return; // already covered by startPos
           if (m.originLat != null && m.originLon != null) {
-            const pos = { lat: m.originLat, lng: m.originLon };
-            new google.maps.marker.AdvancedMarkerElement({ map, position: pos, content: dot(asset.color, `${idx + 1}`) });
-            path.push(pos);
-          }
-          if (m.destinationLat != null && m.destinationLon != null) {
-            const pos = { lat: m.destinationLat, lng: m.destinationLon };
-            path.push(pos);
-            // Final destination on the last member gets an "End" tag.
-            if (idx === cluster.members.length - 1) {
-              new google.maps.marker.AdvancedMarkerElement({ map, position: pos, content: dot('#dc2626', 'End') });
-            }
+            waypoints.push({ location: { lat: m.originLat, lng: m.originLon }, stopover: true });
+            new google.maps.marker.AdvancedMarkerElement({
+              map, position: { lat: m.originLat, lng: m.originLon },
+              content: dot(asset.color, `${idx + 1}`),
+            });
           }
         });
-        if (path.length >= 2) {
-          new google.maps.Polyline({ path, map, strokeColor: asset.color, strokeOpacity: 0.85, strokeWeight: 3.5, geodesic: true });
-        }
+      }
+      if (startPos) {
+        new google.maps.marker.AdvancedMarkerElement({
+          map, position: startPos,
+          content: dot('#16a34a', isCluster ? '1' : 'Start'),
+        });
+      }
+      if (endPos) {
+        new google.maps.marker.AdvancedMarkerElement({
+          map, position: endPos,
+          content: dot('#dc2626', 'End'),
+        });
       }
 
-      const bounds = new google.maps.LatLngBounds();
-      coords.forEach(c => bounds.extend({ lat: c.lat, lng: c.lng }));
-      if (coords.length >= 2) map.fitBounds(bounds, 60);
+      const drawStraightFallback = () => {
+        const path: google.maps.LatLngLiteral[] = [];
+        if (startPos) path.push(startPos);
+        for (const wp of waypoints) {
+          const loc = wp.location as google.maps.LatLngLiteral;
+          path.push(loc);
+        }
+        if (endPos) path.push(endPos);
+        if (path.length >= 2) {
+          new google.maps.Polyline({
+            path, map, strokeColor: asset.color, strokeOpacity: 0.6,
+            strokeWeight: 3, geodesic: true,
+            icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '12px' }],
+          });
+        }
+      };
+
+      if (startPos && endPos) {
+        const directionsService  = new google.maps.DirectionsService();
+        const directionsRenderer = new google.maps.DirectionsRenderer({
+          map,
+          suppressMarkers: true, // keep our custom Start / End / waypoint dots
+          polylineOptions: { strokeColor: asset.color, strokeOpacity: 0.85, strokeWeight: 4 },
+          preserveViewport: false,
+        });
+        directionsService.route(
+          {
+            origin: startPos,
+            destination: endPos,
+            waypoints: waypoints,
+            travelMode: google.maps.TravelMode.DRIVING,
+            optimizeWaypoints: false,
+          },
+          (result, status) => {
+            if (cancelled) return;
+            if (status === google.maps.DirectionsStatus.OK && result) {
+              directionsRenderer.setDirections(result);
+            } else {
+              // Common reasons: ZERO_RESULTS (across an ocean),
+              // OVER_QUERY_LIMIT, no road near coords. Fall back to a
+              // dashed straight line so we still show *something*.
+              drawStraightFallback();
+              const bounds = new google.maps.LatLngBounds();
+              if (startPos) bounds.extend(startPos);
+              if (endPos)   bounds.extend(endPos);
+              waypoints.forEach(wp => bounds.extend(wp.location as google.maps.LatLngLiteral));
+              map.fitBounds(bounds, 60);
+            }
+          },
+        );
+      } else {
+        // Only one endpoint — center on it, no route to draw.
+        const only = startPos ?? endPos;
+        if (only) map.setCenter(only);
+      }
     });
 
     return () => { cancelled = true; mapRef.current = null; };

@@ -1,31 +1,42 @@
 /**
  * Clusters Motive driving periods for the calendar Movements column.
  *
- * Rules (display-only — does not change stored data):
- *   - Long periods (>= SHORT_MS) stay as their own single-member cluster.
- *   - Adjacent short periods (each < SHORT_MS) collapse into one cluster
- *     when the gap between them is <= MERGE_GAP_MS. This is what gets
- *     rid of yard-shuffle / bobtail-jiggle noise visually.
- *   - A long period never absorbs into a short cluster (and vice
- *     versa) — long trips are the signal we don't want to bury.
+ * Merge rules (display-only — does not change stored data):
+ *   1. Any two periods whose real time intervals OVERLAP merge into
+ *      one cluster. Two trips can't physically happen at once for the
+ *      same truck — overlapping records are usually a Motive artifact
+ *      (driver edit, source=3 reassignment) of the same trip.
+ *   2. Two adjacent SHORT periods (each < SHORT_MS) merge if the gap
+ *      between them is <= MERGE_GAP_MS. Kills yard-shuffle noise.
+ *   3. Two adjacent LONG periods stay separate — those are distinct
+ *      loads we don't want to bury.
+ *
+ * Each cluster gets a `displayEndTime` — its real end padded up to the
+ * 30-min visual minimum, but never crossing into the next cluster's
+ * real start. This is what MovementCard paints.
  *
  * Sorted by startTime ascending in the returned array.
  */
 import type { MovementCard } from './railway';
 
-const SHORT_MS     = 30 * 60_000;
-const MERGE_GAP_MS = 15 * 60_000;
+const SHORT_MS         = 30 * 60_000;
+const MERGE_GAP_MS     = 15 * 60_000;
+const MIN_DISPLAY_MS   = 30 * 60_000;
 
 export interface MovementCluster {
   /** Synthetic key — stable for keying in React. */
-  id:           string;
-  startTime:    string;       // members[0].startTime
-  endTime:      string;       // members[last].endTime (or startTime if in-progress)
-  miles:        number;       // sum across members
-  durationMin:  number;       // sum across members (minutes)
-  origin:       string | null; // members[0].origin
-  destination:  string | null; // members[last].destination
-  members:      MovementCard[];
+  id:              string;
+  startTime:       string;       // members[0].startTime
+  endTime:         string;       // members[last].endTime (or startTime if in-progress)
+  /** Padded end used for visual rendering — may extend past endTime
+   *  to enforce a 30-min minimum block, but never reaches the next
+   *  cluster's startTime. */
+  displayEndTime:  string;
+  miles:           number;       // sum across members
+  durationMin:     number;       // sum across members (minutes)
+  origin:          string | null; // members[0].origin
+  destination:     string | null; // members[last].destination
+  members:         MovementCard[];
 }
 
 function periodMs(m: MovementCard): number {
@@ -35,15 +46,22 @@ function periodMs(m: MovementCard): number {
 
 function newClusterFrom(m: MovementCard): MovementCluster {
   return {
-    id:          String(m.id),
-    startTime:   m.startTime,
-    endTime:     m.endTime ?? m.startTime,
-    miles:       m.miles ?? 0,
-    durationMin: m.durationMin ?? 0,
-    origin:      m.origin,
-    destination: m.destination,
-    members:     [m],
+    id:             String(m.id),
+    startTime:      m.startTime,
+    endTime:        m.endTime ?? m.startTime,
+    displayEndTime: m.endTime ?? m.startTime, // filled in by finalize pass
+    miles:          m.miles ?? 0,
+    durationMin:    m.durationMin ?? 0,
+    origin:         m.origin,
+    destination:    m.destination,
+    members:        [m],
   };
+}
+
+/** True if the closed interval [aStart, aEnd] intersects [bStart, bEnd]. */
+function intervalsOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return new Date(aStart).getTime() < new Date(bEnd).getTime()
+      && new Date(bStart).getTime() < new Date(aEnd).getTime();
 }
 
 /**
@@ -89,27 +107,54 @@ export function clusterMovements(movements: MovementCard[]): MovementCluster[] {
   const result: MovementCluster[] = [];
 
   for (const m of sorted) {
-    const mShort = periodMs(m) < SHORT_MS;
-    const last   = result[result.length - 1];
+    const mEnd     = m.endTime ?? m.startTime;
+    const mShort   = periodMs(m) < SHORT_MS;
+    const last     = result[result.length - 1];
 
-    // Merge condition: both this period and the current cluster's last
-    // member are short, and the gap between them is within threshold.
-    const lastMember = last ? last.members[last.members.length - 1] : null;
-    const lastShort  = lastMember ? periodMs(lastMember) < SHORT_MS : false;
-    const gapMs      = last
-      ? new Date(m.startTime).getTime() - new Date(last.endTime).getTime()
-      : Infinity;
+    let merge = false;
+    if (last) {
+      // Rule 1: real time intervals overlap → merge (handles Motive
+      // duplicate / edited / reassigned records on the same trip).
+      if (intervalsOverlap(last.startTime, last.endTime, m.startTime, mEnd)) {
+        merge = true;
+      } else {
+        // Rule 2: both short + small gap → merge (yard-shuffle noise).
+        const lastMember = last.members[last.members.length - 1];
+        const lastShort  = periodMs(lastMember) < SHORT_MS;
+        const gapMs      = new Date(m.startTime).getTime() - new Date(last.endTime).getTime();
+        if (mShort && lastShort && gapMs <= MERGE_GAP_MS) merge = true;
+      }
+    }
 
-    if (last && mShort && lastShort && gapMs <= MERGE_GAP_MS) {
-      last.endTime     = m.endTime ?? last.endTime;
+    if (merge && last) {
+      // Extend end to the later of the two (overlapping case can have
+      // either side end last). Origin sticks with members[0]; destination
+      // tracks the latest member that has one.
+      const newEndMs = Math.max(new Date(last.endTime).getTime(), new Date(mEnd).getTime());
+      last.endTime     = new Date(newEndMs).toISOString();
       last.miles       += m.miles ?? 0;
       last.durationMin += m.durationMin ?? 0;
-      last.destination = m.destination ?? last.destination;
+      if (m.destination) last.destination = m.destination;
       last.members.push(m);
       last.id          = `${last.members[0].id}-cluster-${last.members.length}`;
     } else {
       result.push(newClusterFrom(m));
     }
+  }
+
+  // displayEndTime pass — pad each cluster up to the 30-min visual
+  // minimum, but cap so the padding can never collide with the next
+  // cluster's real start time.
+  for (let i = 0; i < result.length; i++) {
+    const c        = result[i];
+    const realEnd  = new Date(c.endTime).getTime();
+    const start    = new Date(c.startTime).getTime();
+    const minEnd   = start + MIN_DISPLAY_MS;
+    const nextCap  = i + 1 < result.length
+      ? new Date(result[i + 1].startTime).getTime()
+      : Number.POSITIVE_INFINITY;
+    const display  = Math.min(Math.max(realEnd, minEnd), nextCap);
+    c.displayEndTime = new Date(display).toISOString();
   }
 
   return result;
