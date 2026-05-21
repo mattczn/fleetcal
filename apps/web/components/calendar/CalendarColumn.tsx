@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
 import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
@@ -93,7 +94,7 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, vi
 }
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
-  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, assetColumnMode, movementsByVehicle } = useCalendarStore();
+  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, assetColumnMode, movementsByVehicle, movementsLoading } = useCalendarStore();
   const [openCluster, setOpenCluster] = useState<MovementCluster | null>(null);
   const dateStr = localDateStr(currentDate);
   const mode = assetColumnMode[asset.id] ?? 'loads';
@@ -210,9 +211,22 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
         // No overlap algorithm needed since clusters don't conflict in
         // time. Asset color + dashed/solid border + 50% opacity in
         // MovementCard so it reads as "same truck, different layer."
-        movementClusters.map(c => (
-          <MovementCardView key={c.id} cluster={c} assetColor={asset.color} onClick={() => setOpenCluster(c)} />
-        ))
+        <>
+          {movementClusters.map(c => (
+            <MovementCardView key={c.id} cluster={c} assetColor={asset.color} onClick={() => setOpenCluster(c)} />
+          ))}
+          {movementsLoading && movementClusters.length === 0 && (
+            <div className="absolute inset-x-0 top-12 flex flex-col items-center gap-2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }}>
+              <Loader2 size={18} className="animate-spin" />
+              <span className="text-[11px] font-medium">Loading movements…</span>
+            </div>
+          )}
+          {!movementsLoading && movementClusters.length === 0 && (
+            <div className="absolute inset-x-0 top-12 flex flex-col items-center gap-1 pointer-events-none" style={{ color: 'var(--gc-text-3)' }}>
+              <span className="text-[11px] font-medium">No movements today</span>
+            </div>
+          )}
+        </>
       ) : triageLayout
         ? triageLayout.map(({ event, colIdx, totalCols, top }) => (
             <CalendarEvent

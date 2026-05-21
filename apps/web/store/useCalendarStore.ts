@@ -335,6 +335,8 @@ interface CalendarStore extends ModalState {
   setAssetColumnMode: (assetId: number, mode: 'loads' | 'movements') => void;
   /** Most recent /v1/movements response, keyed by Motive vehicleId. */
   movementsByVehicle: Record<string, import('@/lib/railway').MovementCard[]>;
+  /** True while a fetchMovements call is in flight. UI shows a spinner. */
+  movementsLoading: boolean;
   /** Fetch the movements window covering at least [start,end] (ISO).
    *  Backed by /v1/movements; results merge into movementsByVehicle. */
   fetchMovements: (start: string, end: string) => Promise<void>;
@@ -649,7 +651,9 @@ export const useCalendarStore = create<CalendarStore>()(
   setAssetColumnMode: (assetId, mode) =>
     set((state) => ({ assetColumnMode: { ...state.assetColumnMode, [assetId]: mode } })),
   movementsByVehicle: {},
+  movementsLoading: false,
   fetchMovements: async (start, end) => {
+    set({ movementsLoading: true });
     try {
       const { railway } = await import('@/lib/railway');
       // Expand the YYYY-MM-DD inputs to a UTC window that covers the
@@ -663,6 +667,8 @@ export const useCalendarStore = create<CalendarStore>()(
       set({ movementsByVehicle: res.byVehicle ?? {} });
     } catch (err) {
       console.error('[useCalendarStore] fetchMovements:', err);
+    } finally {
+      set({ movementsLoading: false });
     }
   },
 

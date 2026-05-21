@@ -12,7 +12,7 @@
  */
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, MapPin, ExternalLink, Clock, Activity, Layers } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
@@ -222,14 +222,6 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
 
   const inProgress  = !isCluster && (single.status === 'in_progress' || single.endTime == null);
 
-  // Portal to document.body so the fixed-positioned overlay isn't
-  // constrained by some ancestor that creates a containing block
-  // (transform, filter, contain). Without this, the dim background
-  // gets clipped to the calendar grid instead of covering the page.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-  if (!mounted) return null;
-
   const content = (
     <div
       ref={overlayRef}
@@ -318,6 +310,13 @@ export default function MovementDetailPanel({ cluster, asset, onClose }: Props) 
     </div>
   );
 
+  // Portal to document.body so the fixed overlay isn't clipped by an
+  // ancestor's containing block (transform/filter/contain). Component
+  // is 'use client' + only renders after user click — past hydration —
+  // but guard typeof document anyway in case it ever renders on the
+  // server. Using a useState mount gate would break the map's []-deps
+  // effect (the ref isn't attached on the first null render).
+  if (typeof document === 'undefined') return null;
   return createPortal(content, document.body);
 }
 

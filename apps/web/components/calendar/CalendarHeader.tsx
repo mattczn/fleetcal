@@ -97,7 +97,7 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 }
 
 export default function CalendarHeader() {
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, assetColumnMode, setAssetColumnMode } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, assetColumnMode, setAssetColumnMode, movementsLoading } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range that matches the calendar grid below — same logic +
   // same org-tz interpretation, so header chips align with columns.
@@ -213,7 +213,10 @@ export default function CalendarHeader() {
                     e.stopPropagation();
                     setAssetColumnMode(asset.id, mode === 'loads' ? 'movements' : 'loads');
                   }}
-                  title={mode === 'loads' ? 'Switch to Motive movements' : 'Switch to load events'}
+                  title={
+                    mode === 'movements' && movementsLoading ? 'Loading movements…' :
+                    mode === 'loads' ? 'Switch to Motive movements' : 'Switch to load events'
+                  }
                   className="p-1 rounded transition-colors flex-shrink-0"
                   style={{
                     color: mode === 'movements' ? asset.color : 'var(--gc-text-3)',
@@ -222,7 +225,9 @@ export default function CalendarHeader() {
                   onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = mode === 'movements' ? 'var(--gc-hover)' : 'transparent'; }}
                 >
-                  <Activity size={14} />
+                  {mode === 'movements' && movementsLoading
+                    ? <Loader2 size={14} className="animate-spin" />
+                    : <Activity size={14} />}
                 </button>
               )}
               {/* Triage/compress button + SmartAssignDrawer removed
