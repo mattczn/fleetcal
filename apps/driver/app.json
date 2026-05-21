@@ -61,6 +61,13 @@
           "locationWhenInUsePermission": "Allow Curzon Driver to record your location when you check in at a stop."
         }
       ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#1a73e8"
+        }
+      ],
       "expo-sharing",
       "@react-native-community/datetimepicker"
     ],

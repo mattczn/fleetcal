@@ -51,6 +51,13 @@
       "expo-sharing",
       "expo-web-browser",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#1a73e8"
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "Allow Curzon Dispatch to access your photos so you can attach paperwork to loads.",
