@@ -8,10 +8,19 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Truck, ArrowLeft } from "lucide-react-native";
 import { supabase } from "@/lib/supabase";
+
+// Canonical legal URLs hosted on the marketing site. Linked from this
+// screen so the SMS opt-in disclosure points at the real Privacy /
+// Terms / Support pages — required for Twilio A2P 10DLC sign-off and
+// Apple App Store review.
+const PRIVACY_URL = "https://www.curzontrucking.com/app/privacy-policy";
+const TERMS_URL   = "https://www.curzontrucking.com/app/terms-conditions";
+const SUPPORT_URL = "https://www.curzontrucking.com/app/support";
 
 type Step = "phone" | "otp";
 
@@ -176,6 +185,52 @@ export default function LoginScreen() {
                   </Text>
                 )}
               </TouchableOpacity>
+
+              {/* SMS consent disclosure — required by Twilio A2P 10DLC.
+                  Must be visible at the point of phone-number entry so
+                  the campaign reviewer can confirm consent isn't buried
+                  in the terms. */}
+              <View style={{ marginTop: 18 }}>
+                <Text
+                  style={[
+                    txt(500),
+                    { fontSize: 11, color: "rgba(255,255,255,0.55)", lineHeight: 16, textAlign: "center" },
+                  ]}
+                >
+                  By tapping Send Code, you agree to receive SMS verification
+                  codes and operational notifications from Curzon Trucking at
+                  the number above. Msg &amp; data rates may apply. Msg
+                  frequency varies. Reply STOP to opt out, HELP for help.
+                </Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    gap: 14,
+                    marginTop: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <TouchableOpacity onPress={() => void Linking.openURL(PRIVACY_URL)}>
+                    <Text style={[txt(600), { fontSize: 11, color: "rgba(255,255,255,0.75)", textDecorationLine: "underline" }]}>
+                      Privacy
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</Text>
+                  <TouchableOpacity onPress={() => void Linking.openURL(TERMS_URL)}>
+                    <Text style={[txt(600), { fontSize: 11, color: "rgba(255,255,255,0.75)", textDecorationLine: "underline" }]}>
+                      Terms
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.25)" }}>·</Text>
+                  <TouchableOpacity onPress={() => void Linking.openURL(SUPPORT_URL)}>
+                    <Text style={[txt(600), { fontSize: 11, color: "rgba(255,255,255,0.75)", textDecorationLine: "underline" }]}>
+                      Support
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             </>
           ) : (
             <>
