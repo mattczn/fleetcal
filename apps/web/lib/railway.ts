@@ -93,6 +93,13 @@ export interface MovementCard {
   durationMin:    number | null;
   origin:         string | null;
   destination:    string | null;
+  type:           string | null;
+  status:         string | null;
+  source:         number | null;
+  originLat:      number | null;
+  originLon:      number | null;
+  destinationLat: number | null;
+  destinationLon: number | null;
 }
 
 export class RailwayError extends Error {

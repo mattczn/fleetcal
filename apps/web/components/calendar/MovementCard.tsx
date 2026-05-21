@@ -17,9 +17,10 @@ import { localDateStr, timeToPixels } from '@/lib/time-utils';
 interface Props {
   movement: MovementCardData;
   assetColor: string;
+  onClick?: () => void;
 }
 
-export default function MovementCardView({ movement, assetColor }: Props) {
+export default function MovementCardView({ movement, assetColor, onClick }: Props) {
   const { rowHeight, currentDate, calendarTimezone } = useCalendarStore();
   const dateStr = localDateStr(currentDate);
 
@@ -48,6 +49,7 @@ export default function MovementCardView({ movement, assetColor }: Props) {
 
   return (
     <div
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
       className="absolute rounded overflow-hidden z-[5]"
       style={{
         top,
@@ -56,8 +58,8 @@ export default function MovementCardView({ movement, assetColor }: Props) {
         background: assetColor,
         opacity: 0.5,
         border: `1.5px dashed ${assetColor}`,
-        cursor: 'default',
-        pointerEvents: 'none',
+        cursor: onClick ? 'pointer' : 'default',
+        pointerEvents: onClick ? 'auto' : 'none',
       }}
     >
       <div

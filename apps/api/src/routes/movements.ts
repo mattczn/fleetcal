@@ -55,6 +55,13 @@ interface MovementCard {
   durationMin:    number | null;
   origin:         string | null;
   destination:    string | null;
+  type:           string | null;   // 'driving' | 'PC' | 'YM'
+  status:         string | null;   // 'in_progress' | 'complete' | 'interrupted'
+  source:         number | null;   // 1=gateway 2=user-edit 3=unidentified-driver
+  originLat:      number | null;
+  originLon:      number | null;
+  destinationLat: number | null;
+  destinationLon: number | null;
 }
 
 interface ListMovementsResponse {
@@ -76,7 +83,7 @@ movements.get("/", async (c) => {
   const { data, error } = await (supabase as any)
     .from("motive_driving_periods")
     .select(
-      "id, vehicle_id, vehicle_number, start_time, end_time, miles, duration, origin, destination",
+      "id, vehicle_id, vehicle_number, start_time, end_time, miles, duration, origin, destination, type, status, source, origin_lat, origin_lon, destination_lat, destination_lon",
     )
     .eq("org_id", orgId)
     .eq("display_eligible", true)
@@ -93,19 +100,29 @@ movements.get("/", async (c) => {
     id: number; vehicle_id: number | null; vehicle_number: string | null;
     start_time: string; end_time: string | null; miles: number | null;
     duration: number | null; origin: string | null; destination: string | null;
+    type: string | null; status: string | null; source: number | null;
+    origin_lat: number | null; origin_lon: number | null;
+    destination_lat: number | null; destination_lon: number | null;
   }>)) {
     if (r.vehicle_id == null) continue;
     const key = String(r.vehicle_id);
     const card: MovementCard = {
-      id:            r.id,
-      vehicleId:     r.vehicle_id,
-      vehicleNumber: r.vehicle_number,
-      startTime:     r.start_time,
-      endTime:       r.end_time,
-      miles:         r.miles,
-      durationMin:   r.duration != null ? Math.round(r.duration / 60) : null,
-      origin:        r.origin,
-      destination:   r.destination,
+      id:             r.id,
+      vehicleId:      r.vehicle_id,
+      vehicleNumber:  r.vehicle_number,
+      startTime:      r.start_time,
+      endTime:        r.end_time,
+      miles:          r.miles,
+      durationMin:    r.duration != null ? Math.round(r.duration / 60) : null,
+      origin:         r.origin,
+      destination:    r.destination,
+      type:           r.type,
+      status:         r.status,
+      source:         r.source,
+      originLat:      r.origin_lat,
+      originLon:      r.origin_lon,
+      destinationLat: r.destination_lat,
+      destinationLon: r.destination_lon,
     };
     const arr = byVehicle[key] ?? [];
     arr.push(card);

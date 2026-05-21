@@ -1,11 +1,14 @@
 'use client';
 
+import { useState } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
 import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
+import type { MovementCard as MovementCardData } from '@/lib/railway';
 
 import CalendarEvent from './CalendarEvent';
 import MovementCardView from './MovementCard';
+import MovementDetailPanel from './MovementDetailPanel';
 
 interface Props {
   asset: Asset;
@@ -91,6 +94,7 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, vi
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
   const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, assetColumnMode, movementsByVehicle } = useCalendarStore();
+  const [openMovement, setOpenMovement] = useState<MovementCardData | null>(null);
   const dateStr = localDateStr(currentDate);
   const mode = assetColumnMode[asset.id] ?? 'loads';
 
@@ -201,7 +205,7 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
         // applied with dashed border + 50% opacity in MovementCard
         // so it reads as "same truck, different layer."
         movementsForThisAsset.map(m => (
-          <MovementCardView key={m.id} movement={m} assetColor={asset.color} />
+          <MovementCardView key={m.id} movement={m} assetColor={asset.color} onClick={() => setOpenMovement(m)} />
         ))
       ) : triageLayout
         ? triageLayout.map(({ event, colIdx, totalCols, top }) => (
@@ -221,6 +225,13 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
             <CalendarEvent key={event.id} event={event} asset={asset} colIdx={colIdx} totalCols={totalCols} onSmartAssign={onSmartAssign} />
           ))
       }
+      {openMovement && (
+        <MovementDetailPanel
+          movement={openMovement}
+          asset={{ name: asset.name, color: asset.color, unit: asset.unit ?? undefined }}
+          onClose={() => setOpenMovement(null)}
+        />
+      )}
     </div>
   );
 }
