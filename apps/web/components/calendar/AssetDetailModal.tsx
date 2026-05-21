@@ -25,7 +25,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
+import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink, Truck } from 'lucide-react';
 import type { Asset } from '@/lib/types';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import { railway, type MovementCard } from '@/lib/railway';
@@ -522,16 +522,19 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
                     >
                       <ChevronRight size={16} />
                     </button>
-                    <button
-                      onClick={() => { if (location) setSelectedIdx(null); else onClose(); }}
-                      className="p-1.5 rounded-full transition-colors ml-1"
-                      style={{ color: 'var(--gc-text-3)' }}
-                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                      title={location ? 'Back to current location (Esc)' : 'Close (Esc)'}
-                    >
-                      <X size={14} />
-                    </button>
+                    {location && (
+                      <button
+                        onClick={() => setSelectedIdx(null)}
+                        className="flex items-center gap-1 ml-1.5 px-2 py-1 rounded-md text-[11px] font-medium transition-colors"
+                        style={{ color: asset.color, background: hexToRgba(asset.color, 0.12), border: `1px solid ${hexToRgba(asset.color, 0.3)}` }}
+                        onMouseEnter={e => { e.currentTarget.style.background = hexToRgba(asset.color, 0.2); }}
+                        onMouseLeave={e => { e.currentTarget.style.background = hexToRgba(asset.color, 0.12); }}
+                        title="Back to current location (Esc)"
+                      >
+                        <Truck size={11} />
+                        Current location
+                      </button>
+                    )}
                   </div>
                 </>
               ) : (

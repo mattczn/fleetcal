@@ -79,7 +79,7 @@ export default function MovementCardView({ cluster, assetColor, onClick }: Props
         height,
         left: 2, right: 2,
         background: assetColor,
-        opacity: isPaddedShort ? 0.4 : 0.5, // faded so padded blocks read as "less precise"
+        opacity: isPaddedShort ? 0.7 : 0.8, // faded so padded blocks read as "less precise"
         border: `1.5px ${isClustered ? 'solid' : 'dashed'} ${assetColor}`,
         cursor: onClick ? 'pointer' : 'default',
         pointerEvents: onClick ? 'auto' : 'none',
