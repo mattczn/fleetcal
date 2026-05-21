@@ -152,19 +152,33 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
   const apiKey = await getOrgMotiveKey(orgId);
   if (!apiKey) return c.json({ error: "no motive api key configured for this org" }, 400);
 
-  const startTime = new Date(Date.now() - days * 86_400_000).toISOString();
   const MAX_PAGES = 50;
+  // Motive's /v1/driving_periods uses `start_date` (YYYY-MM-DD), not
+  // `start_time`. Per docs, when no date params are given the default
+  // is "today minus 7 days." We pin start_date explicitly to honor the
+  // `days` parameter.
+  const endDate   = new Date();
+  const startDate = new Date(endDate.getTime() - days * 86_400_000);
+  const startDateStr = startDate.toISOString().slice(0, 10);
+  const endDateStr   = endDate.toISOString().slice(0, 10);
 
-  // Probe both endpoints — driver-attributed driving_periods (what
-  // we ingest today) AND unidentified driving events (which Motive's
-  // dashboard shows but is a separate API surface). The user will see
-  // which one actually contains the missing vehicle.
-  const probe = async (path: string, listKey: string, wrapKey: string | null, extraParams: Record<string, string> = {}) => {
+  // Probe Motive's driving_periods endpoint twice — once with default
+  // filter (assigned-to-driver only) and once with
+  // assigned_to_driver=false (unidentified records). Both calls scope
+  // to the queried vehicle via vehicle_ids[] so we get an exact answer
+  // instead of fetching the whole org and filtering client-side.
+  const probe = async (extraParams: Record<string, string> = {}) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const items: any[] = [];
     let pagesFetched = 0;
-    const baseParams = new URLSearchParams({ start_time: startTime, per_page: "100", ...extraParams });
-    let nextUrl: string | null = `https://api.gomotive.com${path}?${baseParams.toString()}`;
+    const baseParams = new URLSearchParams({
+      start_date: startDateStr,
+      end_date:   endDateStr,
+      "vehicle_ids[]": String(vehicleIdNum),
+      per_page:   "100",
+      ...extraParams,
+    });
+    let nextUrl: string | null = `https://api.gomotive.com/v1/driving_periods?${baseParams.toString()}`;
     let httpStatus: number | null = null;
     let error: string | null = null;
     let firstRawSample: unknown = null;
@@ -179,8 +193,8 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data: any = await res.json();
         if (pagesFetched === 0) firstRawSample = data;
-        const wrappers = data?.[listKey] ?? [];
-        for (const w of wrappers) items.push(wrapKey && w[wrapKey] ? w[wrapKey] : w);
+        const wrappers = data?.driving_periods ?? [];
+        for (const w of wrappers) items.push(w.driving_period ?? w);
         pagesFetched++;
         const pagination = data?.pagination;
         if (pagination && pagination.per_page && pagination.total &&
@@ -203,8 +217,8 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
   // back only when the request opts in with assigned_to_driver=false.
   // Probe both flavors so we know if the missing trucks are hidden in
   // the unassigned bucket.
-  const driving      = await probe("/v1/driving_periods", "driving_periods", "driving_period");
-  const unidentified = await probe("/v1/driving_periods", "driving_periods", "driving_period", { assigned_to_driver: "false" });
+  const driving      = await probe();
+  const unidentified = await probe({ assigned_to_driver: "false" });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vehicleOf = (p: any): number | null => p?.vehicle?.id ?? p?.vehicle_id ?? null;
@@ -235,7 +249,7 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
   return c.json({
     queriedVehicleId: vehicleIdNum,
     queriedDays:      days,
-    queriedStartTime: startTime,
+    queriedStartTime: `${startDateStr} → ${endDateStr}`,
     pagesCapAt:       MAX_PAGES,
     drivingPeriods:        summarize(driving),
     unidentifiedDriving:   summarize(unidentified),
