@@ -146,7 +146,6 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
   const [customDate, setCustomDate]     = useState<string>('');
   const [movements, setMovements]       = useState<MovementCard[]>([]);
   const [loading, setLoading]           = useState(false);
-  const [backfilling, setBackfilling]   = useState(false);
   const [error, setError]               = useState<string | null>(null);
   /** Index into the chronologically-ascending clusters array. null =
    *  show current location instead. */
@@ -186,7 +185,12 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
     return () => window.removeEventListener('keydown', handler);
   }, [onClose, selectedIdx, location]);
 
-  // Fetch + auto-backfill on range change.
+  // Read-from-DB only. Motive ingestion happens in two places, both
+  // outside this modal: the 5-min incremental cron, and the manual
+  // "Backfill" buttons in Settings → Integrations → Motive. The modal
+  // just paints whatever's in the DB for the requested window. If a
+  // user wants older data than the cron's covered, they trigger a
+  // wider backfill once from Settings and it's there for everyone.
   useEffect(() => {
     if (!linkedToMotive) return;
     if (range === 'custom' && !customDate) return;
@@ -196,16 +200,6 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
       setLoading(true);
       setSelectedIdx(null); // reset selection when range changes
       try {
-        if (lookbackDays > 7) {
-          setBackfilling(true);
-          try {
-            await railway.syncMovements({ mode: 'backfill', windowDays: lookbackDays });
-          } catch (e) {
-            console.warn('[AssetDetailModal] auto-backfill failed', e);
-          } finally {
-            if (!cancelled) setBackfilling(false);
-          }
-        }
         let fromIso: string;
         let toIso:   string;
         if (range === 'custom' && customDate) {
@@ -628,13 +622,7 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
                   <a href="/settings" className="font-medium" style={{ color: 'var(--gc-blue)' }}>Link it in Settings</a>
                 </div>
               )}
-              {linkedToMotive && backfilling && (
-                <div className="text-center py-3 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-                  <Loader2 size={14} className="inline animate-spin mr-1.5" />
-                  Backfilling history…
-                </div>
-              )}
-              {linkedToMotive && loading && !backfilling && (
+              {linkedToMotive && loading && (
                 <div className="flex items-center justify-center gap-2 py-8 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
                   <Loader2 size={14} className="animate-spin" /> Loading…
                 </div>
