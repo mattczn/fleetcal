@@ -1002,9 +1002,19 @@ export default function LoadDetailScreen() {
             push. Pulls from load_notifications via the loads endpoint. */}
         {(() => {
           const pending = load.pendingNotificationKinds ?? [];
-          // The Confirm banner below already prompts for confirm kind,
-          // so suppress it from this summary to avoid duplication.
-          const remaining = pending.filter(k => k !== "confirm");
+          // This banner lists ACTION-required nudges only — things the
+          // dispatcher asked the driver to actively do. Excludes:
+          //   - 'confirm'         → has its own green "Confirm Load" button below
+          //   - 'assigned'        → informational, just a heads-up about a new load
+          //   - 'reassigned_away' → informational, load is no longer theirs
+          //   - 'load_cancelled'  → informational, load is gone
+          // Dedup by kind so the same ask doesn't render twice if the
+          // dispatcher hit the popover button repeatedly.
+          const ACTIONABLE = new Set([
+            "mark_pickup", "mark_delivery", "upload_pod",
+            "report_trailer", "upload_handoff",
+          ]);
+          const remaining = [...new Set(pending.filter(k => ACTIONABLE.has(k)))];
           if (remaining.length === 0) return null;
           const KIND_LABEL: Record<string, string> = {
             mark_pickup:    "Check in at pickup",
