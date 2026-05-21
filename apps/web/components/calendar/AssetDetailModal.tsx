@@ -38,6 +38,10 @@ interface Props {
   asset:    Asset;
   location: MotiveLocation | null;
   onClose:  () => void;
+  /** When set, the modal auto-selects the cluster containing this
+   *  Motive driving_period id once data loads. Used when opening from
+   *  a calendar movement card click. */
+  initialMotivePeriodId?: number;
 }
 
 const PRESETS = [
@@ -66,6 +70,16 @@ function fmtDuration(min: number): string {
 
 function fmtTime(iso: string, tz: string): string {
   return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+}
+
+/** Tint asset.color with an alpha — used for card highlight backgrounds. */
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!m) return `rgba(0,0,0,${alpha})`;
+  const r = parseInt(m[1], 16);
+  const g = parseInt(m[2], 16);
+  const b = parseInt(m[3], 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function fmtDateTime(iso: string, tz: string): string {
@@ -118,7 +132,7 @@ function makeDotMarker(color: string, label: string): HTMLDivElement {
   return el;
 }
 
-export default function AssetDetailModal({ asset, location, onClose }: Props) {
+export default function AssetDetailModal({ asset, location, onClose, initialMotivePeriodId }: Props) {
   const overlayRef        = useRef<HTMLDivElement>(null);
   const mapContainer      = useRef<HTMLDivElement>(null);
   const mapRef            = useRef<google.maps.Map | null>(null);
@@ -137,6 +151,10 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
   /** Index into the chronologically-ascending clusters array. null =
    *  show current location instead. */
   const [selectedIdx, setSelectedIdx]   = useState<number | null>(null);
+  /** Flips true once mapRef.current is initialized — the layer-paint
+   *  effect needs this so it doesn't try to draw before the Map
+   *  instance exists. */
+  const [mapReady, setMapReady]         = useState(false);
 
   const linkedToMotive = !!asset.motiveVehicleId;
 
@@ -152,8 +170,11 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        // Esc deselects first, then closes on second press.
-        if (selectedIdx !== null) setSelectedIdx(null);
+        // If we have a known current location, Esc deselects first
+        // and closes only on the second press. Without a location to
+        // fall back to, Esc just closes — the empty-map state would
+        // be useless.
+        if (selectedIdx !== null && location) setSelectedIdx(null);
         else onClose();
       } else if (e.key === 'ArrowRight' && selectedIdx !== null) {
         setSelectedIdx(i => i !== null && i < (clustersRef.current.length - 1) ? i + 1 : i);
@@ -163,7 +184,7 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, selectedIdx]);
+  }, [onClose, selectedIdx, location]);
 
   // Fetch + auto-backfill on range change.
   useEffect(() => {
@@ -225,6 +246,18 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
   const clustersRef = useRef<MovementCluster[]>(clusters);
   useEffect(() => { clustersRef.current = clusters; }, [clusters]);
 
+  // If opened from a calendar movement click, pre-select the cluster
+  // containing that motive_period id. Runs once after clusters land.
+  const initialAppliedRef = useRef(false);
+  useEffect(() => {
+    if (initialAppliedRef.current) return;
+    if (initialMotivePeriodId == null) { initialAppliedRef.current = true; return; }
+    if (clusters.length === 0) return;
+    const idx = clusters.findIndex(c => c.members.some(m => m.id === initialMotivePeriodId));
+    if (idx >= 0) setSelectedIdx(idx);
+    initialAppliedRef.current = true;
+  }, [clusters, initialMotivePeriodId]);
+
   const selectedCluster = selectedIdx !== null ? clusters[selectedIdx] : null;
 
   // Groups for the right-hand list. Days reversed (newest first) and
@@ -272,14 +305,17 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
         disableDefaultUI: false, clickableIcons: false,
         gestureHandling: 'greedy',
       });
+      setMapReady(true);
     });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-paint the map's layer whenever selection changes.
+  // Re-paint the map's layer whenever selection changes. Waits on
+  // mapReady so the first paint doesn't fire while the map promise
+  // is still resolving.
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapReady || !mapRef.current) return;
     let cancelled = false;
     (async () => {
       const google = await loadGoogleMaps();
@@ -380,7 +416,7 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIdx, location, asset.color, asset.motiveVehicleId]);
+  }, [selectedIdx, location, asset.color, asset.motiveVehicleId, mapReady]);
 
   // Auto-scroll the right list to keep the selected card visible.
   const cardRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
@@ -401,7 +437,7 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
     >
       <div
         className="relative flex flex-col rounded-2xl overflow-hidden"
-        style={{ width: 1200, height: 720, maxWidth: '96vw', maxHeight: '92vh', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        style={{ width: 1200, height: 864, maxWidth: '96vw', maxHeight: '94vh', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -487,12 +523,12 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
                       <ChevronRight size={16} />
                     </button>
                     <button
-                      onClick={() => setSelectedIdx(null)}
+                      onClick={() => { if (location) setSelectedIdx(null); else onClose(); }}
                       className="p-1.5 rounded-full transition-colors ml-1"
                       style={{ color: 'var(--gc-text-3)' }}
                       onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
                       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                      title="Back to current location (Esc)"
+                      title={location ? 'Back to current location (Esc)' : 'Close (Esc)'}
                     >
                       <X size={14} />
                     </button>
@@ -632,15 +668,17 @@ export default function AssetDetailModal({ asset, location, onClose }: Props) {
                             else    cardRefs.current.delete(idx);
                           }}
                           onClick={() => setSelectedIdx(idx)}
-                          className="flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors"
+                          className="relative flex items-center gap-3 pl-3.5 pr-3 py-2 rounded-lg text-left transition-colors overflow-hidden"
                           style={{
-                            background: selected ? 'var(--gc-blue-light)' : 'var(--gc-bg)',
-                            border: `1px solid ${selected ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+                            background: selected ? hexToRgba(asset.color, 0.14) : 'var(--gc-bg)',
+                            border: `1px solid ${selected ? asset.color : 'var(--gc-border-light)'}`,
                           }}
-                          onMouseEnter={e => { if (!selected) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = selected ? 'var(--gc-blue-light)' : 'var(--gc-bg)'; }}
+                          onMouseEnter={e => { if (!selected) e.currentTarget.style.background = hexToRgba(asset.color, 0.06); }}
+                          onMouseLeave={e => { e.currentTarget.style.background = selected ? hexToRgba(asset.color, 0.14) : 'var(--gc-bg)'; }}
                         >
-                          <div className="text-[12px] font-mono tabular-nums shrink-0" style={{ color: selected ? 'var(--gc-blue)' : 'var(--gc-text-2)', minWidth: 56 }}>
+                          {/* Color stripe — asset color, full height left edge */}
+                          <span aria-hidden className="absolute left-0 top-0 bottom-0" style={{ width: 3, background: asset.color }} />
+                          <div className="text-[12px] font-mono tabular-nums shrink-0" style={{ color: selected ? 'var(--gc-text-1)' : 'var(--gc-text-2)', minWidth: 56 }}>
                             {time}
                           </div>
                           <div className="flex-1 min-w-0">

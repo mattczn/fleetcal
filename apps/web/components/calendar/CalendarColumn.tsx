@@ -5,11 +5,11 @@ import { Loader2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
 import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
-import { clusterMovements, type MovementCluster } from '@/lib/clusterMovements';
+import { clusterMovements } from '@/lib/clusterMovements';
 
 import CalendarEvent from './CalendarEvent';
 import MovementCardView from './MovementCard';
-import MovementDetailPanel from './MovementDetailPanel';
+import AssetDetailModal from './AssetDetailModal';
 
 interface Props {
   asset: Asset;
@@ -95,7 +95,10 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, vi
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
   const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, calendarMode, movementsByVehicle, movementsLoading } = useCalendarStore();
-  const [openCluster, setOpenCluster] = useState<MovementCluster | null>(null);
+  // When a movement card is clicked, we open AssetDetailModal pre-
+  // focused on that cluster — pass the first member's Motive period id
+  // so the modal can find the right cluster after its own re-fetch.
+  const [openMovementId, setOpenMovementId] = useState<number | null>(null);
   const dateStr = localDateStr(currentDate);
   const mode = calendarMode;
 
@@ -213,7 +216,12 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
         // MovementCard so it reads as "same truck, different layer."
         <>
           {movementClusters.map(c => (
-            <MovementCardView key={c.id} cluster={c} assetColor={asset.color} onClick={() => setOpenCluster(c)} />
+            <MovementCardView
+              key={c.id}
+              cluster={c}
+              assetColor={asset.color}
+              onClick={() => setOpenMovementId(c.members[0].id)}
+            />
           ))}
           {movementsLoading && movementClusters.length === 0 && (
             <div className="absolute inset-x-0 top-12 flex flex-col items-center gap-2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }}>
@@ -240,11 +248,12 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
             <CalendarEvent key={event.id} event={event} asset={asset} colIdx={colIdx} totalCols={totalCols} onSmartAssign={onSmartAssign} />
           ))
       }
-      {openCluster && (
-        <MovementDetailPanel
-          cluster={openCluster}
-          asset={{ name: asset.name, color: asset.color, unit: asset.unit ?? undefined }}
-          onClose={() => setOpenCluster(null)}
+      {openMovementId !== null && (
+        <AssetDetailModal
+          asset={asset}
+          location={null}
+          initialMotivePeriodId={openMovementId}
+          onClose={() => setOpenMovementId(null)}
         />
       )}
     </div>
