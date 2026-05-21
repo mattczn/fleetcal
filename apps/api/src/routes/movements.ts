@@ -171,14 +171,20 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const items: any[] = [];
     let pagesFetched = 0;
-    const baseParams = new URLSearchParams({
-      start_date: startDateStr,
-      end_date:   endDateStr,
-      "vehicle_ids[]": String(vehicleIdNum),
-      per_page:   "100",
-      ...extraParams,
-    });
-    let nextUrl: string | null = `https://api.gomotive.com/v1/driving_periods?${baseParams.toString()}`;
+    // Manually compose the query string so the brackets in
+    // `vehicle_ids[]` stay literal — URLSearchParams encodes them to
+    // %5B%5D and some Motive endpoints don't decode that form.
+    const parts: string[] = [
+      `start_date=${encodeURIComponent(startDateStr)}`,
+      `end_date=${encodeURIComponent(endDateStr)}`,
+      `vehicle_ids[]=${vehicleIdNum}`,
+      `per_page=100`,
+    ];
+    for (const [k, v] of Object.entries(extraParams)) {
+      parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+    }
+    const firstUrl = `https://api.gomotive.com/v1/driving_periods?${parts.join('&')}`;
+    let nextUrl: string | null = firstUrl;
     let httpStatus: number | null = null;
     let error: string | null = null;
     let firstRawSample: unknown = null;
@@ -209,7 +215,7 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
     } catch (e) {
       error = (e as Error).message;
     }
-    return { items, pagesFetched, httpStatus, error, firstRawSample };
+    return { items, pagesFetched, httpStatus, error, firstRawSample, firstUrl };
   };
 
   // Motive's /v1/driving_periods defaults to "assigned periods only"
@@ -233,6 +239,7 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
       periodsForQueriedVehicle: probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum).length,
       sampleForQueriedVehicle: probeRes.items.filter(p => vehicleOf(p) === vehicleIdNum).slice(0, 2),
       firstRawSample: probeRes.firstRawSample,
+      firstUrl: probeRes.firstUrl,
       error: probeRes.error,
     };
   };

@@ -3002,6 +3002,9 @@ function DebugProbeBlock({ title, probe, vehicleId, days }: { title: string; pro
       </div>
       <div>Pages fetched: {probe.pagesFetched} · Total across all vehicles: {probe.totalReturned}</div>
       <div>Vehicle ids in response: [{probe.uniqueVehicleIds.join(', ') || '(none)'}]</div>
+      {probe.firstUrl && (
+        <div style={{ wordBreak: 'break-all', color: 'var(--gc-text-3)' }}>URL: {probe.firstUrl}</div>
+      )}
       {probe.error && !httpFail && (
         <div style={{ color: '#d93025' }}>Error: {probe.error}</div>
       )}
