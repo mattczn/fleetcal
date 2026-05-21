@@ -123,6 +123,25 @@ function withResolvedDriverId<T extends { driverName?: string; driverId?: number
   return { ...ev, driverId: match?.id };
 }
 
+/** `[time]` per the notification copy spec — "ddd M/D h:mm A" (e.g.
+ *  "Wed 5/21 8:00 AM"). One format used across every push. Input is a
+ *  naive ISO start ("YYYY-MM-DDTHH:mm") in HOME_TZ. */
+function fmtPushTime(naive: string | undefined | null): string {
+  if (!naive) return '';
+  const m = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return naive;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  let hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  if (hour === 0) hour = 12;
+  else if (hour > 12) hour -= 12;
+  const wd = new Date(year, month - 1, day).toLocaleDateString('en-US', { weekday: 'short' });
+  return `${wd} ${month}/${day} ${hour}:${String(minute).padStart(2, '0')} ${ampm}`;
+}
+
 // Fire a push notification to a driver via the dispatch API. Best-effort —
 // failures are logged but don't block the event write.
 //
@@ -1123,11 +1142,13 @@ export const useCalendarStore = create<CalendarStore>()(
         // notification_rules.onAssignment.enabled + hoursBeforeStart
         // window + quiet hours + the driver's per-rule opt-out.
         if (resolved.driverId) {
+          // [route] = event.title (broker: pickup–delivery), [time] = canonical 12h.
+          // eventId is required so the bell history can anchor the row.
           notifyDriver(
             resolved.driverId,
-            'New load assigned',
-            event.loadNum ? `Load #${event.loadNum} — ${event.title}` : event.title,
-            { loadId: created.id },
+            'New Load Assigned',
+            `${event.title} — ${fmtPushTime(event.start)}. Tap to view.`,
+            { type: 'assigned', loadId: created.id, eventId: created.id, url: `/load/${created.id}` },
             'on_assignment',
             event.start,
           );
@@ -1203,24 +1224,28 @@ export const useCalendarStore = create<CalendarStore>()(
           const pickupMs   = ev.start ? Date.parse(ev.start.replace(' ', 'T')) : NaN;
           const hoursOut   = isFinite(pickupMs) ? (pickupMs - Date.now()) / 3_600_000 : Infinity;
           const lastMinute = hoursOut > 0 && hoursOut < 6;
+          // Copy spec #6/7 (≥6h) vs #8 (<6h, last-minute). [route] =
+          // ev.title (broker: pickup–delivery), [time] = canonical 12h.
           notifyDriver(
             newDriverId,
-            lastMinute ? 'Load assigned — pickup soon' : 'Load assigned to you',
-            ev.loadNum ? `Load #${ev.loadNum} — ${ev.title}` : ev.title,
+            lastMinute ? 'New Load Picking Up Soon' : 'New Load Assigned',
+            lastMinute
+              ? `${ev.title} — Pickup ${fmtPushTime(ev.start)}. Confirm now.`
+              : `${ev.title} — ${fmtPushTime(ev.start)}. Tap to view.`,
             { type: lastMinute ? 'last_minute_assign' : 'assigned', loadId: ev.loadId, eventId: id, url: `/load/${id}` },
             'on_assignment',
             ev.start,
           );
-          // If the previous driver had confirmed, tell them their
-          // load is no longer theirs so they don't show up to a
-          // pickup that's been reshuffled.
+          // Copy spec #9. Only firing when the prior driver had
+          // confirmed — preserves the original "protect drivers who
+          // are about to roll" intent. "unconditional" in the spec
+          // refers to bypassing org rules + opt-outs, not always
+          // firing.
           if (prevDriverId && prevConfirmedAt) {
             notifyDriver(
               prevDriverId,
-              'Load reassigned',
-              ev.loadNum
-                ? `Load #${ev.loadNum} is no longer assigned to you.`
-                : `${ev.title} is no longer assigned to you.`,
+              'Schedule Changed',
+              `${ev.title} is no longer assigned to you.`,
               // Deep-link to home — the load isn't theirs anymore, no
               // point routing to the load detail.
               { type: 'reassigned_away', loadId: ev.loadId, eventId: id, url: '/' },
@@ -1266,14 +1291,14 @@ export const useCalendarStore = create<CalendarStore>()(
       console.error('cancelEventKeepLoad:', err),
     );
 
-    // Notify the driver if they had already confirmed — otherwise they
-    // walk into a pickup that no longer exists. Don't bother for
-    // unconfirmed loads (driver hadn't accepted yet).
+    // Copy spec #10 — cancel-keep-load. Only notify if the driver had
+    // confirmed: otherwise they hadn't committed to the load and a
+    // ping would be noise.
     if (ev.driverId && ev.confirmedAt) {
       notifyDriver(
         ev.driverId,
-        'Load cancelled',
-        ev.loadNum ? `Load #${ev.loadNum} has been cancelled.` : `${ev.title} has been cancelled.`,
+        'Load Cancelled',
+        `${ev.title} has been cancelled.`,
         // Deep-link to home — the load is gone, no detail to route to.
         { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
       );
@@ -1321,13 +1346,14 @@ export const useCalendarStore = create<CalendarStore>()(
     // Revenue + has loadId: DELETE /v1/loads/:loadId cascades to events.
     railway.deleteLoad(ev.loadId).catch(rollback);
 
-    // Notify the driver if they had already confirmed — same logic as
-    // cancelEventKeepLoad. They need to know the load is dead.
+    // Copy spec #11 — full-delete. Identical user-facing copy to #10
+    // since the two paths are indistinguishable from the driver's
+    // perspective. Same confirmed-only gate.
     if (ev.driverId && ev.confirmedAt) {
       notifyDriver(
         ev.driverId,
-        'Load cancelled',
-        ev.loadNum ? `Load #${ev.loadNum} has been cancelled.` : `${ev.title} has been cancelled.`,
+        'Load Cancelled',
+        `${ev.title} has been cancelled.`,
         // Deep-link to home — the load is gone, no detail to route to.
         { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
       );

@@ -45,8 +45,31 @@ interface ActionDef {
   push: (load: CalendarEvent | undefined) => { title: string; body: string };
 }
 
-function loadLabel(load: CalendarEvent | undefined): string {
-  return load?.loadNum ? `Load #${load.loadNum}` : (load?.title ?? 'your load');
+/** `[route]` per the notification copy spec — the event title field,
+ *  formatted "broker: pickup–delivery" upstream. Single source of
+ *  truth: don't synthesize a separate route string. */
+function routeLabel(load: CalendarEvent | undefined): string {
+  return load?.title?.trim() || 'your load';
+}
+
+/** `[time]` per the notification copy spec — "ddd M/D h:mm A"
+ *  (e.g. "Wed 5/21 8:00 AM"). One format used across every push so
+ *  the lock-screen experience is consistent. Input is the event's
+ *  naive ISO start ("YYYY-MM-DDTHH:mm"). */
+function fmtPushTime(naive: string | undefined): string {
+  if (!naive) return '';
+  const m = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return naive;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  let hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  if (hour === 0) hour = 12;
+  else if (hour > 12) hour -= 12;
+  const wd = new Date(year, month - 1, day).toLocaleDateString('en-US', { weekday: 'short' });
+  return `${wd} ${month}/${day} ${hour}:${String(minute).padStart(2, '0')} ${ampm}`;
 }
 
 const ACTIONS: ActionDef[] = [
@@ -55,8 +78,8 @@ const ACTIONS: ActionDef[] = [
     description: 'Ask driver to confirm they\'ve got the load.',
     icon: CheckCircle2,
     push: (load) => ({
-      title: 'Confirm your load',
-      body:  `${loadLabel(load)} — tap to confirm.`,
+      title: 'Confirm On Time Pickup',
+      body:  `${routeLabel(load)} — confirm you've got it. Pickup ${fmtPushTime(load?.start)}.`,
     }),
   },
   {
@@ -64,8 +87,8 @@ const ACTIONS: ActionDef[] = [
     description: 'Prompt driver to check in at pickup stops.',
     icon: PackageCheck,
     push: (load) => ({
-      title: 'Mark picked up',
-      body:  `${loadLabel(load)} — check in at pickup.`,
+      title: 'Check In At Pickup',
+      body:  `${routeLabel(load)} — Check in once you're on site.`,
     }),
   },
   {
@@ -73,8 +96,8 @@ const ACTIONS: ActionDef[] = [
     description: 'Prompt driver to check in at delivery + upload POD.',
     icon: MapPin,
     push: (load) => ({
-      title: 'Mark delivered',
-      body:  `${loadLabel(load)} — check in at delivery and upload POD.`,
+      title: 'Check In At Delivery',
+      body:  `${routeLabel(load)} — Check in once you're on site.`,
     }),
   },
   {
@@ -82,8 +105,8 @@ const ACTIONS: ActionDef[] = [
     description: 'Prompt driver to upload the proof-of-delivery doc.',
     icon: FileSignature,
     push: (load) => ({
-      title: 'Upload POD',
-      body:  `${loadLabel(load)} — upload POD/BOL.`,
+      title: 'Upload Paperwork',
+      body:  `${routeLabel(load)} — Upload POD for each stop.`,
     }),
   },
   {
@@ -91,8 +114,8 @@ const ACTIONS: ActionDef[] = [
     description: 'Prompt driver to set the trailer they\'re pulling.',
     icon: Truck,
     push: (load) => ({
-      title: 'Report trailer',
-      body:  `${loadLabel(load)} — pick the trailer you\'re pulling.`,
+      title: 'Which trailer?',
+      body:  `${routeLabel(load)} — Tell us which trailer you\'re pulling.`,
     }),
   },
 ];

@@ -1022,14 +1022,15 @@ export type LoadNotificationKind =
   | 'mark_delivery'
   | 'upload_pod'
   | 'report_trailer'
-  // Informational — driver doesn't need to act. Auto-acked on insert
-  // so it doesn't inflate the pending badge.
+  // Informational — driver doesn't need to act. Cleared from the
+  // pending badge when the driver opens the bell (mark-viewed).
   | 'assigned'
-  | 'reassigned_away';
+  | 'reassigned_away'
+  | 'load_cancelled';
 
 export const LOAD_NOTIFICATION_KINDS: readonly LoadNotificationKind[] = [
   'confirm', 'mark_pickup', 'mark_delivery', 'upload_pod', 'report_trailer',
-  'assigned', 'reassigned_away',
+  'assigned', 'reassigned_away', 'load_cancelled',
 ];
 
 export interface LoadNotification {

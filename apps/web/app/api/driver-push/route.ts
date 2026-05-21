@@ -108,6 +108,9 @@ async function recordViaRailway(
   } else if (dataType === 'reassigned_away') {
     kind = 'reassigned_away';
     label = 'Auto: load reassigned';
+  } else if (dataType === 'load_cancelled') {
+    kind = 'load_cancelled';
+    label = 'Auto: load cancelled';
   }
   if (!kind) return;
 

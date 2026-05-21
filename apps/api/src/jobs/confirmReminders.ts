@@ -66,12 +66,23 @@ function parseHm(hm: string | undefined | null): number | null {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
+/** `[time]` per the notification copy spec — "ddd M/D h:mm A"
+ *  (e.g. "Wed 5/21 8:00 AM"). Consistent with the format the
+ *  web (notifyDriver / NotifyDriverPopover) uses so lock-screen
+ *  copy reads the same regardless of which path fired the push. */
 function fmtPickup(naive: string): string {
   const m = naive.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   if (!m) return naive;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  const wd = d.toLocaleDateString("en-US", { weekday: "short" });
-  return `${wd} ${Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}`;
+  const year  = Number(m[1]);
+  const month = Number(m[2]);
+  const day   = Number(m[3]);
+  let hour    = Number(m[4]);
+  const min   = Number(m[5]);
+  const ampm = hour >= 12 ? "PM" : "AM";
+  if (hour === 0) hour = 12;
+  else if (hour > 12) hour -= 12;
+  const wd = new Date(year, month - 1, day).toLocaleDateString("en-US", { weekday: "short" });
+  return `${wd} ${month}/${day} ${hour}:${String(min).padStart(2, "0")} ${ampm}`;
 }
 
 // ── Per-org rules cache (one job invocation = one Map) ────────────────
@@ -106,6 +117,9 @@ interface PendingRow {
   driver_id: number;
   load_id:   string | null;
   start:     string;
+  /** events.title — formatted "broker: pickup–delivery" upstream. Used
+   *  as [route] in the push copy spec. */
+  title:     string;
   load:      { load_num: string | null } | { load_num: string | null }[] | null;
 }
 
@@ -114,6 +128,7 @@ interface DeliveredRow {
   org_id:       string;
   driver_id:    number | null;
   load_id:      string | null;
+  title:        string;
   /** Proxy for the actual delivery time — we use events.updated_at on
    *  rows with status='delivered'. The events table doesn't yet have a
    *  delivered_at column (similar to confirmed_at) so this is the
@@ -152,7 +167,7 @@ async function runEveningSweep(rulesCache: Map<string, NotificationRules>) {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, org_id, driver_id, load_id, start, load:loads(load_num)")
+    .select("id, org_id, driver_id, load_id, start, title, load:loads(load_num)")
     .in("status", ["scheduled", "assigned", "dispatched"])
     .is("deleted_at", null)
     .is("confirmed_at", null)
@@ -193,16 +208,23 @@ async function runEveningSweep(rulesCache: Map<string, NotificationRules>) {
     }
 
     try {
-      const firstPickup = loads.map(l => l.start).sort()[0];
+      // Copy spec #12a (single) vs #12b (batch). The single branch
+      // leads with the route since there's only one load to confirm;
+      // the batch branch can't name a route so it leads with the
+      // first pickup time + count.
+      const firstLoad = [...loads].sort((a, b) => a.start.localeCompare(b.start))[0];
       const count = loads.length;
+      const title = count === 1
+        ? "Confirm Tomorrow's Loads"
+        : `Confirm ${count} Upcoming Loads`;
       const body = count === 1
-        ? `1 load to confirm — pickup ${fmtPickup(firstPickup)}.`
-        : `${count} loads to confirm — first pickup ${fmtPickup(firstPickup)}.`;
+        ? `${firstLoad.title} — Pickup ${fmtPickup(firstLoad.start)}. Tap to confirm.`
+        : `First pickup ${fmtPickup(firstLoad.start)}. Tap to review.`;
       const did = await sendAutoPushToDriver(orgId, driverId, "evening_confirm_sweep", {
-        title: count === 1 ? "Confirm tomorrow's load" : `Confirm ${count} upcoming loads`,
+        title,
         body,
         data: count === 1
-          ? { type: "confirm", eventId: loads[0].id, url: `/load/${loads[0].id}` }
+          ? { type: "confirm", eventId: firstLoad.id, url: `/load/${firstLoad.id}` }
           : { type: "confirm", url: "/loads" },
       });
       if (!did) { suppressed++; continue; }
@@ -225,7 +247,7 @@ async function runPrePickupSweep(rulesCache: Map<string, NotificationRules>) {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, org_id, driver_id, load_id, start, load:loads(load_num)")
+    .select("id, org_id, driver_id, load_id, start, title, load:loads(load_num)")
     .in("status", ["scheduled", "assigned", "dispatched"])
     .is("deleted_at", null)
     .is("confirmed_at", null)
@@ -264,11 +286,12 @@ async function runPrePickupSweep(rulesCache: Map<string, NotificationRules>) {
   for (const row of eligible) {
     if (recentlyNudged.has(row.id)) { skipped++; continue; }
     try {
-      const loadObj = Array.isArray(row.load) ? row.load[0] : row.load;
-      const loadNum = loadObj?.load_num ?? null;
+      // Copy spec #13 — pre-pickup confirm reminder. [route] = event
+      // title (broker: pickup–delivery). The load.load_num join is
+      // kept for downstream code but isn't used in the push copy.
       const did = await sendAutoPushToDriver(row.org_id, row.driver_id, "pre_pickup_confirm", {
-        title: loadNum ? `Confirm load #${loadNum}` : "Confirm load",
-        body:  `Pickup at ${fmtPickup(row.start)}. Tap to confirm.`,
+        title: "Confirm Pickup",
+        body:  `${row.title} — Pickup ${fmtPickup(row.start)}. Tap to confirm.`,
         data:  { type: "confirm", eventId: row.id, url: `/load/${row.id}` },
       });
       if (!did) { suppressed++; continue; }
@@ -312,7 +335,7 @@ async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
     const windowStart = new Date(Date.now() - (target + 1) * 3_600_000).toISOString();
     const { data: events, error: evErr } = await supabase
       .from("events")
-      .select("id, org_id, driver_id, load_id, updated_at, load:loads(load_num)")
+      .select("id, org_id, driver_id, load_id, updated_at, title, load:loads(load_num)")
       .eq("org_id", orgRow.org_id)
       .eq("status", "delivered")
       .is("deleted_at", null)
@@ -352,11 +375,14 @@ async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
     if (haveSomePod.has(row.load_id!)) { skipped++; continue; }
     if (recentlyNudged.has(row.id))    { skipped++; continue; }
     try {
-      const loadObj = Array.isArray(row.load) ? row.load[0] : row.load;
-      const loadNum = loadObj?.load_num ?? null;
+      // Copy spec #14 — missing-POD reminder. Only one where [route]
+      // doesn't lead the body (sentence structure reads better). Risks
+      // truncation on lock screen with a long broker:city–city title;
+      // accept that since POD reminders get opened regardless of
+      // preview.
       const did = await sendAutoPushToDriver(row.org_id, row.driver_id!, "missing_pod_reminder", {
-        title: loadNum ? `Upload POD for load #${loadNum}` : "Upload POD",
-        body:  `Don't forget — your delivered load is still missing a POD.`,
+        title: "Reminder: Upload Paperwork",
+        body:  `We still need the POD for ${row.title}. Please upload ASAP.`,
         data:  { type: "upload_pod", eventId: row.id, url: `/load/${row.id}` },
       });
       if (!did) { suppressed++; continue; }

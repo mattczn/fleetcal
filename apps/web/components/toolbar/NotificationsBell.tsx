@@ -30,6 +30,7 @@ const KIND_LABEL: Record<LoadNotificationKind, string> = {
   report_trailer:   'Report trailer',
   assigned:         'Load assigned',
   reassigned_away:  'Load reassigned',
+  load_cancelled:   'Load cancelled',
 };
 
 const KIND_TINT: Record<LoadNotificationKind, { bg: string; fg: string }> = {
@@ -40,6 +41,7 @@ const KIND_TINT: Record<LoadNotificationKind, { bg: string; fg: string }> = {
   report_trailer:   { bg: '#fee2e2', fg: '#991b1b' },
   assigned:         { bg: '#e0f2fe', fg: '#075985' },
   reassigned_away:  { bg: '#fef3c7', fg: '#92400e' },
+  load_cancelled:   { bg: '#f3f4f6', fg: '#374151' },
 };
 
 function relativeTime(iso: string): string {

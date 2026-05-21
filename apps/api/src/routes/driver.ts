@@ -334,7 +334,7 @@ driver.post("/notifications/mark-viewed", async (c) => {
     .update({ acknowledged_at: new Date().toISOString() } as never)
     .eq("driver_id", driverId)
     .eq("org_id", orgId)
-    .in("kind", ["assigned", "reassigned_away"])
+    .in("kind", ["assigned", "reassigned_away", "load_cancelled"])
     .is("acknowledged_at", null);
   if (error) {
     console.error("[POST /v1/driver/notifications/mark-viewed] failed:", error);

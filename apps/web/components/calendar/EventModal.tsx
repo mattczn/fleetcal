@@ -4425,12 +4425,13 @@ export default function EventModal() {
                     mark_delivery:   currentEv.status === 'delivered',
                     upload_pod:      loadDocuments.some(d => d.kind === 'pod'),
                     report_trailer:  currentEv.trailerId != null,
-                    // Informational kinds — auto-acked at insert time
-                    // server-side, so the popover never needs to gray
-                    // them out client-side. Treat as always-acked.
+                    // Informational kinds — popover never needs to gray
+                    // them out client-side. Treat as always-acked so the
+                    // type satisfies Record<LoadNotificationKind, bool>.
                     assigned:        true,
                     reassigned_away: true,
-                  } : { confirm:false, mark_pickup:false, mark_delivery:false, upload_pod:false, report_trailer:false, assigned:true, reassigned_away:true };
+                    load_cancelled:  true,
+                  } : { confirm:false, mark_pickup:false, mark_delivery:false, upload_pod:false, report_trailer:false, assigned:true, reassigned_away:true, load_cancelled:true };
                   return (
                     <div className="mt-1.5 flex items-center gap-1.5 flex-wrap" style={{ position: 'relative' }}>
                       {sel?.phone && <DriverPhoneCopy phone={sel.phone} />}
