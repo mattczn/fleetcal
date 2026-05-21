@@ -29,7 +29,6 @@ import type { DriverDocument, DriverDocumentKind } from "@fleetcal/types";
 import {
   NOTIFICATION_RULE_KEYS,
   NOTIFICATION_RULE_LABEL,
-  NOTIFICATION_RULE_BLURB,
   type NotificationRuleKey,
 } from "@fleetcal/types";
 import { useOrgTz, describeTz } from "@/lib/orgTz";
@@ -1064,12 +1063,9 @@ function NotificationsPrefs() {
             gap: 12,
           }}
         >
-          <View style={{ flex: 1 }}>
-            <Text style={[txt(700), { fontSize: 14, color: "#202124", marginBottom: 2 }]}>
+          <View style={{ flex: 1, justifyContent: "center" }}>
+            <Text style={[txt(700), { fontSize: 14, color: "#202124" }]}>
               {NOTIFICATION_RULE_LABEL[ruleKey]}
-            </Text>
-            <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]}>
-              {NOTIFICATION_RULE_BLURB[ruleKey]}
             </Text>
           </View>
           <PrefSwitch
