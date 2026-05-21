@@ -311,4 +311,141 @@ movements.get("/debug", requireCapability("org.settings.edit"), async (c) => {
   });
 });
 
+// ── Verify endpoint ─────────────────────────────────────────────────────
+// Per-vehicle comparison of Motive's driving_periods against our DB
+// for a given date window. Useful for catching ingest gaps: pulls the
+// truth from Motive and shows side-by-side counts + sums by vehicle.
+
+movements.get("/verify", requireCapability("org.settings.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const url   = new URL(c.req.url);
+  const from  = url.searchParams.get("from"); // YYYY-MM-DD
+  const to    = url.searchParams.get("to");   // YYYY-MM-DD (exclusive)
+  if (!from || !to) return c.json({ error: "from and to required (YYYY-MM-DD)" }, 400);
+
+  const apiKey = await getOrgMotiveKey(orgId);
+  if (!apiKey) return c.json({ error: "no motive api key configured for this org" }, 400);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parseDistance = (s: any): number => {
+    if (typeof s !== "string") return 0;
+    const m = s.trim().match(/^([\d,]+\.?\d*)\s*(mi|km)?$/i);
+    if (!m) return 0;
+    const v = parseFloat(m[1].replace(/,/g, ""));
+    if (!Number.isFinite(v)) return 0;
+    const unit = (m[2] ?? "mi").toLowerCase();
+    return unit === "km" ? v * 0.621371 : v;
+  };
+
+  // Pull every driving period from Motive in the window. Hard cap
+  // to avoid runaway responses for huge orgs.
+  const MAX_PAGES = 100;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allPeriods: any[] = [];
+  let pagesFetched = 0;
+  let motiveError: string | null = null;
+  let pageNo = 1;
+  try {
+    while (pagesFetched < MAX_PAGES) {
+      const parts = [
+        `start_date=${encodeURIComponent(from)}`,
+        `end_date=${encodeURIComponent(to)}`,
+        `per_page=100`,
+        `page_no=${pageNo}`,
+      ];
+      const reqUrl = `https://api.gomotive.com/v1/driving_periods?${parts.join('&')}`;
+      const res = await fetch(reqUrl, { headers: { "x-api-key": apiKey, "Accept": "application/json" } });
+      if (!res.ok) {
+        motiveError = `HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`;
+        break;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any = await res.json();
+      const wrappers = data?.driving_periods ?? [];
+      for (const w of wrappers) allPeriods.push(w.driving_period ?? w);
+      pagesFetched++;
+
+      const pagination = data?.pagination;
+      const totalSoFar = pagesFetched * 100;
+      if (!pagination || !pagination.total || totalSoFar >= pagination.total) break;
+      pageNo++;
+    }
+  } catch (e) {
+    motiveError = (e as Error).message;
+  }
+
+  // Group Motive results by vehicle
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const motiveByVehicle: Record<number, { records: number; miles: number }> = {};
+  for (const p of allPeriods) {
+    const vid = p?.vehicle?.id;
+    if (vid == null) continue;
+    const m = motiveByVehicle[vid] ?? { records: 0, miles: 0 };
+    m.records++;
+    m.miles += parseDistance(p.distance);
+    motiveByVehicle[vid] = m;
+  }
+
+  // Query our DB for the same window
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: dbRows } = await (supabase as any)
+    .from("motive_driving_periods")
+    .select("vehicle_id, miles")
+    .eq("org_id", orgId)
+    .gte("start_time", `${from}T00:00:00Z`)
+    .lt("start_time",  `${to}T00:00:00Z`);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dbByVehicle: Record<number, { records: number; miles: number }> = {};
+  for (const r of (dbRows ?? []) as Array<{ vehicle_id: number | null; miles: number | null }>) {
+    if (r.vehicle_id == null) continue;
+    const d = dbByVehicle[r.vehicle_id] ?? { records: 0, miles: 0 };
+    d.records++;
+    d.miles += r.miles ?? 0;
+    dbByVehicle[r.vehicle_id] = d;
+  }
+
+  // Merge into per-vehicle rows
+  const allVehicleIds = new Set<number>([
+    ...Object.keys(motiveByVehicle).map(Number),
+    ...Object.keys(dbByVehicle).map(Number),
+  ]);
+  const rows = [...allVehicleIds].sort((a, b) => a - b).map(vid => {
+    const motive = motiveByVehicle[vid] ?? { records: 0, miles: 0 };
+    const db     = dbByVehicle[vid]     ?? { records: 0, miles: 0 };
+    const recordDiff = motive.records - db.records;
+    const mileDiff   = motive.miles - db.miles;
+    return {
+      vehicleId: vid,
+      motiveRecords: motive.records,
+      motiveMiles:   Math.round(motive.miles * 10) / 10,
+      dbRecords:     db.records,
+      dbMiles:       Math.round(db.miles * 10) / 10,
+      recordDiff,
+      mileDiff:      Math.round(mileDiff * 10) / 10,
+      ok:            recordDiff === 0 && Math.abs(mileDiff) < 1,
+    };
+  });
+
+  const summary = {
+    motiveTotalRecords: Object.values(motiveByVehicle).reduce((s, v) => s + v.records, 0),
+    motiveTotalMiles:   Math.round(Object.values(motiveByVehicle).reduce((s, v) => s + v.miles, 0) * 10) / 10,
+    dbTotalRecords:     Object.values(dbByVehicle).reduce((s, v) => s + v.records, 0),
+    dbTotalMiles:       Math.round(Object.values(dbByVehicle).reduce((s, v) => s + v.miles, 0) * 10) / 10,
+    vehiclesInMotive:   Object.keys(motiveByVehicle).length,
+    vehiclesInDb:       Object.keys(dbByVehicle).length,
+    okCount:            rows.filter(r => r.ok).length,
+    mismatchCount:      rows.filter(r => !r.ok).length,
+  };
+
+  return c.json({
+    window: { from, to },
+    pagesFetched,
+    pagesCapAt: MAX_PAGES,
+    motiveError,
+    summary,
+    rows,
+  });
+});
+
 export default movements;

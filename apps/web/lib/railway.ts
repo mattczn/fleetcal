@@ -455,6 +455,37 @@ class RailwayClient {
       'GET', `/v1/movements?${qs.toString()}`,
     );
   }
+  /** Per-vehicle completeness check: pulls Motive's driving_periods
+   *  for [from, to) and compares to what's in our DB. */
+  verifyMovements(from: string, to: string) {
+    const qs = new URLSearchParams({ from, to });
+    return this.req<{
+      window: { from: string; to: string };
+      pagesFetched: number;
+      pagesCapAt: number;
+      motiveError: string | null;
+      summary: {
+        motiveTotalRecords: number;
+        motiveTotalMiles:   number;
+        dbTotalRecords:     number;
+        dbTotalMiles:       number;
+        vehiclesInMotive:   number;
+        vehiclesInDb:       number;
+        okCount:            number;
+        mismatchCount:      number;
+      };
+      rows: Array<{
+        vehicleId:      number;
+        motiveRecords:  number;
+        motiveMiles:    number;
+        dbRecords:      number;
+        dbMiles:        number;
+        recordDiff:     number;
+        mileDiff:       number;
+        ok:             boolean;
+      }>;
+    }>('GET', `/v1/movements/verify?${qs.toString()}`);
+  }
   /** Debug helper — probes both Motive endpoints (driver-attributed
    *  driving_periods AND unidentified_driving_events) for one vehicle
    *  and reports back what Motive's API actually has. */

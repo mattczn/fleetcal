@@ -2669,6 +2669,30 @@ function IntegrationsPanel() {
   const [debugResult,    setDebugResult]    = useState<any>(null);
   const [debugError,     setDebugError]     = useState('');
 
+  // ── Verify: per-vehicle Motive vs DB comparison for a date range ──────────
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const [verifyFrom,    setVerifyFrom]    = useState(weekAgo);
+  const [verifyTo,      setVerifyTo]      = useState(today);
+  const [verifyRunning, setVerifyRunning] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [verifyResult,  setVerifyResult]  = useState<any>(null);
+  const [verifyError,   setVerifyError]   = useState('');
+
+  const handleVerify = async () => {
+    setVerifyRunning(true);
+    setVerifyError('');
+    setVerifyResult(null);
+    try {
+      const r = await railway.verifyMovements(verifyFrom, verifyTo);
+      setVerifyResult(r);
+    } catch (e) {
+      setVerifyError(e instanceof Error ? e.message : 'Verify failed');
+    } finally {
+      setVerifyRunning(false);
+    }
+  };
+
   const handleDebugMotive = async () => {
     if (!debugVehicleId.trim()) return;
     setDebugRunning(true);
@@ -2975,6 +2999,91 @@ function IntegrationsPanel() {
                     {' · '}assigned to driver: {debugResult.db.assignedRowsInWindow}
                     {' · '}display-eligible (≥ 1 mi): {debugResult.db.eligibleRowsInWindow}
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Verify completeness across all vehicles ──
+                For a chosen date range, pulls Motive's driving_periods
+                for the whole org and compares to our DB row-by-row. */}
+            <div className="mt-4 pt-4" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+              <div className="text-xs font-semibold mb-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                Verify completeness against Motive (all vehicles)
+              </div>
+              <p className="text-[11px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                Compares record counts and total miles per vehicle between Motive&apos;s API and our DB
+                for the chosen range. Use this after a backfill to make sure nothing was missed.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={verifyFrom}
+                  onChange={e => setVerifyFrom(e.target.value)}
+                  className="text-xs rounded-lg px-2 py-1.5 outline-none"
+                  style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+                />
+                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>→</span>
+                <input
+                  type="date"
+                  value={verifyTo}
+                  onChange={e => setVerifyTo(e.target.value)}
+                  className="text-xs rounded-lg px-2 py-1.5 outline-none"
+                  style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+                />
+                <button
+                  onClick={handleVerify}
+                  disabled={verifyRunning || !verifyFrom || !verifyTo}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                  style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-border)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                >
+                  {verifyRunning ? <Loader2 size={12} className="animate-spin inline" /> : 'Run verify'}
+                </button>
+              </div>
+              {verifyError && (
+                <p className="text-[11px] mt-2" style={{ color: '#d93025' }}>{verifyError}</p>
+              )}
+              {verifyResult && !verifyError && (
+                <div className="mt-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
+                  <div style={{ color: verifyResult.summary.mismatchCount === 0 ? '#15803d' : '#b45309', fontWeight: 600, marginBottom: 6 }}>
+                    {verifyResult.summary.mismatchCount === 0
+                      ? `✓ All ${verifyResult.summary.okCount} vehicles match`
+                      : `⚠ ${verifyResult.summary.mismatchCount} of ${verifyResult.summary.okCount + verifyResult.summary.mismatchCount} vehicles differ`}
+                  </div>
+                  <div style={{ marginBottom: 6 }}>
+                    Org totals — Motive: {verifyResult.summary.motiveTotalRecords} records · {verifyResult.summary.motiveTotalMiles} mi
+                    {' '}· DB: {verifyResult.summary.dbTotalRecords} records · {verifyResult.summary.dbTotalMiles} mi
+                  </div>
+                  {verifyResult.motiveError && (
+                    <div style={{ color: '#d93025', marginBottom: 6 }}>Motive error: {verifyResult.motiveError}</div>
+                  )}
+                  <table className="w-full text-[11px] font-mono" style={{ borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ color: 'var(--gc-text-3)' }}>
+                        <th style={{ textAlign: 'left', padding: '2px 4px' }}>Vehicle</th>
+                        <th style={{ textAlign: 'right', padding: '2px 4px' }}>Motive #</th>
+                        <th style={{ textAlign: 'right', padding: '2px 4px' }}>DB #</th>
+                        <th style={{ textAlign: 'right', padding: '2px 4px' }}>Motive mi</th>
+                        <th style={{ textAlign: 'right', padding: '2px 4px' }}>DB mi</th>
+                        <th style={{ textAlign: 'right', padding: '2px 4px' }}>Δ mi</th>
+                        <th style={{ textAlign: 'center', padding: '2px 4px' }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {verifyResult.rows.map((r: { vehicleId: number; motiveRecords: number; dbRecords: number; motiveMiles: number; dbMiles: number; mileDiff: number; ok: boolean }) => (
+                        <tr key={r.vehicleId} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                          <td style={{ padding: '2px 4px' }}>{r.vehicleId}</td>
+                          <td style={{ textAlign: 'right', padding: '2px 4px' }}>{r.motiveRecords}</td>
+                          <td style={{ textAlign: 'right', padding: '2px 4px' }}>{r.dbRecords}</td>
+                          <td style={{ textAlign: 'right', padding: '2px 4px' }}>{r.motiveMiles}</td>
+                          <td style={{ textAlign: 'right', padding: '2px 4px' }}>{r.dbMiles}</td>
+                          <td style={{ textAlign: 'right', padding: '2px 4px', color: r.ok ? 'var(--gc-text-3)' : '#b45309' }}>{r.mileDiff > 0 ? `+${r.mileDiff}` : r.mileDiff}</td>
+                          <td style={{ textAlign: 'center', padding: '2px 4px' }}>{r.ok ? '✓' : '⚠'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
