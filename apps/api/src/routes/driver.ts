@@ -1515,9 +1515,17 @@ driver.post("/loads/:id/documents", async (c) => {
   return c.json({ document: doc });
 });
 
-// DELETE /v1/driver/documents/:id — remove a document the driver uploaded.
+// DELETE /v1/driver/loads/documents/:id — remove a LOAD-attached
+// document the driver uploaded (POD, BOL, scale ticket, etc).
 // Storage object + DB row come down together; audit logged.
-driver.delete("/documents/:id", async (c) => {
+//
+// NOTE: distinct path from the /documents/:id handler further down,
+// which deletes the driver's PROFILE documents (license, medical
+// card, etc). Both used to share /documents/:id, which collided —
+// Hono picked the first-registered and broke profile-doc delete with
+// a 404. Splitting the routes by entity keeps each scoped to its own
+// table.
+driver.delete("/loads/documents/:id", async (c) => {
   const driverId   = c.get("driverId");
   const orgId      = c.get("orgId");
   const driverName = c.get("driverName");
@@ -1557,7 +1565,7 @@ driver.delete("/documents/:id", async (c) => {
 // (auto-named at upload via {LOAD_NUM}_{KIND}.{ext}), so we don't let
 // drivers rename. Restricted to the org's driver-allowed upload kinds
 // so rate_con / invoice / driver_sheet are never reachable here.
-driver.patch("/documents/:id", async (c) => {
+driver.patch("/loads/documents/:id", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
   const driverName = c.get("driverName");
@@ -1639,7 +1647,7 @@ driver.patch("/documents/:id", async (c) => {
 
 // GET /v1/driver/documents/:id/url — short-lived signed URL for viewing.
 // Same authorization as DELETE — must be the driver's load.
-driver.get("/documents/:id/url", async (c) => {
+driver.get("/loads/documents/:id/url", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
   const id = c.req.param("id");

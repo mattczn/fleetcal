@@ -191,18 +191,21 @@ export const railway = {
   uploadDocument(loadId: string, form: FormData) {
     return req<{ document: unknown }>("POST", `/v1/driver/loads/${loadId}/documents`, form, { isFormData: true });
   },
+  /** Delete a LOAD-attached document. The matching profile-document
+   *  delete is `deleteMyDocument` above (DELETE /v1/driver/documents/:id).
+   *  The two paths used to collide — keep them distinct. */
   deleteDocument(id: string) {
-    return req<{ ok: true }>("DELETE", `/v1/driver/documents/${id}`);
+    return req<{ ok: true }>("DELETE", `/v1/driver/loads/documents/${id}`);
   },
   /** Re-categorize a document's kind. Kind-only by design — filename
    *  stays auto-generated server-side. Server restricts the kind to
    *  the org's driver-allowed list (and hard-blocks rate_con/invoice
    *  even if mis-allowed). */
   updateDocumentKind(id: string, kind: string) {
-    return req<{ document: unknown }>("PATCH", `/v1/driver/documents/${id}`, { kind });
+    return req<{ document: unknown }>("PATCH", `/v1/driver/loads/documents/${id}`, { kind });
   },
   getDocumentUrl(id: string) {
-    return req<{ url: string }>("GET", `/v1/driver/documents/${id}/url`);
+    return req<{ url: string }>("GET", `/v1/driver/loads/documents/${id}/url`);
   },
 
   // Org settings + assets + trailers

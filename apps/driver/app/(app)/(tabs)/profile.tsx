@@ -11,11 +11,14 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator,
-  KeyboardAvoidingView, Platform, RefreshControl, Modal, Linking,
+  KeyboardAvoidingView, Platform, RefreshControl, Modal, Image,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import WebView from "react-native-webview";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import {
-  LogOut, User, FileText, Trash2, ExternalLink, Plus, Calendar as CalendarIcon, ChevronDown,
+  LogOut, User, FileText, Trash2, X, Share2, Eye, Plus, Calendar as CalendarIcon, ChevronDown,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
@@ -111,6 +114,10 @@ export default function ProfileScreen() {
   const [docs,       setDocs]       = useState<DriverDocument[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Currently-open profile document in the in-app viewer. Replaces
+  // the old Linking.openURL flow that punted to the system browser
+  // and showed the user a raw Supabase signed URL.
+  const [viewDocState, setViewDocState] = useState<DriverDocument | null>(null);
   // Captures the most recent /me fetch failure so the UI can render a
   // visible error state instead of empty form fields (which the
   // driver was reading as "I need to fill all of these in").
@@ -279,12 +286,12 @@ export default function ProfileScreen() {
     }
   }
 
-  async function viewDoc(d: DriverDocument) {
+  function viewDoc(d: DriverDocument) {
     if (!d.signedUrl) {
       Alert.alert("Unavailable", "Refresh and try again.");
       return;
     }
-    await Linking.openURL(d.signedUrl);
+    setViewDocState(d);
   }
 
   async function deleteDoc(d: DriverDocument) {
@@ -595,7 +602,114 @@ export default function ProfileScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* In-app viewer — opens when a doc tile's eye icon is tapped.
+          Image docs render inline, other types (PDF) load in a WebView.
+          Share button dumps the file to cache and hands it to the OS
+          share sheet so the driver can send it to their dispatcher,
+          email it to themselves, save to Files, etc. */}
+      <DriverDocumentViewer doc={viewDocState} onClose={() => setViewDocState(null)} />
     </SafeAreaView>
+  );
+}
+
+/** In-app viewer for the driver's profile documents (license, medical
+ *  card, MVR, other). Mirrors the load-document viewer pattern in
+ *  DocumentsView.tsx — image inline, WebView for everything else,
+ *  download-to-cache → OS share sheet for the Share button. */
+function DriverDocumentViewer({ doc, onClose }: { doc: DriverDocument | null; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const [sharing, setSharing] = useState(false);
+
+  if (!doc || !doc.signedUrl) return null;
+
+  const isImage = (doc.mimeType ?? "").startsWith("image/")
+    || /\.(jpg|jpeg|png|webp|heic)$/i.test(doc.fileName);
+
+  async function handleShare() {
+    if (!doc || !doc.signedUrl || sharing) return;
+    setSharing(true);
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert("Sharing not available", "This device can't share files.");
+        return;
+      }
+      const safeName = (doc.fileName || "document").replace(/[^A-Za-z0-9._-]/g, "_");
+      const dest = (FileSystem.cacheDirectory ?? "") + safeName;
+      const { uri } = await FileSystem.downloadAsync(doc.signedUrl, dest);
+      await Sharing.shareAsync(uri, {
+        mimeType: doc.mimeType,
+        UTI:      doc.mimeType === "application/pdf" ? "com.adobe.pdf" : undefined,
+      });
+    } catch (err) {
+      Alert.alert("Couldn't share", err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setSharing(false);
+    }
+  }
+
+  return (
+    <Modal visible animationType="fade" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: "#000000" }}>
+        <View style={{ paddingTop: insets.top, flex: 1 }}>
+          <View style={{
+            flexDirection: "row", alignItems: "center", paddingHorizontal: 14,
+            paddingTop: 8, paddingBottom: 12, gap: 12,
+          }}>
+            <TouchableOpacity onPress={onClose} hitSlop={14}
+              style={{
+                width: 40, height: 40, borderRadius: 20,
+                backgroundColor: "rgba(255,255,255,0.18)",
+                alignItems: "center", justifyContent: "center",
+              }}>
+              <X size={20} color="#ffffff" strokeWidth={2.4} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={[txt(800), { fontSize: 14, color: "#ffffff" }]} numberOfLines={1}>
+                {doc.fileName}
+              </Text>
+              <Text style={[txt(500), { fontSize: 11, color: "rgba(255,255,255,0.55)" }]}>
+                {DOC_KIND_LABEL[doc.kind] ?? doc.kind}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => void handleShare()}
+              hitSlop={14}
+              disabled={sharing}
+              style={{
+                width: 40, height: 40, borderRadius: 20,
+                backgroundColor: "rgba(255,255,255,0.18)",
+                alignItems: "center", justifyContent: "center",
+                opacity: sharing ? 0.5 : 1,
+              }}>
+              {sharing
+                ? <ActivityIndicator color="#ffffff" />
+                : <Share2 size={18} color="#ffffff" strokeWidth={2.4} />}
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ flex: 1, padding: 0 }}>
+            {isImage ? (
+              <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 12 }}>
+                <Image source={{ uri: doc.signedUrl }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+              </View>
+            ) : (
+              <WebView
+                source={{ uri: doc.signedUrl }}
+                style={{ flex: 1, backgroundColor: "#000000" }}
+                originWhitelist={["*"]}
+                startInLoadingState
+                renderLoading={() => (
+                  <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#000000" }}>
+                    <ActivityIndicator color="#ffffff" />
+                  </View>
+                )}
+              />
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -866,7 +980,7 @@ function DocRow({
         </Text>
       </View>
       <TouchableOpacity onPress={onView} style={{ padding: 6 }}>
-        <ExternalLink size={16} color="#1a73e8" />
+        <Eye size={16} color="#1a73e8" />
       </TouchableOpacity>
       <TouchableOpacity onPress={onDelete} style={{ padding: 6 }}>
         <Trash2 size={16} color="#b91c1c" />
