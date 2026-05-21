@@ -12,9 +12,9 @@
  * the card says.
  */
 
-import React from "react";
-import { View, Text, TouchableOpacity, Linking, Platform, ActionSheetIOS, Alert } from "react-native";
-import { Truck, MapPin, Navigation, AlertTriangle } from "lucide-react-native";
+import React, { useState } from "react";
+import { View, Text, TouchableOpacity, Linking, Platform, ActionSheetIOS, Alert, ActivityIndicator } from "react-native";
+import { Truck, MapPin, Navigation, AlertTriangle, RefreshCw } from "lucide-react-native";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -53,11 +53,25 @@ interface Props {
   /** Fires when "View on Map" is tapped — caller scrolls/expands the
    *  existing route map into view. */
   onViewOnMap: () => void;
+  /** Force-refresh the truck location (bypass the per-org Motive
+   *  cache server-side). Caller should return a promise that
+   *  resolves once the new data is in. Card displays a spinner on
+   *  the refresh button while it's pending. Omit to hide the
+   *  refresh affordance entirely. */
+  onRefresh?: () => Promise<void>;
 }
 
-export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap }: Props) {
+export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap, onRefresh }: Props) {
   const color = assetColor ?? "#1a73e8";
   const hasLocation = truck != null;
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function handleRefresh() {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    try { await onRefresh(); }
+    finally { setRefreshing(false); }
+  }
 
   /** Picks between Google Maps and Apple Maps. On iOS we surface a
    *  native action sheet; Android shows an Alert with the same two
@@ -133,19 +147,38 @@ export function AssignedTruckCard({ assetName, assetColor, truck, onViewOnMap }:
         </View>
       </View>
 
-      {/* Last-seen line. Replaced by a 'no location yet' hint when the
-          truck has no recent ELD ping or the asset isn't linked to Motive. */}
-      <View style={{ marginTop: 10, paddingLeft: 52 }}>
+      {/* Last-seen line + refresh button. Truck location ages with the
+          truck (engine off → ping doesn't update), so the driver may
+          need to force-fetch from Motive when the timestamp looks too
+          old. Spinner replaces the icon while the refetch is in flight. */}
+      <View style={{ marginTop: 10, paddingLeft: 52, flexDirection: "row", alignItems: "center" }}>
         {hasLocation ? (
-          <Text style={[txt(500), { fontSize: 12, color: "#5f6368" }]} numberOfLines={1}>
+          <Text style={[txt(500), { flex: 1, fontSize: 12, color: "#5f6368" }]} numberOfLines={1}>
             <MapPin size={11} color="#5f6368" strokeWidth={2.2} />{" "}
             {truck.description?.trim() || "Location available"}
             <Text style={[txt(500), { color: "#9aa0a6" }]}>{"  ·  "}{relTime(truck.locatedAt)}</Text>
           </Text>
         ) : (
-          <Text style={[txt(500), { fontSize: 12, color: "#9aa0a6" }]}>
+          <Text style={[txt(500), { flex: 1, fontSize: 12, color: "#9aa0a6" }]}>
             No live location available
           </Text>
+        )}
+        {onRefresh && (
+          <TouchableOpacity
+            onPress={() => void handleRefresh()}
+            disabled={refreshing}
+            hitSlop={10}
+            style={{
+              width: 28, height: 28, borderRadius: 14,
+              alignItems: "center", justifyContent: "center",
+              opacity: refreshing ? 0.5 : 1,
+            }}
+            accessibilityLabel="Refresh truck location"
+          >
+            {refreshing
+              ? <ActivityIndicator size="small" color="#5f6368" />
+              : <RefreshCw size={14} color="#5f6368" strokeWidth={2.2} />}
+          </TouchableOpacity>
         )}
       </View>
 

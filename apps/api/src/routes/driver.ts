@@ -1680,15 +1680,21 @@ driver.get("/loads/documents/:id/url", async (c) => {
 
 interface MotiveLocation { description: string; lat: number; lon: number; locatedAt: string; }
 
-// Per-org cache for Motive lookups — Motive's free tier has tight rate
-// limits and the location only updates every minute or so on their side
-// anyway. 10 min mirrors the dispatch app's cache.
+// Per-org cache for Motive lookups. One bulk fetch returns every
+// vehicle in the org, so the rate is bounded by 1 Motive request per
+// TTL regardless of how many drivers are polling at once. Dropped
+// from 10 min to 60s — 'view assigned truck' is a real-time use case
+// and 10-min-old coords were too stale for drivers to trust.
+//
+// 60s × 60 = 60 Motive requests / hour / org. Well inside Motive's
+// rate limits on all tiers; Motive itself only updates the
+// underlying ping every few seconds anyway.
 const motiveCache = new Map<string, { locations: Map<string, MotiveLocation>; fetchedAt: number }>();
-const MOTIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+const MOTIVE_CACHE_TTL_MS = 60 * 1000;
 
-async function fetchMotiveLocations(orgId: string): Promise<Map<string, MotiveLocation>> {
+async function fetchMotiveLocations(orgId: string, force = false): Promise<Map<string, MotiveLocation>> {
   const cached = motiveCache.get(orgId);
-  if (cached && Date.now() - cached.fetchedAt < MOTIVE_CACHE_TTL_MS) return cached.locations;
+  if (!force && cached && Date.now() - cached.fetchedAt < MOTIVE_CACHE_TTL_MS) return cached.locations;
 
   const { data: settingsRow } = await supabase
     .from("org_settings")
@@ -1729,10 +1735,17 @@ async function fetchMotiveLocations(orgId: string): Promise<Map<string, MotiveLo
 // asset color for the load's bound vehicle. Returns 404 silently when
 // the asset has no Motive vehicle id, no location, or the org doesn't
 // have a Motive API key configured.
+//
+// Query params:
+//   ?force=true — skip the per-org Motive cache and hit Motive directly.
+//                 Used by the driver app's manual "refresh location"
+//                 button so the driver can force-fetch the latest ping
+//                 if the cached value looks too stale.
 driver.get("/loads/:id/truck-location", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
   const id = c.req.param("id");
+  const force = new URL(c.req.url).searchParams.get("force") === "true";
 
   const found = await loadDriverEvent(id, driverId, orgId);
   if (!found || found.row === null) return c.json({ error: "forbidden" }, 403);
@@ -1756,7 +1769,7 @@ driver.get("/loads/:id/truck-location", async (c) => {
   const vehicleId = assetRow?.motive_vehicle_id;
   if (!vehicleId) return c.json({ error: "not_found" }, 404);
 
-  const locations = await fetchMotiveLocations(orgId);
+  const locations = await fetchMotiveLocations(orgId, force);
   const loc = locations.get(vehicleId);
   if (!loc) return c.json({ error: "not_found" }, 404);
 

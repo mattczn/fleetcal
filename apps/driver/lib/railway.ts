@@ -176,11 +176,15 @@ export const railway = {
     return req<{ ok: true }>("POST", `/v1/driver/stops/${stopId}/check-out`);
   },
 
-  // Truck location for a specific load (returns null when no ELD bound).
-  getTruckLocation(loadId: string) {
+  /** Truck location for a specific load (returns 404 when no ELD bound).
+   *  Pass `{ force: true }` to bypass the API's per-org Motive cache
+   *  and trigger a fresh fetch from Motive — used by the manual
+   *  refresh button on the AssignedTruckCard. */
+  getTruckLocation(loadId: string, opts?: { force?: boolean }) {
+    const q = opts?.force ? "?force=true" : "";
     return req<{ lat: number; lon: number; locatedAt: string; description: string; color: string | null }>(
       "GET",
-      `/v1/driver/loads/${loadId}/truck-location`,
+      `/v1/driver/loads/${loadId}/truck-location${q}`,
     );
   },
 

@@ -1179,6 +1179,20 @@ export default function LoadDetailScreen() {
               });
               routeMapRef.current?.openOnTruck();
             }}
+            onRefresh={async () => {
+              // Force-bypass the API's per-org Motive cache so the
+              // driver gets the freshest possible ping. We invalidate
+              // the React Query cache key on success so the new data
+              // flows into both the card AND the route map's truck
+              // pin without a re-render gap.
+              try {
+                const fresh = await railway.getTruckLocation(id!, { force: true });
+                queryClient.setQueryData(["truck-location", id], fresh);
+              } catch (err) {
+                showToast("Couldn't refresh truck location");
+                console.warn("[truck-location] force refresh:", err);
+              }
+            }}
           />
         )}
 
