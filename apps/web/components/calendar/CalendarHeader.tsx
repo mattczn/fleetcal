@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MapPin, Loader2, RefreshCw, Truck } from 'lucide-react';
+import { MapPin, Loader2, RefreshCw, Truck, Activity } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W } from '@/lib/time-utils';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
@@ -97,7 +97,7 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 }
 
 export default function CalendarHeader() {
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, assetColumnMode, setAssetColumnMode } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range that matches the calendar grid below — same logic +
   // same org-tz interpretation, so header chips align with columns.
@@ -174,6 +174,8 @@ export default function CalendarHeader() {
       {visibleAssets.map((asset) => {
         const loc = asset.motiveVehicleId ? locations[asset.motiveVehicleId] : undefined;
         const age = loc ? staleness(loc.locatedAt) : null;
+        const mode = assetColumnMode[asset.id] ?? 'loads';
+        const canToggle = !!asset.motiveVehicleId;
 
         return (
           <div
@@ -205,6 +207,24 @@ export default function CalendarHeader() {
                   {asset.unit ? `#${asset.unit}` : asset.type}
                 </span>
               </div>
+              {canToggle && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAssetColumnMode(asset.id, mode === 'loads' ? 'movements' : 'loads');
+                  }}
+                  title={mode === 'loads' ? 'Switch to Motive movements' : 'Switch to load events'}
+                  className="p-1 rounded transition-colors flex-shrink-0"
+                  style={{
+                    color: mode === 'movements' ? asset.color : 'var(--gc-text-3)',
+                    background: mode === 'movements' ? 'var(--gc-hover)' : 'transparent',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = mode === 'movements' ? 'var(--gc-hover)' : 'transparent'; }}
+                >
+                  <Activity size={14} />
+                </button>
+              )}
               {/* Triage/compress button + SmartAssignDrawer removed
                   for now. Store state (triageMode, smartAssignEventId)
                   + the drawer component are preserved so we can

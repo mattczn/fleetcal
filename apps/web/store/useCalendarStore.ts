@@ -326,6 +326,19 @@ interface CalendarStore extends ModalState {
   calendarTimezone: string;
   setCalendarTimezone: (tz: string) => void;
 
+  // ── Motive movements (per-asset column "Movements" mode) ────────────
+  /** Per-asset toggle: 'loads' (default) renders the existing load
+   *  events; 'movements' renders Motive driving-period cards. Stored
+   *  per dispatcher via the zustand persist below so the layout
+   *  survives reloads. */
+  assetColumnMode: Record<number, 'loads' | 'movements'>;
+  setAssetColumnMode: (assetId: number, mode: 'loads' | 'movements') => void;
+  /** Most recent /v1/movements response, keyed by Motive vehicleId. */
+  movementsByVehicle: Record<string, import('@/lib/railway').MovementCard[]>;
+  /** Fetch the movements window covering at least [start,end] (ISO).
+   *  Backed by /v1/movements; results merge into movementsByVehicle. */
+  fetchMovements: (start: string, end: string) => Promise<void>;
+
   cardFields: CardFieldKey[];
   setCardFields: (fields: CardFieldKey[]) => void;
 
@@ -631,6 +644,20 @@ export const useCalendarStore = create<CalendarStore>()(
 
   calendarTimezone: 'America/Denver',
   setCalendarTimezone: (tz) => set({ calendarTimezone: tz }),
+
+  assetColumnMode: {},
+  setAssetColumnMode: (assetId, mode) =>
+    set((state) => ({ assetColumnMode: { ...state.assetColumnMode, [assetId]: mode } })),
+  movementsByVehicle: {},
+  fetchMovements: async (start, end) => {
+    try {
+      const { railway } = await import('@/lib/railway');
+      const res = await railway.listMovements(start, end);
+      set({ movementsByVehicle: res.byVehicle ?? {} });
+    } catch (err) {
+      console.error('[useCalendarStore] fetchMovements:', err);
+    }
+  },
 
   cardFields: DEFAULT_CARD_FIELDS,
   setCardFields: (fields) => set({ cardFields: fields }),
@@ -1946,6 +1973,7 @@ export const useCalendarStore = create<CalendarStore>()(
         showBillingOverlay:  state.showBillingOverlay,
         showUnassigned:     state.showUnassigned,
         calendarTimezone:   state.calendarTimezone,
+        assetColumnMode:    state.assetColumnMode,
         cardFields:         state.cardFields,
         unassignedAssetId:  state.unassignedAssetId,
         lastKnownAssetCount: state.lastKnownAssetCount,

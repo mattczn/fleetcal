@@ -1,0 +1,435 @@
+/**
+ * Motive driving-periods ingestion.
+ *
+ * Two modes:
+ *   - backfill:    pull a date range across all vehicles, paginate to end.
+ *   - incremental: pull ?updated_after=<cursor>, advance the cursor.
+ *
+ * Read-only — Motive is the data source, we never push anything back.
+ *
+ * Authoritative behavior:
+ *   - UPSERT on Motive's id so later edits (source=2 user edits in
+ *     the Motive app, or source=3 unidentified-driver assumptions
+ *     that get reassigned) overwrite our row instead of duplicating.
+ *   - Pagination: loop page_no=1..N using pagination.total to decide
+ *     when to stop. The docs don't pin a max per_page; we send the
+ *     configured PER_PAGE and log a warning if a page comes back
+ *     short in a way that suggests a server cap.
+ *   - HTTP 429: exponential backoff with jitter, capped retries.
+ *
+ * Designed to be reused for /idle_events and /reefer_samples later:
+ *   the pagination + backoff + cursor helpers are decoupled from the
+ *   driving-periods row shape.
+ */
+
+import { supabase } from "./supabase.js";
+
+// ── Config (env-tunable) ────────────────────────────────────────────────
+
+/** Page size sent to Motive. Doc'd max is not specified — start at 100
+ *  and log a warning if the API caps us lower. Override via env. */
+const PER_PAGE = Math.max(1, Math.min(500, Number(process.env.MOTIVE_PER_PAGE ?? 100)));
+
+/** Per-spec: only mirror movements above this distance threshold. */
+const MIN_MOVEMENT_MILES = Number(process.env.MIN_MOVEMENT_MILES ?? 1.0);
+
+/** Backoff bounds for 429 / 5xx retries. */
+const BACKOFF_BASE_MS = Number(process.env.MOTIVE_BACKOFF_BASE_MS ?? 750);
+const BACKOFF_MAX_MS  = Number(process.env.MOTIVE_BACKOFF_MAX_MS  ?? 15_000);
+const MAX_RETRIES     = Number(process.env.MOTIVE_MAX_RETRIES     ?? 5);
+
+const KM_TO_MI = 0.621371;
+
+// ── Motive API shapes (just what we consume) ────────────────────────────
+
+interface MotiveDrivingPeriodInner {
+  id:                 number;
+  start_time:         string | null;
+  end_time:           string | null;
+  duration:           number | null;
+  start_kilometers:   number | null;
+  end_kilometers:     number | null;
+  distance:           string | null;
+  origin:             string | null;
+  destination:        string | null;
+  origin_lat:         number | null;
+  origin_lon:         number | null;
+  destination_lat:    number | null;
+  destination_lon:    number | null;
+  type:               string | null;
+  status:             string | null;
+  source:             number | null;
+  updated_at:         string | null;
+  vehicle?: {
+    id:     number | null;
+    number: string | null;
+  } | null;
+  driver?: {
+    id:         number | null;
+    first_name: string | null;
+    last_name:  string | null;
+  } | null;
+}
+
+interface MotiveDrivingPeriodsPage {
+  driving_periods?: Array<{ driving_period?: MotiveDrivingPeriodInner }>;
+  pagination?: { per_page?: number; page_no?: number; total?: number };
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────
+
+/** Resolve the org's Motive key. Matches the pattern the existing
+ *  /v1/vehicle_locations cache uses — keys live in org_settings so
+ *  multi-org doesn't require a redeploy. */
+async function getOrgMotiveKey(orgId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("org_settings")
+    .select("motive_api_key")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) {
+    console.error("[motiveIngest] org_settings lookup:", error);
+    return null;
+  }
+  return (data as { motive_api_key: string | null } | null)?.motive_api_key ?? null;
+}
+
+// ── HTTP w/ retry ───────────────────────────────────────────────────────
+
+function jitter(ms: number): number {
+  // ±25% jitter so a thundering herd of retries doesn't pile up
+  return ms + Math.floor((Math.random() - 0.5) * ms * 0.5);
+}
+
+async function motiveFetch(url: string, apiKey: string): Promise<unknown> {
+  let attempt = 0;
+  while (true) {
+    const res = await fetch(url, {
+      headers: { "x-api-key": apiKey, "Accept": "application/json" },
+    });
+    if (res.ok) return res.json();
+
+    // 429 = explicit throttle. 5xx = transient server. Both retry.
+    if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES) {
+      const backoff = Math.min(BACKOFF_BASE_MS * 2 ** attempt, BACKOFF_MAX_MS);
+      const wait = jitter(backoff);
+      console.warn(`[motiveIngest] ${res.status} on ${url} — retry ${attempt + 1}/${MAX_RETRIES} after ${wait}ms`);
+      await new Promise(r => setTimeout(r, wait));
+      attempt++;
+      continue;
+    }
+
+    // Anything else (4xx other than 429, or retries exhausted) is fatal.
+    const body = await res.text().catch(() => "");
+    throw new Error(`Motive ${res.status}: ${body.slice(0, 300)}`);
+  }
+}
+
+// ── Pagination loop ─────────────────────────────────────────────────────
+
+/**
+ * Walk every page of a Motive list endpoint via pagination.total.
+ * Yields one page at a time so the caller can upsert as it goes
+ * (avoids holding the entire result set in memory for big backfills).
+ */
+async function* paginate(
+  baseUrl: string,
+  apiKey: string,
+): AsyncGenerator<MotiveDrivingPeriodsPage> {
+  let pageNo = 1;
+  let totalSeen = 0;
+
+  while (true) {
+    const url = new URL(baseUrl);
+    url.searchParams.set("per_page", String(PER_PAGE));
+    url.searchParams.set("page_no",  String(pageNo));
+    const body = await motiveFetch(url.toString(), apiKey) as MotiveDrivingPeriodsPage;
+
+    const items = body.driving_periods ?? [];
+    if (items.length < PER_PAGE && items.length > 0 && pageNo === 1) {
+      // First page came short. Could be a real "fewer than per_page"
+      // result OR the server capping per_page lower. Surface in logs
+      // so we can adjust PER_PAGE once we see the actual behavior.
+      console.warn(
+        `[motiveIngest] page 1 returned ${items.length} items with per_page=${PER_PAGE} — ` +
+        `server may be capping per_page. Set MOTIVE_PER_PAGE lower if this persists.`,
+      );
+    }
+
+    yield body;
+
+    totalSeen += items.length;
+    const total = body.pagination?.total ?? totalSeen;
+    if (totalSeen >= total || items.length === 0) return;
+    pageNo++;
+
+    // Hard ceiling to prevent infinite loops if the API misreports
+    // pagination.total — 200 pages × 100 per_page = 20k records, way
+    // more than a sane backfill window per org.
+    if (pageNo > 200) {
+      console.warn("[motiveIngest] pagination exceeded 200 pages; stopping defensively");
+      return;
+    }
+  }
+}
+
+// ── Row mapping ─────────────────────────────────────────────────────────
+
+interface DrivingPeriodRow {
+  id:                  number;
+  org_id:              string;
+  vehicle_id:          number | null;
+  vehicle_number:      string | null;
+  driver_id:           number | null;
+  driver_first_name:   string | null;
+  driver_last_name:    string | null;
+  start_time:          string;
+  end_time:            string | null;
+  duration:            number | null;
+  start_kilometers:    number | null;
+  end_kilometers:      number | null;
+  distance:            string | null;
+  origin:              string | null;
+  destination:         string | null;
+  origin_lat:          number | null;
+  origin_lon:          number | null;
+  destination_lat:     number | null;
+  destination_lon:     number | null;
+  type:                string | null;
+  status:              string | null;
+  source:              number | null;
+  miles:               number | null;
+  display_eligible:    boolean;
+  motive_updated_at:   string | null;
+}
+
+function rowFromMotive(p: MotiveDrivingPeriodInner, orgId: string): DrivingPeriodRow | null {
+  // Drop rows we can't anchor on the calendar — no start time means
+  // nothing useful to render.
+  if (!p.id || !p.start_time) return null;
+
+  const km =
+    p.start_kilometers != null && p.end_kilometers != null
+      ? p.end_kilometers - p.start_kilometers
+      : null;
+  const miles = km != null ? km * KM_TO_MI : null;
+
+  return {
+    id:                p.id,
+    org_id:            orgId,
+    vehicle_id:        p.vehicle?.id ?? null,
+    vehicle_number:    p.vehicle?.number ?? null,
+    driver_id:         p.driver?.id ?? null,
+    driver_first_name: p.driver?.first_name ?? null,
+    driver_last_name:  p.driver?.last_name  ?? null,
+    start_time:        p.start_time,
+    end_time:          p.end_time,
+    duration:          p.duration,
+    start_kilometers:  p.start_kilometers,
+    end_kilometers:    p.end_kilometers,
+    distance:          p.distance,
+    origin:            p.origin,
+    destination:       p.destination,
+    origin_lat:        p.origin_lat,
+    origin_lon:        p.origin_lon,
+    destination_lat:   p.destination_lat,
+    destination_lon:   p.destination_lon,
+    type:              p.type,
+    status:            p.status,
+    source:            p.source,
+    miles,
+    display_eligible:  miles != null && miles >= MIN_MOVEMENT_MILES,
+    motive_updated_at: p.updated_at,
+  };
+}
+
+// ── Upsert batch ────────────────────────────────────────────────────────
+
+async function upsertBatch(rows: DrivingPeriodRow[]): Promise<{ count: number }> {
+  if (rows.length === 0) return { count: 0 };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from("motive_driving_periods")
+    .upsert(rows, { onConflict: "id" });
+  if (error) {
+    console.error("[motiveIngest] upsert failed:", error);
+    throw new Error(`upsert failed: ${error.message}`);
+  }
+  return { count: rows.length };
+}
+
+// ── Sync state ──────────────────────────────────────────────────────────
+
+const FEED = "driving_periods";
+
+async function readCursor(orgId: string): Promise<string | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data } = await (supabase as any)
+    .from("motive_sync_state")
+    .select("last_cursor")
+    .eq("org_id", orgId)
+    .eq("feed", FEED)
+    .maybeSingle();
+  return (data as { last_cursor: string | null } | null)?.last_cursor ?? null;
+}
+
+async function writeSyncState(
+  orgId: string,
+  args: { cursor: string | null; status: "ok" | "error"; detail?: string },
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (supabase as any).from("motive_sync_state").upsert(
+    {
+      org_id:          orgId,
+      feed:            FEED,
+      last_cursor:     args.cursor,
+      last_synced_at:  new Date().toISOString(),
+      last_run_status: args.status,
+      last_run_detail: args.detail ?? null,
+    },
+    { onConflict: "org_id,feed" },
+  );
+}
+
+// ── Public sync entrypoints ─────────────────────────────────────────────
+
+export interface SyncResult {
+  orgId:          string;
+  mode:           "backfill" | "incremental";
+  pagesFetched:   number;
+  rowsUpserted:   number;
+  rowsSkipped:    number;
+  /** New cursor written to motive_sync_state. */
+  newCursor:      string | null;
+  durationMs:     number;
+}
+
+export interface SyncOptions {
+  /** Defaults to last 7 days. Use a Date for either bound. */
+  startDate?: Date;
+  endDate?:   Date;
+}
+
+/**
+ * Backfill mode — pull a window across all vehicles configured at the
+ * org level. Default window is 7 days ending now. Use this for the
+ * initial pull or for catching up after a long outage.
+ */
+export async function syncBackfill(orgId: string, opts: SyncOptions = {}): Promise<SyncResult> {
+  const t0 = Date.now();
+  const apiKey = await getOrgMotiveKey(orgId);
+  if (!apiKey) throw new Error(`org ${orgId} has no motive_api_key configured`);
+
+  const endDate   = opts.endDate   ?? new Date();
+  const startDate = opts.startDate ?? new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const params = new URLSearchParams({
+    start_date: startDate.toISOString().slice(0, 10),
+    end_date:   endDate.toISOString().slice(0, 10),
+  });
+  const baseUrl = `https://api.gomotive.com/v1/driving_periods?${params.toString()}`;
+
+  let pages = 0;
+  let inserted = 0;
+  let skipped = 0;
+  let maxUpdatedAt: string | null = null;
+
+  try {
+    for await (const page of paginate(baseUrl, apiKey)) {
+      pages++;
+      const rows: DrivingPeriodRow[] = [];
+      for (const wrapper of (page.driving_periods ?? [])) {
+        const r = rowFromMotive(wrapper.driving_period ?? {} as MotiveDrivingPeriodInner, orgId);
+        if (r) {
+          rows.push(r);
+          if (r.motive_updated_at && (!maxUpdatedAt || r.motive_updated_at > maxUpdatedAt)) {
+            maxUpdatedAt = r.motive_updated_at;
+          }
+        } else {
+          skipped++;
+        }
+      }
+      const { count } = await upsertBatch(rows);
+      inserted += count;
+    }
+    // Cursor advances to the newest motive_updated_at we saw. If the
+    // backfill window came back empty, leave the existing cursor alone.
+    const existing = await readCursor(orgId);
+    const next = maxUpdatedAt && (!existing || maxUpdatedAt > existing) ? maxUpdatedAt : existing;
+    await writeSyncState(orgId, { cursor: next, status: "ok" });
+    return { orgId, mode: "backfill", pagesFetched: pages, rowsUpserted: inserted, rowsSkipped: skipped, newCursor: next, durationMs: Date.now() - t0 };
+  } catch (err) {
+    await writeSyncState(orgId, { cursor: await readCursor(orgId), status: "error", detail: (err as Error).message });
+    throw err;
+  }
+}
+
+/**
+ * Incremental mode — pull everything updated since the last cursor.
+ * On the first ever run for an org (no cursor yet), defaults to the
+ * last 7 days so the cron has something to chew on without blocking
+ * on a separate backfill.
+ */
+export async function syncIncremental(orgId: string): Promise<SyncResult> {
+  const t0 = Date.now();
+  const apiKey = await getOrgMotiveKey(orgId);
+  if (!apiKey) throw new Error(`org ${orgId} has no motive_api_key configured`);
+
+  const cursor = await readCursor(orgId);
+  const fallback = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const effectiveCursor = cursor ?? fallback;
+  const params = new URLSearchParams({ updated_after: effectiveCursor });
+  const baseUrl = `https://api.gomotive.com/v1/driving_periods?${params.toString()}`;
+
+  let pages = 0;
+  let inserted = 0;
+  let skipped = 0;
+  let maxUpdatedAt: string | null = effectiveCursor;
+
+  try {
+    for await (const page of paginate(baseUrl, apiKey)) {
+      pages++;
+      const rows: DrivingPeriodRow[] = [];
+      for (const wrapper of (page.driving_periods ?? [])) {
+        const r = rowFromMotive(wrapper.driving_period ?? {} as MotiveDrivingPeriodInner, orgId);
+        if (r) {
+          rows.push(r);
+          if (r.motive_updated_at && r.motive_updated_at > (maxUpdatedAt ?? "")) {
+            maxUpdatedAt = r.motive_updated_at;
+          }
+        } else {
+          skipped++;
+        }
+      }
+      const { count } = await upsertBatch(rows);
+      inserted += count;
+    }
+    await writeSyncState(orgId, { cursor: maxUpdatedAt, status: "ok" });
+    return { orgId, mode: "incremental", pagesFetched: pages, rowsUpserted: inserted, rowsSkipped: skipped, newCursor: maxUpdatedAt, durationMs: Date.now() - t0 };
+  } catch (err) {
+    await writeSyncState(orgId, { cursor, status: "error", detail: (err as Error).message });
+    throw err;
+  }
+}
+
+// ── Cron-level helper: run incremental for every org with a key ─────────
+
+export async function syncIncrementalAllOrgs(): Promise<SyncResult[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: orgs, error } = await (supabase as any)
+    .from("org_settings")
+    .select("org_id, motive_api_key")
+    .not("motive_api_key", "is", null);
+  if (error) {
+    console.error("[motiveIngest] orgs lookup:", error);
+    return [];
+  }
+  const results: SyncResult[] = [];
+  for (const row of (orgs ?? []) as Array<{ org_id: string }>) {
+    try {
+      results.push(await syncIncremental(row.org_id));
+    } catch (err) {
+      console.error(`[motiveIngest] sync failed for org ${row.org_id}:`, err);
+    }
+  }
+  return results;
+}

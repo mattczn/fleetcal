@@ -5,6 +5,7 @@ import { Asset, CalendarEvent as EventType } from '@/lib/types';
 import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 
 import CalendarEvent from './CalendarEvent';
+import MovementCardView from './MovementCard';
 
 interface Props {
   asset: Asset;
@@ -89,10 +90,18 @@ function computeLayout(colEvents: EventType[], dateStr: string, rowH: number, vi
 }
 
 export default function CalendarColumn({ asset, compact = false, onSmartAssign }: Props) {
-  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone } = useCalendarStore();
+  const { events, resourceWidth: rw, rowHeight, currentDate, openCreateModal, calendarTimezone, assetColumnMode, movementsByVehicle } = useCalendarStore();
   const dateStr = localDateStr(currentDate);
+  const mode = assetColumnMode[asset.id] ?? 'loads';
 
-  const colEvents = events.filter((e) => {
+  // Movements mode — render Motive driving-period cards instead of
+  // load events. Movements come keyed by Motive vehicleId (numeric)
+  // so we map our asset's motive_vehicle_id (text) into that key.
+  const movementsForThisAsset = mode === 'movements' && asset.motiveVehicleId
+    ? (movementsByVehicle[String(asset.motiveVehicleId)] ?? [])
+    : [];
+
+  const colEvents = mode === 'movements' ? [] : events.filter((e) => {
     if (e.assetId !== asset.id) return false;
     // Drop soft-deleted events. Most paths only put live events into
     // the store, but the search-bar dropdown for cancelled / deleted
@@ -185,7 +194,16 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
       onClick={handleClick}
     >
       <div className="absolute inset-0 group-hover:bg-blue-50/20 transition-colors pointer-events-none" />
-      {triageLayout
+      {mode === 'movements' ? (
+        // Telemetry view — render Motive driving periods. Read-only;
+        // no overlap algorithm needed since periods don't conflict in
+        // time (one period ends, next begins). Asset color is
+        // applied with dashed border + 50% opacity in MovementCard
+        // so it reads as "same truck, different layer."
+        movementsForThisAsset.map(m => (
+          <MovementCardView key={m.id} movement={m} assetColor={asset.color} />
+        ))
+      ) : triageLayout
         ? triageLayout.map(({ event, colIdx, totalCols, top }) => (
             <CalendarEvent
               key={event.id}

@@ -43,6 +43,8 @@ import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
 import driverDocumentsRoute from "./routes/driver-documents.js";
 import reportsRoute from "./routes/reports.js";
 import internalRoute from "./routes/internal.js";
+import movementsRoute from "./routes/movements.js";
+import { syncIncrementalAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import pkg from "../package.json" with { type: "json" };
@@ -117,6 +119,7 @@ authed.route("/stops", stopsRoute);
 // mounted from inside loadsRoute as /loads/:loadId/check-calls.
 authed.route("/check-calls", checkCallsRoute);
 authed.route("/fuel-reports", fuelReportsRoute);
+authed.route("/movements", movementsRoute);
 authed.route("/maintenance-reports", maintenanceReportsRoute);
 authed.route("/maintenance-action-items", maintenanceActionItemsRoute);
 authed.route("/driver-documents", driverDocumentsRoute);
@@ -235,3 +238,30 @@ function fireConfirmReminders(label: string) {
 }
 setTimeout(() => fireConfirmReminders("startup pass"), CONFIRM_REMINDERS_STARTUP_DELAY_MS).unref();
 setInterval(() => fireConfirmReminders("tick"), CONFIRM_REMINDERS_INTERVAL_MS).unref();
+
+// ── Motive driving-periods incremental sync ─────────────────────────────
+//
+// Per-org `updated_after`-cursor pull every MOTIVE_SYNC_INTERVAL_MS
+// (default 5 min). Only orgs that have a motive_api_key set get
+// queried. Initial backfill is dispatcher-triggered from settings.
+//
+// Single-replica caveat applies (same as the other in-process crons):
+// scaling the API horizontally would duplicate the sync. The cadence
+// is conservative enough to make accidental double-runs harmless.
+
+const MOTIVE_SYNC_INTERVAL_MS  = Number(process.env.MOTIVE_SYNC_INTERVAL_MS  ?? 5 * 60 * 1000);
+const MOTIVE_SYNC_STARTUP_DELAY = Number(process.env.MOTIVE_SYNC_STARTUP_DELAY_MS ?? 60_000);
+
+async function fireMovementsSync(label: string): Promise<void> {
+  try {
+    const results = await syncIncrementalAllOrgs();
+    if (results.length > 0) {
+      const total = results.reduce((sum, r) => sum + r.rowsUpserted, 0);
+      console.log(`[api] movements sync (${label}): ${results.length} org(s), ${total} rows`);
+    }
+  } catch (err) {
+    console.error("[api] movements sync failed:", err);
+  }
+}
+setTimeout(() => void fireMovementsSync("startup pass"), MOTIVE_SYNC_STARTUP_DELAY).unref();
+setInterval(() => void fireMovementsSync("tick"), MOTIVE_SYNC_INTERVAL_MS).unref();

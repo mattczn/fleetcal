@@ -2642,6 +2642,26 @@ function IntegrationsPanel() {
 
   const matchedCount = Object.values(assignments).filter(Boolean).length;
 
+  // ── Movements sync state ──────────────────────────────────────────────────
+  const [movementsSyncing, setMovementsSyncing] = useState(false);
+  const [movementsSyncError, setMovementsSyncError] = useState('');
+  const [movementsSyncResult, setMovementsSyncResult] = useState<
+    { rowsUpserted: number; pagesFetched: number; durationMs: number; at: Date } | null
+  >(null);
+
+  const handleSyncMovements = async (mode: 'backfill' | 'incremental') => {
+    setMovementsSyncing(true);
+    setMovementsSyncError('');
+    try {
+      const r = await railway.syncMovements({ mode, windowDays: 7 });
+      setMovementsSyncResult({ ...r.result, at: new Date() });
+    } catch (e) {
+      setMovementsSyncError(e instanceof Error ? e.message : 'Sync failed');
+    } finally {
+      setMovementsSyncing(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: 680 }}>
       <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Integrations</h2>
@@ -2831,6 +2851,60 @@ function IntegrationsPanel() {
                   </button>
                 </div>
               </>
+            )}
+          </div>
+        )}
+
+        {/* ── Movements sync ── */}
+        {configured && (
+          <div className="px-6 py-5" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+            <div className="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  Movements feed
+                </div>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Syncs Motive driving periods so each asset column can show what actually
+                  moved (≥ 1 mile). Cron runs every 5 min — use these to pull on demand.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => handleSyncMovements('incremental')}
+                  disabled={movementsSyncing}
+                  className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                  style={{ background: 'var(--gc-blue-light)', color: 'var(--gc-blue)' }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                >
+                  {movementsSyncing
+                    ? <Loader2 size={12} className="animate-spin" />
+                    : <RefreshCw size={12} />}
+                  Sync now
+                </button>
+                <button
+                  onClick={() => handleSyncMovements('backfill')}
+                  disabled={movementsSyncing}
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+                  style={{ color: 'var(--gc-text-3)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  title="Pull the last 7 days of driving periods for every vehicle"
+                >
+                  Backfill 7 days
+                </button>
+              </div>
+            </div>
+            {movementsSyncError && (
+              <p className="text-xs" style={{ color: '#d93025' }}>{movementsSyncError}</p>
+            )}
+            {movementsSyncResult && !movementsSyncError && (
+              <p className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                Last sync: {movementsSyncResult.rowsUpserted} period{movementsSyncResult.rowsUpserted === 1 ? '' : 's'}
+                {' · '}{movementsSyncResult.pagesFetched} page{movementsSyncResult.pagesFetched === 1 ? '' : 's'}
+                {' · '}{(movementsSyncResult.durationMs / 1000).toFixed(1)}s
+                {' · '}{movementsSyncResult.at.toLocaleTimeString()}
+              </p>
             )}
           </div>
         )}

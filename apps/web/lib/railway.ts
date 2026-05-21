@@ -81,6 +81,20 @@ export function setRailwayTokenProvider(fn: () => Promise<string | null>) {
   _getToken = fn;
 }
 
+/** Shape of one movement card returned by /v1/movements. Mirrors the
+ *  API's response.byVehicle[vehicleId] entries. */
+export interface MovementCard {
+  id:             number;
+  vehicleId:      number;
+  vehicleNumber:  string | null;
+  startTime:      string;
+  endTime:        string | null;
+  miles:          number | null;
+  durationMin:    number | null;
+  origin:         string | null;
+  destination:    string | null;
+}
+
 export class RailwayError extends Error {
   constructor(public status: number, public detail: unknown, message?: string) {
     super(message ?? `Railway request failed: ${status}`);
@@ -401,6 +415,23 @@ class RailwayClient {
   }
   updateOrgSettings(body: UpdateOrgSettingsRequest) {
     return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
+  }
+
+  // ── Movements (Motive driving-periods feed) ───────────────────────────
+  /** Trigger a manual Motive sync. mode='backfill' pulls the last N
+   *  days (default 7) for every vehicle; mode='incremental' advances
+   *  the per-org cursor like the cron does. */
+  syncMovements(body: { mode: 'backfill' | 'incremental'; windowDays?: number }) {
+    return this.req<{ ok: true; result: { rowsUpserted: number; pagesFetched: number; durationMs: number } }>(
+      'POST', '/v1/movements/sync', body,
+    );
+  }
+  /** Calendar feed for the Movements column mode. from/to are ISO. */
+  listMovements(from: string, to: string) {
+    const qs = new URLSearchParams({ from, to });
+    return this.req<{ byVehicle: Record<string, MovementCard[]> }>(
+      'GET', `/v1/movements?${qs.toString()}`,
+    );
   }
 
   // ── Invoices ──────────────────────────────────────────────────────────
