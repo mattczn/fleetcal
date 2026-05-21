@@ -462,6 +462,12 @@ loads.get("/search", async (c) => {
   const numericId = Number.isFinite(parsedNum) && parsedNum <= 2147483647 ? parsedNum : null;
 
   // 1) Load-side matches → list of load_ids whose loads-row fields hit.
+  //
+  // NOTE: `.is("deleted_at", null)` filter intentionally removed —
+  // dispatchers want to find cancelled-keep-load AND fully-deleted
+  // loads via search without bouncing between the calendar and the
+  // Recently Deleted tray. The status of each result (active /
+  // cancelled / deleted) is rendered as a pill in the dropdown.
   const loadOr = numericId !== null
     ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`
     : `load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`;
@@ -469,16 +475,15 @@ loads.get("/search", async (c) => {
     .from("loads")
     .select("id")
     .eq("org_id", orgId)
-    .is("deleted_at", null)
     .or(loadOr)
     .limit(50);
 
   // 2) Event-side matches → joined events whose event-row fields hit.
+  //    Same filter relaxation as above — soft-deleted events count.
   const eventMatchesP = supabase
     .from("events")
     .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
     .eq("org_id", orgId)
-    .is("deleted_at", null)
     .or(`title.ilike.${pattern},driver_name.ilike.${pattern},notes.ilike.${pattern}`)
     .order("start", { ascending: false })
     .limit(limit);
@@ -500,7 +505,8 @@ loads.get("/search", async (c) => {
       .from("events")
       .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
       .eq("org_id", orgId)
-      .is("deleted_at", null)
+      // Same filter relaxation as the other two queries above —
+      // search returns cancelled-keep-load + fully-deleted too.
       .in("load_id", matchedLoadIds)
       .order("start", { ascending: false })
       .limit(limit);

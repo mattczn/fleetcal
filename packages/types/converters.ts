@@ -131,6 +131,11 @@ export function joinEventLoadToApp(
                       ? (l!.follow_ups as LoadFollowUp[])
                       : [],
     isTonu:         (l?.is_tonu as boolean | null | undefined) ?? false,
+    // Load-row soft-delete timestamp. Distinct from `deletedAt`
+    // (event-level) — a cancelled-keep-load has the EVENT deleted
+    // but the LOAD alive; a full delete has both. Search-result
+    // status pills use both flags to label the row.
+    loadDeletedAt:  (l?.deleted_at as string | null | undefined) ?? undefined,
     // relayGroupId aliases loadId for relay legs. Two events with the same
     // load_id and relay_role set ARE the relay; the alias keeps existing
     // relayGroupId-reading code working. Pre-2.5c, fall back to the

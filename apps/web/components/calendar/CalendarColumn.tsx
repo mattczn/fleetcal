@@ -94,6 +94,11 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
 
   const colEvents = events.filter((e) => {
     if (e.assetId !== asset.id) return false;
+    // Drop soft-deleted events. Most paths only put live events into
+    // the store, but the search-bar dropdown for cancelled / deleted
+    // loads merges those into events too so the modal can find them
+    // on click. The column render shouldn't draw a bar for them.
+    if (e.deletedAt) return false;
     // Filter against view-tz dates so events that straddle midnight in
     // home-tz but fall fully inside today in view-tz still render.
     const vs = naiveHomeToView(e.start, calendarTimezone);

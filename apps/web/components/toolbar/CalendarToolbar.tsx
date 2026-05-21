@@ -56,7 +56,7 @@ export default function CalendarToolbar() {
     currentDate, setCurrentDate, resourceWidth, setResourceWidth, resourceWidthLocked, unlockResourceWidth,
     rowHeight, setRowHeight,
     sidebarOpen, toggleSidebar,
-    events, assets, openEditModal, openCreateModal,
+    events, assets, openEditModal, openCreateModal, mergeEvents,
     deletedEvents, restoreEvent, purgeEvent, clearTrash,
     viewMode, setViewMode,
     batchParseProgress, batchParseTotal, batchMinimized, batchItems, modalOpen, clearBatch, requestBatchCancel,
@@ -161,6 +161,15 @@ export default function CalendarToolbar() {
   const handleSelectResult = (eventId: string, start: string) => {
     const [y, m, d] = start.split('T')[0].split('-').map(Number);
     setCurrentDate(new Date(y, m - 1, d));
+    // For cancelled-keep-load + recently-deleted hits, the event isn't
+    // in the live events store (calendar only loads active rows in the
+    // visible window). Merge the search-returned event so the modal
+    // can find it on open. Calendar columns already filter out
+    // deletedAt rows so this doesn't draw a bar on the grid.
+    const hit = searchResults.find(e => e.id === eventId);
+    if (hit && !events.some(e => e.id === eventId)) {
+      mergeEvents([hit]);
+    }
     openEditModal(eventId);
     setSearchOpen(false); setQuery('');
   };
@@ -430,14 +439,23 @@ export default function CalendarToolbar() {
                 <div className="px-4 py-3 text-sm" style={{ color: 'var(--gc-text-3)' }}>No loads found</div>
               ) : searchResults.map(ev => {
                 const asset = assets.find(a => a.id === ev.assetId);
+                // Status pill: distinguish active / cancelled-keep-load /
+                // fully-deleted. cancel-keep-load drops the event row
+                // but leaves the load record alive; full delete drops
+                // both. See Load.deletedAt + Load.loadDeletedAt.
+                const pill = ev.deletedAt
+                  ? (ev.loadDeletedAt
+                      ? { label: 'Deleted',   bg: '#fee2e2', fg: '#991b1b' }
+                      : { label: 'Cancelled', bg: '#fef3c7', fg: '#92400e' })
+                  : null;
                 return (
                   <button key={ev.id} onClick={() => handleSelectResult(ev.id, ev.start)}
                     className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors"
                     onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                     onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
-                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6' }} />
+                    <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6', opacity: pill ? 0.5 : 1 }} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
+                      <div className="text-sm font-bold truncate" style={{ color: pill ? 'var(--gc-text-2)' : 'var(--gc-text-1)' }}>{ev.title}</div>
                       <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
                         {eventDateLabel(ev.start)}
                         {ev.loadNum && <> · <span style={{ color: 'var(--gc-text-2)', fontWeight: 600 }}>#{ev.loadNum}</span></>}
@@ -445,6 +463,14 @@ export default function CalendarToolbar() {
                         {ev.driverName && <> · {ev.driverName}</>}
                       </div>
                     </div>
+                    {pill && (
+                      <span
+                        className="text-[10px] font-bold uppercase tracking-wider rounded px-1.5 py-0.5 shrink-0"
+                        style={{ background: pill.bg, color: pill.fg, letterSpacing: '0.5px' }}
+                      >
+                        {pill.label}
+                      </span>
+                    )}
                   </button>
                 );
               })}

@@ -205,7 +205,9 @@ export default function WeekView() {
         {/* Asset rows — flex-1 fills viewport; minHeight = rowHeight controls minimum/slider size */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {assets.map(asset => {
-            const assetEvents = events.filter(e => e.assetId === asset.id);
+            // Drop soft-deleted — see CalendarColumn for the full
+            // explanation of why these end up in the events store.
+            const assetEvents = events.filter(e => e.assetId === asset.id && !e.deletedAt);
             const layout      = computeWeekLayout(assetEvents, weekDayStrs, calendarTimezone);
             const numLanes    = layout.length === 0 ? 1 : Math.max(...layout.map(l => l.lane)) + 1;
 

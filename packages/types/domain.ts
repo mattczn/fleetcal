@@ -740,6 +740,15 @@ export interface Load {
   isTonu?: boolean;
 
   /**
+   * loads.deleted_at — load-row soft-delete timestamp. Distinct from
+   * `deletedAt` (event-level): a cancel-keep-load drops the EVENT but
+   * leaves the LOAD record alive (loadDeletedAt = null, deletedAt
+   * set). A full delete drops BOTH (both set). Search results use
+   * the pair to render the right status pill.
+   */
+  loadDeletedAt?: string;
+
+  /**
    * Per-kind doc counts for this load (load_documents keyed by `kind`).
    * Optional + populated by the list endpoints that opt into it
    * (driver loads list, closeout queue) — most queries leave it
