@@ -12,6 +12,7 @@ import {
 import { printPayroll, fmtDate } from '@/lib/payrollPdf';
 import LoadHistorySection from './LoadHistorySection';
 import LifecycleEditor from './LifecycleEditor';
+import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import type { Driver, CalendarEvent, Asset } from '@/lib/types';
 
 const ACCENT = '#1a73e8';
@@ -91,10 +92,20 @@ function driverInitials(d: Driver): string {
 
 export default function DriversModal({ onClose, initialDriverId }: { onClose: () => void; initialDriverId?: number }) {
   const {
-    assets, drivers, driverPrefs, driverPrefsSecondary,
+    assets, drivers: allDrivers, driverPrefs, driverPrefsSecondary,
     addDriver, removeDriver, updateDriver, setDriverPref, setDriverPrefSecondary,
     events,
   } = useCalendarStore();
+
+  // Sort retired drivers to the bottom of the directory list so the
+  // panel leads with active staff. Retired entries stay visible (with
+  // a 'Retired' pill on the row) so dispatch can review history and
+  // restore.
+  const today = dateKeyOf(new Date());
+  const drivers = [
+    ...allDrivers.filter(d =>  isActiveOn(d, today)),
+    ...allDrivers.filter(d => !isActiveOn(d, today)),
+  ];
 
   const [selected, setSelectedRaw] = useState<number | 'asset-prefs'>(
     initialDriverId ?? (drivers.length > 0 ? drivers[0].id : 'asset-prefs')
@@ -320,6 +331,9 @@ function NavDriverRow({ driver, selected, onSelect }: {
   onSelect: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  // Retirement check matches the AssetsModal pill — activeTo set and
+  // already in the past. Future-dated retirement isn't flagged here.
+  const retired = !isActiveOn(driver, dateKeyOf(new Date()));
 
   return (
     <div
@@ -343,6 +357,15 @@ function NavDriverRow({ driver, selected, onSelect }: {
         style={{ color: selected ? ACCENT : 'var(--gc-text-1)' }}>
         {driverDisplayName(driver)}
       </span>
+      {retired && (
+        <span
+          className="shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-[1px] rounded"
+          style={{ background: '#fee2e2', color: '#991b1b', letterSpacing: '0.5px' }}
+          title={driver.activeTo ? `Retired ${driver.activeTo}` : 'Retired'}
+        >
+          Retired
+        </span>
+      )}
     </div>
   );
 }

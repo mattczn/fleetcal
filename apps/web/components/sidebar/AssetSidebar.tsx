@@ -39,17 +39,15 @@ export default function AssetSidebar() {
   // affordances on rows fire railway.updateAsset / railway.reorderAssets
   // which the API would 403. Hide them at the UI tier.
   const canEditAssets = canDo('assets.edit');
-  // Filter out the special 'Unassigned' bucket AND any asset that's
-  // currently retired (activeTo before today) or not yet active
-  // (activeFrom after today). Retired trucks still exist in the
-  // directory (AssetsModal lists them with a 'Retired' pill), but they
-  // shouldn't take up a calendar column in the live dispatcher view.
-  // Historical loads attached to retired assets remain accessible via
-  // the closeout / load-history flows.
+  // Drop the special 'Unassigned' bucket, then partition the rest:
+  // currently-active trucks first (preserving the dispatcher's drag
+  // order), retired trucks at the bottom so they're visible for
+  // history / restore but don't crowd the daily working view.
   const today = dateKeyOf(new Date());
-  const assets = allAssets.filter(a =>
-    a.id !== unassignedAssetId && isActiveOn(a, today),
-  );
+  const assets = [
+    ...allAssets.filter(a => a.id !== unassignedAssetId &&  isActiveOn(a, today)),
+    ...allAssets.filter(a => a.id !== unassignedAssetId && !isActiveOn(a, today)),
+  ];
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   const { organization } = useOrganization();
   const [showDrivers, setShowDrivers] = useState(false);

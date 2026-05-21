@@ -38,7 +38,13 @@ const P_INPUT: React.CSSProperties = {
 
 export default function AssetsModal({ onClose, initialAssetId }: { onClose: () => void; initialAssetId?: number }) {
   const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, unassignedAssetId } = useCalendarStore();
-  const assets = allAssets.filter(a => a.id !== unassignedAssetId);
+  // Drop the 'Unassigned' bucket, then sort retired trucks to the
+  // bottom so the directory leads with everything currently in service.
+  const today = dateKeyOf(new Date());
+  const assets = [
+    ...allAssets.filter(a => a.id !== unassignedAssetId &&  isActiveOn(a, today)),
+    ...allAssets.filter(a => a.id !== unassignedAssetId && !isActiveOn(a, today)),
+  ];
 
   const [selected, setSelectedRaw] = useState<number>(
     initialAssetId && assets.some(a => a.id === initialAssetId)
