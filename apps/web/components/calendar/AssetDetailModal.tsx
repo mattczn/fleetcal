@@ -25,7 +25,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink, Truck, Gauge } from 'lucide-react';
+import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink, Truck, Gauge, Sparkles } from 'lucide-react';
 import type { Asset } from '@/lib/types';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import { railway, type MovementCard } from '@/lib/railway';
@@ -34,8 +34,9 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import DatePicker from './DatePicker';
 import OdometerChart from './OdometerChart';
+import CostAnalysisPanel from './CostAnalysisPanel';
 
-type Tab = 'movements' | 'odometer';
+type Tab = 'movements' | 'odometer' | 'cost';
 
 interface Props {
   asset:    Asset;
@@ -578,6 +579,7 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
               {([
                 { key: 'movements', label: 'Movements', icon: <ChevronRight size={11} /> },
                 { key: 'odometer',  label: 'Odometer',  icon: <Gauge size={11} /> },
+                { key: 'cost',      label: 'Cost',      icon: <Sparkles size={11} /> },
               ] as const).map(t => {
                 const active = tab === t.key;
                 return (
@@ -731,6 +733,18 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
             {tab === 'odometer' && !asset.motiveVehicleId && (
               <div className="flex-1 flex items-center justify-center text-[12px] px-4 text-center" style={{ color: 'var(--gc-text-3)' }}>
                 Link this asset to a Motive vehicle in Settings to see odometer history.
+              </div>
+            )}
+
+            {tab === 'cost' && asset.motiveVehicleId && (
+              <CostAnalysisPanel
+                vehicleId={Number(asset.motiveVehicleId)}
+                days={lookbackDays}
+              />
+            )}
+            {tab === 'cost' && !asset.motiveVehicleId && (
+              <div className="flex-1 flex items-center justify-center text-[12px] px-4 text-center" style={{ color: 'var(--gc-text-3)' }}>
+                Link this asset to a Motive vehicle in Settings before running cost analysis — it needs telemetry to match against the load schedule.
               </div>
             )}
           </div>

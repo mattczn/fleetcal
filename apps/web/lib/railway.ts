@@ -102,6 +102,41 @@ export interface MovementCard {
   destinationLon: number | null;
 }
 
+export interface CostAnalysisLoad {
+  loadId:              string;
+  loadLabel:           string;
+  confidence:          'high' | 'medium' | 'low';
+  matchedMovementIds:  number[];
+  loadedMiles:         number;
+  deadheadMilesBefore: number;
+  deadheadMilesAfter:  number;
+  revenue:             number;
+  statedRpm:           number;
+  trueRpm:             number;
+  reasoning:           string;
+}
+
+export interface CostAnalysisUnmatched {
+  movementId:    number;
+  likelyPurpose: 'positioning' | 'return_home' | 'personal' | 'unknown';
+  miles:         number;
+  reasoning:     string;
+}
+
+export interface CostAnalysisResult {
+  loads:              CostAnalysisLoad[];
+  unmatchedMovements: CostAnalysisUnmatched[];
+  summary: {
+    totalRevenue:         number;
+    totalLoadedMiles:     number;
+    totalDeadheadMiles:   number;
+    totalReturnHomeMiles: number;
+    fleetTrueRpm:         number;
+    loadedRatio:          number;
+    narrative:            string;
+  };
+}
+
 export interface MovementProbeSummary {
   httpStatus:               number | null;
   pagesFetched:             number;
@@ -480,6 +515,24 @@ class RailwayClient {
     return this.req<{ ok: true; result: { vehiclesSeen: number; rowsInserted: number; rowsSkipped: number } }>(
       'POST', '/v1/movements/odometer/snapshot', {},
     );
+  }
+  /** Experimental: AI-powered cost-per-load analysis. Pulls movements
+   *  + load schedule for one vehicle over a date range and asks Claude
+   *  to match them, reporting true RPM (loaded + deadhead miles). */
+  getCostAnalysis(vehicleId: string | number, from: string, to: string) {
+    const qs = new URLSearchParams({ vehicleId: String(vehicleId), from, to });
+    return this.req<{
+      vehicleId: number;
+      window: { from: string; to: string };
+      counts: { movements: number; loads: number };
+      analysis: CostAnalysisResult;
+      usage: {
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheCreationTokens?: number | null;
+        cacheReadTokens?: number | null;
+      };
+    }>('GET', `/v1/cost-analysis?${qs.toString()}`);
   }
   /** Per-vehicle completeness check: pulls Motive's driving_periods
    *  for [from, to) and compares to what's in our DB. */
