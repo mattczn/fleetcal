@@ -63,7 +63,9 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
 
   // Auto-load the most recent saved report for this vehicle so users
   // see prior work immediately and don't burn tokens on a fresh run
-  // they didn't ask for.
+  // they didn't ask for. Reports saved under earlier schemas may be
+  // missing some fields — we validate before adopting so the renderer
+  // can't crash on an old shape.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -71,7 +73,16 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
       try {
         const { report } = await railway.getLatestCostAnalysis(vehicleId);
         if (cancelled || !report) return;
-        setResult(report.result);
+        // Shape guard — drop reports that don't have the minimum
+        // structure our UI expects. Treating these as "no cache"
+        // means the empty CTA shows and the user re-runs, which
+        // saves a fresh report under the current schema.
+        const r = report.result as CostAnalysisResult | null;
+        if (!r || !r.summary || !Array.isArray(r.loads)) {
+          console.warn('[CostAnalysisPanel] cached report has unexpected shape, ignoring');
+          return;
+        }
+        setResult(r);
         setCounts(report.counts);
         setUsage(report.usage ?? null);
         setCreatedAt(report.created_at);
@@ -359,6 +370,15 @@ function ResultView({ result, counts, usage, ranWindow, createdAt, onRerun }: {
   createdAt: string | null;
   onRerun: () => void;
 }) {
+  // Defensive — if the result somehow slipped through the guard with
+  // a broken shape, render a clean fallback instead of crashing.
+  if (!result || !result.summary || !Array.isArray(result.loads)) {
+    return (
+      <div className="py-8 text-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+        Saved report has an unexpected shape. Click <button onClick={onRerun} className="font-medium" style={{ color: 'var(--gc-blue)' }}>Re-run</button> to refresh.
+      </div>
+    );
+  }
   const s = result.summary;
   const generatedAgo = createdAt ? formatAgo(new Date(createdAt)) : null;
   return (

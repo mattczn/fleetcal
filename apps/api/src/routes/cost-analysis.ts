@@ -413,53 +413,78 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
 // enough metadata to drive the per-load chunked flow.
 
 costAnalysis.get("/loads-in-window", requireCapability("loads.view"), async (c) => {
-  const orgId = c.get("orgId");
-  const url   = new URL(c.req.url);
-  const vehicleIdStr = url.searchParams.get("vehicleId");
-  const from = url.searchParams.get("from");
-  const to   = url.searchParams.get("to");
-  if (!vehicleIdStr || !from || !to) {
-    return c.json({ error: "vehicleId, from, to required" }, 400);
+  try {
+    const orgId = c.get("orgId");
+    const url   = new URL(c.req.url);
+    const vehicleIdStr = url.searchParams.get("vehicleId");
+    const from = url.searchParams.get("from");
+    const to   = url.searchParams.get("to");
+    if (!vehicleIdStr || !from || !to) {
+      return c.json({ error: "vehicleId, from, to required" }, 400);
+    }
+    const vehicleId = Number(vehicleIdStr);
+    if (!Number.isFinite(vehicleId)) {
+      return c.json({ error: "vehicleId must be numeric" }, 400);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: asset, error: aErr } = await (supabase as any)
+      .from("assets")
+      .select("id")
+      .eq("org_id", orgId)
+      .eq("motive_vehicle_id", String(vehicleId))
+      .maybeSingle();
+    if (aErr) {
+      console.error("[cost-analysis/loads-in-window] asset lookup:", aErr);
+      return c.json({ error: "asset_lookup_failed", detail: aErr.message }, 500);
+    }
+    if (!asset) return c.json({ assetId: null, events: [], movementsCount: 0 });
+
+    // `end` is a reserved-ish identifier in some Postgres contexts, so
+    // we alias it to avoid any parser ambiguity in the supabase-js
+    // select string. Frontend will see `endIso` instead of `end`.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: eventsRaw, error: eErr } = await (supabase as any)
+      .from("events")
+      .select(`id, title, start, endIso:end`)
+      .eq("org_id", orgId)
+      .eq("asset_id", asset.id)
+      .gte("start", from)
+      .lt("start", to)
+      .is("deleted_at", null)
+      .order("start", { ascending: true });
+    if (eErr) {
+      console.error("[cost-analysis/loads-in-window] events fetch:", eErr);
+      return c.json({ error: "events_fetch_failed", detail: eErr.message }, 500);
+    }
+
+    // Normalize to { id, title, start, end } for the frontend.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events = (eventsRaw ?? []).map((e: any) => ({
+      id:    e.id,
+      title: e.title,
+      start: e.start,
+      end:   e.endIso ?? e.end ?? null,
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { count: movementsCount, error: mErr } = await (supabase as any)
+      .from("motive_driving_periods")
+      .select("id", { count: "exact", head: true })
+      .eq("org_id", orgId)
+      .eq("vehicle_id", vehicleId)
+      .gte("start_time", from)
+      .lt("start_time", to);
+    if (mErr) console.error("[cost-analysis/loads-in-window] movement count:", mErr);
+
+    return c.json({
+      assetId: asset.id,
+      events,
+      movementsCount: movementsCount ?? 0,
+    });
+  } catch (err) {
+    console.error("[cost-analysis/loads-in-window] unexpected:", err);
+    return c.json({ error: "unexpected", detail: (err as Error).message ?? String(err) }, 500);
   }
-  const vehicleId = Number(vehicleIdStr);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: asset, error: aErr } = await (supabase as any)
-    .from("assets")
-    .select("id")
-    .eq("org_id", orgId)
-    .eq("motive_vehicle_id", String(vehicleId))
-    .maybeSingle();
-  if (aErr) return c.json({ error: "asset_lookup_failed", detail: aErr.message }, 500);
-  if (!asset) return c.json({ events: [], assetId: null });
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: events, error: eErr } = await (supabase as any)
-    .from("events")
-    .select("id, title, start, \"end\"")
-    .eq("org_id", orgId)
-    .eq("asset_id", asset.id)
-    .gte("start", from)
-    .lt("start", to)
-    .is("deleted_at", null)
-    .order("start", { ascending: true });
-  if (eErr) return c.json({ error: "events_fetch_failed", detail: eErr.message }, 500);
-
-  // Also count movements in the window so the UI can show what the
-  // analysis will cover.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { count: movementsCount } = await (supabase as any)
-    .from("motive_driving_periods")
-    .select("id", { count: "exact", head: true })
-    .eq("org_id", orgId)
-    .eq("vehicle_id", vehicleId)
-    .gte("start_time", from)
-    .lt("start_time", to);
-
-  return c.json({
-    assetId: asset.id,
-    events:  events ?? [],
-    movementsCount: movementsCount ?? 0,
-  });
 });
 
 // ─── Per-load chunked endpoints ───────────────────────────────────────
