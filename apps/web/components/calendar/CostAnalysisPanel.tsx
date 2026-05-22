@@ -13,9 +13,24 @@
  */
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, AlertTriangle } from 'lucide-react';
 import { railway, type CostAnalysisResult } from '@/lib/railway';
+
+/** Safe number formatter — returns a placeholder for null/undefined/NaN/Infinity
+ *  instead of throwing. Claude's tool input is usually schema-compliant but
+ *  edge cases (divide-by-zero, missing fields) shouldn't crash the panel. */
+function num(value: unknown, opts: { decimals?: number; prefix?: string; suffix?: string; placeholder?: string } = {}): string {
+  const { decimals = 0, prefix = '', suffix = '', placeholder = '—' } = opts;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return placeholder;
+  const formatted = decimals > 0 ? value.toFixed(decimals) : Math.round(value).toLocaleString();
+  return `${prefix}${formatted}${suffix}`;
+}
+
+/** Numeric guard for color thresholds — treats non-finite as 0 so comparisons don't blow up. */
+function safeNum(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
 
 interface Props {
   vehicleId: number;
@@ -25,11 +40,22 @@ interface Props {
 
 export default function CostAnalysisPanel({ vehicleId, days }: Props) {
   const [running, setRunning] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [result,  setResult]  = useState<CostAnalysisResult | null>(null);
   const [counts,  setCounts]  = useState<{ movements: number; loads: number } | null>(null);
   const [usage,   setUsage]   = useState<{ inputTokens?: number; outputTokens?: number } | null>(null);
   const [error,   setError]   = useState<string | null>(null);
   const [ranWindow, setRanWindow] = useState<string | null>(null);
+
+  // Tick a per-second elapsed counter while the analysis is running
+  // so the long wait shows progress instead of looking frozen.
+  useEffect(() => {
+    if (!running) return;
+    const startedAt = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
   const handleRun = async () => {
     setRunning(true);
@@ -85,8 +111,12 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
         {running && (
           <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
             <Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
-            <p className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-              Claude is reasoning through the route…
+            <p className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+              Claude is reasoning through the route… <span className="tabular-nums">({elapsed}s)</span>
+            </p>
+            <p className="text-[11px] max-w-md" style={{ color: 'var(--gc-text-3)' }}>
+              A busy week takes 60–180 seconds. The model is matching every movement to a load and computing margin breakdowns —
+              don&apos;t close the tab or the request will abort.
             </p>
           </div>
         )}
@@ -148,27 +178,27 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
       <div className="rounded-lg p-3" style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
         {/* Top row: revenue & margin */}
         <div className="grid grid-cols-4 gap-3 mb-3">
-          <Stat label="Revenue"          value={`$${Math.round(s.totalRevenue).toLocaleString()}`} />
-          <Stat label="Driver pay"       value={`$${Math.round(s.totalDriverPay).toLocaleString()}`} />
-          <Stat label="Margin after driver" value={`$${Math.round(s.totalMargin).toLocaleString()}`} accent={s.totalMargin >= 0} negative={s.totalMargin < 0} />
-          <Stat label="Loaded ratio"     value={`${Math.round(s.loadedRatio * 100)}%`} />
+          <Stat label="Revenue"             value={num(s.totalRevenue,   { prefix: '$' })} />
+          <Stat label="Driver pay"          value={num(s.totalDriverPay, { prefix: '$' })} />
+          <Stat label="Margin after driver" value={num(s.totalMargin,    { prefix: '$' })} accent={safeNum(s.totalMargin) >= 0} negative={safeNum(s.totalMargin) < 0} />
+          <Stat label="Loaded ratio"        value={Number.isFinite(s.loadedRatio) ? `${Math.round(s.loadedRatio * 100)}%` : '—'} />
         </div>
         {/* Middle row: miles + hours */}
         <div className="grid grid-cols-4 gap-3 mb-3 pt-3" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
-          <Stat label="Loaded mi"  value={Math.round(s.totalLoadedMiles).toLocaleString()} />
-          <Stat label="Empty mi"   value={Math.round(s.totalDeadheadMiles + s.totalReturnHomeMiles).toLocaleString()} />
-          <Stat label="Loaded hrs" value={s.totalLoadedHours.toFixed(1)} />
-          <Stat label="Empty hrs"  value={s.totalDeadheadHours.toFixed(1)} />
+          <Stat label="Loaded mi"  value={num(s.totalLoadedMiles)} />
+          <Stat label="Empty mi"   value={num(safeNum(s.totalDeadheadMiles) + safeNum(s.totalReturnHomeMiles))} />
+          <Stat label="Loaded hrs" value={num(s.totalLoadedHours, { decimals: 1 })} />
+          <Stat label="Empty hrs"  value={num(s.totalDeadheadHours, { decimals: 1 })} />
         </div>
         {/* Bottom row: rates */}
         <div className="grid grid-cols-4 gap-3 pt-3" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
-          <Stat label="True $/mi"   value={`$${s.fleetTrueRpm.toFixed(2)}`} accent />
-          <Stat label="True $/hr"   value={`$${s.fleetTrueRph.toFixed(2)}`} accent />
-          <Stat label="Margin $/mi" value={`$${s.fleetMarginRpm.toFixed(2)}`} accent={s.fleetMarginRpm >= 0} negative={s.fleetMarginRpm < 0} />
-          <Stat label="Margin $/hr" value={`$${s.fleetMarginRph.toFixed(2)}`} accent={s.fleetMarginRph >= 0} negative={s.fleetMarginRph < 0} />
+          <Stat label="True $/mi"   value={num(s.fleetTrueRpm, { decimals: 2, prefix: '$' })} accent />
+          <Stat label="True $/hr"   value={num(s.fleetTrueRph, { decimals: 2, prefix: '$' })} accent />
+          <Stat label="Margin $/mi" value={num(s.fleetMarginRpm, { decimals: 2, prefix: '$' })} accent={safeNum(s.fleetMarginRpm) >= 0} negative={safeNum(s.fleetMarginRpm) < 0} />
+          <Stat label="Margin $/hr" value={num(s.fleetMarginRph, { decimals: 2, prefix: '$' })} accent={safeNum(s.fleetMarginRph) >= 0} negative={safeNum(s.fleetMarginRph) < 0} />
         </div>
         <div className="text-[11px] leading-relaxed pt-3 mt-1" style={{ color: 'var(--gc-text-2)', borderTop: '1px dashed var(--gc-border-light)' }}>
-          {s.narrative}
+          {s.narrative ?? '(no narrative returned)'}
         </div>
       </div>
 
@@ -202,34 +232,36 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
               </tr>
             )}
             {result.loads.map((l) => {
-              const totalEmptyMi = l.deadheadMilesBefore + l.deadheadMilesAfter;
-              const totalEmptyHr = l.deadheadHoursBefore + l.deadheadHoursAfter;
-              const trueRpmCrash = l.trueRpm < l.statedRpm * 0.8;
-              const marginNeg    = l.marginAfterDriver < 0;
+              const totalEmptyMi = safeNum(l.deadheadMilesBefore) + safeNum(l.deadheadMilesAfter);
+              const totalEmptyHr = safeNum(l.deadheadHoursBefore) + safeNum(l.deadheadHoursAfter);
+              const stated       = safeNum(l.statedRpm);
+              const trueR        = safeNum(l.trueRpm);
+              const trueRpmCrash = stated > 0 && trueR > 0 && trueR < stated * 0.8;
+              const marginNeg    = safeNum(l.marginAfterDriver) < 0;
               return (
                 <tr key={l.loadId} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
                   <td className="px-2 py-1.5 font-medium sticky left-0 z-10" style={{ color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }}>
-                    {l.loadLabel}
+                    {l.loadLabel ?? '(unlabeled)'}
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">${Math.round(l.revenue).toLocaleString()}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>${Math.round(l.driverPay).toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{num(l.revenue,           { prefix: '$' })}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{num(l.driverPay, { prefix: '$' })}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums font-semibold"
                     style={{ color: marginNeg ? '#d93025' : 'var(--gc-text-1)' }}>
-                    ${Math.round(l.marginAfterDriver).toLocaleString()}
+                    {num(l.marginAfterDriver, { prefix: '$' })}
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{Math.round(l.loadedMiles)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{Math.round(totalEmptyMi)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{l.loadedHours.toFixed(1)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{totalEmptyHr.toFixed(1)}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">${l.statedRpm.toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{num(l.loadedMiles)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{num(totalEmptyMi)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{num(l.loadedHours, { decimals: 1 })}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{num(totalEmptyHr, { decimals: 1 })}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{num(l.statedRpm, { decimals: 2, prefix: '$' })}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums font-semibold"
                     style={{ color: trueRpmCrash ? '#d93025' : 'var(--gc-text-1)' }}>
-                    ${l.trueRpm.toFixed(2)}
+                    {num(l.trueRpm, { decimals: 2, prefix: '$' })}
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">${l.trueRph.toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{num(l.trueRph, { decimals: 2, prefix: '$' })}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums"
-                    style={{ color: l.marginRpm < 0 ? '#d93025' : 'var(--gc-text-1)' }}>
-                    ${l.marginRpm.toFixed(2)}
+                    style={{ color: safeNum(l.marginRpm) < 0 ? '#d93025' : 'var(--gc-text-1)' }}>
+                    {num(l.marginRpm, { decimals: 2, prefix: '$' })}
                   </td>
                   <td className="px-2 py-1.5 text-center"><ConfidenceChip level={l.confidence} /></td>
                 </tr>
@@ -268,10 +300,10 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono" style={{ color: 'var(--gc-text-3)' }}>M{u.movementId}</span>
                   <span style={{ color: 'var(--gc-text-2)' }}>
-                    {u.miles.toFixed(0)} mi · <span style={{ color: 'var(--gc-text-1)' }}>{u.likelyPurpose.replace(/_/g, ' ')}</span>
+                    {num(u.miles)} mi · <span style={{ color: 'var(--gc-text-1)' }}>{(u.likelyPurpose ?? 'unknown').replace(/_/g, ' ')}</span>
                   </span>
                 </div>
-                <div className="mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{u.reasoning}</div>
+                <div className="mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{u.reasoning ?? ''}</div>
               </div>
             ))}
           </div>
