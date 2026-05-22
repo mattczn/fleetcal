@@ -27,6 +27,10 @@ CREATE INDEX IF NOT EXISTS idx_motive_odometer_readings_vehicle_captured
 CREATE INDEX IF NOT EXISTS idx_motive_odometer_readings_org_captured
   ON motive_odometer_readings (org_id, captured_at DESC);
 
--- Used by the cron to know if today's snapshot already exists (idempotency).
-CREATE INDEX IF NOT EXISTS idx_motive_odometer_readings_vehicle_day
-  ON motive_odometer_readings (vehicle_id, (captured_at::date));
+-- Note: the idempotency probe (gte/lt on a UTC-day range, scoped to
+-- vehicle_id) is already covered by the (vehicle_id, captured_at)
+-- index above. An earlier draft of this migration added a
+-- (vehicle_id, captured_at::date) expression index, but timestamptz →
+-- date isn't IMMUTABLE in Postgres (depends on session tz), so it
+-- can't live in an index expression. The range-scan index serves the
+-- same purpose without the immutability gotcha.
