@@ -436,7 +436,14 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
     >
       <div
         className="relative flex flex-col rounded-2xl overflow-hidden"
-        style={{ width: 1200, height: 864, maxWidth: '96vw', maxHeight: '94vh', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        style={{
+          width: tab === 'cost' ? 1600 : 1200,
+          height: 864,
+          maxWidth: '96vw',
+          maxHeight: '94vh',
+          background: 'var(--gc-surface)',
+          boxShadow: 'var(--shadow-3)',
+        }}
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -462,8 +469,16 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
 
         {/* Body */}
         <div className="flex-1 flex min-h-0">
-          {/* Left: full-height map (~60%) */}
-          <div className="relative flex-1 min-w-0" style={{ borderRight: '1px solid var(--gc-border-light)' }}>
+          {/* Left: full-height map (~60%) — hidden on Cost tab so the
+              wide table has the entire modal width to itself. The
+              map adds no value when reading financial analytics. */}
+          <div
+            className="relative flex-1 min-w-0"
+            style={{
+              borderRight: '1px solid var(--gc-border-light)',
+              display: tab === 'cost' ? 'none' : 'block',
+            }}
+          >
             <div ref={mapContainer} className="absolute inset-0" />
 
             {/* Bottom overlay — swaps between "last seen" and movement details */}
@@ -573,7 +588,15 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
           </div>
 
           {/* Right: movements list OR odometer chart, depending on tab */}
-          <div className="flex flex-col shrink-0" style={{ width: 460 }}>
+          <div
+            className="flex flex-col"
+            style={{
+              // Cost tab: panel takes the whole modal (map is hidden).
+              // Other tabs: keep the original narrow side panel.
+              width: tab === 'cost' ? '100%' : 460,
+              flexShrink: tab === 'cost' ? 1 : 0,
+            }}
+          >
             {/* Tab toggle — Movements (default) / Odometer */}
             <div className="flex items-center gap-1 px-4 pt-3" style={{ color: 'var(--gc-text-3)' }}>
               {([

@@ -172,9 +172,10 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
         </div>
       </div>
 
-      {/* Per-load table — scrolls horizontally on narrow modal widths */}
+      {/* Per-load table — scrolls horizontally only if even the
+          expanded modal isn't wide enough. */}
       <div className="rounded-lg overflow-auto" style={{ border: '1px solid var(--gc-border-light)' }}>
-        <table className="w-full text-[11px]" style={{ minWidth: 760 }}>
+        <table className="w-full text-[12px]" style={{ minWidth: 1100 }}>
           <thead>
             <tr style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
               <th className="text-left  px-2 py-1.5 font-semibold sticky left-0 z-10" style={{ background: 'var(--gc-bg)' }}>Load</th>
