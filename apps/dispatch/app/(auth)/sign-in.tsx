@@ -1,7 +1,7 @@
 import React from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useOAuth } from "@clerk/clerk-expo";
+import { useOAuth, useAuth } from "@clerk/clerk-expo";
 import * as WebBrowser from "expo-web-browser";
 import { Truck } from "lucide-react-native";
 import { txt } from "@/lib/font";
@@ -10,12 +10,22 @@ WebBrowser.maybeCompleteAuthSession();
 
 export default function SignInScreen() {
   const { startOAuthFlow } = useOAuth({ strategy: "oauth_google" });
+  const { signOut } = useAuth();
   const [busy, setBusy] = React.useState(false);
 
   async function onSignIn() {
     if (busy) return;
     setBusy(true);
     try {
+      // Clear any stale session before launching OAuth. The Clerk
+      // Expo SDK occasionally lands in a state where useAuth() reads
+      // isSignedIn:false (so the root layout sends the user here)
+      // while startOAuthFlow() still detects a leftover session token
+      // and rejects with "already signed in". Most often hit when
+      // switching accounts on a shared device. Signing out first
+      // guarantees a clean slate; if there's nothing to sign out
+      // from, the call is a no-op.
+      try { await signOut(); } catch { /* no active session — fine */ }
       const { createdSessionId, setActive } = await startOAuthFlow();
       if (createdSessionId && setActive) {
         await setActive({ session: createdSessionId });
