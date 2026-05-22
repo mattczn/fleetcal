@@ -67,8 +67,10 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
   const trafficRef   = useRef<google.maps.TrafficLayer | null>(null);
+  const truckMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
   const [trafficOn, setTrafficOn] = useState(true);
   const [truckLoc, setTruckLoc] = useState<TruckLocation | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const truckRef = useRef<TruckLocation | null>(null);
   const [etas, setEtas] = useState<Record<string, string | 'loading'>>({});
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
@@ -124,6 +126,7 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
         gestureHandling: 'greedy',
       });
       mapRef.current = map;
+      setMapReady(true);
 
       // Live traffic overlay (toggleable)
       trafficRef.current = new google.maps.TrafficLayer({ map: trafficOn ? map : null });
@@ -191,40 +194,11 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
         marker.addListener('click', () => openPopup(marker, html));
       });
 
-      // Truck location marker
-      const truck = truckRef.current;
-      if (truck) {
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'position:relative;width:22px;height:22px;cursor:pointer;';
-        const pulse = document.createElement('div');
-        pulse.style.cssText = 'position:absolute;inset:0;border-radius:50%;background:rgba(59,130,246,0.25);animation:truck-pulse 2s ease-out infinite;';
-        const dot = document.createElement('div');
-        dot.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid white;box-shadow:0 1px 6px rgba(59,130,246,0.6);';
-        if (!document.getElementById('truck-pulse-style')) {
-          const style = document.createElement('style');
-          style.id = 'truck-pulse-style';
-          style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
-          document.head.appendChild(style);
-        }
-        wrapper.appendChild(pulse);
-        wrapper.appendChild(dot);
-
-        const age    = Math.round((Date.now() - new Date(truck.locatedAt).getTime()) / 60000);
-        const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
-        const html = `
-          <div style="font-size:12px;line-height:1.5;max-width:200px;padding:2px 4px">
-            <div style="font-weight:700;color:#1d4ed8">Truck Location</div>
-            <div style="color:#555">${truck.description}</div>
-            <div style="color:#888;margin-top:2px">Updated ${ageStr}</div>
-          </div>`;
-
-        const marker = new google.maps.marker.AdvancedMarkerElement({
-          map,
-          position: { lat: truck.lat, lng: truck.lon },
-          content: wrapper,
-        });
-        marker.addListener('click', () => openPopup(marker, html));
-      }
+      // Truck marker is now rendered in a separate effect keyed on
+      // truckLoc — the Motive fetch resolves AFTER this init runs,
+      // so doing it here meant we tried to draw a marker before the
+      // location data existed, and the []-deps prevented a re-run.
+      // See the truck-marker effect below.
 
       // Route line
       if (geocodedStops.length >= 2) {
@@ -265,6 +239,63 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
       trafficRef.current.setMap(trafficOn ? mapRef.current : null);
     }
   }, [trafficOn]);
+
+  // Render/refresh the truck marker on the map. Separate from the
+  // main map-init effect because that effect has []-deps and runs
+  // before the Motive fetch resolves — without this, the side-panel
+  // "Truck (ELD)" row would fly the camera to the right spot with
+  // nothing drawn there.
+  useEffect(() => {
+    if (!mapReady) return;
+    const map = mapRef.current;
+    if (!map) return;
+    // Tear down any prior marker (truckLoc may have updated, or just cleared).
+    if (truckMarkerRef.current) {
+      truckMarkerRef.current.map = null;
+      truckMarkerRef.current = null;
+    }
+    if (!truckLoc) return;
+
+    let cancelled = false;
+    void loadGoogleMaps().then(google => {
+      if (cancelled || !mapRef.current) return;
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'position:relative;width:22px;height:22px;cursor:pointer;';
+      const pulse = document.createElement('div');
+      pulse.style.cssText = 'position:absolute;inset:0;border-radius:50%;background:rgba(59,130,246,0.25);animation:truck-pulse 2s ease-out infinite;';
+      const dot = document.createElement('div');
+      dot.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#3b82f6;border:2.5px solid white;box-shadow:0 1px 6px rgba(59,130,246,0.6);';
+      if (!document.getElementById('truck-pulse-style')) {
+        const style = document.createElement('style');
+        style.id = 'truck-pulse-style';
+        style.textContent = '@keyframes truck-pulse{0%{transform:scale(1);opacity:.6}70%{transform:scale(2.4);opacity:0}100%{transform:scale(2.4);opacity:0}}';
+        document.head.appendChild(style);
+      }
+      wrapper.appendChild(pulse);
+      wrapper.appendChild(dot);
+
+      const age    = Math.round((Date.now() - new Date(truckLoc.locatedAt).getTime()) / 60000);
+      const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+      const html = `
+        <div style="font-size:12px;line-height:1.5;max-width:200px;padding:2px 4px">
+          <div style="font-weight:700;color:#1d4ed8">Truck Location</div>
+          <div style="color:#555">${truckLoc.description}</div>
+          <div style="color:#888;margin-top:2px">Updated ${ageStr}</div>
+        </div>`;
+      const marker = new google.maps.marker.AdvancedMarkerElement({
+        map: mapRef.current,
+        position: { lat: truckLoc.lat, lng: truckLoc.lon },
+        content: wrapper,
+      });
+      const popup = new google.maps.InfoWindow();
+      marker.addListener('click', () => {
+        popup.setContent(html);
+        popup.open({ anchor: marker, map: mapRef.current! });
+      });
+      truckMarkerRef.current = marker;
+    });
+    return () => { cancelled = true; };
+  }, [truckLoc, mapReady]);
 
   const flyTo = (lat: number, lng: number, zoom: number) => {
     const map = mapRef.current;

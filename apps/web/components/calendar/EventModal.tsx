@@ -4963,13 +4963,11 @@ export default function EventModal() {
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#5b21b6', background: '#ede9fe', borderRadius: 6, padding: '6px 10px' }}>{delivAssetName}</div>
                               </div>
                             </div>
-                            {/* Delivery-leg view of the trailer drop —
-                                read-only, mirrored from the partner
-                                pickup event. Only rendered once the
-                                pickup driver has actually pinned the
-                                trailer; before then there's nothing
-                                real for the delivery driver to see. */}
-                            {relayPartner?.trailerDropoffLat != null && (
+                            {/* Trailer pin viewer hidden 2026-05-22 —
+                                feature was too complex for the prototype.
+                                Schema + relayPartner trailer fields are
+                                preserved; just uncomment to re-enable. */}
+                            {/* {relayPartner?.trailerDropoffLat != null && (
                               <TrailerLocationCard
                                 editable={false}
                                 address={relayPartner?.trailerDropoffAddress}
@@ -4978,7 +4976,7 @@ export default function EventModal() {
                                 pinAt={relayPartner?.trailerDropoffAt}
                                 tz={calendarTimezone}
                               />
-                            )}
+                            )} */}
                           </div>
                         );
                       })()}
@@ -5161,7 +5159,10 @@ export default function EventModal() {
                               type the street address that pairs with
                               the pin (primary), with the pin shown
                               underneath as the verification layer. */}
-                          {(() => {
+                          {/* Trailer pin editor hidden 2026-05-22 — pair
+                              with the driver-app RelayTrailerLocation
+                              removal. Re-enable by uncommenting. */}
+                          {/* {(() => {
                             const currentEv = events.find(e => e.id === modalEventId);
                             if (currentEv?.trailerDropoffLat == null) return null;
                             return (
@@ -5178,7 +5179,7 @@ export default function EventModal() {
                                 tz={calendarTimezone}
                               />
                             );
-                          })()}
+                          })()} */}
                         </div>
                       )}
                     </div>

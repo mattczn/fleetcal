@@ -46,7 +46,8 @@ import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StatusPickerSheet } from "@/components/StatusPickerSheet";
 import { RelayHandoffPhotos, promptRelayHandoffUpload } from "@/components/RelayHandoffPhotos";
-import { RelayTrailerLocation } from "@/components/RelayTrailerLocation";
+// Trailer pin feature hidden 2026-05-22 — component preserved for re-enable.
+// import { RelayTrailerLocation } from "@/components/RelayTrailerLocation";
 import { TrailerPickerSheet } from "@/components/TrailerPickerSheet";
 import { RouteMap, type RouteMapHandle } from "@/components/RouteMap";
 import { AssignedTruckCard } from "@/components/AssignedTruckCard";
@@ -1073,7 +1074,7 @@ export default function LoadDetailScreen() {
             mark_delivery:  "Check in at delivery + upload POD",
             upload_pod:     "Upload POD",
             report_trailer: "Report trailer",
-            upload_handoff: "Upload trailer handoff photos + pin location",
+            upload_handoff: "Upload trailer handoff photos",
           };
           return (
             <View style={{
@@ -1402,25 +1403,10 @@ export default function LoadDetailScreen() {
               </View>
             </View>
             <RelayHandoffPhotos loadId={load.id} reloadKey={relayPhotosReloadKey} />
-            {load.relayRole && (
-              <RelayTrailerLocation
-                eventId={load.id}
-                relayRole={load.relayRole}
-                trailerDropoffLat={load.trailerDropoffLat}
-                trailerDropoffLng={load.trailerDropoffLng}
-                trailerDropoffAt={load.trailerDropoffAt}
-                partnerTrailerDropoffLat={load.partnerTrailerDropoffLat}
-                partnerTrailerDropoffLng={load.partnerTrailerDropoffLng}
-                partnerTrailerDropoffAt={load.partnerTrailerDropoffAt}
-                partnerTrailerDropoffAddress={load.partnerTrailerDropoffAddress}
-                onSaved={() => {
-                  // Refetch so the new pin shows immediately AND so
-                  // the relay partner (if they're also looking) gets
-                  // the update on their next refresh / poll.
-                  void queryClient.invalidateQueries({ queryKey: ["load", id] });
-                }}
-              />
-            )}
+            {/* RelayTrailerLocation (the trailer-drop pin feature) was
+                hidden 2026-05-22 — too complex for the prototype.
+                Component + API + schema stay in place so re-enabling
+                is just uncommenting this block. */}
           </View>
         ) : null}
 
