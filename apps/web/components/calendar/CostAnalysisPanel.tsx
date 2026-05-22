@@ -32,6 +32,14 @@ function safeNum(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+function formatAgo(d: Date): string {
+  const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (sec < 60)        return 'just now';
+  if (sec < 3600)      return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86_400)    return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86_400)}d ago`;
+}
+
 interface Props {
   vehicleId: number;
   /** Lookback window in days, mirrors the modal's range chip. */
@@ -39,6 +47,7 @@ interface Props {
 }
 
 export default function CostAnalysisPanel({ vehicleId, days }: Props) {
+  const [loadingLatest, setLoadingLatest] = useState(true);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [result,  setResult]  = useState<CostAnalysisResult | null>(null);
@@ -46,8 +55,34 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
   const [usage,   setUsage]   = useState<{ inputTokens?: number; outputTokens?: number } | null>(null);
   const [error,   setError]   = useState<string | null>(null);
   const [ranWindow, setRanWindow] = useState<string | null>(null);
+  const [createdAt, setCreatedAt] = useState<string | null>(null);
 
-  // Tick a per-second elapsed counter while the analysis is running
+  // Auto-load the most recent saved report for this vehicle so users
+  // see prior work immediately and don't burn tokens on a fresh run
+  // they didn't ask for.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingLatest(true);
+      try {
+        const { report } = await railway.getLatestCostAnalysis(vehicleId);
+        if (cancelled || !report) return;
+        setResult(report.result);
+        setCounts(report.counts);
+        setUsage(report.usage ?? null);
+        setCreatedAt(report.created_at);
+        setRanWindow(`${report.window_from.slice(0, 10)} → ${report.window_to.slice(0, 10)}`);
+      } catch (e) {
+        // Non-fatal — just means no cached report. The empty CTA shows.
+        console.warn('[CostAnalysisPanel] latest fetch:', e);
+      } finally {
+        if (!cancelled) setLoadingLatest(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [vehicleId]);
+
+  // Tick a per-second elapsed counter while a fresh run is in flight
   // so the long wait shows progress instead of looking frozen.
   useEffect(() => {
     if (!running) return;
@@ -60,16 +95,16 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
   const handleRun = async () => {
     setRunning(true);
     setError(null);
-    setResult(null);
     try {
       const nowMs = Date.now();
       const fromIso = new Date(nowMs - days * 86_400_000).toISOString();
       const toIso   = new Date(nowMs).toISOString();
-      const r = await railway.getCostAnalysis(vehicleId, fromIso, toIso);
+      const r = await railway.runCostAnalysis(vehicleId, fromIso, toIso);
       setResult(r.analysis);
       setCounts(r.counts);
       setUsage(r.usage);
       setRanWindow(`${fromIso.slice(0, 10)} → ${toIso.slice(0, 10)}`);
+      setCreatedAt(r.createdAt);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       setError(detail);
@@ -89,11 +124,18 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-4">
-        {!result && !running && !error && (
+        {loadingLatest && !result && !running && (
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <Loader2 size={16} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
+            <p className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Loading saved reports…</p>
+          </div>
+        )}
+
+        {!loadingLatest && !result && !running && !error && (
           <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
             <p className="text-[12px] max-w-md" style={{ color: 'var(--gc-text-3)' }}>
-              Sends the last {days} day{days === 1 ? '' : 's'} of this truck&apos;s movements + scheduled loads to Claude and asks it to match them.
-              Click below to run. Each call costs a few cents and takes 10-20 seconds.
+              No saved analysis yet for this truck. Sends the last {days} day{days === 1 ? '' : 's'} of movements + scheduled loads to Claude
+              and asks it to match them. Costs a few cents per run, takes 1-3 minutes. The result is saved so you don&apos;t pay to re-open the tab.
             </p>
             <button
               onClick={handleRun}
@@ -144,6 +186,7 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
             counts={counts}
             usage={usage}
             ranWindow={ranWindow}
+            createdAt={createdAt}
             onRerun={handleRun}
           />
         )}
@@ -152,14 +195,16 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
   );
 }
 
-function ResultView({ result, counts, usage, ranWindow, onRerun }: {
+function ResultView({ result, counts, usage, ranWindow, createdAt, onRerun }: {
   result: CostAnalysisResult;
   counts: { movements: number; loads: number } | null;
   usage: { inputTokens?: number; outputTokens?: number } | null;
   ranWindow: string | null;
+  createdAt: string | null;
   onRerun: () => void;
 }) {
   const s = result.summary;
+  const generatedAgo = createdAt ? formatAgo(new Date(createdAt)) : null;
   return (
     <div className="flex flex-col gap-4">
       {/* Top: window + re-run + meta */}
@@ -167,6 +212,7 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
         <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
           Window: <span style={{ color: 'var(--gc-text-2)' }}>{ranWindow}</span>
           {counts && <span> · {counts.loads} load{counts.loads === 1 ? '' : 's'} · {counts.movements} movement{counts.movements === 1 ? '' : 's'}</span>}
+          {generatedAgo && <span> · generated {generatedAgo}</span>}
           {usage?.inputTokens != null && <span> · {usage.inputTokens.toLocaleString()} in · {usage.outputTokens?.toLocaleString() ?? '?'} out</span>}
         </div>
         <button onClick={onRerun} className="text-[11px] font-medium" style={{ color: 'var(--gc-blue)' }}>

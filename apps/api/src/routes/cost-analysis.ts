@@ -170,12 +170,49 @@ const ANALYSIS_TOOL: Anthropic.Tool = {
   },
 };
 
-costAnalysis.get("/", requireCapability("loads.view"), async (c) => {
+// ── Latest saved report ────────────────────────────────────────────────
+// Loaded on Cost-tab open so dispatchers see the most recent analysis
+// without spending tokens. Returns 404 when there's no prior run.
+
+costAnalysis.get("/latest", requireCapability("loads.view"), async (c) => {
   const orgId = c.get("orgId");
   const url   = new URL(c.req.url);
   const vehicleIdStr = url.searchParams.get("vehicleId");
-  const from = url.searchParams.get("from"); // ISO
-  const to   = url.searchParams.get("to");   // ISO
+  if (!vehicleIdStr) return c.json({ error: "vehicleId required" }, 400);
+  const vehicleId = Number(vehicleIdStr);
+  if (!Number.isFinite(vehicleId)) return c.json({ error: "vehicleId must be numeric" }, 400);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("cost_analysis_reports")
+    .select("id, window_from, window_to, result, counts, usage, model, created_at, created_by")
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[cost-analysis] latest fetch:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+  if (!data) return c.json({ report: null });
+  return c.json({ report: data });
+});
+
+// ── Run + persist ──────────────────────────────────────────────────────
+// Generates a fresh analysis from Claude and stores it. The new row
+// becomes the "latest" on the next /latest call.
+
+costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any = {};
+  try { body = await c.req.json(); } catch { /* allow empty */ }
+
+  const vehicleIdStr = body?.vehicleId != null ? String(body.vehicleId) : null;
+  const from = typeof body?.from === "string" ? body.from : null;
+  const to   = typeof body?.to   === "string" ? body.to   : null;
   if (!vehicleIdStr || !from || !to) {
     return c.json({ error: "vehicleId, from, to required" }, 400);
   }
@@ -321,20 +358,50 @@ costAnalysis.get("/", requireCapability("loads.view"), async (c) => {
     return c.json({ error: "no_tool_use", detail: "Model didn't call the submit_analysis tool." }, 500);
   }
 
+  const counts = {
+    movements: (movements ?? []).length,
+    loads:     (events ?? []).length,
+  };
+  const usage = {
+    inputTokens:        response.usage?.input_tokens ?? null,
+    outputTokens:       response.usage?.output_tokens ?? null,
+    cacheCreationTokens: response.usage?.cache_creation_input_tokens ?? null,
+    cacheReadTokens:     response.usage?.cache_read_input_tokens ?? null,
+  };
+
+  // Persist before returning. We don't block the response on insert
+  // failure — the user still gets the freshly-generated analysis, but
+  // it just won't be cached for the next /latest call. Logged for
+  // follow-up.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: saved, error: insertErr } = await (supabase as any)
+    .from("cost_analysis_reports")
+    .insert({
+      org_id:      orgId,
+      vehicle_id:  vehicleId,
+      asset_id:    asset.id,
+      window_from: from,
+      window_to:   to,
+      result:      toolUse.input,
+      counts,
+      usage,
+      model:       MODEL,
+      created_by:  userId ?? null,
+    })
+    .select("id, created_at")
+    .maybeSingle();
+  if (insertErr) {
+    console.error("[cost-analysis] insert failed (returning unsaved result):", insertErr);
+  }
+
   return c.json({
+    id:           saved?.id ?? null,
+    createdAt:    saved?.created_at ?? null,
     vehicleId,
-    window: { from, to },
-    counts: {
-      movements: (movements ?? []).length,
-      loads:     (events ?? []).length,
-    },
-    analysis: toolUse.input,
-    usage: {
-      inputTokens:        response.usage?.input_tokens,
-      outputTokens:       response.usage?.output_tokens,
-      cacheCreationTokens: response.usage?.cache_creation_input_tokens,
-      cacheReadTokens:     response.usage?.cache_read_input_tokens,
-    },
+    window:       { from, to },
+    counts,
+    analysis:     toolUse.input,
+    usage,
   });
 });
 

@@ -537,23 +537,40 @@ class RailwayClient {
       'POST', '/v1/movements/odometer/snapshot', {},
     );
   }
-  /** Experimental: AI-powered cost-per-load analysis. Pulls movements
-   *  + load schedule for one vehicle over a date range and asks Claude
-   *  to match them, reporting true RPM (loaded + deadhead miles). */
-  getCostAnalysis(vehicleId: string | number, from: string, to: string) {
-    const qs = new URLSearchParams({ vehicleId: String(vehicleId), from, to });
+  /** Latest saved cost-analysis report for a vehicle (or null). */
+  getLatestCostAnalysis(vehicleId: string | number) {
+    const qs = new URLSearchParams({ vehicleId: String(vehicleId) });
     return this.req<{
+      report: {
+        id:           string;
+        window_from:  string;
+        window_to:    string;
+        result:       CostAnalysisResult;
+        counts:       { movements: number; loads: number } | null;
+        usage:        { inputTokens?: number; outputTokens?: number; cacheCreationTokens?: number | null; cacheReadTokens?: number | null } | null;
+        model:        string;
+        created_at:   string;
+        created_by:   string | null;
+      } | null;
+    }>('GET', `/v1/cost-analysis/latest?${qs.toString()}`);
+  }
+  /** Run a fresh analysis and persist it. Returns the same shape as the
+   *  saved row plus the analysis (so the caller can render immediately). */
+  runCostAnalysis(vehicleId: string | number, from: string, to: string) {
+    return this.req<{
+      id:        string | null;
+      createdAt: string | null;
       vehicleId: number;
-      window: { from: string; to: string };
-      counts: { movements: number; loads: number };
-      analysis: CostAnalysisResult;
+      window:    { from: string; to: string };
+      counts:    { movements: number; loads: number };
+      analysis:  CostAnalysisResult;
       usage: {
         inputTokens?: number;
         outputTokens?: number;
         cacheCreationTokens?: number | null;
         cacheReadTokens?: number | null;
       };
-    }>('GET', `/v1/cost-analysis?${qs.toString()}`);
+    }>('POST', '/v1/cost-analysis/run', { vehicleId, from, to });
   }
   /** Per-vehicle completeness check: pulls Motive's driving_periods
    *  for [from, to) and compares to what's in our DB. */
