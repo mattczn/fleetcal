@@ -107,12 +107,26 @@ export interface CostAnalysisLoad {
   loadLabel:           string;
   confidence:          'high' | 'medium' | 'low';
   matchedMovementIds:  number[];
+
   loadedMiles:         number;
   deadheadMilesBefore: number;
   deadheadMilesAfter:  number;
+
+  loadedHours:         number;
+  deadheadHoursBefore: number;
+  deadheadHoursAfter:  number;
+
   revenue:             number;
+  driverPay:           number;
+  marginAfterDriver:   number;
+
   statedRpm:           number;
   trueRpm:             number;
+  statedRph:           number;
+  trueRph:             number;
+  marginRpm:           number;
+  marginRph:           number;
+
   reasoning:           string;
 }
 
@@ -128,10 +142,17 @@ export interface CostAnalysisResult {
   unmatchedMovements: CostAnalysisUnmatched[];
   summary: {
     totalRevenue:         number;
+    totalDriverPay:       number;
+    totalMargin:          number;
     totalLoadedMiles:     number;
     totalDeadheadMiles:   number;
     totalReturnHomeMiles: number;
+    totalLoadedHours:     number;
+    totalDeadheadHours:   number;
     fleetTrueRpm:         number;
+    fleetTrueRph:         number;
+    fleetMarginRpm:       number;
+    fleetMarginRph:       number;
     loadedRatio:          number;
     narrative:            string;
   };

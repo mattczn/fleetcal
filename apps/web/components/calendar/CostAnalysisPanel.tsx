@@ -146,60 +146,94 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
 
       {/* Summary block */}
       <div className="rounded-lg p-3" style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
-        <div className="grid grid-cols-4 gap-3 mb-3 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-          <Stat label="Revenue" value={`$${Math.round(s.totalRevenue).toLocaleString()}`} />
-          <Stat label="Loaded miles" value={Math.round(s.totalLoadedMiles).toLocaleString()} />
-          <Stat label="Empty miles" value={Math.round(s.totalDeadheadMiles + s.totalReturnHomeMiles).toLocaleString()} />
-          <Stat label="True $/mi" value={`$${s.fleetTrueRpm.toFixed(2)}`} accent />
+        {/* Top row: revenue & margin */}
+        <div className="grid grid-cols-4 gap-3 mb-3">
+          <Stat label="Revenue"          value={`$${Math.round(s.totalRevenue).toLocaleString()}`} />
+          <Stat label="Driver pay"       value={`$${Math.round(s.totalDriverPay).toLocaleString()}`} />
+          <Stat label="Margin after driver" value={`$${Math.round(s.totalMargin).toLocaleString()}`} accent={s.totalMargin >= 0} negative={s.totalMargin < 0} />
+          <Stat label="Loaded ratio"     value={`${Math.round(s.loadedRatio * 100)}%`} />
         </div>
-        <div className="text-[11px] leading-relaxed pt-2" style={{ color: 'var(--gc-text-2)', borderTop: '1px dashed var(--gc-border-light)' }}>
+        {/* Middle row: miles + hours */}
+        <div className="grid grid-cols-4 gap-3 mb-3 pt-3" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+          <Stat label="Loaded mi"  value={Math.round(s.totalLoadedMiles).toLocaleString()} />
+          <Stat label="Empty mi"   value={Math.round(s.totalDeadheadMiles + s.totalReturnHomeMiles).toLocaleString()} />
+          <Stat label="Loaded hrs" value={s.totalLoadedHours.toFixed(1)} />
+          <Stat label="Empty hrs"  value={s.totalDeadheadHours.toFixed(1)} />
+        </div>
+        {/* Bottom row: rates */}
+        <div className="grid grid-cols-4 gap-3 pt-3" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+          <Stat label="True $/mi"   value={`$${s.fleetTrueRpm.toFixed(2)}`} accent />
+          <Stat label="True $/hr"   value={`$${s.fleetTrueRph.toFixed(2)}`} accent />
+          <Stat label="Margin $/mi" value={`$${s.fleetMarginRpm.toFixed(2)}`} accent={s.fleetMarginRpm >= 0} negative={s.fleetMarginRpm < 0} />
+          <Stat label="Margin $/hr" value={`$${s.fleetMarginRph.toFixed(2)}`} accent={s.fleetMarginRph >= 0} negative={s.fleetMarginRph < 0} />
+        </div>
+        <div className="text-[11px] leading-relaxed pt-3 mt-1" style={{ color: 'var(--gc-text-2)', borderTop: '1px dashed var(--gc-border-light)' }}>
           {s.narrative}
-        </div>
-        <div className="text-[10px] mt-1.5" style={{ color: 'var(--gc-text-3)' }}>
-          Loaded ratio: {(s.loadedRatio * 100).toFixed(0)}% (loaded / total miles).
         </div>
       </div>
 
-      {/* Per-load table */}
-      <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--gc-border-light)' }}>
-        <table className="w-full text-[11px]">
+      {/* Per-load table — scrolls horizontally on narrow modal widths */}
+      <div className="rounded-lg overflow-auto" style={{ border: '1px solid var(--gc-border-light)' }}>
+        <table className="w-full text-[11px]" style={{ minWidth: 760 }}>
           <thead>
             <tr style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
-              <th className="text-left  px-2 py-1.5 font-semibold">Load</th>
-              <th className="text-right px-2 py-1.5 font-semibold">Revenue</th>
-              <th className="text-right px-2 py-1.5 font-semibold">Loaded</th>
-              <th className="text-right px-2 py-1.5 font-semibold">DH pre</th>
-              <th className="text-right px-2 py-1.5 font-semibold">DH post</th>
-              <th className="text-right px-2 py-1.5 font-semibold">Stated</th>
-              <th className="text-right px-2 py-1.5 font-semibold">True</th>
-              <th className="text-center px-2 py-1.5 font-semibold">Confidence</th>
+              <th className="text-left  px-2 py-1.5 font-semibold sticky left-0 z-10" style={{ background: 'var(--gc-bg)' }}>Load</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Rev</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Driver</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Margin</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Loaded mi</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Empty mi</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Loaded hr</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Empty hr</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Stated $/mi</th>
+              <th className="text-right px-2 py-1.5 font-semibold">True $/mi</th>
+              <th className="text-right px-2 py-1.5 font-semibold">True $/hr</th>
+              <th className="text-right px-2 py-1.5 font-semibold">Mgn $/mi</th>
+              <th className="text-center px-2 py-1.5 font-semibold">Conf</th>
             </tr>
           </thead>
           <tbody>
             {result.loads.length === 0 && (
               <tr>
-                <td colSpan={8} className="text-center px-2 py-4" style={{ color: 'var(--gc-text-3)' }}>
+                <td colSpan={13} className="text-center px-2 py-4" style={{ color: 'var(--gc-text-3)' }}>
                   No loads matched in this window.
                 </td>
               </tr>
             )}
-            {result.loads.map((l) => (
-              <tr key={l.loadId} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-                <td className="px-2 py-1.5 font-medium" style={{ color: 'var(--gc-text-1)' }}>{l.loadLabel}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">${Math.round(l.revenue).toLocaleString()}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">{Math.round(l.loadedMiles)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{Math.round(l.deadheadMilesBefore)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{Math.round(l.deadheadMilesAfter)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums">${l.statedRpm.toFixed(2)}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums font-semibold"
-                  style={{ color: l.trueRpm < l.statedRpm * 0.8 ? '#d93025' : 'var(--gc-text-1)' }}>
-                  ${l.trueRpm.toFixed(2)}
-                </td>
-                <td className="px-2 py-1.5 text-center">
-                  <ConfidenceChip level={l.confidence} />
-                </td>
-              </tr>
-            ))}
+            {result.loads.map((l) => {
+              const totalEmptyMi = l.deadheadMilesBefore + l.deadheadMilesAfter;
+              const totalEmptyHr = l.deadheadHoursBefore + l.deadheadHoursAfter;
+              const trueRpmCrash = l.trueRpm < l.statedRpm * 0.8;
+              const marginNeg    = l.marginAfterDriver < 0;
+              return (
+                <tr key={l.loadId} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                  <td className="px-2 py-1.5 font-medium sticky left-0 z-10" style={{ color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }}>
+                    {l.loadLabel}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">${Math.round(l.revenue).toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>${Math.round(l.driverPay).toLocaleString()}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums font-semibold"
+                    style={{ color: marginNeg ? '#d93025' : 'var(--gc-text-1)' }}>
+                    ${Math.round(l.marginAfterDriver).toLocaleString()}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{Math.round(l.loadedMiles)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{Math.round(totalEmptyMi)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{l.loadedHours.toFixed(1)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{totalEmptyHr.toFixed(1)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">${l.statedRpm.toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums font-semibold"
+                    style={{ color: trueRpmCrash ? '#d93025' : 'var(--gc-text-1)' }}>
+                    ${l.trueRpm.toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">${l.trueRph.toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums"
+                    style={{ color: l.marginRpm < 0 ? '#d93025' : 'var(--gc-text-1)' }}>
+                    ${l.marginRpm.toFixed(2)}
+                  </td>
+                  <td className="px-2 py-1.5 text-center"><ConfidenceChip level={l.confidence} /></td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -246,11 +280,12 @@ function ResultView({ result, counts, usage, ranWindow, onRerun }: {
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Stat({ label, value, accent, negative }: { label: string; value: string; accent?: boolean; negative?: boolean }) {
+  const color = negative ? '#d93025' : accent ? 'var(--gc-blue)' : 'var(--gc-text-1)';
   return (
     <div className="flex flex-col">
       <span style={{ color: 'var(--gc-text-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>{label}</span>
-      <span style={{ color: accent ? 'var(--gc-blue)' : 'var(--gc-text-1)', fontWeight: 700, fontSize: 16 }}>{value}</span>
+      <span style={{ color, fontWeight: 700, fontSize: 16 }}>{value}</span>
     </div>
   );
 }

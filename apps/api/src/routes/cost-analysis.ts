@@ -28,34 +28,54 @@ const MODEL  = "claude-sonnet-4-5-20250929";
 
 const costAnalysis = new Hono<{ Variables: AuthVariables }>();
 
-const SYSTEM_PROMPT = `You are analyzing a trucking dispatcher's data to figure out the *true* cost-per-mile per load.
+const SYSTEM_PROMPT = `You are analyzing a trucking dispatcher's data to figure out the *true* economics per load.
 
 Two data streams will be provided for one truck over a date range:
 
-1. SCHEDULED LOADS — what dispatch booked: load id, customer, pickup/delivery stops with addresses + appointment times, price, loaded-mile estimate. These are the "revenue" segments.
+1. SCHEDULED LOADS — what dispatch booked: load id, customer, pickup/delivery stops with addresses + appointment times, load price (revenue), loaded-mile estimate, and driver pay (what we paid the driver for this load).
 
-2. TELEMETRY MOVEMENTS — what the truck actually did: each driving period from the ELD with start/end timestamp, origin + destination text, miles driven, duration. These are the "ground truth" of where the truck went.
+2. TELEMETRY MOVEMENTS — what the truck actually did: each driving period from the ELD with start/end timestamp, origin + destination text, miles driven, duration in seconds.
 
-Your job is to match movements to loads, account for the empty miles around each load, and report a per-load cost picture. Definitions you should use:
+Your job is to match movements to loads, account for the empty miles + time around each load, and report a full per-load economic picture. Definitions:
 
-- **Loaded miles**: the truck-movement miles that happened *under* a scheduled load (between pickup and delivery for that load). Match by time + geography.
-- **Deadhead before**: miles the truck moved *to position itself* for this load's pickup (from wherever it dropped its prior load, OR from a home/yard, to the pickup point).
-- **Deadhead after**: miles to the *next* load's pickup, OR back to a home/yard, *only if* there is no next load and the truck returned to base.
-- **Return home**: a special case of deadhead-after where the truck went back to a home base (typically the last movement of the week).
-- **Stated RPM** = load_price / loaded_miles (what dispatch sees on the rate-con)
-- **True RPM** = load_price / (loaded_miles + deadhead_before + apportioned_return_home) — the real cost-per-mile including positioning.
+MILEAGE BUCKETS:
+- **Loaded miles**: movement miles between pickup and delivery for a load. Match by time + geography.
+- **Deadhead before**: positioning miles to reach pickup (from prior drop, yard, or home).
+- **Deadhead after**: miles after delivery toward the next load's pickup OR back to home if no next load.
+- **Return home**: a special deadhead-after case where the truck returns to base (typically the last movement of the window).
 
-You must:
-- Be conservative. Mark confidence "low" when the time/geography evidence is weak.
+TIME BUCKETS (mirror the mileage buckets, in HOURS):
+- **Loaded hours**: sum of duration of matched-to-load movements / 3600.
+- **Deadhead hours before**: positioning duration before pickup.
+- **Deadhead hours after**: duration after delivery toward next load or home.
+- Track hours separately from miles — a slow-moving 30 mi inner-city run can take longer than a 70 mi highway run, and that time has cost (driver wages, opportunity cost).
+
+REVENUE / COST:
+- **Revenue**: load_price from the rate-con.
+- **Driver pay**: amount paid to the driver for this load (the dispatcher's actual payout — already known per load).
+- **Margin after driver**: revenue − driver_pay. This is gross-margin before fuel/maintenance/insurance.
+
+METRICS (all to two decimals):
+- **Stated RPM** = revenue / loaded_miles. What the rate-con looks like in isolation.
+- **True RPM**   = revenue / (loaded_miles + deadhead_before + deadhead_after). What dispatch is actually earning per turn of the wheel.
+- **Stated RPH** = revenue / loaded_hours. Hourly rate on paper.
+- **True RPH**   = revenue / (loaded_hours + deadhead_hours_before + deadhead_hours_after). Real hourly rate, including time spent positioning.
+- **Margin RPM** = (revenue − driver_pay) / (loaded_miles + deadhead). Margin to the business per actual mile after driver cost.
+- **Margin RPH** = (revenue − driver_pay) / total_hours. Margin per hour.
+
+RULES:
+- Be conservative. Mark confidence "low" when time/geography evidence is weak.
 - Account for *every* movement — either it belongs to a load, or it's labeled in unmatchedMovements as positioning, return_home, personal, or unknown.
-- Avoid double-counting miles. A movement belongs to at most one bucket.
-- Output via the submit_analysis tool. Don't write prose outside the tool.
+- Avoid double-counting miles or time. A movement belongs to at most one bucket.
+- Output ONLY via the submit_analysis tool. Don't write prose outside the tool.
 
 When you reason, look for:
-- Movement times that fall between a load's pickup-time and delivery-time
-- Movement origin/destination cities that match the load's pickup/delivery cities
-- Gaps between loads where the truck moved → that's positioning
-- The last movement of the window with no next load → likely return-home
+- Movement times falling between a load's pickup and delivery appointments
+- Movement origin/destination cities matching the load's pickup/delivery cities
+- Gaps between loads where the truck moved → positioning
+- The last movement of the window with no follow-on load → likely return-home
+
+The interesting tells are loads where stated RPM looks good but true RPH crashes because the positioning took half a day, or loads where margin-after-driver is negative because deadhead miles ate the whole price.
 `;
 
 const ANALYSIS_TOOL: Anthropic.Tool = {
@@ -74,15 +94,36 @@ const ANALYSIS_TOOL: Anthropic.Tool = {
             loadLabel:            { type: "string",  description: "Brief human label e.g. 'Provo UT → Cheyenne WY'." },
             confidence:           { type: "string",  enum: ["high", "medium", "low"] },
             matchedMovementIds:   { type: "array",   items: { type: "number" }, description: "Motive driving_period ids that map to this load's loaded miles." },
+
             loadedMiles:          { type: "number" },
             deadheadMilesBefore:  { type: "number", description: "Positioning miles to reach pickup." },
-            deadheadMilesAfter:   { type: "number", description: "Miles after delivery toward the next load's pickup OR home. 0 if no movement after." },
+            deadheadMilesAfter:   { type: "number", description: "Miles after delivery toward the next load's pickup OR home." },
+
+            loadedHours:          { type: "number", description: "Hours under load (matched movement durations summed)." },
+            deadheadHoursBefore:  { type: "number", description: "Hours of positioning before pickup." },
+            deadheadHoursAfter:   { type: "number", description: "Hours after delivery toward next or home." },
+
             revenue:              { type: "number", description: "Load price in dollars." },
-            statedRpm:            { type: "number", description: "revenue / loadedMiles. Two decimal places." },
-            trueRpm:              { type: "number", description: "revenue / (loadedMiles + deadheadMilesBefore + deadheadMilesAfter). Two decimal places." },
-            reasoning:            { type: "string", description: "Plain-English one-paragraph explanation of how you matched and where the deadhead came from." },
+            driverPay:            { type: "number", description: "Amount paid to the driver for this load (from input). 0 if unknown." },
+            marginAfterDriver:    { type: "number", description: "revenue − driverPay." },
+
+            statedRpm:            { type: "number", description: "revenue / loadedMiles." },
+            trueRpm:              { type: "number", description: "revenue / (loadedMiles + deadheadMilesBefore + deadheadMilesAfter)." },
+            statedRph:            { type: "number", description: "revenue / loadedHours." },
+            trueRph:              { type: "number", description: "revenue / (loadedHours + deadheadHoursBefore + deadheadHoursAfter)." },
+            marginRpm:            { type: "number", description: "marginAfterDriver / (loadedMiles + deadheadMilesBefore + deadheadMilesAfter)." },
+            marginRph:            { type: "number", description: "marginAfterDriver / (loadedHours + deadheadHoursBefore + deadheadHoursAfter)." },
+
+            reasoning:            { type: "string", description: "Plain-English one-paragraph explanation of how you matched and where the deadhead came from. Call out time costs explicitly when significant." },
           },
-          required: ["loadId", "loadLabel", "confidence", "matchedMovementIds", "loadedMiles", "deadheadMilesBefore", "deadheadMilesAfter", "revenue", "statedRpm", "trueRpm", "reasoning"],
+          required: [
+            "loadId", "loadLabel", "confidence", "matchedMovementIds",
+            "loadedMiles", "deadheadMilesBefore", "deadheadMilesAfter",
+            "loadedHours", "deadheadHoursBefore", "deadheadHoursAfter",
+            "revenue", "driverPay", "marginAfterDriver",
+            "statedRpm", "trueRpm", "statedRph", "trueRph", "marginRpm", "marginRph",
+            "reasoning",
+          ],
         },
       },
       unmatchedMovements: {
@@ -101,15 +142,28 @@ const ANALYSIS_TOOL: Anthropic.Tool = {
       summary: {
         type: "object",
         properties: {
-          totalRevenue:       { type: "number" },
-          totalLoadedMiles:   { type: "number" },
-          totalDeadheadMiles: { type: "number" },
+          totalRevenue:         { type: "number" },
+          totalDriverPay:       { type: "number" },
+          totalMargin:          { type: "number", description: "totalRevenue − totalDriverPay." },
+          totalLoadedMiles:     { type: "number" },
+          totalDeadheadMiles:   { type: "number" },
           totalReturnHomeMiles: { type: "number" },
-          fleetTrueRpm:       { type: "number", description: "totalRevenue / (totalLoadedMiles + totalDeadheadMiles + totalReturnHomeMiles)." },
-          loadedRatio:        { type: "number", description: "loaded / total miles, as a decimal between 0 and 1." },
-          narrative:          { type: "string", description: "2-4 sentence summary of the week's economics — what worked, what cost margin, etc." },
+          totalLoadedHours:     { type: "number" },
+          totalDeadheadHours:   { type: "number" },
+          fleetTrueRpm:         { type: "number", description: "totalRevenue / (totalLoadedMiles + totalDeadheadMiles + totalReturnHomeMiles)." },
+          fleetTrueRph:         { type: "number", description: "totalRevenue / (totalLoadedHours + totalDeadheadHours)." },
+          fleetMarginRpm:       { type: "number", description: "totalMargin / total miles." },
+          fleetMarginRph:       { type: "number", description: "totalMargin / total hours." },
+          loadedRatio:          { type: "number", description: "loaded miles / total miles, decimal 0-1." },
+          narrative:            { type: "string", description: "2-4 sentences — week's economics, what worked, where time/deadhead/driver pay ate margin, which loads were actually profitable." },
         },
-        required: ["totalRevenue", "totalLoadedMiles", "totalDeadheadMiles", "totalReturnHomeMiles", "fleetTrueRpm", "loadedRatio", "narrative"],
+        required: [
+          "totalRevenue", "totalDriverPay", "totalMargin",
+          "totalLoadedMiles", "totalDeadheadMiles", "totalReturnHomeMiles",
+          "totalLoadedHours", "totalDeadheadHours",
+          "fleetTrueRpm", "fleetTrueRph", "fleetMarginRpm", "fleetMarginRph",
+          "loadedRatio", "narrative",
+        ],
       },
     },
     required: ["loads", "unmatchedMovements", "summary"],
@@ -165,7 +219,7 @@ costAnalysis.get("/", requireCapability("loads.view"), async (c) => {
   const { data: events, error: eErr } = await (supabase as any)
     .from("events")
     .select(`
-      id, title, start, "end", loaded_miles, status,
+      id, title, start, "end", loaded_miles, status, driver_pay, driver_name,
       load:loads(id, broker, load_price, load_num, commodity)
     `)
     .eq("org_id", orgId)
@@ -225,7 +279,8 @@ costAnalysis.get("/", requireCapability("loads.view"), async (c) => {
         return [
           `L${e.id}: ${e.title ?? "(no title)"}`,
           `  Status: ${e.status ?? "??"}  |  Window: ${e.start} → ${e.end}`,
-          `  Loaded miles (quoted): ${e.loaded_miles ?? "??"}  |  Revenue: $${load?.load_price ?? "??"}  |  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
+          `  Loaded miles (quoted): ${e.loaded_miles ?? "??"}  |  Revenue: $${load?.load_price ?? "??"}  |  Driver pay: $${e.driver_pay ?? "??"}  |  Driver: ${e.driver_name ?? "??"}`,
+          `  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
           stopsText,
         ].join("\n");
       }).join("\n\n");
