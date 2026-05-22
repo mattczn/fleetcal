@@ -24,7 +24,10 @@ import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
-const MODEL  = "claude-sonnet-4-5-20250929";
+// Opus is the right tool for this — multi-step geographic + temporal
+// matching across telemetry and load schedules, then dollar math.
+// Quality matters more than latency since the result is persisted.
+const MODEL  = "claude-opus-4-5";
 
 const costAnalysis = new Hono<{ Variables: AuthVariables }>();
 
