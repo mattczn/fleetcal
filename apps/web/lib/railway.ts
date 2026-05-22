@@ -555,7 +555,9 @@ class RailwayClient {
     }>('GET', `/v1/cost-analysis/latest?${qs.toString()}`);
   }
   /** Run a fresh analysis and persist it. Returns the same shape as the
-   *  saved row plus the analysis (so the caller can render immediately). */
+   *  saved row plus the analysis (so the caller can render immediately).
+   *  Note: kept for backward compat; the chunked flow (analyzeLoad +
+   *  saveCostAnalysis) is preferred for new code. */
   runCostAnalysis(vehicleId: string | number, from: string, to: string) {
     return this.req<{
       id:        string | null;
@@ -571,6 +573,44 @@ class RailwayClient {
         cacheReadTokens?: number | null;
       };
     }>('POST', '/v1/cost-analysis/run', { vehicleId, from, to });
+  }
+  /** List loads + movement count in the analysis window. Cheap, no AI.
+   *  Frontend uses this to chunk the work for the parallel per-load flow. */
+  listCostAnalysisLoads(vehicleId: string | number, from: string, to: string) {
+    const qs = new URLSearchParams({ vehicleId: String(vehicleId), from, to });
+    return this.req<{
+      assetId: number | null;
+      events: Array<{ id: string; title: string | null; start: string; end: string }>;
+      movementsCount: number;
+    }>('GET', `/v1/cost-analysis/loads-in-window?${qs.toString()}`);
+  }
+  /** Analyze ONE load. Backend pulls movements ±6h around the load's
+   *  window, sends a small prompt to Claude, returns just the per-load
+   *  shape. Fire in parallel for all loads in the analysis window. */
+  analyzeCostLoad(vehicleId: string | number, eventId: string) {
+    return this.req<{
+      loadId: string;
+      load:   Omit<CostAnalysisLoad, 'loadId'> & { loadId?: string };
+      usage: {
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheCreationTokens?: number | null;
+        cacheReadTokens?: number | null;
+      };
+    }>('POST', '/v1/cost-analysis/load', { vehicleId, eventId });
+  }
+  /** Save an assembled bundle (all per-load chunks merged + client-side
+   *  summary) to cost_analysis_reports. */
+  saveCostAnalysis(input: {
+    vehicleId: string | number;
+    from:      string;
+    to:        string;
+    assetId?:  number;
+    result:    CostAnalysisResult;
+    counts:    { movements: number; loads: number };
+    usage?:    { inputTokens?: number; outputTokens?: number };
+  }) {
+    return this.req<{ id: string; createdAt: string }>('POST', '/v1/cost-analysis/save', input);
   }
   /** Per-vehicle completeness check: pulls Motive's driving_periods
    *  for [from, to) and compares to what's in our DB. */

@@ -405,4 +405,295 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
   });
 });
 
+// ── List loads in window (cheap, no AI) ────────────────────────────────
+// Frontend uses this to learn what loads to chunk against. Returns just
+// enough metadata to drive the per-load chunked flow.
+
+costAnalysis.get("/loads-in-window", requireCapability("loads.view"), async (c) => {
+  const orgId = c.get("orgId");
+  const url   = new URL(c.req.url);
+  const vehicleIdStr = url.searchParams.get("vehicleId");
+  const from = url.searchParams.get("from");
+  const to   = url.searchParams.get("to");
+  if (!vehicleIdStr || !from || !to) {
+    return c.json({ error: "vehicleId, from, to required" }, 400);
+  }
+  const vehicleId = Number(vehicleIdStr);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: asset, error: aErr } = await (supabase as any)
+    .from("assets")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("motive_vehicle_id", String(vehicleId))
+    .maybeSingle();
+  if (aErr) return c.json({ error: "asset_lookup_failed", detail: aErr.message }, 500);
+  if (!asset) return c.json({ events: [], assetId: null });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: events, error: eErr } = await (supabase as any)
+    .from("events")
+    .select("id, title, start, \"end\"")
+    .eq("org_id", orgId)
+    .eq("asset_id", asset.id)
+    .gte("start", from)
+    .lt("start", to)
+    .is("deleted_at", null)
+    .order("start", { ascending: true });
+  if (eErr) return c.json({ error: "events_fetch_failed", detail: eErr.message }, 500);
+
+  // Also count movements in the window so the UI can show what the
+  // analysis will cover.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { count: movementsCount } = await (supabase as any)
+    .from("motive_driving_periods")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleId)
+    .gte("start_time", from)
+    .lt("start_time", to);
+
+  return c.json({
+    assetId: asset.id,
+    events:  events ?? [],
+    movementsCount: movementsCount ?? 0,
+  });
+});
+
+// ─── Per-load chunked endpoints ───────────────────────────────────────
+//
+// The monolithic /run call was hitting 2+ minutes per analysis and
+// dropping connections. Chunking breaks it into N parallel single-load
+// calls (~15-30s each), which the frontend fires in parallel and
+// renders progressively as each completes. After all loads finish, the
+// frontend assembles them and calls /save to persist the bundle.
+
+const SYSTEM_PROMPT_LOAD = `You are analyzing ONE truck load for a dispatch system.
+
+You will receive:
+1. ONE SCHEDULED LOAD with its stops, price, driver pay, and time window.
+2. A SET OF MOVEMENTS that happened within roughly ±6 hours of that load. Some are this load's actual loaded miles, some are deadhead positioning before, some are deadhead after (toward the next load or home), some may be unrelated.
+
+Your job: figure out which movements belong to which bucket FOR THIS LOAD and report the economic picture.
+
+Definitions:
+- **Loaded miles/hours**: movement under this specific load (between its pickup and delivery). Match by city + time window overlap.
+- **Deadhead before**: positioning miles/hours to reach this load's pickup point.
+- **Deadhead after**: miles/hours after this delivery, toward where the truck went next.
+
+Metrics (two decimal places):
+- statedRpm = revenue / loadedMiles
+- trueRpm   = revenue / (loadedMiles + deadheadMilesBefore + deadheadMilesAfter)
+- statedRph = revenue / loadedHours
+- trueRph   = revenue / (loadedHours + deadheadHoursBefore + deadheadHoursAfter)
+- marginAfterDriver = revenue − driverPay
+- marginRpm = marginAfterDriver / total miles
+- marginRph = marginAfterDriver / total hours
+
+Rules:
+- Be conservative. Use "low" confidence when geographic or time evidence is weak.
+- A movement matches THIS load only if its start_time falls inside the load's appointment window AND its cities align with the load's pickup/delivery cities.
+- Don't claim movements that clearly belong to a different time window — those are just context.
+- Output ONLY via submit_load_analysis. No prose outside the tool.
+`;
+
+const ANALYSIS_LOAD_TOOL: Anthropic.Tool = {
+  name: "submit_load_analysis",
+  description: "Submit the cost analysis for this single load.",
+  input_schema: {
+    type: "object",
+    properties: {
+      loadLabel:           { type: "string" },
+      confidence:          { type: "string", enum: ["high", "medium", "low"] },
+      matchedMovementIds:  { type: "array", items: { type: "number" } },
+      loadedMiles:         { type: "number" },
+      deadheadMilesBefore: { type: "number" },
+      deadheadMilesAfter:  { type: "number" },
+      loadedHours:         { type: "number" },
+      deadheadHoursBefore: { type: "number" },
+      deadheadHoursAfter:  { type: "number" },
+      revenue:             { type: "number" },
+      driverPay:           { type: "number" },
+      marginAfterDriver:   { type: "number" },
+      statedRpm:           { type: "number" },
+      trueRpm:             { type: "number" },
+      statedRph:           { type: "number" },
+      trueRph:             { type: "number" },
+      marginRpm:           { type: "number" },
+      marginRph:           { type: "number" },
+      reasoning:           { type: "string", description: "One paragraph: how you matched, where deadhead came from, any time costs worth flagging." },
+    },
+    required: [
+      "loadLabel", "confidence", "matchedMovementIds",
+      "loadedMiles", "deadheadMilesBefore", "deadheadMilesAfter",
+      "loadedHours", "deadheadHoursBefore", "deadheadHoursAfter",
+      "revenue", "driverPay", "marginAfterDriver",
+      "statedRpm", "trueRpm", "statedRph", "trueRph", "marginRpm", "marginRph",
+      "reasoning",
+    ],
+  },
+};
+
+const CONTEXT_HOURS = 6;
+
+costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
+  const orgId = c.get("orgId");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any = {};
+  try { body = await c.req.json(); } catch { /* allow empty */ }
+
+  const vehicleIdStr = body?.vehicleId != null ? String(body.vehicleId) : null;
+  const loadEventId  = typeof body?.eventId === "string" ? body.eventId : null;
+  if (!vehicleIdStr || !loadEventId) {
+    return c.json({ error: "vehicleId and eventId required" }, 400);
+  }
+  const vehicleId = Number(vehicleIdStr);
+
+  // Pull the single event + stops + load
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: event, error: eErr } = await (supabase as any)
+    .from("events")
+    .select(`
+      id, title, start, "end", loaded_miles, status, driver_pay, driver_name, asset_id,
+      load:loads(id, broker, load_price, load_num, commodity)
+    `)
+    .eq("id", loadEventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (eErr || !event) {
+    return c.json({ error: "event_not_found", detail: eErr?.message }, 404);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: stops } = await (supabase as any)
+    .from("stops")
+    .select("sequence, type, facility_name, address, city, state, appt_start, appt_end")
+    .eq("event_id", loadEventId)
+    .order("sequence", { ascending: true });
+
+  // Movement context window: load.start − 6h to load.end + 6h
+  const loadStartMs = new Date(event.start).getTime();
+  const loadEndMs   = new Date(event.end).getTime();
+  const ctxFromIso  = new Date(loadStartMs - CONTEXT_HOURS * 3_600_000).toISOString();
+  const ctxToIso    = new Date(loadEndMs   + CONTEXT_HOURS * 3_600_000).toISOString();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: movements, error: mErr } = await (supabase as any)
+    .from("motive_driving_periods")
+    .select("id, start_time, end_time, miles, duration, origin, destination")
+    .eq("org_id", orgId)
+    .eq("vehicle_id", vehicleId)
+    .gte("start_time", ctxFromIso)
+    .lt("start_time", ctxToIso)
+    .order("start_time", { ascending: true });
+  if (mErr) {
+    return c.json({ error: "movements_fetch_failed", detail: mErr.message }, 500);
+  }
+
+  // Build a compact prompt for this single load
+  const stopsText = (stops ?? []).length === 0
+    ? "  (no stops on record)"
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    : (stops as any[]).map((s) =>
+        `  ${s.sequence}. ${s.type ?? "stop"} — ${s.facility_name ?? ""} ${s.address ?? ""} ${s.city ?? ""} ${s.state ?? ""}` +
+        (s.appt_start ? ` (appt ${s.appt_start}${s.appt_end ? "→" + s.appt_end : ""})` : "")
+      ).join("\n");
+
+  const load = event.load as { broker?: string; load_price?: number; load_num?: string; commodity?: string } | null;
+  const loadBlock = [
+    `LOAD ${event.id}: ${event.title ?? "(no title)"}`,
+    `  Window: ${event.start} → ${event.end}`,
+    `  Loaded miles (quoted): ${event.loaded_miles ?? "??"}  |  Revenue: $${load?.load_price ?? "??"}  |  Driver pay: $${event.driver_pay ?? "??"}`,
+    `  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
+    stopsText,
+  ].join("\n");
+
+  const movementsBlock = (movements ?? []).length === 0
+    ? "(no movements in context window)"
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    : (movements as any[]).map((m) => {
+        const miles = m.miles != null ? `${m.miles.toFixed(1)} mi` : "?? mi";
+        const dur   = m.duration != null ? `${Math.round(m.duration / 60)} min` : "?? min";
+        return `M${m.id}: ${m.start_time} → ${m.end_time ?? "??"} | ${m.origin ?? "??"} → ${m.destination ?? "??"} | ${miles} | ${dur}`;
+      }).join("\n");
+
+  const userMessage = [
+    `# Load`,
+    loadBlock,
+    ``,
+    `# Movements in the ±${CONTEXT_HOURS}h context window`,
+    movementsBlock,
+    ``,
+    `Submit your analysis for THIS load via submit_load_analysis.`,
+  ].join("\n");
+
+  let response;
+  try {
+    response = await client.messages.create({
+      model:      MODEL,
+      max_tokens: 4000,
+      system:     [{ type: "text", text: SYSTEM_PROMPT_LOAD, cache_control: { type: "ephemeral" } }],
+      tools:      [ANALYSIS_LOAD_TOOL],
+      tool_choice: { type: "tool", name: "submit_load_analysis" },
+      messages:   [{ role: "user", content: userMessage }],
+    });
+  } catch (err) {
+    console.error("[cost-analysis/load] anthropic call failed:", err);
+    return c.json({ error: "ai_failed", detail: (err as Error).message }, 500);
+  }
+
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") {
+    return c.json({ error: "no_tool_use" }, 500);
+  }
+
+  return c.json({
+    loadId: loadEventId,
+    load:   toolUse.input,
+    usage: {
+      inputTokens:        response.usage?.input_tokens ?? null,
+      outputTokens:       response.usage?.output_tokens ?? null,
+      cacheCreationTokens: response.usage?.cache_creation_input_tokens ?? null,
+      cacheReadTokens:     response.usage?.cache_read_input_tokens ?? null,
+    },
+  });
+});
+
+// ── Save assembled bundle ──────────────────────────────────────────────
+// Frontend calls this once all per-load chunks have come back. Body is
+// the fully-assembled CostAnalysisResult shape so the saved row looks
+// identical to anything /run produced.
+costAnalysis.post("/save", requireCapability("loads.view"), async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any = {};
+  try { body = await c.req.json(); } catch { /* allow empty */ }
+  const { vehicleId, from, to, assetId, result, counts, usage } = body ?? {};
+  if (!vehicleId || !from || !to || !result) {
+    return c.json({ error: "vehicleId, from, to, result required" }, 400);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: saved, error } = await (supabase as any)
+    .from("cost_analysis_reports")
+    .insert({
+      org_id:      orgId,
+      vehicle_id:  Number(vehicleId),
+      asset_id:    assetId ?? null,
+      window_from: from,
+      window_to:   to,
+      result,
+      counts:      counts ?? null,
+      usage:       usage  ?? null,
+      model:       MODEL,
+      created_by:  userId ?? null,
+    })
+    .select("id, created_at")
+    .maybeSingle();
+  if (error) {
+    console.error("[cost-analysis/save] insert failed:", error);
+    return c.json({ error: "save_failed", detail: error.message }, 500);
+  }
+  return c.json({ id: saved?.id, createdAt: saved?.created_at });
+});
+
 export default costAnalysis;

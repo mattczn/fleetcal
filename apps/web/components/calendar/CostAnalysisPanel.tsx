@@ -15,7 +15,7 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, AlertTriangle } from 'lucide-react';
-import { railway, type CostAnalysisResult } from '@/lib/railway';
+import { railway, type CostAnalysisResult, type CostAnalysisLoad } from '@/lib/railway';
 
 /** Safe number formatter — returns a placeholder for null/undefined/NaN/Infinity
  *  instead of throwing. Claude's tool input is usually schema-compliant but
@@ -56,6 +56,10 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
   const [error,   setError]   = useState<string | null>(null);
   const [ranWindow, setRanWindow] = useState<string | null>(null);
   const [createdAt, setCreatedAt] = useState<string | null>(null);
+  /** When running chunked analysis: how many loads we expect / completed. */
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  /** Per-load results as they arrive — used to render rows progressively. */
+  const [partialLoads, setPartialLoads] = useState<CostAnalysisLoad[]>([]);
 
   // Auto-load the most recent saved report for this vehicle so users
   // see prior work immediately and don't burn tokens on a fresh run
@@ -92,26 +96,162 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
     return () => clearInterval(id);
   }, [running]);
 
+  /** Chunked run: one HTTP call per load fires in parallel. Each
+   *  resolves in ~15-30s and gets pushed to partialLoads so the UI
+   *  shows progress. After all settle, summary is computed locally
+   *  and the bundle is persisted via /save. */
   const handleRun = async () => {
     setRunning(true);
     setError(null);
+    setPartialLoads([]);
+    setProgress(null);
     try {
-      const nowMs = Date.now();
+      const nowMs   = Date.now();
       const fromIso = new Date(nowMs - days * 86_400_000).toISOString();
       const toIso   = new Date(nowMs).toISOString();
-      const r = await railway.runCostAnalysis(vehicleId, fromIso, toIso);
-      setResult(r.analysis);
-      setCounts(r.counts);
-      setUsage(r.usage);
+
+      // Step 1: get the list of loads to chunk against (cheap, no AI).
+      const list = await railway.listCostAnalysisLoads(vehicleId, fromIso, toIso);
+      const events = list.events ?? [];
+      setProgress({ done: 0, total: events.length });
+
+      if (events.length === 0) {
+        // No loads in window — still want to show something useful.
+        const emptyResult: CostAnalysisResult = {
+          loads: [],
+          unmatchedMovements: [],
+          summary: {
+            totalRevenue: 0, totalDriverPay: 0, totalMargin: 0,
+            totalLoadedMiles: 0, totalDeadheadMiles: 0, totalReturnHomeMiles: 0,
+            totalLoadedHours: 0, totalDeadheadHours: 0,
+            fleetTrueRpm: 0, fleetTrueRph: 0, fleetMarginRpm: 0, fleetMarginRph: 0,
+            loadedRatio: 0,
+            narrative: `No loads found for this truck between ${fromIso.slice(0, 10)} and ${toIso.slice(0, 10)}.`,
+          },
+        };
+        setResult(emptyResult);
+        setCounts({ movements: list.movementsCount, loads: 0 });
+        setRanWindow(`${fromIso.slice(0, 10)} → ${toIso.slice(0, 10)}`);
+        setUsage(null);
+        setCreatedAt(null);
+        return;
+      }
+
+      // Step 2: fire all per-load calls in parallel. Each that resolves
+      // updates partialLoads + progress; failures are captured but
+      // don't abort the rest.
+      let totalIn = 0, totalOut = 0;
+      const errors: string[] = [];
+      const results = await Promise.allSettled(
+        events.map(async (ev) => {
+          const r = await railway.analyzeCostLoad(vehicleId, ev.id);
+          totalIn  += r.usage.inputTokens  ?? 0;
+          totalOut += r.usage.outputTokens ?? 0;
+          const cleanedLoad: CostAnalysisLoad = {
+            ...(r.load as Omit<CostAnalysisLoad, 'loadId'>),
+            loadId: ev.id,
+          };
+          setPartialLoads(prev => [...prev, cleanedLoad]);
+          setProgress(prev => prev ? { ...prev, done: prev.done + 1 } : prev);
+          return cleanedLoad;
+        }),
+      );
+
+      const succeeded: CostAnalysisLoad[] = [];
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === 'fulfilled') {
+          succeeded.push(r.value);
+        } else {
+          const detail = r.reason instanceof Error ? r.reason.message : String(r.reason);
+          errors.push(`Load ${events[i].title ?? events[i].id}: ${detail}`);
+        }
+      }
+
+      // Sort by the event's start time so the table reads in
+      // chronological order regardless of which calls resolved first.
+      const orderByEvent = new Map(events.map((e, i) => [e.id, i]));
+      succeeded.sort((a, b) => (orderByEvent.get(a.loadId) ?? 0) - (orderByEvent.get(b.loadId) ?? 0));
+
+      // Step 3: compute the summary locally and assemble the final result.
+      const summary = computeSummary(succeeded);
+      const assembled: CostAnalysisResult = {
+        loads: succeeded,
+        unmatchedMovements: [], // chunked flow doesn't classify these for now
+        summary: {
+          ...summary,
+          narrative: errors.length > 0
+            ? `${succeeded.length} of ${events.length} loads analyzed successfully. ${errors.length} failed — re-run to retry.`
+            : `${succeeded.length} load${succeeded.length === 1 ? '' : 's'} analyzed across ${list.movementsCount} movements in this window.`,
+        },
+      };
+
+      setResult(assembled);
+      setCounts({ movements: list.movementsCount, loads: events.length });
+      setUsage({ inputTokens: totalIn, outputTokens: totalOut });
       setRanWindow(`${fromIso.slice(0, 10)} → ${toIso.slice(0, 10)}`);
-      setCreatedAt(r.createdAt);
+
+      // Step 4: persist the bundle. Non-blocking on failure.
+      try {
+        const saved = await railway.saveCostAnalysis({
+          vehicleId,
+          from: fromIso,
+          to:   toIso,
+          assetId: list.assetId ?? undefined,
+          result: assembled,
+          counts: { movements: list.movementsCount, loads: events.length },
+          usage:  { inputTokens: totalIn, outputTokens: totalOut },
+        });
+        setCreatedAt(saved.createdAt);
+      } catch (saveErr) {
+        console.warn('[CostAnalysisPanel] save failed (result not persisted):', saveErr);
+      }
+
+      if (errors.length > 0) {
+        setError(`Some loads failed:\n${errors.join('\n')}`);
+      }
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       setError(detail);
     } finally {
       setRunning(false);
+      setProgress(null);
     }
   };
+
+  /** Sum up the per-load rows into the summary stats the UI displays.
+   *  Mirrors what the holistic prompt used to compute server-side. */
+  function computeSummary(loads: CostAnalysisLoad[]): Omit<CostAnalysisResult['summary'], 'narrative'> {
+    let revenue = 0, driverPay = 0, margin = 0;
+    let loadedMi = 0, deadheadMi = 0;
+    let loadedHr = 0, deadheadHr = 0;
+    for (const l of loads) {
+      revenue    += safeNum(l.revenue);
+      driverPay  += safeNum(l.driverPay);
+      margin     += safeNum(l.marginAfterDriver);
+      loadedMi   += safeNum(l.loadedMiles);
+      deadheadMi += safeNum(l.deadheadMilesBefore) + safeNum(l.deadheadMilesAfter);
+      loadedHr   += safeNum(l.loadedHours);
+      deadheadHr += safeNum(l.deadheadHoursBefore) + safeNum(l.deadheadHoursAfter);
+    }
+    const totalMi = loadedMi + deadheadMi;
+    const totalHr = loadedHr + deadheadHr;
+    return {
+      totalRevenue:         revenue,
+      totalDriverPay:       driverPay,
+      totalMargin:          margin,
+      totalLoadedMiles:     loadedMi,
+      totalDeadheadMiles:   deadheadMi,
+      totalReturnHomeMiles: 0,                                  // not separately tracked in chunked mode
+      totalLoadedHours:     loadedHr,
+      totalDeadheadHours:   deadheadHr,
+      fleetTrueRpm:   totalMi > 0 ? revenue / totalMi : 0,
+      fleetTrueRph:   totalHr > 0 ? revenue / totalHr : 0,
+      fleetMarginRpm: totalMi > 0 ? margin  / totalMi : 0,
+      fleetMarginRph: totalHr > 0 ? margin  / totalHr : 0,
+      loadedRatio:    totalMi > 0 ? loadedMi / totalMi : 0,
+    };
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -151,15 +291,31 @@ export default function CostAnalysisPanel({ vehicleId, days }: Props) {
         )}
 
         {running && (
-          <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
+          <div className="flex flex-col items-center justify-center py-8 gap-3 text-center">
             <Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
             <p className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
-              Claude is reasoning through the route… <span className="tabular-nums">({elapsed}s)</span>
+              {progress
+                ? <>Analyzing load <strong className="tabular-nums">{progress.done}</strong> of <strong className="tabular-nums">{progress.total}</strong>… <span className="tabular-nums">({elapsed}s)</span></>
+                : <>Looking up loads in window… <span className="tabular-nums">({elapsed}s)</span></>}
             </p>
             <p className="text-[11px] max-w-md" style={{ color: 'var(--gc-text-3)' }}>
-              A busy week takes 60–180 seconds. The model is matching every movement to a load and computing margin breakdowns —
-              don&apos;t close the tab or the request will abort.
+              Per-load calls fire in parallel — total time is about the slowest load (~30s), not the sum. Each load lights up below as it finishes.
             </p>
+            {/* Per-load results stream in as the analysis runs */}
+            {partialLoads.length > 0 && (
+              <div className="w-full mt-2 max-h-64 overflow-y-auto rounded-lg" style={{ border: '1px solid var(--gc-border-light)' }}>
+                {partialLoads.map((l, i) => (
+                  <div key={l.loadId ?? i} className="px-3 py-1.5 text-[11px] text-left flex items-center gap-2"
+                    style={{ borderTop: i > 0 ? '1px solid var(--gc-border-light)' : 'none' }}>
+                    <span style={{ color: 'var(--gc-text-3)' }}>✓</span>
+                    <span style={{ color: 'var(--gc-text-1)', flex: 1 }}>{l.loadLabel ?? '(load)'}</span>
+                    <span className="tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                      {num(l.revenue, { prefix: '$' })} · <span style={{ color: safeNum(l.trueRpm) < safeNum(l.statedRpm) * 0.8 ? '#d93025' : 'var(--gc-text-2)' }}>{num(l.trueRpm, { decimals: 2, prefix: '$' })}/mi true</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
