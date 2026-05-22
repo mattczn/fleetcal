@@ -5,6 +5,7 @@ import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink } from
 import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
+import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
 import LifecycleEditor from './LifecycleEditor';
@@ -216,13 +217,10 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
                     await hardDeleteAsset(selectedAsset.id);
                     setSelectedRaw(remaining.length > 0 ? remaining[0].id : -1);
                   } catch (err) {
-                    // 409 from API when a load slipped in between the
-                    // panel's "0 loads" check and the request — fall
-                    // back gracefully.
-                    const msg = err instanceof Error ? err.message : String(err);
-                    alert(/has_references|409/.test(msg)
-                      ? 'This asset has loads attached and can\'t be permanently deleted. Retire it instead.'
-                      : `Couldn't delete asset: ${msg}`);
+                    // 409 from API when references exist on tables we
+                    // don't track locally (fuel reports, etc.). The
+                    // API returns a per-table breakdown; surface it.
+                    alert(formatHardDeleteError('asset', err));
                   }
                 }}
               />
@@ -642,25 +640,36 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
       </div>
       )}
 
-      {/* Permanent delete — only safe when nothing references the
-          asset. For the "I created this by accident" case: 0 loads
-          attached, so the FK constraint won't block. Shown to users
-          with assets.delete and hidden behind a confirm + type-name
-          gate so it can't be triggered by mistake. */}
-      {canDelete && loadsAttached === 0 && (
-        <PermanentDeleteBlock label={asset.name} onConfirm={onHardDelete} />
+      {/* Permanent delete — always visible (no more hiding when loads
+          exist). When references are detected the button shows
+          disabled with the local blocker hint; the API does a real
+          pre-flight count on EVERY related table, so it's the source
+          of truth even if our local hint missed something. */}
+      {canDelete && (
+        <PermanentDeleteBlock
+          label={asset.name}
+          onConfirm={onHardDelete}
+          localBlockerHint={loadsAttached > 0
+            ? `${loadsAttached} load${loadsAttached === 1 ? '' : 's'} attached`
+            : null}
+        />
       )}
     </div>
   );
 }
 
 /** Two-step destructive confirm — click to arm, type the name, click
- *  again to fire. Used for hard deletes of assets and drivers where
- *  the row truly goes away. */
-function PermanentDeleteBlock({ label, onConfirm }: { label: string; onConfirm: () => void | Promise<void> }) {
+ *  again to fire. When `localBlockerHint` is set, the button is
+ *  disabled and the hint is shown inline. */
+function PermanentDeleteBlock({ label, onConfirm, localBlockerHint }: {
+  label: string;
+  onConfirm: () => void | Promise<void>;
+  localBlockerHint: string | null;
+}) {
   const [armed, setArmed] = useState(false);
   const [typed, setTyped] = useState('');
-  const ready = armed && typed.trim() === label.trim();
+  const ready    = armed && typed.trim() === label.trim();
+  const blocked  = localBlockerHint != null;
   return (
     <div className="mt-6 pt-6" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
       <div className="text-[11px] font-semibold uppercase tracking-wider mb-2"
@@ -668,15 +677,23 @@ function PermanentDeleteBlock({ label, onConfirm }: { label: string; onConfirm: 
         Danger zone
       </div>
       {!armed ? (
-        <button
-          onClick={() => setArmed(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          style={{ color: '#7a1d18', border: '1px solid rgba(217,48,37,0.4)' }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.08)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-          <Trash2 size={14} />
-          Delete permanently
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { if (!blocked) setArmed(true); }}
+            disabled={blocked}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40"
+            style={{ color: '#7a1d18', border: '1px solid rgba(217,48,37,0.4)', cursor: blocked ? 'not-allowed' : 'pointer' }}
+            onMouseEnter={e => { if (!blocked) e.currentTarget.style.background = 'rgba(217,48,37,0.08)'; }}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            <Trash2 size={14} />
+            Delete permanently
+          </button>
+          {blocked && (
+            <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+              {localBlockerHint} — retire instead to keep history.
+            </span>
+          )}
+        </div>
       ) : (
         <div className="flex flex-col gap-3">
           <p className="text-sm" style={{ color: 'var(--gc-text-2)' }}>

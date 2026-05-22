@@ -170,25 +170,32 @@ drivers.delete("/:id", requireCapability("drivers.delete"), async (c) => {
   if (!Number.isFinite(id)) {
     return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
   }
-  // Hard delete branch — same pattern as assets. events.driver_id is
-  // ON DELETE RESTRICT, so Postgres blocks if any loads reference;
-  // we catch and return 409. Cascade-coupled tables (push tokens,
-  // notification prefs, etc.) are wiped automatically by their FKs.
+  // Hard delete branch — strict pre-flight on every table that
+  // references this driver. The FK on events.driver_id is RESTRICT,
+  // but several other related tables (push tokens, notification prefs,
+  // load notifications, documents, evening sweeps) are ON DELETE
+  // CASCADE — those would silently wipe on a raw delete. Counting up
+  // front makes cascade impossible: if anything references, we refuse.
   const hard = c.req.query("hard") === "true";
   if (hard) {
+    const blockers = await countDriverBlockers(orgId, id);
+    const total = Object.values(blockers).reduce((s, n) => s + n, 0);
+    if (total > 0) {
+      return c.json(
+        {
+          error: "has_references",
+          detail: "This driver can't be permanently deleted because other records still reference them.",
+          blockers,
+        },
+        409,
+      );
+    }
     const { error: delErr } = await supabase
       .from("drivers")
       .delete()
       .eq("id", id)
       .eq("org_id", orgId);
     if (delErr) {
-      const isFk = (delErr.code === "23503") || /foreign key|violates/i.test(delErr.message ?? "");
-      if (isFk) {
-        return c.json(
-          { error: "has_references", detail: "This driver has loads attached. Retire instead." } satisfies ApiErrorResponse,
-          409,
-        );
-      }
       console.error("[DELETE /v1/drivers/:id?hard=true] failed:", delErr);
       return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
     }
@@ -382,5 +389,56 @@ drivers.post("/:id/documents", requireCapability("drivers.edit"), async (c) => {
 
 export { rowToDriverDoc, listDocsForDriver, DRIVER_DOC_KINDS, DRIVER_DOC_BUCKET, DRIVER_DOC_COLS };
 export type { DriverDocRow, DriverDocKind };
+
+/**
+ * Count every table that references a driver. Returns { table → count }
+ * with only non-zero entries. Used as a pre-flight before hard delete
+ * so no cascade ever fires — if anything points at this driver, the
+ * delete is refused with a per-table breakdown.
+ */
+async function countDriverBlockers(orgId: string, driverId: number): Promise<Record<string, number>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+  const count = async (table: string, col: string, scopeOrg = true) => {
+    let q = sb.from(table).select("*", { count: "exact", head: true }).eq(col, driverId);
+    if (scopeOrg) q = q.eq("org_id", orgId);
+    const { count: n, error } = await q;
+    if (error) {
+      console.error(`[countDriverBlockers] ${table}.${col}:`, error);
+      return 0;
+    }
+    return n ?? 0;
+  };
+  // Run in parallel — each is a cheap HEAD count.
+  // Note: events.driver_id (primary) AND events.secondary_driver_id
+  // both count as a reference. The "secondary" FK is SET NULL on
+  // delete, but counting it means a delete that would silently null
+  // out a co-driver slot gets refused. Safer.
+  const [
+    primaryLoads, secondaryLoads, fuel, maintenance,
+    pushTokens, notifPrefs, loadNotifs, docs, eveningSweeps,
+  ] = await Promise.all([
+    count("events",                     "driver_id"),
+    count("events",                     "secondary_driver_id"),
+    count("fuel_reports",               "driver_id"),
+    count("maintenance_reports",        "driver_id"),
+    count("driver_push_tokens",         "driver_id"),
+    count("driver_notification_prefs",  "driver_id"),
+    count("load_notifications",         "driver_id"),
+    count("driver_documents",           "driver_id"),
+    count("driver_evening_sweeps",      "driver_id"),
+  ]);
+  const out: Record<string, number> = {};
+  const loads = primaryLoads + secondaryLoads;
+  if (loads          > 0) out.loads                = loads;
+  if (fuel           > 0) out.fuel_reports         = fuel;
+  if (maintenance    > 0) out.maintenance_reports  = maintenance;
+  if (pushTokens     > 0) out.push_tokens          = pushTokens;
+  if (notifPrefs     > 0) out.notification_prefs   = notifPrefs;
+  if (loadNotifs     > 0) out.load_notifications   = loadNotifs;
+  if (docs           > 0) out.documents            = docs;
+  if (eveningSweeps  > 0) out.evening_sweeps       = eveningSweeps;
+  return out;
+}
 
 export default drivers;

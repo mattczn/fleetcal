@@ -184,27 +184,33 @@ assets.delete("/:id", requireCapability("assets.delete"), async (c) => {
     return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
   }
   // Hard delete branch — actually remove the row. Used for "created
-  // by accident" cleanup where the entity has zero attached loads.
-  // events.asset_id has ON DELETE RESTRICT, so Postgres blocks the
-  // delete if any events still reference this asset; we catch the
-  // FK violation and return 409 so the client knows to retire instead.
+  // by accident" cleanup where the entity is fully orphaned.
+  //
+  // Strict pre-flight: count rows in every related table. If anything
+  // references this asset (loads, fuel reports, maintenance reports),
+  // we refuse the delete with a per-table breakdown. This makes
+  // cascade impossible — by the time the DELETE fires, there is
+  // nothing to cascade.
   const hard = c.req.query("hard") === "true";
   if (hard) {
+    const blockers = await countAssetBlockers(orgId, id);
+    const total = Object.values(blockers).reduce((s, n) => s + n, 0);
+    if (total > 0) {
+      return c.json(
+        {
+          error: "has_references",
+          detail: "This asset can't be permanently deleted because other records still reference it.",
+          blockers,
+        },
+        409,
+      );
+    }
     const { error: delErr } = await supabase
       .from("assets")
       .delete()
       .eq("id", id)
       .eq("org_id", orgId);
     if (delErr) {
-      // Postgres FK violation surfaces as code 23503 in PostgREST
-      // error.code; the message is also human-readable.
-      const isFk = (delErr.code === "23503") || /foreign key|violates/i.test(delErr.message ?? "");
-      if (isFk) {
-        return c.json(
-          { error: "has_references", detail: "This asset has loads attached. Retire it instead." } satisfies ApiErrorResponse,
-          409,
-        );
-      }
       console.error("[DELETE /v1/assets/:id?hard=true] failed:", delErr);
       return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
     }
@@ -261,5 +267,39 @@ assets.post("/reorder", requireCapability("assets.edit"), async (c) => {
   }
   return c.body(null, 204);
 });
+
+/**
+ * Count every table that references an asset. Returns { table → count }
+ * with only non-zero entries. Used as a pre-flight before hard delete
+ * so we never trigger a cascade — if anything points at this asset,
+ * the delete is refused with a breakdown.
+ */
+async function countAssetBlockers(orgId: string, assetId: number): Promise<Record<string, number>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabase as any;
+  const count = async (table: string, col: string) => {
+    const { count: n, error } = await sb
+      .from(table)
+      .select("*", { count: "exact", head: true })
+      .eq("org_id", orgId)
+      .eq(col, assetId);
+    if (error) {
+      console.error(`[countAssetBlockers] ${table}.${col}:`, error);
+      return 0;
+    }
+    return n ?? 0;
+  };
+  // Run in parallel — each is a HEAD count, cheap.
+  const [events, fuel, maintenance] = await Promise.all([
+    count("events",              "asset_id"),
+    count("fuel_reports",        "asset_id"),
+    count("maintenance_reports", "asset_id"),
+  ]);
+  const out: Record<string, number> = {};
+  if (events      > 0) out.loads               = events;       // friendlier label
+  if (fuel        > 0) out.fuel_reports        = fuel;
+  if (maintenance > 0) out.maintenance_reports = maintenance;
+  return out;
+}
 
 export default assets;
