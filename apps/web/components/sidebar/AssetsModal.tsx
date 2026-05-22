@@ -37,7 +37,7 @@ const P_INPUT: React.CSSProperties = {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AssetsModal({ onClose, initialAssetId }: { onClose: () => void; initialAssetId?: number }) {
-  const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, unassignedAssetId } = useCalendarStore();
+  const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, hardDeleteAsset, unassignedAssetId } = useCalendarStore();
   // Drop the 'Unassigned' bucket, then sort retired trucks to the
   // bottom so the directory leads with everything currently in service.
   const today = dateKeyOf(new Date());
@@ -209,6 +209,22 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
                   removeAsset(selectedAsset.id);
                   setSelectedRaw(remaining.length > 0 ? remaining[0].id : -1);
                 }}
+                onHardDelete={async () => {
+                  if (draftIdRef.current === selectedAsset.id) draftIdRef.current = null;
+                  const remaining = assets.filter(a => a.id !== selectedAsset.id);
+                  try {
+                    await hardDeleteAsset(selectedAsset.id);
+                    setSelectedRaw(remaining.length > 0 ? remaining[0].id : -1);
+                  } catch (err) {
+                    // 409 from API when a load slipped in between the
+                    // panel's "0 loads" check and the request — fall
+                    // back gracefully.
+                    const msg = err instanceof Error ? err.message : String(err);
+                    alert(/has_references|409/.test(msg)
+                      ? 'This asset has loads attached and can\'t be permanently deleted. Retire it instead.'
+                      : `Couldn't delete asset: ${msg}`);
+                  }
+                }}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-sm"
@@ -297,17 +313,25 @@ function NavAssetRow({ asset, selected, onSelect }: {
 
 // ─── Asset Profile Panel ──────────────────────────────────────────────────────
 
-function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: {
+function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, onHardDelete }: {
   asset: Asset;
   events: CalendarEvent[];
   drivers: Driver[];
   openEditModal: (id: string) => void;
   onRemove: () => void;
+  onHardDelete: () => void;
 }) {
-  const { updateAsset, assetCategories } = useCalendarStore();
+  const { updateAsset, assetCategories, deletedEvents } = useCalendarStore();
   const { can: canDo } = usePermissions();
   const canDelete = canDo('assets.delete');
   const canEdit   = canDo('assets.edit');
+  // Hard delete is only safe when there are no loads referencing this
+  // asset (events.asset_id has ON DELETE RESTRICT). We count both live
+  // events AND soft-deleted ones — the FK constraint doesn't care
+  // about deleted_at, it cares about row existence.
+  const loadsAttached =
+    events.filter(e => e.assetId === asset.id).length +
+    deletedEvents.filter(e => e.assetId === asset.id).length;
 
   const [name,            setName]            = useState(asset.name);
   const [unit,            setUnit]            = useState(asset.unit            ?? '');
@@ -616,6 +640,77 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove }: 
           </button>
         )}
       </div>
+      )}
+
+      {/* Permanent delete — only safe when nothing references the
+          asset. For the "I created this by accident" case: 0 loads
+          attached, so the FK constraint won't block. Shown to users
+          with assets.delete and hidden behind a confirm + type-name
+          gate so it can't be triggered by mistake. */}
+      {canDelete && loadsAttached === 0 && (
+        <PermanentDeleteBlock label={asset.name} onConfirm={onHardDelete} />
+      )}
+    </div>
+  );
+}
+
+/** Two-step destructive confirm — click to arm, type the name, click
+ *  again to fire. Used for hard deletes of assets and drivers where
+ *  the row truly goes away. */
+function PermanentDeleteBlock({ label, onConfirm }: { label: string; onConfirm: () => void | Promise<void> }) {
+  const [armed, setArmed] = useState(false);
+  const [typed, setTyped] = useState('');
+  const ready = armed && typed.trim() === label.trim();
+  return (
+    <div className="mt-6 pt-6" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+      <div className="text-[11px] font-semibold uppercase tracking-wider mb-2"
+        style={{ color: 'var(--gc-text-3)' }}>
+        Danger zone
+      </div>
+      {!armed ? (
+        <button
+          onClick={() => setArmed(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          style={{ color: '#7a1d18', border: '1px solid rgba(217,48,37,0.4)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.08)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          <Trash2 size={14} />
+          Delete permanently
+        </button>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
+            Permanently delete <strong>{label}</strong>. This can&apos;t be undone — the row is removed from the database.
+            Type <code style={{ background: 'var(--gc-hover)', padding: '1px 4px', borderRadius: 3 }}>{label}</code> below to confirm.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
+              placeholder={label}
+              className="flex-1 text-sm rounded-lg px-3 py-1.5 outline-none"
+              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+            />
+            <button
+              onClick={() => { void onConfirm(); }}
+              disabled={!ready}
+              className="px-4 py-1.5 rounded-lg text-sm font-medium text-white disabled:opacity-40"
+              style={{ background: '#d93025' }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+              onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+              Delete permanently
+            </button>
+            <button
+              onClick={() => { setArmed(false); setTyped(''); }}
+              className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

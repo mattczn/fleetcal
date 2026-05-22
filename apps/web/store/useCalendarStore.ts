@@ -214,6 +214,9 @@ interface CalendarStore extends ModalState {
   addAsset: (asset: Omit<Asset, 'id'>) => Promise<number>;
   updateAsset: (id: number, updates: Partial<Omit<Asset, 'id'>>) => void;
   removeAsset: (id: number) => void;
+  /** Hard delete — only succeeds when the asset has no loads attached.
+   *  Throws on FK violation so the caller can show "retire instead." */
+  hardDeleteAsset: (id: number) => Promise<void>;
   reorderAssets: (fromId: number, toId: number) => void;
 
   /** Create a driver. Accepts either a bare name (legacy) or a full
@@ -222,6 +225,8 @@ interface CalendarStore extends ModalState {
   addDriver: (input: string | Partial<Omit<Driver, 'id'>>) => Promise<number>;
   updateDriver: (id: number, updates: Partial<Omit<Driver, 'id'>>) => void;
   removeDriver: (id: number) => void;
+  /** Hard delete — only succeeds when the driver has no loads attached. */
+  hardDeleteDriver: (id: number) => Promise<void>;
   setDriverPref: (assetId: number, driverId: number | null) => void;
   setDriverPrefSecondary: (assetId: number, driverId: number | null) => void;
 
@@ -965,6 +970,28 @@ export const useCalendarStore = create<CalendarStore>()(
     });
   },
 
+  hardDeleteAsset: async (id) => {
+    if (get().isDemo) return;
+    const prevAssets        = get().assets;
+    const prevEvents        = get().events;
+    const prevDeletedEvents = get().deletedEvents;
+    // Optimistic remove
+    set((state) => ({
+      assets:        state.assets.filter((a) => a.id !== id),
+      events:        state.events.filter((e) => e.assetId !== id),
+      deletedEvents: state.deletedEvents.filter((e) => e.assetId !== id),
+    }));
+    try {
+      await railway.hardDeleteAsset(id);
+    } catch (err) {
+      // Roll back on any failure — the most likely case is 409 from
+      // events still referencing the asset, which means the caller's
+      // "no loads attached" check was wrong (e.g. cached state).
+      set({ assets: prevAssets, events: prevEvents, deletedEvents: prevDeletedEvents });
+      throw err;
+    }
+  },
+
   reorderAssets: (fromId, toId) => {
     if (get().isDemo) return;
     const { assets: cur, unassignedAssetId: unassignedId } = get();
@@ -1086,6 +1113,21 @@ export const useCalendarStore = create<CalendarStore>()(
       set({ drivers: prevDrivers, driverPrefs: prevDriverPrefs });
       notifyDeleteError('Driver', err);
     });
+  },
+
+  hardDeleteDriver: async (id) => {
+    if (get().isDemo) return;
+    const prevDrivers     = get().drivers;
+    const prevDriverPrefs = get().driverPrefs;
+    const prefs = { ...prevDriverPrefs };
+    Object.keys(prefs).forEach((k) => { if (prefs[+k] === id) delete prefs[+k]; });
+    set((state) => ({ drivers: state.drivers.filter((d) => d.id !== id), driverPrefs: prefs }));
+    try {
+      await railway.hardDeleteDriver(id);
+    } catch (err) {
+      set({ drivers: prevDrivers, driverPrefs: prevDriverPrefs });
+      throw err;
+    }
   },
 
   setDriverPref: (assetId, driverId) => {

@@ -335,6 +335,9 @@ class RailwayClient {
     return this.req<UpdateAssetResponse>('PATCH', `/v1/assets/${id}`, body);
   }
   deleteAsset(id: number)                    { return this.req<void>('DELETE', `/v1/assets/${id}`); }
+  /** Hard delete — actually removes the row. 409 if any loads still
+   *  reference this asset; in that case fall back to deleteAsset (retire). */
+  hardDeleteAsset(id: number)                { return this.req<{ deleted: true; id: number }>('DELETE', `/v1/assets/${id}?hard=true`); }
   reorderAssets(ids: number[]) {
     return this.req<void>('POST', '/v1/assets/reorder', { ids } satisfies ReorderAssetsRequest);
   }
@@ -345,6 +348,8 @@ class RailwayClient {
     return this.req<UpdateDriverResponse>('PATCH', `/v1/drivers/${id}`, body);
   }
   deleteDriver(id: number)                   { return this.req<void>('DELETE', `/v1/drivers/${id}`); }
+  /** Hard delete — actually removes the row. 409 if any loads reference. */
+  hardDeleteDriver(id: number)               { return this.req<{ deleted: true; id: number }>('DELETE', `/v1/drivers/${id}?hard=true`); }
 
   // Driver documents (ops surface)
   listDriverDocuments(driverId: number) {

@@ -93,8 +93,8 @@ function driverInitials(d: Driver): string {
 export default function DriversModal({ onClose, initialDriverId }: { onClose: () => void; initialDriverId?: number }) {
   const {
     assets, drivers: allDrivers, driverPrefs, driverPrefsSecondary,
-    addDriver, removeDriver, updateDriver, setDriverPref, setDriverPrefSecondary,
-    events,
+    addDriver, removeDriver, hardDeleteDriver, updateDriver, setDriverPref, setDriverPrefSecondary,
+    events, deletedEvents,
   } = useCalendarStore();
 
   // Sort retired drivers to the bottom of the directory list so the
@@ -294,9 +294,20 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
                 key={selectedDriver.id}
                 driver={selectedDriver}
                 events={events}
+                deletedEvents={deletedEvents}
                 assets={assets}
                 updateDriver={updateDriver}
                 onRemove={() => handleRemove(selectedDriver.id)}
+                onHardDelete={async () => {
+                  try {
+                    await hardDeleteDriver(selectedDriver.id);
+                  } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    alert(/has_references|409/.test(msg)
+                      ? 'This driver has loads attached and can\'t be permanently deleted. Retire instead.'
+                      : `Couldn't delete driver: ${msg}`);
+                  }
+                }}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-sm"
@@ -372,12 +383,14 @@ function NavDriverRow({ driver, selected, onSelect }: {
 
 // ─── Driver Profile Panel ─────────────────────────────────────────────────────
 
-function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: {
+function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDriver, onRemove, onHardDelete }: {
   driver: Driver;
   events: CalendarEvent[];
+  deletedEvents: CalendarEvent[];
   assets: Asset[];
   updateDriver: (id: number, updates: Partial<Omit<Driver, 'id'>>) => void;
   onRemove: () => void;
+  onHardDelete: () => void;
 }) {
   const { openEditModal, orgId } = useCalendarStore();
   const { organization } = useOrganization();
@@ -385,6 +398,14 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
   const canDelete       = canDo('drivers.delete');
   const canViewPayroll  = canDo('payroll.access');
   const canEdit         = canDo('drivers.edit');
+  // Hard delete only safe when no loads reference this driver as the
+  // primary. events.driver_id is ON DELETE RESTRICT; secondary_driver_id
+  // is ON DELETE SET NULL, so a driver who only ever appeared as secondary
+  // can still be hard-deleted (those slots silently clear). Count both
+  // live + soft-deleted rows since the FK doesn't distinguish.
+  const loadsAttached =
+    events.filter(e => e.driverId === driver.id).length +
+    deletedEvents.filter(e => e.driverId === driver.id).length;
   const [firstName, setFirstName] = useState(driver.firstName ?? '');
   const [lastName,  setLastName]  = useState(driver.lastName  ?? '');
   const [phone,     setPhone]     = useState(driver.phone     ?? '');
@@ -948,6 +969,75 @@ function DriverProfilePanel({ driver, events, assets, updateDriver, onRemove }: 
           </button>
         )}
       </div>
+      )}
+
+      {/* Permanent delete — only visible when no loads reference the
+          driver (FK on events.driver_id is ON DELETE RESTRICT). For
+          the "I created this by accident" case. Type-name confirm to
+          prevent finger-slip deletions. */}
+      {canDelete && loadsAttached === 0 && (
+        <PermanentDeleteBlock label={driverDisplayName(driver)} onConfirm={onHardDelete} />
+      )}
+    </div>
+  );
+}
+
+/** Two-step destructive confirm — same component as the one in
+ *  AssetsModal. Type the entity's name, then click to fire. */
+function PermanentDeleteBlock({ label, onConfirm }: { label: string; onConfirm: () => void | Promise<void> }) {
+  const [armed, setArmed] = useState(false);
+  const [typed, setTyped] = useState('');
+  const ready = armed && typed.trim() === label.trim();
+  return (
+    <div className="mt-6 pt-6" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+      <div className="text-[11px] font-semibold uppercase tracking-wider mb-2"
+        style={{ color: 'var(--gc-text-3)' }}>
+        Danger zone
+      </div>
+      {!armed ? (
+        <button
+          onClick={() => setArmed(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          style={{ color: '#7a1d18', border: '1px solid rgba(217,48,37,0.4)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.08)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          <Trash2 size={14} />
+          Delete permanently
+        </button>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <p className="text-sm" style={{ color: 'var(--gc-text-2)' }}>
+            Permanently delete <strong>{label}</strong>. This can&apos;t be undone — the row is removed from the database.
+            Type <code style={{ background: 'var(--gc-hover)', padding: '1px 4px', borderRadius: 3 }}>{label}</code> below to confirm.
+          </p>
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              value={typed}
+              onChange={e => setTyped(e.target.value)}
+              placeholder={label}
+              className="flex-1 text-sm rounded-lg px-3 py-1.5 outline-none"
+              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+            />
+            <button
+              onClick={() => { void onConfirm(); }}
+              disabled={!ready}
+              className="px-4 py-1.5 rounded-lg text-sm font-medium text-white disabled:opacity-40"
+              style={{ background: '#d93025' }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+              onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+              Delete permanently
+            </button>
+            <button
+              onClick={() => { setArmed(false); setTyped(''); }}
+              className="px-4 py-1.5 rounded-lg text-sm font-medium transition-colors"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

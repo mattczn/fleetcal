@@ -170,6 +170,31 @@ drivers.delete("/:id", requireCapability("drivers.delete"), async (c) => {
   if (!Number.isFinite(id)) {
     return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
   }
+  // Hard delete branch — same pattern as assets. events.driver_id is
+  // ON DELETE RESTRICT, so Postgres blocks if any loads reference;
+  // we catch and return 409. Cascade-coupled tables (push tokens,
+  // notification prefs, etc.) are wiped automatically by their FKs.
+  const hard = c.req.query("hard") === "true";
+  if (hard) {
+    const { error: delErr } = await supabase
+      .from("drivers")
+      .delete()
+      .eq("id", id)
+      .eq("org_id", orgId);
+    if (delErr) {
+      const isFk = (delErr.code === "23503") || /foreign key|violates/i.test(delErr.message ?? "");
+      if (isFk) {
+        return c.json(
+          { error: "has_references", detail: "This driver has loads attached. Retire instead." } satisfies ApiErrorResponse,
+          409,
+        );
+      }
+      console.error("[DELETE /v1/drivers/:id?hard=true] failed:", delErr);
+      return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+    }
+    return c.json({ deleted: true, id });
+  }
+
   const today = todayUtcDateKey();
   const { data, error } = await supabase
     .from("drivers")

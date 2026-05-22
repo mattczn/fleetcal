@@ -183,6 +183,34 @@ assets.delete("/:id", requireCapability("assets.delete"), async (c) => {
   if (!Number.isFinite(id)) {
     return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
   }
+  // Hard delete branch — actually remove the row. Used for "created
+  // by accident" cleanup where the entity has zero attached loads.
+  // events.asset_id has ON DELETE RESTRICT, so Postgres blocks the
+  // delete if any events still reference this asset; we catch the
+  // FK violation and return 409 so the client knows to retire instead.
+  const hard = c.req.query("hard") === "true";
+  if (hard) {
+    const { error: delErr } = await supabase
+      .from("assets")
+      .delete()
+      .eq("id", id)
+      .eq("org_id", orgId);
+    if (delErr) {
+      // Postgres FK violation surfaces as code 23503 in PostgREST
+      // error.code; the message is also human-readable.
+      const isFk = (delErr.code === "23503") || /foreign key|violates/i.test(delErr.message ?? "");
+      if (isFk) {
+        return c.json(
+          { error: "has_references", detail: "This asset has loads attached. Retire it instead." } satisfies ApiErrorResponse,
+          409,
+        );
+      }
+      console.error("[DELETE /v1/assets/:id?hard=true] failed:", delErr);
+      return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+    }
+    return c.json({ deleted: true, id });
+  }
+
   const today = todayUtcDateKey();
   const { data, error } = await supabase
     .from("assets")
