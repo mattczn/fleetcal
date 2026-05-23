@@ -3685,7 +3685,7 @@ function SavedLocationsPanel() {
 const TRAILER_CATEGORIES = ['Swing', 'Roll Up', 'Flat Bed', 'Other'] as const;
 
 function TrailersPanel() {
-  const { trailers, fetchTrailers, addTrailer, updateTrailer, removeTrailer, orgId } = useCalendarStore();
+  const { trailers, fetchTrailers, addTrailer, updateTrailer, removeTrailer, hardDeleteTrailer, events, orgId } = useCalendarStore();
   const { can } = usePermissions();
   const canDelete = can('trailers.delete');
   const [adding, setAdding] = useState(false);
@@ -3704,6 +3704,14 @@ function TrailersPanel() {
   const [editNotes, setEditNotes] = useState('');
   const [editMotive, setEditMotive] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  // Hard-delete (permanent) confirm flow — scoped to whichever trailer
+  // is being edited. We track armed-state + the user-typed name +
+  // any error from the API so blockers can be surfaced inline.
+  const [hardArmed,   setHardArmed]   = useState(false);
+  const [hardTyped,   setHardTyped]   = useState('');
+  const [hardError,   setHardError]   = useState<string | null>(null);
+  const [hardDeleting, setHardDeleting] = useState(false);
 
   useEffect(() => { if (orgId) void fetchTrailers(); }, [orgId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3739,6 +3747,47 @@ function TrailersPanel() {
     setSaving(true);
     await updateTrailer(id, { name, trailerNumber: editNumber.trim() || undefined, category: editCategory, notes: editNotes.trim() || undefined, motiveVehicleId: editMotive.trim() || undefined });
     setEditId(null); setSaving(false);
+  }
+
+  /** Reset the danger-zone confirm state. Called when entering/leaving
+   *  edit mode so the armed state doesn't leak between trailers. */
+  function resetHardDeleteState() {
+    setHardArmed(false); setHardTyped(''); setHardError(null); setHardDeleting(false);
+  }
+
+  /** Permanent delete. Translates API error envelopes into a
+   *  human-readable inline message. Most likely failure is 409
+   *  has_references when the trailer is still attached to loads /
+   *  inspections / maintenance — we surface the per-table breakdown
+   *  so the dispatcher knows what's blocking. */
+  async function handleHardDelete(id: number, name: string) {
+    setHardError(null);
+    setHardDeleting(true);
+    try {
+      await hardDeleteTrailer(id);
+      // Row removed by the store; close the editor.
+      setEditId(null);
+      resetHardDeleteState();
+    } catch (err: unknown) {
+      const msg = (() => {
+        if (typeof err === 'object' && err !== null) {
+          const e = err as { status?: number; detail?: { error?: string; blockers?: Record<string, number> } | unknown; message?: string };
+          const d = (typeof e.detail === 'object' && e.detail !== null) ? e.detail as { error?: string; blockers?: Record<string, number> } : null;
+          if (e.status === 409 && d?.error === 'has_references' && d.blockers) {
+            const parts = Object.entries(d.blockers).map(([k, n]) => {
+              const label = k.replace(/_/g, ' ');
+              return `${n} ${label}`;
+            });
+            return `Can't delete ${name} — still referenced by ${parts.join(', ')}. Retire instead to keep history.`;
+          }
+          if (e.message) return e.message;
+        }
+        return String(err);
+      })();
+      setHardError(msg);
+    } finally {
+      setHardDeleting(false);
+    }
   }
 
   return (
@@ -3792,7 +3841,7 @@ function TrailersPanel() {
                     style={{ background: '#1a73e8', color: '#fff', border: 'none', cursor: 'pointer' }}>
                     <Check size={12} /> Save
                   </button>
-                  <button onClick={() => setEditId(null)}
+                  <button onClick={() => { setEditId(null); resetHardDeleteState(); }}
                     className="text-xs px-3 py-1.5 rounded-lg" style={{ border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
                     Cancel
                   </button>
@@ -3809,6 +3858,80 @@ function TrailersPanel() {
                   accent="#1a73e8"
                   onSave={(changes) => void updateTrailer(t.id, changes)}
                 />
+
+                {/* Danger zone — permanent delete. Gated on trailers.delete.
+                    Two-step type-the-name confirm modeled on AssetsModal.
+                    Local pre-check counts loads attached locally so we
+                    can show "retire instead" without round-tripping;
+                    the API still does the authoritative count across
+                    every referencing table and returns 409 if anything
+                    remains. */}
+                {canDelete && (() => {
+                  const localLoadCount = events.filter(e => e.trailerId === t.id && !e.deletedAt).length;
+                  const localBlocker = localLoadCount > 0
+                    ? `${localLoadCount} load${localLoadCount === 1 ? '' : 's'} attached`
+                    : null;
+                  return (
+                    <div className="mt-6 pt-4" style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+                      <div className="text-[11px] font-semibold uppercase tracking-wider mb-2"
+                        style={{ color: 'var(--gc-text-3)' }}>
+                        Danger zone
+                      </div>
+                      {!hardArmed ? (
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <button
+                            onClick={() => { if (!localBlocker) { setHardArmed(true); setHardError(null); } }}
+                            disabled={!!localBlocker}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
+                            style={{ color: '#7a1d18', border: '1px solid rgba(217,48,37,0.4)', background: 'transparent', cursor: localBlocker ? 'not-allowed' : 'pointer' }}
+                            onMouseEnter={e => { if (!localBlocker) e.currentTarget.style.background = 'rgba(217,48,37,0.08)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                            <Trash2 size={12} /> Delete permanently
+                          </button>
+                          {localBlocker && (
+                            <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                              {localBlocker} — retire instead to keep history.
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <p className="text-xs" style={{ color: 'var(--gc-text-2)' }}>
+                            Permanently delete <strong>{t.name}</strong>. This can&apos;t be undone — the row is removed from the database.
+                            Type <code style={{ background: 'var(--gc-hover)', padding: '1px 4px', borderRadius: 3 }}>{t.name}</code> to confirm.
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <input
+                              autoFocus
+                              value={hardTyped}
+                              onChange={e => setHardTyped(e.target.value)}
+                              placeholder={t.name}
+                              style={inp}
+                            />
+                            <button
+                              onClick={() => { void handleHardDelete(t.id, t.name); }}
+                              disabled={hardTyped.trim() !== t.name.trim() || hardDeleting}
+                              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-40"
+                              style={{ background: '#d93025', border: 'none', cursor: 'pointer' }}>
+                              {hardDeleting ? <Loader2 size={12} className="animate-spin inline" /> : 'Delete'}
+                            </button>
+                            <button
+                              onClick={resetHardDeleteState}
+                              className="text-xs px-3 py-1.5 rounded-lg"
+                              style={{ border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
+                              Cancel
+                            </button>
+                          </div>
+                          {hardError && (
+                            <div className="text-xs px-3 py-2 rounded-lg" style={{ background: '#fce8e6', color: '#d93025' }}>
+                              {hardError}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ) : (
               <div className="flex items-center justify-between gap-2" style={{ opacity: t.activeTo ? 0.6 : 1 }}>
@@ -3834,7 +3957,7 @@ function TrailersPanel() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => { setEditId(t.id); setEditName(t.name); setEditNumber(t.trailerNumber ?? ''); setEditCategory(t.category); setEditNotes(t.notes ?? ''); setEditMotive(t.motiveVehicleId ?? ''); }}
+                  <button onClick={() => { setEditId(t.id); setEditName(t.name); setEditNumber(t.trailerNumber ?? ''); setEditCategory(t.category); setEditNotes(t.notes ?? ''); setEditMotive(t.motiveVehicleId ?? ''); resetHardDeleteState(); }}
                     style={{ padding: 6, borderRadius: 7, border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--gc-text-3)' }}
                     onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-1)'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>

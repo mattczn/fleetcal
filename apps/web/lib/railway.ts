@@ -438,6 +438,7 @@ class RailwayClient {
     return this.req<UpdateTrailerResponse>('PATCH', `/v1/trailers/${id}`, body);
   }
   deleteTrailer(id: number)                  { return this.req<void>('DELETE', `/v1/trailers/${id}`); }
+  hardDeleteTrailer(id: number)              { return this.req<{ deleted: true; id: number }>('DELETE', `/v1/trailers/${id}?hard=true`); }
 
   listDispatchers()                          { return this.req<ListDispatchersResponse>('GET', '/v1/dispatchers'); }
   createDispatcher(body: CreateDispatcherRequest) { return this.req<CreateDispatcherResponse>('POST', '/v1/dispatchers', body); }

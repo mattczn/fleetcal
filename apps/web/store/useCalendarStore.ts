@@ -395,6 +395,7 @@ interface CalendarStore extends ModalState {
   addTrailer: (t: Omit<Trailer, 'id'>) => Promise<void>;
   updateTrailer: (id: number, updates: Partial<Omit<Trailer, 'id'>>) => Promise<void>;
   removeTrailer: (id: number) => Promise<void>;
+  hardDeleteTrailer: (id: number) => Promise<void>;
 
   dragState: DragState | null;
   setDragState: (s: DragState | null) => void;
@@ -886,6 +887,22 @@ export const useCalendarStore = create<CalendarStore>()(
       }));
     } catch (err) {
       notifyDeleteError('Trailer', err);
+    }
+  },
+  hardDeleteTrailer: async (id) => {
+    // Mirrors hardDeleteAsset/hardDeleteDriver — optimistic remove
+    // from the local store, then call the API. On failure (most
+    // likely 409 because something still references this trailer)
+    // we roll back and re-throw so the caller can surface the
+    // blocker reason inline.
+    if (get().isDemo) return;
+    const prevTrailers = get().trailers;
+    set((s) => ({ trailers: s.trailers.filter(t => t.id !== id) }));
+    try {
+      await railway.hardDeleteTrailer(id);
+    } catch (err) {
+      set({ trailers: prevTrailers });
+      throw err;
     }
   },
 
