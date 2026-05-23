@@ -1267,6 +1267,8 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
               prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(storedRules.prePickupConfirm    ?? {}) },
               onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(storedRules.onAssignment        ?? {}) },
               missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(storedRules.missingPodReminder  ?? {}) },
+              loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(storedRules.loadCancelled       ?? {}) },
+              reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(storedRules.reassignedAway      ?? {}) },
             }
           : DEFAULT_NOTIFICATION_RULES);
       })
@@ -1313,6 +1315,8 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
           prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(res.settings.notificationRules.prePickupConfirm    ?? {}) },
           onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(res.settings.notificationRules.onAssignment        ?? {}) },
           missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(res.settings.notificationRules.missingPodReminder  ?? {}) },
+          loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(res.settings.notificationRules.loadCancelled       ?? {}) },
+          reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(res.settings.notificationRules.reassignedAway      ?? {}) },
         });
       }
       setRulesSaveState('saved');
@@ -1548,6 +1552,62 @@ function DriverAppPanel({ setActive }: { setActive: (v: NavItem) => void }) {
                   onCommit={(n) => void saveRules({
                     ...rules,
                     missingPodReminder: { ...rules.missingPodReminder, hoursAfterDelivery: n },
+                  })}
+                />
+              </SettingsField>
+            )}
+
+            <SettingsField
+              inline
+              label="Load cancelled"
+              hint={NOTIFICATION_RULE_BLURB.load_cancelled}
+            >
+              <SettingsToggle
+                checked={rules.loadCancelled.enabled}
+                disabled={rulesBusy}
+                onChange={() => void saveRules({
+                  ...rules,
+                  loadCancelled: { ...rules.loadCancelled, enabled: !rules.loadCancelled.enabled },
+                })}
+              />
+            </SettingsField>
+            {rules.loadCancelled.enabled && (
+              <SettingsField inline label="Hours before pickup" hint="Only fire the cancel push when the load was scheduled to pick up within this many hours from now.">
+                <SettingsNumberInput
+                  value={rules.loadCancelled.hoursBeforeStart}
+                  min={1} max={168}
+                  disabled={rulesBusy}
+                  onCommit={(n) => void saveRules({
+                    ...rules,
+                    loadCancelled: { ...rules.loadCancelled, hoursBeforeStart: n },
+                  })}
+                />
+              </SettingsField>
+            )}
+
+            <SettingsField
+              inline
+              label="Load reassigned away"
+              hint={NOTIFICATION_RULE_BLURB.reassigned_away}
+            >
+              <SettingsToggle
+                checked={rules.reassignedAway.enabled}
+                disabled={rulesBusy}
+                onChange={() => void saveRules({
+                  ...rules,
+                  reassignedAway: { ...rules.reassignedAway, enabled: !rules.reassignedAway.enabled },
+                })}
+              />
+            </SettingsField>
+            {rules.reassignedAway.enabled && (
+              <SettingsField inline label="Hours before pickup" hint="Only fire the reassign push when the load was scheduled to pick up within this many hours from now.">
+                <SettingsNumberInput
+                  value={rules.reassignedAway.hoursBeforeStart}
+                  min={1} max={168}
+                  disabled={rulesBusy}
+                  onCommit={(n) => void saveRules({
+                    ...rules,
+                    reassignedAway: { ...rules.reassignedAway, hoursBeforeStart: n },
                   })}
                 />
               </SettingsField>

@@ -116,6 +116,8 @@ async function loadOrgNotificationRules(orgId: string): Promise<NotificationRule
     prePickupConfirm:    { ...DEFAULT_NOTIFICATION_RULES.prePickupConfirm,    ...(stored.prePickupConfirm    ?? {}) },
     onAssignment:        { ...DEFAULT_NOTIFICATION_RULES.onAssignment,        ...(stored.onAssignment        ?? {}) },
     missingPodReminder:  { ...DEFAULT_NOTIFICATION_RULES.missingPodReminder,  ...(stored.missingPodReminder  ?? {}) },
+    loadCancelled:       { ...DEFAULT_NOTIFICATION_RULES.loadCancelled,       ...(stored.loadCancelled       ?? {}) },
+    reassignedAway:      { ...DEFAULT_NOTIFICATION_RULES.reassignedAway,      ...(stored.reassignedAway      ?? {}) },
   };
 }
 
@@ -175,6 +177,24 @@ export async function sendAutoPushToDriver(
         : (hm >= start || hm < end); // wraps midnight
       if (inQuiet) return false;
     }
+  }
+
+  // Cancel + reassign-away both gate on "is the pickup within
+  // hoursBeforeStart from now". Same pattern as on_assignment but
+  // without the quiet-hours suppression — these are protective
+  // notifications and an overnight cancel is exactly the kind of
+  // thing the driver wants to know about before they hit the road.
+  // Loads in the past get filtered too (hoursOut <= 0) so we don't
+  // ping about cancellations of loads already in progress / delivered.
+  if (ruleKey === 'load_cancelled' || ruleKey === 'reassigned_away') {
+    if (!opts?.eventStart) return false;
+    const startMs = Date.parse(opts.eventStart.replace(' ', 'T'));
+    if (!isFinite(startMs)) return false;
+    const hoursOut = (startMs - Date.now()) / 3_600_000;
+    const windowH  = ruleKey === 'load_cancelled'
+      ? rules.loadCancelled.hoursBeforeStart
+      : rules.reassignedAway.hoursBeforeStart;
+    if (hoursOut <= 0 || hoursOut > windowH) return false;
   }
 
   // Driver per-rule override (sparse — missing means follow org default).

@@ -123,19 +123,6 @@ function withResolvedDriverId<T extends { driverName?: string; driverId?: number
   return { ...ev, driverId: match?.id };
 }
 
-/** Imminent-shift gate for cancel + reassign-away pushes. Returns
- *  true if the load's pickup is between now and 24h from now. The
- *  reason this isn't just `< 24h` is that loads with pickups in the
- *  past (delivered, in-progress) shouldn't trigger "your shift was
- *  cancelled" pings — the driver's already there. */
-function isWithinNext24h(naive: string | undefined | null): boolean {
-  if (!naive) return false;
-  const pickupMs = Date.parse(naive.replace(' ', 'T'));
-  if (!isFinite(pickupMs)) return false;
-  const hoursOut = (pickupMs - Date.now()) / 3_600_000;
-  return hoursOut > 0 && hoursOut <= 24;
-}
-
 /** `[time]` per the notification copy spec — "ddd M/D h:mm A" (e.g.
  *  "Wed 5/21 8:00 AM"). One format used across every push. Input is a
  *  naive ISO start ("YYYY-MM-DDTHH:mm") in HOME_TZ. */
@@ -160,20 +147,21 @@ function fmtPushTime(naive: string | undefined | null): string {
 //
 // If `ruleKey` is provided, the server applies the org notification rule
 // + per-driver override check before sending (auto-fire). Without it,
-// the push goes through unconditionally — reserved for protective
-// notifications (load cancellation, reassign-away) that the driver
-// can't opt out of, since they already confirmed and would otherwise
-// show up to a pickup that no longer exists.
+// the push goes through unconditionally — reserved for manual
+// dispatcher nudges from NotifyDriverPopover.
 //
-// For ruleKey='on_assignment', pass `eventStart` (naive ISO in dispatch
-// zone) so the server can enforce the rule's hoursBeforeStart window —
-// far-out assignments rely on the evening confirm sweep instead.
+// All three rule-gated push kinds pass `eventStart` (naive ISO in
+// dispatch zone) so the server can enforce the rule's hoursBeforeStart
+// window:
+//   on_assignment    — pings new driver on assignment of an imminent load
+//   load_cancelled   — pings driver when their imminent load is cancelled
+//   reassigned_away  — pings driver when their imminent load goes to someone else
 function notifyDriver(
   driverId: number,
   title: string,
   body: string,
   data?: Record<string, unknown>,
-  ruleKey?: 'on_assignment',
+  ruleKey?: 'on_assignment' | 'load_cancelled' | 'reassigned_away',
   eventStart?: string | null,
 ) {
   fetch('/api/driver-push', {
@@ -1361,21 +1349,12 @@ export const useCalendarStore = create<CalendarStore>()(
             'on_assignment',
             ev.start,
           );
-          // Notify the prior driver if the load they lost was within
-          // the next 24h — they're likely already planning their day
-          // around it and need to know it's gone, regardless of whether
-          // they had formally tapped Confirm.
-          //
-          // Was previously gated on prevConfirmedAt (the "protect
-          // drivers about to roll" intent), but that missed the common
-          // case of a driver who was assigned a 6am pickup yesterday
-          // afternoon, hadn't gotten around to tapping Confirm, and
-          // wakes up to find the load silently reassigned. With the
-          // 24h window the floor of unwanted noise stays low (we're
-          // not pinging drivers who lost a load 2 weeks out) but the
-          // imminent-shift signal gets through.
-          const startsWithin24hPrev = isWithinNext24h(ev.start);
-          if (prevDriverId && startsWithin24hPrev) {
+          // Notify the prior driver via the reassigned_away rule. The
+          // server applies the rule's hoursBeforeStart window (default
+          // 24h, configurable per-org in Settings → Driver App), plus
+          // the per-driver opt-out check from driver_notification_prefs.
+          // Pass eventStart so the server can do the time-window math.
+          if (prevDriverId) {
             notifyDriver(
               prevDriverId,
               'Schedule Changed',
@@ -1383,6 +1362,8 @@ export const useCalendarStore = create<CalendarStore>()(
               // Deep-link to home — the load isn't theirs anymore, no
               // point routing to the load detail.
               { type: 'reassigned_away', loadId: ev.loadId, eventId: id, url: '/' },
+              'reassigned_away',
+              ev.start,
             );
           }
         }
@@ -1425,19 +1406,18 @@ export const useCalendarStore = create<CalendarStore>()(
       console.error('cancelEventKeepLoad:', err),
     );
 
-    // Cancel-keep-load — notify if the load was within the next 24h.
-    // Was previously gated on confirmedAt, which silently skipped
-    // cancellations of imminent unconfirmed loads (the case where a
-    // driver was assigned a 6am pickup yesterday afternoon, hadn't
-    // tapped Confirm yet, and would otherwise just see the load
-    // vanish from their schedule on morning refresh).
-    if (ev.driverId && isWithinNext24h(ev.start)) {
+    // Cancel-keep-load — server enforces the load_cancelled rule's
+    // hoursBeforeStart window + per-driver opt-out. Window default is
+    // 24h, tunable in Settings → Driver App.
+    if (ev.driverId) {
       notifyDriver(
         ev.driverId,
         'Load Cancelled',
         `${ev.title} — pickup ${fmtPushTime(ev.start)} — has been cancelled.`,
         // Deep-link to home — the load is gone, no detail to route to.
         { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
+        'load_cancelled',
+        ev.start,
       );
     }
   },
@@ -1485,14 +1465,16 @@ export const useCalendarStore = create<CalendarStore>()(
 
     // Full-delete — identical user-facing copy to the cancel-keep
     // path since the two are indistinguishable from the driver's
-    // perspective. Same 24h-window gate.
-    if (ev.driverId && isWithinNext24h(ev.start)) {
+    // perspective. Same load_cancelled rule applies.
+    if (ev.driverId) {
       notifyDriver(
         ev.driverId,
         'Load Cancelled',
         `${ev.title} — pickup ${fmtPushTime(ev.start)} — has been cancelled.`,
         // Deep-link to home — the load is gone, no detail to route to.
         { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
+        'load_cancelled',
+        ev.start,
       );
     }
   },

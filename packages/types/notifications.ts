@@ -23,6 +23,8 @@ export const NOTIFICATION_RULE_KEYS = [
   "pre_pickup_confirm",
   "on_assignment",
   "missing_pod_reminder",
+  "load_cancelled",
+  "reassigned_away",
 ] as const;
 export type NotificationRuleKey = typeof NOTIFICATION_RULE_KEYS[number];
 
@@ -60,12 +62,28 @@ export interface MissingPodReminderRule {
    *  document and no missing_pod nudge has been sent. */
   hoursAfterDelivery: number;
 }
+export interface LoadCancelledRule {
+  enabled: boolean;
+  /** Only fire the cancel push when the load's pickup is within this
+   *  many hours from now. Cancels of loads weeks out aren't urgent —
+   *  driver sees it on the next schedule open. */
+  hoursBeforeStart: number;
+}
+export interface ReassignedAwayRule {
+  enabled: boolean;
+  /** Only fire the reassign-away push when the load's pickup is
+   *  within this many hours from now. Same reasoning as cancel —
+   *  loads far out get picked up via the regular schedule view. */
+  hoursBeforeStart: number;
+}
 
 export interface NotificationRules {
   eveningConfirmSweep: EveningConfirmSweepRule;
   prePickupConfirm:    PrePickupConfirmRule;
   onAssignment:        OnAssignmentRule;
   missingPodReminder:  MissingPodReminderRule;
+  loadCancelled:       LoadCancelledRule;
+  reassignedAway:      ReassignedAwayRule;
 }
 
 /** Defaults applied when the org has no notification_rules row yet
@@ -77,6 +95,8 @@ export const DEFAULT_NOTIFICATION_RULES: NotificationRules = {
   prePickupConfirm:    { enabled: true,  hoursBeforePickup: 6 },
   onAssignment:        { enabled: true,  hoursBeforeStart: 12, quietHoursStart: null, quietHoursEnd: null },
   missingPodReminder:  { enabled: false, hoursAfterDelivery: 24 },
+  loadCancelled:       { enabled: true,  hoursBeforeStart: 24 },
+  reassignedAway:      { enabled: true,  hoursBeforeStart: 24 },
 };
 
 /** UI copy for the four rules — used in both the dispatch web settings
@@ -86,6 +106,8 @@ export const NOTIFICATION_RULE_LABEL: Record<NotificationRuleKey, string> = {
   pre_pickup_confirm:    "Pre-pickup confirm reminder",
   on_assignment:         "New load assigned",
   missing_pod_reminder:  "Missing POD reminder",
+  load_cancelled:        "Load cancelled",
+  reassigned_away:       "Load reassigned away",
 };
 
 export const NOTIFICATION_RULE_BLURB: Record<NotificationRuleKey, string> = {
@@ -93,6 +115,8 @@ export const NOTIFICATION_RULE_BLURB: Record<NotificationRuleKey, string> = {
   pre_pickup_confirm:    "One-shot reminder a few hours before pickup if the load isn't confirmed yet.",
   on_assignment:         "Immediate push when a load is assigned. Optional quiet hours suppress overnight assigns.",
   missing_pod_reminder:  "Nudge the driver to upload a POD when one hasn't landed within the configured window after delivery.",
+  load_cancelled:        "Push the driver if a load they were assigned gets cancelled within the configured window before pickup.",
+  reassigned_away:       "Push the driver if a load they were assigned gets handed to someone else within the configured window before pickup.",
 };
 
 /** Map a NotificationRules key (camelCase JSON) to the matching
@@ -104,12 +128,16 @@ export const NOTIFICATION_RULE_KEY_FROM_FIELD: Record<keyof NotificationRules, N
   prePickupConfirm:    "pre_pickup_confirm",
   onAssignment:        "on_assignment",
   missingPodReminder:  "missing_pod_reminder",
+  loadCancelled:       "load_cancelled",
+  reassignedAway:      "reassigned_away",
 };
 export const NOTIFICATION_RULE_FIELD_FROM_KEY: Record<NotificationRuleKey, keyof NotificationRules> = {
   evening_confirm_sweep: "eveningConfirmSweep",
   pre_pickup_confirm:    "prePickupConfirm",
   on_assignment:         "onAssignment",
   missing_pod_reminder:  "missingPodReminder",
+  load_cancelled:        "loadCancelled",
+  reassigned_away:       "reassignedAway",
 };
 
 /** Per-driver row in driver_notification_prefs. Sparse — only stored
