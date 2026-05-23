@@ -35,12 +35,13 @@ interface DbDriverRow {
   dob: string | null;
   active_from: string;
   active_to: string | null;
+  last_seen_at: string | null;
 }
 
 export const DRIVER_COLS =
   "id,name,first_name,last_name,phone,notes," +
   "email,address,license_number,license_state,license_exp,medical_card_exp,dob," +
-  "active_from,active_to";
+  "active_from,active_to,last_seen_at";
 
 export function rowToDriver(r: DbDriverRow): Driver {
   return {
@@ -59,6 +60,7 @@ export function rowToDriver(r: DbDriverRow): Driver {
     dob:            r.dob             ?? undefined,
     activeFrom:     r.active_from,
     activeTo:       r.active_to,
+    lastSeenAt:     r.last_seen_at ?? null,
   };
 }
 

@@ -151,6 +151,13 @@ export interface Driver {
    *  view but still appear on historical loads they ran. */
   activeFrom?: string;
   activeTo?: string | null;
+
+  /** Last time this driver made an authenticated request from the
+   *  driver app. ISO timestamp. null/undefined = they've never logged
+   *  in (or pre-dates the last_seen_at column). Maintained by the
+   *  API's driverAuth middleware with a ~2-min in-process throttle so
+   *  it's "approximately when active" not a precise heartbeat. */
+  lastSeenAt?: string | null;
 }
 
 export type DriverDocumentKind = 'license' | 'medical_card' | 'mvr' | 'other';

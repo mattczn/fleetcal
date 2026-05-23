@@ -110,5 +110,44 @@ export const driverAuth: MiddlewareHandler<{ Variables: DriverAuthVariables }> =
     c.set("orgId",      driver.org_id);
     c.set("driverName", driver.name);
     c.set("phone",      driver.phone);
+
+    // Bump drivers.last_seen_at as a side-effect of any authenticated
+    // request — gives dispatch a "did this driver actually log in /
+    // is their token still working?" signal in the web app. Throttled
+    // in-process so an actively-polling driver doesn't generate a
+    // write storm: only refresh if we haven't recorded this driver
+    // within LAST_SEEN_TTL_MS. Single API replica means the in-process
+    // cache is authoritative; on restart the first request per driver
+    // does one extra write while the cache warms back up.
+    touchDriverLastSeen(driver.id);
+
     await next();
   };
+
+// ── last_seen_at throttle ─────────────────────────────────────────────
+// Map of driverId → millisecond timestamp of our most recent UPDATE.
+// We don't read last_seen_at from the DB on the hot path; this cache
+// is the throttle window. 2-minute TTL is fine for the "is the driver
+// active?" use case (dispatcher wants granularity of "in the last few
+// minutes", not "in the last 30 seconds").
+const LAST_SEEN_TTL_MS = 2 * 60 * 1000;
+const lastSeenCache = new Map<number, number>();
+
+function touchDriverLastSeen(driverId: number): void {
+  const now    = Date.now();
+  const cached = lastSeenCache.get(driverId);
+  if (cached && now - cached < LAST_SEEN_TTL_MS) return;
+  lastSeenCache.set(driverId, now);
+  // Fire-and-forget — never block the request on the write. Auth
+  // path must stay fast even when Supabase is having a bad minute.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  void (supabase as any)
+    .from("drivers")
+    .update({ last_seen_at: new Date(now).toISOString() })
+    .eq("id", driverId)
+    .then((res: { error?: { message?: string } | null }) => {
+      if (res?.error) {
+        console.warn("[driverAuth] last_seen_at update failed:", driverId, res.error.message);
+      }
+    });
+}

@@ -89,6 +89,40 @@ function driverInitials(d: Driver): string {
   return d.name?.[0]?.toUpperCase() ?? '?';
 }
 
+/** Relative-time label for the driver app "last seen" line. Keeps the
+ *  dispatcher's read fast — "2 min ago" / "3 h ago" / "yesterday" /
+ *  "Mar 12" — same vocabulary used elsewhere in the app. */
+function lastSeenLabel(iso: string | null | undefined): string {
+  if (!iso) return 'never opened';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 'never opened';
+  const diffMs = Date.now() - t;
+  if (diffMs < 0) return 'just now';
+  const min = Math.floor(diffMs / 60_000);
+  if (min < 1)    return 'just now';
+  if (min < 60)   return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24)    return `${hr} h ago`;
+  const day = Math.floor(hr / 24);
+  if (day === 1)  return 'yesterday';
+  if (day < 7)    return `${day} days ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** Three-state color for the activity dot:
+ *    green  — opened the app in the last 24h (currently active)
+ *    amber  — opened in the last 14d (occasional user / token still works)
+ *    grey   — never opened or hasn't in 14d+ (probably can't log in) */
+function lastSeenDotColor(iso: string | null | undefined): string {
+  if (!iso) return '#9ca3af';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '#9ca3af';
+  const hours = (Date.now() - t) / 3_600_000;
+  if (hours <= 24)        return '#22c55e';  // green-500
+  if (hours <= 24 * 14)   return '#f59e0b';  // amber-500
+  return '#9ca3af';                           // gray-400
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function DriversModal({ onClose, initialDriverId }: { onClose: () => void; initialDriverId?: number }) {
@@ -366,6 +400,16 @@ function NavDriverRow({ driver, selected, onSelect }: {
         style={{ color: selected ? ACCENT : 'var(--gc-text-1)' }}>
         {driverDisplayName(driver)}
       </span>
+      {/* Driver-app activity dot — at-a-glance signal for which
+          drivers are actually using the app. Title shows the exact
+          relative time on hover. */}
+      {!retired && (
+        <span
+          className="shrink-0 w-1.5 h-1.5 rounded-full"
+          style={{ background: lastSeenDotColor(driver.lastSeenAt) }}
+          title={`Driver app: ${lastSeenLabel(driver.lastSeenAt)}`}
+        />
+      )}
       {retired && (
         <span
           className="shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-[1px] rounded"
@@ -562,6 +606,18 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
               {driver.phone}
             </div>
           )}
+          {/* Driver-app activity — confirms the driver successfully
+              logged in and is the API's last_seen_at timestamp from
+              their most recent authenticated request. "Never" means
+              the driver has not yet opened the app on a device
+              wired up with their phone / test-OTP. */}
+          <div className="text-xs mt-1 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+            <span
+              className="inline-block w-2 h-2 rounded-full shrink-0"
+              style={{ background: lastSeenDotColor(driver.lastSeenAt) }}
+            />
+            <span>Driver app: {lastSeenLabel(driver.lastSeenAt)}</span>
+          </div>
         </div>
       </div>
 
