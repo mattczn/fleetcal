@@ -293,22 +293,6 @@ export default function CalendarToolbar() {
       {/* ── Right controls ── */}
       <div className="flex items-center gap-1 shrink-0">
 
-        {/* Trailer fleet — one-click open of the fleet-wide trailer
-            map. Hidden when the org hasn't set up any trailers yet. */}
-        {hasActiveTrailers && (
-          <Tooltip content="Trailer fleet map">
-            <button
-              onClick={() => setTrailerFleetOpen(true)}
-              className="p-2 rounded-full transition-colors mr-1"
-              style={{ color: 'var(--gc-text-2)' }}
-              onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <Container size={18} />
-            </button>
-          </Tooltip>
-        )}
-
         {/* Batch progress / ready indicator */}
         {(() => {
           const isParsing = batchParseTotal > 0;
@@ -808,6 +792,24 @@ export default function CalendarToolbar() {
             </div>
           )}
         </div>
+
+        {/* Trailer fleet — one-click open of the fleet-wide trailer
+            map. Sits just right of the layers eye so trailer status
+            lives next to the other "what am I looking at" controls.
+            Hidden when the org hasn't set up any trailers yet. */}
+        {hasActiveTrailers && (
+          <Tooltip content="Trailer fleet map" placement="bottom">
+            <button
+              onClick={() => setTrailerFleetOpen(true)}
+              className="flex items-center justify-center w-9 h-9 rounded-full transition-colors"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <Container size={16} />
+            </button>
+          </Tooltip>
+        )}
 
         {/* View sliders popover */}
         <div ref={viewContainer} style={{ position: 'relative' }}>
