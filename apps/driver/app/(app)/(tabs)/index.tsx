@@ -10,7 +10,7 @@ import {
   Dimensions,
   Modal,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, AlertTriangle } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
@@ -298,23 +298,33 @@ export default function LoadsScreen() {
 
       {/* Inspection form — full-screen modal. On submit, refetch the
           today's-inspections query so the card flips to its green
-          state and lists the new entry. */}
+          state and lists the new entry.
+
+          IMPORTANT: <Modal> renders into its own native root view that
+          is OUTSIDE expo-router's SafeAreaProvider. Without an explicit
+          provider here, the SafeAreaView falls back to zero insets and
+          the back-arrow lands underneath the dynamic island. Wrapping
+          the modal contents with our own SafeAreaProvider re-injects
+          the insets so edges={["top"]} actually pushes the header
+          below the island. */}
       <Modal
         visible={inspectionFormOpen}
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => setInspectionFormOpen(false)}
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: "white" }} edges={["top"]}>
-          <InspectionFormScreen
-            driverName={driver?.name ?? "Driver"}
-            onClose={() => setInspectionFormOpen(false)}
-            onSubmitted={() => {
-              setInspectionFormOpen(false);
-              void refetchInspections();
-            }}
-          />
-        </SafeAreaView>
+        <SafeAreaProvider>
+          <SafeAreaView style={{ flex: 1, backgroundColor: "white" }} edges={["top"]}>
+            <InspectionFormScreen
+              driverName={driver?.name ?? "Driver"}
+              onClose={() => setInspectionFormOpen(false)}
+              onSubmitted={() => {
+                setInspectionFormOpen(false);
+                void refetchInspections();
+              }}
+            />
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     </SafeAreaView>
   );

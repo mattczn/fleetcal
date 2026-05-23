@@ -2672,12 +2672,23 @@ driver.post("/inspections/:id/photos", async (c) => {
     return c.json({ error: "not_authorized" }, 403);
   }
 
-  let body: { file?: File; itemId?: string; caption?: string };
-  try { body = await c.req.parseBody() as { file?: File; itemId?: string; caption?: string }; }
+  let body: { file?: File; itemId?: string; caption?: string; target?: string };
+  try { body = await c.req.parseBody() as { file?: File; itemId?: string; caption?: string; target?: string }; }
   catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400); }
   const file = body.file;
   if (!file || typeof file === 'string') {
     return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
+  }
+
+  // target = 'truck' | 'trailer' | undefined. Reject anything else so
+  // the DB check constraint never fires — failing here is a clearer
+  // error than a 500 from a constraint violation. undefined → NULL so
+  // legacy clients without the field still upload.
+  let target: "truck" | "trailer" | null = null;
+  if (body.target === "truck" || body.target === "trailer") {
+    target = body.target;
+  } else if (body.target != null && body.target !== "") {
+    return c.json({ error: "validation_failed", errors: ["target must be 'truck' or 'trailer'"] }, 400);
   }
 
   const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
@@ -2702,10 +2713,11 @@ driver.post("/inspections/:id/photos", async (c) => {
     .insert({
       report_id:    id,
       item_id:      body.itemId ?? null,
+      target,
       storage_path: storagePath,
       caption:      body.caption ?? null,
     })
-    .select("id, item_id, storage_path, caption, uploaded_at")
+    .select("id, item_id, target, storage_path, caption, uploaded_at")
     .single();
   if (error || !data) {
     void supabase.storage.from(INSPECTION_PHOTO_BUCKET).remove([storagePath]);

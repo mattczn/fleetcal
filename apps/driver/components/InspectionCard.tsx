@@ -132,14 +132,14 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
   );
 }
 
-// marginTop sits in normal flow below the blue header — the
-// SafeAreaView outside this card already covers the dynamic island,
-// so the extra breathing room here is purely visual padding between
-// the tab bar and the card body. Bumped from 10 → 16 after the card
-// moved to the Active tab (where the header bar is denser).
+// marginTop sits flush against the tab bar (which already has its own
+// paddingBottom on the active-indicator), so only a couple px of
+// breathing room. marginBottom separates the card from the first
+// LoadCard so they don't read as one stacked block.
 const cardBase = {
   marginHorizontal: 14,
-  marginTop:        16,
+  marginTop:        6,
+  marginBottom:     14,
   borderRadius:     12,
   borderWidth:      1,
   padding:          16,

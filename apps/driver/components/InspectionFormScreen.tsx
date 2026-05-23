@@ -147,6 +147,8 @@ function defaultsFor(list: ChecklistItem[]): Record<string, ItemState> {
   return out;
 }
 
+type PhotoTarget = "truck" | "trailer";
+
 interface PendingPhoto {
   /** Stable client id so React can key the thumbnail before upload. */
   key:      string;
@@ -155,6 +157,12 @@ interface PendingPhoto {
   mimeType: string;
   /** Checklist item this photo is attached to. null = general photo. */
   itemId:   string | null;
+  /** Which piece of equipment this photo is about — derived from the
+   *  checklist row for per-item photos, picked explicitly by the
+   *  driver via the truck-section / trailer-section + button for
+   *  general photos. Carried through to the upload so dispatch can
+   *  group photos under the right asset in the inspection history. */
+  target:   PhotoTarget;
 }
 
 interface Props {
@@ -187,7 +195,6 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   const [notes,       setNotes]       = useState("");
   const [photos,      setPhotos]      = useState<PendingPhoto[]>([]);
   const [submitting,  setSubmitting]  = useState(false);
-  const [photoTarget, setPhotoTarget] = useState<string | null>(null); // itemId being photographed (UI hint)
 
   // ── Compliance signals — captured at mount, sent at submit.
   // openedAtRef is a ref (not state) so re-renders don't reset the
@@ -258,14 +265,20 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   // standard Take-Photo / Choose-from-Library sheet. Photos are queued
   // locally (PendingPhoto) and uploaded sequentially after the report
   // row is created, so each upload knows the inspection id.
-  const addPhotoFor = useCallback(async (itemId: string | null) => {
+  //
+  // target = "truck" | "trailer" is required so dispatch can group
+  // photos under the right asset. For per-item photos it's derived
+  // from the checklist block; for general photos it's picked
+  // explicitly by which "+ Add photo" button the driver tapped.
+  const addPhotoFor = useCallback(async (target: PhotoTarget, itemId: string | null) => {
     if (photos.length >= 12) {
       Alert.alert("Limit reached", "Up to 12 photos per inspection.");
       return;
     }
-    setPhotoTarget(itemId);
     Alert.alert(
-      itemId ? "Add photo for this item" : "Add general photo",
+      itemId
+        ? `Add photo (${target})`
+        : `Add general ${target} photo`,
       undefined,
       [
         {
@@ -286,6 +299,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
               fileName: a.fileName ?? `inspection-${Date.now()}.jpg`,
               mimeType: a.mimeType ?? "image/jpeg",
               itemId,
+              target,
             }]);
           },
         },
@@ -312,6 +326,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
                 fileName: a.fileName ?? `inspection-${Date.now()}.jpg`,
                 mimeType: a.mimeType ?? "image/jpeg",
                 itemId,
+                target,
               })),
             ]);
           },
@@ -384,6 +399,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           form.append("file", { uri: ph.uri, name: ph.fileName, type: ph.mimeType } as any);
           if (ph.itemId) form.append("itemId", ph.itemId);
+          form.append("target", ph.target);
           await railway.uploadInspectionPhoto(inspection.id, form);
         } catch (err) {
           console.warn("[inspection] photo upload failed:", err);
@@ -409,11 +425,6 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
     () => Object.values(items).filter(s => s.status === "fail").length,
     [items],
   );
-
-  // Photos that aren't pinned to a specific item — surfaced in a
-  // dedicated "General photos" block so the driver can also add
-  // odometer / nameplate / etc. shots.
-  const generalPhotos = photos.filter(p => p.itemId == null);
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -496,64 +507,38 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
           </View>
         </View>
 
-        {/* Truck checklist */}
+        {/* Truck checklist — general photos block lives inside, tagged
+            target="truck" so dispatch can attribute them correctly. */}
         {assetId && (
           <ChecklistBlock
             title="Truck inspection"
+            target="truck"
             sections={truckSections}
             items={items}
             setStatus={setStatus}
             setItemNotes={setItemNotes}
-            onAddPhoto={(itemId) => addPhotoFor(itemId)}
-            photos={photos}
+            onAddPhoto={(itemId) => addPhotoFor("truck", itemId)}
+            onAddGeneralPhoto={() => addPhotoFor("truck", null)}
+            photos={photos.filter(p => p.target === "truck")}
             onRemovePhoto={removePhoto}
           />
         )}
 
-        {/* Trailer checklist */}
+        {/* Trailer checklist — same structure, target="trailer". */}
         {includeTrailer && trailerId && (
           <ChecklistBlock
             title="Trailer inspection"
+            target="trailer"
             sections={trailerSections}
             items={items}
             setStatus={setStatus}
             setItemNotes={setItemNotes}
-            onAddPhoto={(itemId) => addPhotoFor(itemId)}
-            photos={photos}
+            onAddPhoto={(itemId) => addPhotoFor("trailer", itemId)}
+            onAddGeneralPhoto={() => addPhotoFor("trailer", null)}
+            photos={photos.filter(p => p.target === "trailer")}
             onRemovePhoto={removePhoto}
           />
         )}
-
-        {/* General photos — odometer shot, nameplate, anything else */}
-        <View style={{ backgroundColor: "white", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
-            <Text style={[txt(700), { flex: 1, fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5 }]}>
-              General photos (optional)
-            </Text>
-            <TouchableOpacity
-              onPress={() => addPhotoFor(null)}
-              style={{
-                flexDirection: "row", alignItems: "center", gap: 4,
-                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
-                backgroundColor: "#eff6ff",
-              }}
-            >
-              <Plus size={14} color="#1a73e8" />
-              <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]}>Add photo</Text>
-            </TouchableOpacity>
-          </View>
-          {generalPhotos.length === 0 ? (
-            <Text style={[txt(500), { fontSize: 12, color: "#9ca3af" }]}>
-              Odometer, truck nameplate, anything you want a visual record of.
-            </Text>
-          ) : (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {generalPhotos.map(ph => (
-                <PhotoThumb key={ph.key} uri={ph.uri} onRemove={() => removePhoto(ph.key)} />
-              ))}
-            </View>
-          )}
-        </View>
 
         {/* General notes */}
         <View style={{ backgroundColor: "white", borderRadius: 12, padding: 14, marginBottom: 14 }}>
@@ -620,10 +605,6 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
         />
       )}
 
-      {/* photoTarget is set transiently while the picker sheet is open
-          — keep it referenced so React doesn't drop the value mid-flow
-          and confuse the upload metadata. */}
-      {photoTarget && null}
     </KeyboardAvoidingView>
   );
 }
@@ -631,17 +612,24 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
 // ─── Subcomponents ────────────────────────────────────────────────────
 
 function ChecklistBlock({
-  title, sections, items, setStatus, setItemNotes, onAddPhoto, photos, onRemovePhoto,
+  title, target, sections, items, setStatus, setItemNotes, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto,
 }: {
   title: string;
+  target: PhotoTarget;
   sections: { name: string; items: ChecklistItem[] }[];
   items: Record<string, ItemState>;
-  setStatus:     (id: string, s: ItemStatus) => void;
-  setItemNotes:  (id: string, n: string)     => void;
-  onAddPhoto:    (itemId: string)            => void;
-  photos:        PendingPhoto[];
-  onRemovePhoto: (key: string)               => void;
+  setStatus:          (id: string, s: ItemStatus) => void;
+  setItemNotes:       (id: string, n: string)     => void;
+  onAddPhoto:         (itemId: string)            => void;
+  onAddGeneralPhoto:  ()                          => void;
+  photos:             PendingPhoto[];
+  onRemovePhoto:      (key: string)               => void;
 }) {
+  // Photos with no itemId are the "general" ones for this piece of
+  // equipment — odometer shot, nameplate, the dirty wiring under the
+  // dash, anything the driver wants on record but doesn't tie to a
+  // single checklist row.
+  const generalPhotos = photos.filter(p => p.itemId == null);
   return (
     <View style={{ backgroundColor: "white", borderRadius: 12, padding: 14, marginBottom: 14 }}>
       <Text style={[txt(700), { fontSize: 12, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }]}>
@@ -711,6 +699,42 @@ function ChecklistBlock({
           })}
         </View>
       ))}
+
+      {/* General photos for THIS piece of equipment — separate block
+          so a truck+trailer combined inspection ends up with two
+          distinct buckets. target prop is set in the parent so every
+          photo added here is tagged correctly without re-derivation. */}
+      <View style={{ marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f3f4f6" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+          <Text style={[txt(700), { flex: 1, fontSize: 13, color: "#374151" }]}>
+            General {target} photos
+          </Text>
+          <TouchableOpacity
+            onPress={onAddGeneralPhoto}
+            style={{
+              flexDirection: "row", alignItems: "center", gap: 4,
+              paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+              backgroundColor: "#eff6ff",
+            }}
+          >
+            <Plus size={14} color="#1a73e8" />
+            <Text style={[txt(700), { fontSize: 12, color: "#1a73e8" }]}>Add photo</Text>
+          </TouchableOpacity>
+        </View>
+        {generalPhotos.length === 0 ? (
+          <Text style={[txt(500), { fontSize: 12, color: "#9ca3af" }]}>
+            {target === "truck"
+              ? "Odometer, truck nameplate, anything worth a visual record."
+              : "Trailer placard, load tag, any general trailer condition shots."}
+          </Text>
+        ) : (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {generalPhotos.map(ph => (
+              <PhotoThumb key={ph.key} uri={ph.uri} onRemove={() => onRemovePhoto(ph.key)} />
+            ))}
+          </View>
+        )}
+      </View>
     </View>
   );
 }
