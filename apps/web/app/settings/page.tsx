@@ -53,6 +53,7 @@ import { useRouter } from 'next/navigation';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useOnboardingStore } from '@/store/useOnboardingStore';
 import DataLoader from '@/components/DataLoader';
+import LifecycleEditor from '@/components/sidebar/LifecycleEditor';
 import { ALL_FIELDS, DEFAULT_SECTION_ORDER, FieldDef, FieldSection, SECTION_LABELS, getEnabledFieldsForSection } from '@/lib/fields';
 import { buildRateConPrompt } from '@/lib/prompt';
 import { InvoiceDocument } from '@/components/invoicing/InvoiceDocument';
@@ -3761,7 +3762,18 @@ function TrailersPanel() {
             No trailers yet. Add one below.
           </div>
         )}
-        {trailers.map(t => (
+        {/* Active first, retired sorted to bottom. Same UX as the assets
+            modal — retired entries stay visible so the dispatcher can
+            edit the retire date or un-retire, but they don't crowd the
+            active list. */}
+        {[...trailers]
+          .sort((a, b) => {
+            const aR = !!a.activeTo;
+            const bR = !!b.activeTo;
+            if (aR !== bR) return aR ? 1 : -1;
+            return (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+          })
+          .map(t => (
           <div key={t.id} className="rounded-xl p-3" style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
             {editId === t.id ? (
               <div className="space-y-2">
@@ -3785,11 +3797,37 @@ function TrailersPanel() {
                     Cancel
                   </button>
                 </div>
+                {/* Lifecycle dates — separate Save button inside the
+                    editor so dispatchers can adjust retire/active-from
+                    without re-saving every other field. Empty Retire
+                    date = currently active; setting it retires the
+                    trailer from that day forward and the row shows
+                    a Retired pill. */}
+                <LifecycleEditor
+                  activeFrom={t.activeFrom}
+                  activeTo={t.activeTo}
+                  accent="#1a73e8"
+                  onSave={(changes) => void updateTrailer(t.id, changes)}
+                />
               </div>
             ) : (
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{t.name}</div>
+              <div className="flex items-center justify-between gap-2" style={{ opacity: t.activeTo ? 0.6 : 1 }}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>{t.name}</span>
+                    {/* Retired pill — surfaced inline so the dispatcher
+                        can see at a glance which trailers are out of
+                        the active fleet without opening the editor. */}
+                    {t.activeTo && (
+                      <span
+                        title={`Retired ${t.activeTo}`}
+                        className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{ color: '#7a1d18', background: 'rgba(217,48,37,0.1)' }}
+                      >
+                        Retired
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
                     {[t.trailerNumber && `#${t.trailerNumber}`, t.category].filter(Boolean).join(' · ')}
                     {t.notes && ` · ${t.notes}`}

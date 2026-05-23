@@ -867,9 +867,23 @@ export const useCalendarStore = create<CalendarStore>()(
     set((s) => ({ trailers: s.trailers.map(t => t.id === id ? { ...t, ...updates } : t) }));
   },
   removeTrailer: async (id) => {
+    // The backend's DELETE /v1/trailers/:id is a soft-retire — it
+    // stamps active_to=today rather than dropping the row, so any
+    // historical loads still reference a real trailer record. Mirror
+    // that locally: mark the trailer retired (activeTo=today) instead
+    // of filtering it out. The settings list sorts retired entries to
+    // the bottom and shows a "Retired" pill; the calendar +
+    // trailer-fleet panel already skip trailers with activeTo set.
     try {
       await deleteTrailer(id);
-      set((s) => ({ trailers: s.trailers.filter(t => t.id !== id) }));
+      const today = (() => {
+        const d = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      })();
+      set((s) => ({
+        trailers: s.trailers.map(t => t.id === id ? { ...t, activeTo: t.activeTo ?? today } : t),
+      }));
     } catch (err) {
       notifyDeleteError('Trailer', err);
     }
