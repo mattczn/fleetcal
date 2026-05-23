@@ -26,7 +26,7 @@ import {
 } from "react-native";
 import {
   Truck, Container, ChevronDown, Check, X, ArrowLeft, AlertTriangle,
-  Camera, Plus, Trash2,
+  Camera, Plus, Trash2, Search,
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
@@ -804,6 +804,22 @@ function PickerOverlay({ title, options, onPick, onClose }: {
   onPick: (id: number) => void;
   onClose: () => void;
 }) {
+  // Search filter — case-insensitive substring match against the label
+  // text (which already concatenates name + #unit / #trailerNumber).
+  // Splitting the query on whitespace lets a driver type "ford 312" and
+  // match a "2024 Ford F-150 · #312" row even though those tokens are
+  // far apart in the label.
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    const tokens = q.split(/\s+/);
+    return options.filter(opt => {
+      const hay = opt.label.toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+  }, [query, options]);
+
   return (
     <View style={{
       position: "absolute", inset: 0, backgroundColor: "white",
@@ -815,27 +831,73 @@ function PickerOverlay({ title, options, onPick, onClose }: {
         <TouchableOpacity onPress={onClose} style={{ padding: 6, marginLeft: -6 }}>
           <X size={22} color="#111827" />
         </TouchableOpacity>
-        <Text style={[txt(700), { fontSize: 16, color: "#111827" }]}>{title}</Text>
+        <Text style={[txt(700), { fontSize: 16, color: "#111827", flex: 1 }]}>{title}</Text>
+        <Text style={[txt(500), { fontSize: 12, color: "#9ca3af" }]}>
+          {filtered.length}{query ? ` / ${options.length}` : ""}
+        </Text>
       </View>
-      <ScrollView>
-        {options.length === 0 && (
+
+      {/* Search row — only shown when there's enough rows to be worth
+          filtering. <6 items just scroll naturally. */}
+      {options.length >= 6 && (
+        <View style={{
+          flexDirection: "row", alignItems: "center", gap: 8,
+          paddingHorizontal: 14, paddingVertical: 10,
+          borderBottomWidth: 1, borderBottomColor: "#f3f4f6",
+        }}>
+          <View style={{
+            flex: 1, flexDirection: "row", alignItems: "center", gap: 8,
+            paddingHorizontal: 12, paddingVertical: 10,
+            borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 10,
+            backgroundColor: "#f9fafb",
+          }}>
+            <Search size={16} color="#9ca3af" />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search by name or number…"
+              placeholderTextColor="#9ca3af"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              style={[txt(500), { flex: 1, fontSize: 15, color: "#111827", padding: 0 }]}
+            />
+            {query.length > 0 && (
+              <TouchableOpacity onPress={() => setQuery("")} hitSlop={10}>
+                <X size={16} color="#9ca3af" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
+      <ScrollView keyboardShouldPersistTaps="handled">
+        {options.length === 0 ? (
           <View style={{ padding: 24, flexDirection: "row", alignItems: "center", gap: 10, justifyContent: "center" }}>
             <AlertTriangle size={16} color="#9ca3af" />
             <Text style={[txt(500), { color: "#6b7280" }]}>No options available.</Text>
           </View>
+        ) : filtered.length === 0 ? (
+          <View style={{ padding: 32, alignItems: "center", gap: 6 }}>
+            <Text style={[txt(700), { color: "#374151", fontSize: 15 }]}>No matches</Text>
+            <Text style={[txt(500), { color: "#9ca3af", fontSize: 13, textAlign: "center" }]}>
+              Nothing matched “{query.trim()}”. Try a different name or number.
+            </Text>
+          </View>
+        ) : (
+          filtered.map(opt => (
+            <TouchableOpacity
+              key={opt.id}
+              onPress={() => onPick(opt.id)}
+              style={{
+                paddingHorizontal: 14, paddingVertical: 16,
+                borderBottomWidth: 1, borderBottomColor: "#f3f4f6",
+              }}
+            >
+              <Text style={[txt(600), { fontSize: 16, color: "#111827" }]}>{opt.label}</Text>
+            </TouchableOpacity>
+          ))
         )}
-        {options.map(opt => (
-          <TouchableOpacity
-            key={opt.id}
-            onPress={() => onPick(opt.id)}
-            style={{
-              paddingHorizontal: 14, paddingVertical: 16,
-              borderBottomWidth: 1, borderBottomColor: "#f3f4f6",
-            }}
-          >
-            <Text style={[txt(600), { fontSize: 16, color: "#111827" }]}>{opt.label}</Text>
-          </TouchableOpacity>
-        ))}
       </ScrollView>
     </View>
   );
