@@ -22,7 +22,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator,
-  KeyboardAvoidingView, Platform, Image,
+  KeyboardAvoidingView, Platform, Image, findNodeHandle,
 } from "react-native";
 import {
   Truck, Container, ChevronDown, Check, X, ArrowLeft, AlertTriangle,
@@ -203,6 +203,32 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   // location.
   const openedAtRef = useRef<number>(Date.now());
   const gpsRef      = useRef<{ latitude: number; longitude: number } | null>(null);
+
+  // Scroll-to-input on focus. When a driver taps the per-item notes
+  // or general-notes TextInput, the iOS keyboard slides up and would
+  // otherwise cover whatever field they're typing into. RN's built-in
+  // scroll responder method positions the focused input ~120px above
+  // the keyboard so they can actually see what they're writing.
+  //
+  // The 60ms delay is so the keyboard has started animating before
+  // we measure — measuring too early gives the pre-keyboard layout
+  // and the scroll undershoots.
+  const scrollRef = useRef<ScrollView>(null);
+  // Signature is `any` because RN's onFocus event type changed shape
+  // across versions (TextInputFocusEventData vs ReactNativeElement
+  // target) and findNodeHandle's strict overloads don't match either
+  // cleanly. The runtime contract is stable: e.target is a node ref
+  // findNodeHandle can resolve.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleInputFocus = useCallback((e: any) => {
+    const tag = findNodeHandle(e?.target);
+    if (tag == null) return;
+    setTimeout(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const responder: any = scrollRef.current?.getScrollResponder?.();
+      responder?.scrollResponderScrollNativeHandleToKeyboard?.(tag, 120, true);
+    }, 60);
+  }, []);
 
   // Load asset + trailer options + suggested asset in parallel.
   useEffect(() => {
@@ -464,6 +490,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       </View>
 
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1, backgroundColor: "#f8f9fa" }}
         contentContainerStyle={{ padding: 14, paddingBottom: 100 }}
         keyboardShouldPersistTaps="handled"
@@ -542,6 +569,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
             items={items}
             setStatus={setStatus}
             setItemNotes={setItemNotes}
+            onInputFocus={handleInputFocus}
             onAddPhoto={(itemId) => addPhotoFor("truck", itemId)}
             onAddGeneralPhoto={() => addPhotoFor("truck", null)}
             photos={photos.filter(p => p.target === "truck")}
@@ -558,6 +586,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
             items={items}
             setStatus={setStatus}
             setItemNotes={setItemNotes}
+            onInputFocus={handleInputFocus}
             onAddPhoto={(itemId) => addPhotoFor("trailer", itemId)}
             onAddGeneralPhoto={() => addPhotoFor("trailer", null)}
             photos={photos.filter(p => p.target === "trailer")}
@@ -573,6 +602,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
           <TextInput
             value={notes}
             onChangeText={setNotes}
+            onFocus={handleInputFocus}
             placeholder="Anything else worth noting…"
             placeholderTextColor="#9ca3af"
             multiline
@@ -637,7 +667,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
 // ─── Subcomponents ────────────────────────────────────────────────────
 
 function ChecklistBlock({
-  title, target, sections, items, setStatus, setItemNotes, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto,
+  title, target, sections, items, setStatus, setItemNotes, onInputFocus, onAddPhoto, onAddGeneralPhoto, photos, onRemovePhoto,
 }: {
   title: string;
   target: PhotoTarget;
@@ -645,6 +675,8 @@ function ChecklistBlock({
   items: Record<string, ItemState>;
   setStatus:          (id: string, s: ItemStatus) => void;
   setItemNotes:       (id: string, n: string)     => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onInputFocus:       (e: any)                    => void;
   onAddPhoto:         (itemId: string)            => void;
   onAddGeneralPhoto:  ()                          => void;
   photos:             PendingPhoto[];
@@ -690,6 +722,7 @@ function ChecklistBlock({
                     <TextInput
                       value={state?.notes ?? ""}
                       onChangeText={(t) => setItemNotes(item.id, t)}
+                      onFocus={onInputFocus}
                       placeholder="Describe the issue…"
                       placeholderTextColor="#9ca3af"
                       multiline
