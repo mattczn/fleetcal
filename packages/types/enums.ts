@@ -57,6 +57,7 @@ export type ScheduleType = (typeof SCHEDULE_TYPES)[number];
 export const TRAILER_CATEGORIES = [
   "Swing",
   "Roll Up",
+  "Reefer",
   "Flat Bed",
   "Other",
 ] as const;

@@ -30,6 +30,7 @@ import {
   type DocumentKind,
   type DocumentTypeConfig,
   type NotificationRules,
+  type TrailerCategory,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import {
@@ -2525,7 +2526,7 @@ function Textarea({ value, onChange, placeholder, rows }: { value: string; onCha
 }
 
 function IntegrationsPanel() {
-  const { assets: allAssets, unassignedAssetId, updateAsset } = useCalendarStore();
+  const { assets: allAssets, unassignedAssetId, updateAsset, trailers, updateTrailer } = useCalendarStore();
   const assets = allAssets.filter(a => a.id !== unassignedAssetId);
 
   // ── API key state ─────────────────────────────────────────────────────────
@@ -2641,6 +2642,80 @@ function IntegrationsPanel() {
   };
 
   const matchedCount = Object.values(assignments).filter(Boolean).length;
+
+  // ── Trailer matcher state (parallel to the asset matcher above) ──────────
+  // Same shape, different data. trailerAssignments keys are Motive trailer
+  // IDs; values are calendar trailer IDs as strings (or '' for unmatched).
+  type MotiveTrailerVehicle = { id: string; number: string; year: number | null; make: string | null; model: string | null; type: string | null };
+  type TrailerMatchSuggestion = { motiveId: string; trailerId: number; confidence: 'high' | 'medium' | 'low' };
+  const [showTrailerMatcher,   setShowTrailerMatcher]   = useState(false);
+  const [trailerMatchLoading,  setTrailerMatchLoading]  = useState(false);
+  const [trailerMatchError,    setTrailerMatchError]    = useState('');
+  const [motiveTrailers,       setMotiveTrailers]       = useState<MotiveTrailerVehicle[]>([]);
+  const [trailerAssignments,   setTrailerAssignments]   = useState<Record<string, string>>({});
+  const [trailerApplying,      setTrailerApplying]      = useState(false);
+  const [trailerApplied,       setTrailerApplied]       = useState(false);
+
+  const handleOpenTrailerMatcher = async () => {
+    setShowTrailerMatcher(true);
+    setTrailerMatchLoading(true);
+    setTrailerMatchError('');
+    setTrailerApplied(false);
+
+    try {
+      const vRes = await fetch('/api/motive/trailers');
+      if (!vRes.ok) throw new Error((await vRes.json()).error ?? 'Failed to fetch Motive trailers');
+      const { trailers: motiveList } = await vRes.json() as { trailers: MotiveTrailerVehicle[] };
+      setMotiveTrailers(motiveList);
+
+      const mRes = await fetch('/api/motive/match-trailers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          motiveTrailers:   motiveList,
+          calendarTrailers: trailers.map(t => ({
+            id: t.id, name: t.name, trailerNumber: t.trailerNumber, category: t.category, notes: t.notes,
+          })),
+        }),
+      });
+      const { suggestions = [] } = mRes.ok ? await mRes.json() as { suggestions: TrailerMatchSuggestion[] } : {};
+
+      const init: Record<string, string> = {};
+      for (const v of motiveList) {
+        const existing = trailers.find(t => t.motiveVehicleId === v.id);
+        if (existing) init[v.id] = String(existing.id);
+      }
+      for (const s of suggestions) {
+        if (!init[s.motiveId]) init[s.motiveId] = String(s.trailerId);
+      }
+      setTrailerAssignments(init);
+    } catch (e) {
+      setTrailerMatchError(e instanceof Error ? e.message : 'Error loading trailers');
+    } finally {
+      setTrailerMatchLoading(false);
+    }
+  };
+
+  const handleApplyTrailers = async () => {
+    setTrailerApplying(true);
+    // Build: trailerId → motiveId | undefined. Start by clearing all so
+    // unmatched trailers get their motive id unset.
+    const trailerMap: Record<number, string | undefined> = {};
+    for (const t of trailers) trailerMap[t.id] = undefined;
+    for (const [motiveId, idStr] of Object.entries(trailerAssignments)) {
+      if (idStr) trailerMap[Number(idStr)] = motiveId;
+    }
+    await Promise.all(
+      Object.entries(trailerMap).map(([idStr, motiveId]) =>
+        updateTrailer(Number(idStr), { motiveVehicleId: motiveId }),
+      ),
+    );
+    setTrailerApplying(false);
+    setTrailerApplied(true);
+    setTimeout(() => { setTrailerApplied(false); setShowTrailerMatcher(false); }, 1500);
+  };
+
+  const trailerMatchedCount = Object.values(trailerAssignments).filter(Boolean).length;
 
   // ── Movements sync state ──────────────────────────────────────────────────
   const [movementsSyncing, setMovementsSyncing] = useState(false);
@@ -2763,7 +2838,7 @@ function IntegrationsPanel() {
           </div>
           {keyError && <p className="text-xs mb-3" style={{ color: '#d93025' }}>{keyError}</p>}
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             {configured && (
               <>
                 <button
@@ -2773,7 +2848,16 @@ function IntegrationsPanel() {
                   onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
                   onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                 >
-                  {showMatcher ? 'Hide matcher' : '✦ Match assets with AI'}
+                  {showMatcher ? 'Hide truck matcher' : '✦ Match trucks with AI'}
+                </button>
+                <button
+                  onClick={() => { if (!showTrailerMatcher) handleOpenTrailerMatcher(); else setShowTrailerMatcher(false); }}
+                  className="flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-xl transition-colors"
+                  style={{ background: 'var(--gc-blue-light)', color: 'var(--gc-blue)' }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
+                >
+                  {showTrailerMatcher ? 'Hide trailer matcher' : '✦ Match trailers with AI'}
                 </button>
                 <button onClick={handleClearKey} disabled={keySaving}
                   className="text-xs transition-colors"
@@ -2888,6 +2972,119 @@ function IntegrationsPanel() {
                   </button>
                   <button
                     onClick={() => setShowMatcher(false)}
+                    className="text-sm transition-colors px-3 py-2 rounded-xl"
+                    style={{ color: 'var(--gc-text-3)' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Trailer matcher panel ── */}
+        {showTrailerMatcher && (
+          <div className="px-6 py-5" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+            {trailerMatchLoading ? (
+              <div className="flex items-center gap-2 py-6 justify-center" style={{ color: 'var(--gc-text-3)' }}>
+                <Loader2 size={16} className="animate-spin" />
+                <span className="text-sm">Fetching Motive trailers and running AI match…</span>
+              </div>
+            ) : trailerMatchError ? (
+              <p className="text-sm py-4 text-center" style={{ color: '#d93025' }}>{trailerMatchError}</p>
+            ) : motiveTrailers.length === 0 ? (
+              <p className="text-sm py-4 text-center" style={{ color: 'var(--gc-text-3)' }}>
+                No trailers found in your Motive account. Add trailers there first, then return here to match.
+              </p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>
+                    {motiveTrailers.length} Motive trailers · {trailerMatchedCount} matched
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                    <span style={{ color: CONFIDENCE_COLOR.high }}>●</span> high &nbsp;
+                    <span style={{ color: CONFIDENCE_COLOR.medium }}>◑</span> medium &nbsp;
+                    <span style={{ color: CONFIDENCE_COLOR.low }}>○</span> low
+                  </p>
+                </div>
+
+                <div className="rounded-xl overflow-hidden mb-4" style={{ border: '1px solid var(--gc-border-light)' }}>
+                  <div className="grid text-[10px] font-bold uppercase tracking-widest px-4 py-2.5"
+                    style={{ gridTemplateColumns: '1fr 24px 1fr', background: 'var(--gc-bg)', color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                    <span>Motive Trailer</span>
+                    <span />
+                    <span>Calendar Trailer</span>
+                  </div>
+
+                  {motiveTrailers.map((v, i) => {
+                    const selectedId = trailerAssignments[v.id] ?? '';
+                    const isLast = i === motiveTrailers.length - 1;
+                    const label = `Unit #${v.number}${v.year ? `, ${v.year}` : ''}${v.make ? ` ${v.make}` : ''}${v.model ? ` ${v.model}` : ''}${v.type ? ` (${v.type})` : ''}`;
+                    return (
+                      <div
+                        key={v.id}
+                        className="grid items-center px-4 py-3"
+                        style={{
+                          gridTemplateColumns: '1fr 24px 1fr',
+                          borderBottom: isLast ? 'none' : '1px solid var(--gc-border-light)',
+                          background: selectedId ? 'transparent' : 'rgba(0,0,0,0.01)',
+                        }}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate" style={{ color: 'var(--gc-text-1)' }}>
+                            {label}
+                          </div>
+                          <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                            ID {v.id}
+                          </div>
+                        </div>
+
+                        <div className="text-center text-base" style={{ color: selectedId ? 'var(--gc-blue)' : 'var(--gc-border)' }}>
+                          →
+                        </div>
+
+                        <select
+                          value={selectedId}
+                          onChange={e => setTrailerAssignments(prev => ({ ...prev, [v.id]: e.target.value }))}
+                          className="text-sm rounded-lg px-3 outline-none"
+                          style={{
+                            height: 36,
+                            border: `1px solid ${selectedId ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+                            background: 'var(--gc-bg)',
+                            color: selectedId ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+                            cursor: 'pointer',
+                            width: '100%',
+                          }}
+                        >
+                          <option value="">— No match —</option>
+                          {trailers.map(t => (
+                            <option key={t.id} value={String(t.id)}>
+                              {t.name}{t.trailerNumber ? ` #${t.trailerNumber}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleApplyTrailers}
+                    disabled={trailerApplying || trailerApplied}
+                    className="px-6 py-2.5 rounded-xl text-sm font-medium text-white disabled:opacity-60 transition-all"
+                    style={{ background: trailerApplied ? '#16a34a' : '#1a73e8' }}
+                    onMouseEnter={e => { if (!trailerApplied) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+                    onMouseLeave={e => { if (!trailerApplied) e.currentTarget.style.background = '#1a73e8'; }}
+                  >
+                    {trailerApplying ? 'Applying…' : trailerApplied ? 'Applied ✓' : `Apply ${trailerMatchedCount} match${trailerMatchedCount !== 1 ? 'es' : ''}`}
+                  </button>
+                  <button
+                    onClick={() => setShowTrailerMatcher(false)}
                     className="text-sm transition-colors px-3 py-2 rounded-xl"
                     style={{ color: 'var(--gc-text-3)' }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
@@ -3502,7 +3699,7 @@ function TrailersPanel() {
   const [editId, setEditId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editNumber, setEditNumber] = useState('');
-  const [editCategory, setEditCategory] = useState<'Swing' | 'Roll Up' | 'Flat Bed' | 'Other'>('Swing');
+  const [editCategory, setEditCategory] = useState<TrailerCategory>('Swing');
   const [editNotes, setEditNotes] = useState('');
   const [editMotive, setEditMotive] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
