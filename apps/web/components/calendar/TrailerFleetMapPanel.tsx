@@ -5,23 +5,28 @@
  *
  * Opened via the Container icon in CalendarToolbar. Shows:
  *   - Left: Google Map with one pin per Motive-linked trailer that
- *     has a current_location. Blue pin = in use right now; gray pin
- *     = idle.
- *   - Right: sectioned list of all trailers:
+ *     has a current_location. RED pin = in use right now (currently
+ *     attached to an active load); GREEN pin = idle / available.
+ *   - Right: search box, then sectioned list of all trailers:
  *       Active (in use right now)  — pulled from getTrailerUsage()
  *       Idle (no current load)
- *       No GPS (trailers without motiveVehicleId)
- *     Each row shows trailer name, number, category. In-use rows
- *     also show the linked load's driver, route, status.
+ *       No GPS (trailers without motiveVehicleId, or no recent ping)
+ *     Each row shows trailer name, number, category, "last seen" if
+ *     the trailer has GPS data, and (for in-use rows) the linked
+ *     load's driver, route, and status.
  *
  * Click a sidebar row → pans the map to its pin. Click a pin → marks
  * the corresponding sidebar row.
+ *
+ * Search filters every section (matches name, trailer #, category,
+ * notes). When the query is non-empty, sections collapse to only the
+ * trailers that match.
  *
  * Polls /api/motive/trailer-locations every 60s while open. Closes on
  * Escape or click outside.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, MapPin, Container, AlertCircle, Loader2 } from 'lucide-react';
+import { X, MapPin, Container, AlertCircle, Loader2, Search, Clock } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { getTrailerUsage, type TrailerUsage } from '@/lib/trailerUsage';
@@ -32,9 +37,12 @@ interface Props {
   onClose: () => void;
 }
 
+// Status palette: red signals "this trailer is tied up right now",
+// green signals "this trailer is free." Matches dispatcher mental
+// model where green = good-to-grab.
 const STATUS_PIN_COLOR = {
-  in_use: '#1a73e8',  // blue
-  idle:   '#9ca3af',  // gray
+  in_use: '#d93025',  // red
+  idle:   '#1e8e3e',  // green
 } as const;
 
 const POLL_MS = 60_000;
@@ -54,6 +62,40 @@ function makePinElement(color: string): HTMLDivElement {
   return wrapper;
 }
 
+/** Format an ISO timestamp as a coarse "X ago" string. Returns null
+ *  when the input is missing or unparseable. Granularity is sized for
+ *  fleet GPS pings: seconds → minutes → hours → days → months → years. */
+function formatLastSeen(iso: string | undefined | null): string | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return null;
+  const diffMs = Date.now() - then;
+  if (diffMs < 30_000) return 'just now';
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60)         return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60)         return `${min}m ago`;
+  const hr  = Math.floor(min / 60);
+  if (hr  < 24)         return `${hr}h ago`;
+  const day = Math.floor(hr  / 24);
+  if (day < 30)         return `${day}d ago`;
+  const mo  = Math.floor(day / 30);
+  if (mo  < 12)         return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+/** Case-insensitive substring match across the fields the dispatcher
+ *  is likely to type. Empty query matches everything. */
+function trailerMatchesQuery(t: Trailer, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  if (t.name.toLowerCase().includes(needle)) return true;
+  if (t.trailerNumber?.toLowerCase().includes(needle)) return true;
+  if (t.category.toLowerCase().includes(needle))       return true;
+  if (t.notes?.toLowerCase().includes(needle))         return true;
+  return false;
+}
+
 export default function TrailerFleetMapPanel({ onClose }: Props) {
   const { trailers, events, drivers, assets, calendarTimezone } = useCalendarStore();
   const overlayRef   = useRef<HTMLDivElement>(null);
@@ -65,6 +107,7 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
   const [locLoading, setLocLoading] = useState(false);
   const [locError,   setLocError]   = useState<string | null>(null);
   const [selectedTrailerId, setSelectedTrailerId] = useState<number | null>(null);
+  const [query, setQuery] = useState('');
 
   // ── ESC closes ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -73,9 +116,9 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
-  // Stable comma-separated list of Motive asset IDs to locate. Motive
-  // has no bulk-locate endpoint — the server fans out per-asset calls
-  // — so we only ask for IDs we actually have linked trailers for.
+  // Stable comma-separated list of Motive asset IDs to locate. The
+  // server-side endpoint hits keeptruckin.com/v1/asset_locations and
+  // trims the response to just these IDs.
   const motiveIds = useMemo(() => {
     return trailers
       .filter(t => !t.activeTo && !!t.motiveVehicleId)
@@ -118,16 +161,21 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
   }, [motiveIds]);
 
   // ── Compute usage + grouping ──────────────────────────────────────────
-  // Group every trailer into Active / Idle / No GPS. Active is shown
-  // first because that's what the dispatcher cares about most.
+  // Group every (non-retired) trailer into Active / Idle / No GPS, then
+  // filter by the search query. Filtering AFTER grouping keeps the
+  // section labels honest: "Active 0" still appears if the user has
+  // typed a query that doesn't match any active trailer, rather than
+  // silently shifting items between sections.
   const groups = useMemo(() => {
-    const active: Array<{ trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation }> = [];
-    const idle:   Array<{ trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation }> = [];
-    const noGps:  Array<{ trailer: Trailer; usage: TrailerUsage }>                              = [];
+    type RowWithLoc = { trailer: Trailer; usage: TrailerUsage; loc: MotiveTrailerLocation };
+    type RowNoGps   = { trailer: Trailer; usage: TrailerUsage };
+    const active: RowWithLoc[] = [];
+    const idle:   RowWithLoc[] = [];
+    const noGps:  RowNoGps[]   = [];
 
     for (const t of trailers) {
-      // Skip retired trailers from the fleet view — they're history.
-      if (t.activeTo) continue;
+      if (t.activeTo) continue;  // retired — out of the fleet view
+      if (!trailerMatchesQuery(t, query)) continue;
       const usage = getTrailerUsage(t.id, events, calendarTimezone);
       const loc = t.motiveVehicleId ? locations[t.motiveVehicleId] : undefined;
       if (!loc) {
@@ -137,9 +185,11 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
       (usage.status === 'in_use' ? active : idle).push({ trailer: t, usage, loc });
     }
     return { active, idle, noGps };
-  }, [trailers, events, locations, calendarTimezone]);
+  }, [trailers, events, locations, calendarTimezone, query]);
 
   // ── Initialize map + plot pins ────────────────────────────────────────
+  // Pins are plotted from groups (so search filtering hides pins too
+  // — the map shows exactly what the sidebar shows).
   useEffect(() => {
     if (!mapContainer.current) return;
     let cancelled = false;
@@ -147,7 +197,6 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
     loadGoogleMaps().then(google => {
       if (cancelled || !mapContainer.current) return;
 
-      // Center on the spread of all pins; fall back to continental US.
       const allPinned = [...groups.active, ...groups.idle];
       const initialCenter = allPinned.length > 0
         ? { lat: allPinned[0].loc.lat, lng: allPinned[0].loc.lon }
@@ -163,15 +212,17 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
       });
       mapRef.current = map;
 
-      // Plot pins
       const bounds = new google.maps.LatLngBounds();
       for (const entry of allPinned) {
         const color = STATUS_PIN_COLOR[entry.usage.status];
+        const lastSeen = formatLastSeen(entry.loc.locatedAt);
         const marker = new google.maps.marker.AdvancedMarkerElement({
           map,
           position: { lat: entry.loc.lat, lng: entry.loc.lon },
           content: makePinElement(color),
-          title: entry.trailer.name,
+          // Hover title gives the dispatcher a quick read without
+          // clicking through to the sidebar.
+          title: lastSeen ? `${entry.trailer.name} · ${lastSeen}` : entry.trailer.name,
         });
         marker.addListener('click', () => setSelectedTrailerId(entry.trailer.id));
         markersRef.current.set(String(entry.trailer.id), marker);
@@ -267,57 +318,105 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
           </div>
 
           {/* Sidebar */}
-          <div className="flex-1 overflow-auto" style={{ borderLeft: '1px solid var(--gc-border)' }}>
-            <Section
-              label="Active"
-              count={groups.active.length}
-              statusColor={STATUS_PIN_COLOR.in_use}
-              rows={groups.active.map(({ trailer, usage }) => ({
-                trailer,
-                badge: 'In use',
-                badgeColor: STATUS_PIN_COLOR.in_use,
-                detail: {
-                  driver: driverName(usage.load),
-                  asset:  assetName(usage.load),
-                  route:  routeLabel(usage.load),
-                  status: usage.load?.status,
-                },
-              }))}
-              selectedId={selectedTrailerId}
-              onSelect={setSelectedTrailerId}
-            />
-            <Section
-              label="Idle"
-              count={groups.idle.length}
-              statusColor={STATUS_PIN_COLOR.idle}
-              rows={groups.idle.map(({ trailer }) => ({ trailer, badge: 'Idle', badgeColor: STATUS_PIN_COLOR.idle }))}
-              selectedId={selectedTrailerId}
-              onSelect={setSelectedTrailerId}
-            />
-            <Section
-              label="No GPS"
-              count={groups.noGps.length}
-              statusColor="var(--gc-border)"
-              rows={groups.noGps.map(({ trailer, usage }) => ({
-                trailer,
-                badge: usage.status === 'in_use' ? 'In use (no GPS)' : 'Idle',
-                badgeColor: usage.status === 'in_use' ? STATUS_PIN_COLOR.in_use : 'var(--gc-text-3)',
-                detail: usage.status === 'in_use' ? {
-                  driver: driverName(usage.load),
-                  asset:  assetName(usage.load),
-                  route:  routeLabel(usage.load),
-                  status: usage.load?.status,
-                } : undefined,
-              }))}
-              selectedId={selectedTrailerId}
-              onSelect={setSelectedTrailerId}
-              dim
-            />
-            {totalCount === 0 && (
-              <div className="px-4 py-8 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
-                No active trailers in the fleet yet.
+          <div className="flex-1 flex flex-col min-h-0" style={{ borderLeft: '1px solid var(--gc-border)' }}>
+            {/* Search — sits above the scrollable section list so it
+                stays visible while scrolling through long fleets. */}
+            <div className="px-3 py-2.5 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              <div className="relative">
+                <Search
+                  size={13}
+                  style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--gc-text-3)' }}
+                />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={e => setQuery(e.target.value)}
+                  placeholder="Search trailer name, #, or category"
+                  className="w-full text-[13px] outline-none"
+                  style={{
+                    padding: '7px 28px 7px 30px',
+                    border: '1px solid var(--gc-border)',
+                    borderRadius: 8,
+                    background: 'var(--gc-surface)',
+                    color: 'var(--gc-text-1)',
+                  }}
+                />
+                {query && (
+                  <button
+                    onClick={() => setQuery('')}
+                    title="Clear search"
+                    style={{
+                      position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                      padding: 3, borderRadius: 6, border: 'none', background: 'transparent',
+                      cursor: 'pointer', color: 'var(--gc-text-3)',
+                    }}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
               </div>
-            )}
+            </div>
+
+            <div className="flex-1 overflow-auto">
+              <Section
+                label="Active"
+                count={groups.active.length}
+                statusColor={STATUS_PIN_COLOR.in_use}
+                rows={groups.active.map(({ trailer, usage, loc }) => ({
+                  trailer,
+                  badge: 'In use',
+                  badgeColor: STATUS_PIN_COLOR.in_use,
+                  lastSeen: formatLastSeen(loc.locatedAt),
+                  locationLabel: loc.description || undefined,
+                  detail: {
+                    driver: driverName(usage.load),
+                    asset:  assetName(usage.load),
+                    route:  routeLabel(usage.load),
+                    status: usage.load?.status,
+                  },
+                }))}
+                selectedId={selectedTrailerId}
+                onSelect={setSelectedTrailerId}
+              />
+              <Section
+                label="Idle"
+                count={groups.idle.length}
+                statusColor={STATUS_PIN_COLOR.idle}
+                rows={groups.idle.map(({ trailer, loc }) => ({
+                  trailer,
+                  badge: 'Idle',
+                  badgeColor: STATUS_PIN_COLOR.idle,
+                  lastSeen: formatLastSeen(loc.locatedAt),
+                  locationLabel: loc.description || undefined,
+                }))}
+                selectedId={selectedTrailerId}
+                onSelect={setSelectedTrailerId}
+              />
+              <Section
+                label="No GPS"
+                count={groups.noGps.length}
+                statusColor="var(--gc-border)"
+                rows={groups.noGps.map(({ trailer, usage }) => ({
+                  trailer,
+                  badge: usage.status === 'in_use' ? 'In use (no GPS)' : 'Idle',
+                  badgeColor: usage.status === 'in_use' ? STATUS_PIN_COLOR.in_use : 'var(--gc-text-3)',
+                  detail: usage.status === 'in_use' ? {
+                    driver: driverName(usage.load),
+                    asset:  assetName(usage.load),
+                    route:  routeLabel(usage.load),
+                    status: usage.load?.status,
+                  } : undefined,
+                }))}
+                selectedId={selectedTrailerId}
+                onSelect={setSelectedTrailerId}
+                dim
+              />
+              {totalCount === 0 && (
+                <div className="px-4 py-8 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+                  {query ? `No trailers match "${query}".` : 'No active trailers in the fleet yet.'}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -345,6 +444,10 @@ function Section({
     trailer: Trailer;
     badge: string;
     badgeColor: string;
+    /** Pre-formatted "X ago" string — only set for rows that have GPS. */
+    lastSeen?:      string | null;
+    /** Reverse-geocoded address from Motive — shown above driver/asset. */
+    locationLabel?: string;
     detail?: { driver?: string; asset?: string; route?: string; status?: string };
   }>;
   selectedId: number | null;
@@ -362,7 +465,7 @@ function Section({
         </span>
         <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>{count}</span>
       </div>
-      {rows.map(({ trailer, badge, badgeColor, detail }) => {
+      {rows.map(({ trailer, badge, badgeColor, lastSeen, locationLabel, detail }) => {
         const isSel = trailer.id === selectedId;
         return (
           <button
@@ -387,7 +490,18 @@ function Section({
                     </span>
                   )}
                 </div>
-                <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>{trailer.category}</div>
+                <div className="text-[11px] mt-0.5 flex items-center gap-2" style={{ color: 'var(--gc-text-3)' }}>
+                  <span>{trailer.category}</span>
+                  {lastSeen && (
+                    <>
+                      <span style={{ opacity: 0.4 }}>·</span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock size={9} />
+                        {lastSeen}
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
               <span
                 className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded shrink-0"
@@ -396,9 +510,18 @@ function Section({
                 {badge}
               </span>
             </div>
+            {/* Address — surfaced even on idle rows so the dispatcher
+                can see "trailer is sitting at the yard" without
+                clicking the pin. */}
+            {locationLabel && (
+              <div className="mt-1.5 text-[11px] flex items-center gap-1" style={{ color: 'var(--gc-text-2)' }}>
+                <MapPin size={10} style={{ color: 'var(--gc-text-3)' }} />
+                <span className="truncate">{locationLabel}</span>
+              </div>
+            )}
             {detail && (detail.route || detail.driver || detail.asset) && (
               <div className="mt-1.5 pl-0 text-[11px] space-y-0.5" style={{ color: 'var(--gc-text-2)' }}>
-                {detail.route && (
+                {detail.route && !locationLabel && (
                   <div className="flex items-center gap-1">
                     <MapPin size={10} style={{ color: 'var(--gc-text-3)' }} />
                     <span className="truncate">{detail.route}</span>
