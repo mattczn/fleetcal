@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Fuel, Wrench } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Fuel, Wrench, Container } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -12,6 +12,7 @@ import { NotificationsBell } from '@/components/toolbar/NotificationsBell';
 import Tooltip from '@/components/ui/Tooltip';
 import { Authorize } from '@/components/Authorize';
 import DatePicker from '@/components/calendar/DatePicker';
+import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -56,7 +57,7 @@ export default function CalendarToolbar() {
     currentDate, setCurrentDate, resourceWidth, setResourceWidth, resourceWidthLocked, unlockResourceWidth,
     rowHeight, setRowHeight,
     sidebarOpen, toggleSidebar,
-    events, assets, openEditModal, openCreateModal, mergeEvents,
+    events, assets, trailers, openEditModal, openCreateModal, mergeEvents,
     deletedEvents, restoreEvent, purgeEvent, clearTrash,
     viewMode, setViewMode,
     batchParseProgress, batchParseTotal, batchMinimized, batchItems, modalOpen, clearBatch, requestBatchCancel,
@@ -73,6 +74,10 @@ export default function CalendarToolbar() {
   const [searchOpen,         setSearchOpen]         = useState(false);
   const [query,              setQuery]              = useState('');
   const [trashOpen,          setTrashOpen]          = useState(false);
+  const [trailerFleetOpen,   setTrailerFleetOpen]   = useState(false);
+  // Hide the button when no trailers — keeps the toolbar clean for
+  // orgs that don't use trailers yet. Retired trailers don't count.
+  const hasActiveTrailers = trailers.some(t => !t.activeTo);
   const [trashAllOpen,       setTrashAllOpen]       = useState(false);
   const [trashQuery,         setTrashQuery]         = useState('');
   const [confirmClearTrash,  setConfirmClearTrash]  = useState(false);
@@ -200,6 +205,7 @@ export default function CalendarToolbar() {
   const today = mounted && isToday(currentDate, calendarTimezone);
 
   return (
+    <>
     <header
       className="shrink-0 flex items-center gap-3 px-4 select-none"
       style={{ background: 'var(--gc-surface)', height: 64, borderBottom: '1px solid var(--gc-border)' }}
@@ -286,6 +292,22 @@ export default function CalendarToolbar() {
 
       {/* ── Right controls ── */}
       <div className="flex items-center gap-1 shrink-0">
+
+        {/* Trailer fleet — one-click open of the fleet-wide trailer
+            map. Hidden when the org hasn't set up any trailers yet. */}
+        {hasActiveTrailers && (
+          <Tooltip content="Trailer fleet map">
+            <button
+              onClick={() => setTrailerFleetOpen(true)}
+              className="p-2 rounded-full transition-colors mr-1"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <Container size={18} />
+            </button>
+          </Tooltip>
+        )}
 
         {/* Batch progress / ready indicator */}
         {(() => {
@@ -967,5 +989,7 @@ export default function CalendarToolbar() {
         </div>
       </div>
     </header>
+    {trailerFleetOpen && <TrailerFleetMapPanel onClose={() => setTrailerFleetOpen(false)} />}
+    </>
   );
 }
