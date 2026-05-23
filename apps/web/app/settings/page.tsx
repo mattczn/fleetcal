@@ -31,6 +31,7 @@ import {
   type DocumentTypeConfig,
   type NotificationRules,
   type TrailerCategory,
+  TRAILER_CATEGORIES,
 } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import {
@@ -3682,7 +3683,8 @@ function SavedLocationsPanel() {
 
 // ─── Trailers Panel ───────────────────────────────────────────────────────────
 
-const TRAILER_CATEGORIES = ['Swing', 'Roll Up', 'Flat Bed', 'Other'] as const;
+// Categories come from packages/types/enums.ts — single source of truth
+// so adding a new type (Reefer, etc.) shows up everywhere automatically.
 
 function TrailersPanel() {
   const { trailers, fetchTrailers, addTrailer, updateTrailer, removeTrailer, hardDeleteTrailer, events, orgId } = useCalendarStore();
@@ -3692,7 +3694,7 @@ function TrailersPanel() {
   const [saveError, setSaveError] = useState('');
   const [newName, setNewName] = useState('');
   const [newNumber, setNewNumber] = useState('');
-  const [newCategory, setNewCategory] = useState<'Swing' | 'Roll Up' | 'Flat Bed' | 'Other'>('Swing');
+  const [newCategory, setNewCategory] = useState<TrailerCategory>('Swing');
   const [newNotes, setNewNotes] = useState('');
   const [newMotive, setNewMotive] = useState('');
   const [saving, setSaving] = useState(false);
