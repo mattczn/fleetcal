@@ -162,7 +162,9 @@ function ScheduleCard({ entry }: { entry: DayEntry }) {
 export default function ScheduleScreen() {
   const session = useDriverSession();
   const queryClient = useQueryClient();
-  const [mode, setMode] = React.useState<"schedule" | "day">("schedule");
+  // Default to the day/calendar view — drivers think in "today's runs"
+  // more than a list of upcoming. List remains one tap away via toggle.
+  const [mode, setMode] = React.useState<"schedule" | "day">("day");
   const dayViewRef = React.useRef<DayViewHandle>(null);
   const driver = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
