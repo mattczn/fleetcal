@@ -123,6 +123,19 @@ function withResolvedDriverId<T extends { driverName?: string; driverId?: number
   return { ...ev, driverId: match?.id };
 }
 
+/** Imminent-shift gate for cancel + reassign-away pushes. Returns
+ *  true if the load's pickup is between now and 24h from now. The
+ *  reason this isn't just `< 24h` is that loads with pickups in the
+ *  past (delivered, in-progress) shouldn't trigger "your shift was
+ *  cancelled" pings — the driver's already there. */
+function isWithinNext24h(naive: string | undefined | null): boolean {
+  if (!naive) return false;
+  const pickupMs = Date.parse(naive.replace(' ', 'T'));
+  if (!isFinite(pickupMs)) return false;
+  const hoursOut = (pickupMs - Date.now()) / 3_600_000;
+  return hoursOut > 0 && hoursOut <= 24;
+}
+
 /** `[time]` per the notification copy spec — "ddd M/D h:mm A" (e.g.
  *  "Wed 5/21 8:00 AM"). One format used across every push. Input is a
  *  naive ISO start ("YYYY-MM-DDTHH:mm") in HOME_TZ. */
@@ -1348,16 +1361,25 @@ export const useCalendarStore = create<CalendarStore>()(
             'on_assignment',
             ev.start,
           );
-          // Copy spec #9. Only firing when the prior driver had
-          // confirmed — preserves the original "protect drivers who
-          // are about to roll" intent. "unconditional" in the spec
-          // refers to bypassing org rules + opt-outs, not always
-          // firing.
-          if (prevDriverId && prevConfirmedAt) {
+          // Notify the prior driver if the load they lost was within
+          // the next 24h — they're likely already planning their day
+          // around it and need to know it's gone, regardless of whether
+          // they had formally tapped Confirm.
+          //
+          // Was previously gated on prevConfirmedAt (the "protect
+          // drivers about to roll" intent), but that missed the common
+          // case of a driver who was assigned a 6am pickup yesterday
+          // afternoon, hadn't gotten around to tapping Confirm, and
+          // wakes up to find the load silently reassigned. With the
+          // 24h window the floor of unwanted noise stays low (we're
+          // not pinging drivers who lost a load 2 weeks out) but the
+          // imminent-shift signal gets through.
+          const startsWithin24hPrev = isWithinNext24h(ev.start);
+          if (prevDriverId && startsWithin24hPrev) {
             notifyDriver(
               prevDriverId,
               'Schedule Changed',
-              `${ev.title} is no longer assigned to you.`,
+              `${ev.title} — pickup ${fmtPushTime(ev.start)} — is no longer assigned to you.`,
               // Deep-link to home — the load isn't theirs anymore, no
               // point routing to the load detail.
               { type: 'reassigned_away', loadId: ev.loadId, eventId: id, url: '/' },
@@ -1403,14 +1425,17 @@ export const useCalendarStore = create<CalendarStore>()(
       console.error('cancelEventKeepLoad:', err),
     );
 
-    // Copy spec #10 — cancel-keep-load. Only notify if the driver had
-    // confirmed: otherwise they hadn't committed to the load and a
-    // ping would be noise.
-    if (ev.driverId && ev.confirmedAt) {
+    // Cancel-keep-load — notify if the load was within the next 24h.
+    // Was previously gated on confirmedAt, which silently skipped
+    // cancellations of imminent unconfirmed loads (the case where a
+    // driver was assigned a 6am pickup yesterday afternoon, hadn't
+    // tapped Confirm yet, and would otherwise just see the load
+    // vanish from their schedule on morning refresh).
+    if (ev.driverId && isWithinNext24h(ev.start)) {
       notifyDriver(
         ev.driverId,
         'Load Cancelled',
-        `${ev.title} has been cancelled.`,
+        `${ev.title} — pickup ${fmtPushTime(ev.start)} — has been cancelled.`,
         // Deep-link to home — the load is gone, no detail to route to.
         { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
       );
@@ -1458,14 +1483,14 @@ export const useCalendarStore = create<CalendarStore>()(
     // Revenue + has loadId: DELETE /v1/loads/:loadId cascades to events.
     railway.deleteLoad(ev.loadId).catch(rollback);
 
-    // Copy spec #11 — full-delete. Identical user-facing copy to #10
-    // since the two paths are indistinguishable from the driver's
-    // perspective. Same confirmed-only gate.
-    if (ev.driverId && ev.confirmedAt) {
+    // Full-delete — identical user-facing copy to the cancel-keep
+    // path since the two are indistinguishable from the driver's
+    // perspective. Same 24h-window gate.
+    if (ev.driverId && isWithinNext24h(ev.start)) {
       notifyDriver(
         ev.driverId,
         'Load Cancelled',
-        `${ev.title} has been cancelled.`,
+        `${ev.title} — pickup ${fmtPushTime(ev.start)} — has been cancelled.`,
         // Deep-link to home — the load is gone, no detail to route to.
         { type: 'load_cancelled', loadId: ev.loadId, eventId: id, url: '/' },
       );
