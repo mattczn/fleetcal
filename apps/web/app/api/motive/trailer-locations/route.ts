@@ -1,20 +1,25 @@
 /**
  * GET /api/motive/trailer-locations?ids=12,34,56
  *
- * Returns the last-known location for every Motive-tracked asset, then
- * narrows to the trailer IDs the caller asked about. Used by the
- * calendar's trailer fleet map panel.
+ * Returns the last-known location for every Motive-tracked asset that
+ * has a recent GPS ping, then optionally narrows to the trailer IDs
+ * the caller asked about. Used by the calendar's trailer fleet map.
  *
- * One bulk call to `GET https://api.gomotive.com/v1/asset_locations`
- * rather than per-asset `/locate` fan-out — Motive returns the whole
- * fleet's last-known coordinates in a single response, so we map by
- * our stored motive_vehicle_id rather than burn one HTTP call per
- * trailer. The `?ids=` query param is still honored to trim the
- * response payload to trailers the panel actually cares about.
+ * Why /v1/assets and not /v1/asset_locations or /assets/{id}/locate:
  *
- * Server caches per-org for 10 minutes; the panel polls every 60s
- * client-side but the cache absorbs duplicate fetches and protects
- * Motive's rate limit.
+ *   - There IS no bulk /v1/asset_locations endpoint in Motive's API,
+ *     despite the name being plausible. /v1/assets is the bulk source
+ *     and it embeds `current_location` on each row (same pattern as
+ *     /v1/vehicle_locations does for trucks).
+ *   - /v1/assets/{id}/locate is a PUT and ASYNCHRONOUS — it pings the
+ *     gateway, the actual coordinates come back 5-15 minutes later,
+ *     and there's a 15-minute per-asset cooldown. That's the wrong
+ *     tool for a "show me current pins" map.
+ *
+ * The `?ids=` query param trims the response payload to trailers the
+ * panel actually cares about, but the per-org 10-minute cache stores
+ * the *full* fleet response so different filtered calls share the
+ * same Motive fetch.
  */
 import { auth } from '@clerk/nextjs/server';
 import { NextRequest, NextResponse } from 'next/server';
@@ -31,44 +36,27 @@ export interface MotiveTrailerLocation {
   locatedAt:   string;
 }
 
-/**
- * Motive's /v1/asset_locations response shape — defensively typed
- * because Motive's docs aren't always exact about field names and
- * different account tiers / asset categories occasionally surface
- * slightly different envelopes. We accept either:
- *   - { asset_locations: [{ asset: { id, current_location: {...} } }] }
- *   - { asset_locations: [{ id, lat, lon, located_at, location }] }
- * and pluck whichever shape is present.
- */
-interface MotiveAssetLocationsResponse {
-  asset_locations?: Array<{
-    /** Nested-asset envelope (mirrors /v1/assets shape). */
-    asset?: {
-      id?:               number | string;
-      current_location?: {
-        location?:   string | null;
-        lat?:        number | null;
-        lon?:        number | null;
-        located_at?: string | null;
-      } | null;
+/** Raw row from /v1/assets — only the fields we care about for mapping. */
+interface MotiveAssetRow {
+  asset: {
+    id: number | string;
+    /** Motive embeds the asset's most recent ping here when one exists.
+     *  Trackers that haven't reported recently return null. */
+    current_location?: {
+      description?: string | null;
+      lat?:         number | null;
+      lon?:         number | null;
+      located_at?:  string | null;
     } | null;
-    /** Flat envelope — id + coordinates on the row itself. */
-    id?:         number | string;
-    location?:   string | null;
-    lat?:        number | null;
-    lon?:        number | null;
-    located_at?: string | null;
-  }>;
+  };
 }
 
 export async function GET(req: NextRequest) {
   const { orgId } = await auth();
   if (!orgId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  // Optional filter — when present, the response is trimmed to just
-  // these IDs. The cache itself stores the *full* fleet response so
-  // different panels (each asking for a different subset of IDs) all
-  // share the same Motive call.
+  // Optional filter — narrows the response payload. Cache itself is
+  // unfiltered so multiple panels share one Motive call.
   const idsParam = req.nextUrl.searchParams.get('ids') ?? '';
   const filterIds = new Set(idsParam.split(',').map(s => s.trim()).filter(Boolean));
 
@@ -93,7 +81,7 @@ export async function GET(req: NextRequest) {
 
   let res: Response;
   try {
-    res = await fetch('https://api.gomotive.com/v1/asset_locations?per_page=100', {
+    res = await fetch('https://api.gomotive.com/v1/assets?per_page=100', {
       headers: { 'X-Api-Key': apiKey, Accept: 'application/json' },
       next: { revalidate: 0 },
     });
@@ -108,30 +96,34 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `Motive API responded ${res.status}` }, { status: 502 });
   }
 
-  const json = await res.json() as MotiveAssetLocationsResponse;
+  const json = await res.json() as { assets?: MotiveAssetRow[] };
 
-  // Normalize whichever envelope Motive returned into a flat list. We
-  // skip rows missing coordinates (Motive returns the row even if the
-  // tracker hasn't pinged in a while) so the map only shows pins we
-  // can actually plot.
-  const locations: MotiveTrailerLocation[] = (json.asset_locations ?? [])
+  // Pull current_location out of each asset row. Rows without a
+  // current_location are silently dropped — that's expected: trackers
+  // that haven't pinged in a while leave the field null.
+  const locations: MotiveTrailerLocation[] = (json.assets ?? [])
     .map((row): MotiveTrailerLocation | null => {
-      const nested = row.asset?.current_location ?? null;
-      const id = row.asset?.id ?? row.id;
-      const lat = nested?.lat ?? row.lat;
-      const lon = nested?.lon ?? row.lon;
-      const description = nested?.location ?? row.location ?? '';
-      const locatedAt   = nested?.located_at ?? row.located_at ?? new Date().toISOString();
-      if (id == null || typeof lat !== 'number' || typeof lon !== 'number') return null;
+      const loc = row.asset.current_location;
+      if (!loc || typeof loc.lat !== 'number' || typeof loc.lon !== 'number') return null;
       return {
-        trailerId: String(id),
-        description: description ?? '',
-        lat,
-        lon,
-        locatedAt,
+        trailerId:   String(row.asset.id),
+        description: loc.description ?? '',
+        lat:         loc.lat,
+        lon:         loc.lon,
+        locatedAt:   loc.located_at ?? new Date().toISOString(),
       };
     })
     .filter((l): l is MotiveTrailerLocation => l !== null);
+
+  // Telemetry log — surfaces in Next.js logs if the panel still shows
+  // empty. Tells us how many assets Motive returned vs how many had
+  // a usable current_location, which is the single most diagnostic
+  // signal when no pins appear.
+  console.log(
+    `[motive/trailer-locations] assets=${(json.assets ?? []).length} ` +
+    `with-location=${locations.length} ` +
+    `filter-ids=${filterIds.size || '(none)'}`
+  );
 
   cache.set(orgId, { locations, fetchedAt: Date.now() });
 
