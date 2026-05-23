@@ -50,6 +50,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { getUserDisplayName } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { checkCallsScopedRouter } from "./check-calls.js";
@@ -203,7 +204,8 @@ function badRequest(c: AnyHonoContext, errors: string[]) {
 // ─────────────────────────────────────────────────────────────────────────
 
 loads.post("/", requireCapability("loads.create"), async (c) => {
-  const orgId = c.get("orgId");
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
   const body = await c.req.json<CreateLoadRequest>();
 
   // Validation
@@ -234,6 +236,19 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
 
   // 1. Insert load
   const loadInsert = appLoadToLoadInsert(body.load, orgId);
+
+  // Backfill created_by_name from Clerk when the client didn't pass it.
+  // Manual creation via EventModal always sets the field, but
+  // programmatic flows (rate-con parser, bulk paste, future batch
+  // imports) frequently forget, leaving the dispatcher UI's audit
+  // panel showing "—" instead of who actually created the load.
+  // Looking it up from the JWT's userId here closes the gap for every
+  // path that goes through POST /v1/loads, which is all of them.
+  if (!loadInsert.created_by_name) {
+    const name = await getUserDisplayName(userId);
+    if (name) loadInsert.created_by_name = name;
+  }
+
   const { data: loadRow, error: loadErr } = await supabase
     .from("loads")
     .insert(loadInsert)
