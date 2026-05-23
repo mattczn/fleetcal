@@ -4,12 +4,12 @@
  * Returns the last-known location for every Motive-tracked trailer in
  * the org's account. Used by the calendar's trailer fleet map panel.
  *
- * Motive separates trucks from non-vehicle equipment (trailers,
- * containers, gensets). Truck locations live at /v1/vehicle_locations
- * (see ../locations/route.ts). Trailer locations live at
- * /v2/asset_locations. Each row is normalized to match the truck
- * `MotiveLocation` shape so the client can reuse the same staleness +
- * map-marker helpers.
+ * Motive's asset endpoint /v2/assets returns trailers (and other
+ * non-vehicle equipment) WITH their current_location embedded — that's
+ * different from how trucks work: trucks have a separate
+ * /v1/vehicle_locations endpoint, but assets consolidate metadata +
+ * location into one response. So this endpoint hits /v2/assets and
+ * pulls current_location out of each row.
  *
  * Server caches per-org for 10 minutes — the panel polls every 60s
  * client-side but the cache absorbs duplicate fetches and avoids
@@ -64,7 +64,7 @@ export async function GET() {
 
   let res: Response;
   try {
-    res = await fetch('https://api.keeptruckin.com/v2/asset_locations?per_page=50', {
+    res = await fetch('https://api.keeptruckin.com/v2/assets?per_page=50', {
       headers: { 'X-Api-Key': apiKey, Accept: 'application/json' },
       next: { revalidate: 0 },
     });
@@ -80,8 +80,11 @@ export async function GET() {
   }
 
   const json = await res.json() as { assets?: MotiveAssetRow[] };
+  // Each asset may or may not have a current_location depending on
+  // whether Motive's tracker has reported recently. Skip assets
+  // without one so the map only shows pins we can actually plot.
   const locations: MotiveTrailerLocation[] = (json.assets ?? [])
-    .filter(a => a.asset.current_location)
+    .filter(a => a.asset.current_location && typeof a.asset.current_location.lat === 'number')
     .map(a => ({
       trailerId:   String(a.asset.id),
       description: a.asset.current_location!.description,
