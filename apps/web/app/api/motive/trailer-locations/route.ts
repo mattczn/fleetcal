@@ -1,27 +1,30 @@
 /**
- * GET /api/motive/trailer-locations
+ * GET /api/motive/trailer-locations?ids=12,34,56
  *
- * Returns the last-known location for every Motive-tracked trailer in
- * the org's account. Used by the calendar's trailer fleet map panel.
+ * Returns the last-known location for the specified Motive trailers.
+ * Used by the calendar's trailer fleet map panel.
  *
- * Motive's asset endpoint /v2/assets returns trailers (and other
- * non-vehicle equipment) WITH their current_location embedded — that's
- * different from how trucks work: trucks have a separate
- * /v1/vehicle_locations endpoint, but assets consolidate metadata +
- * location into one response. So this endpoint hits /v2/assets and
- * pulls current_location out of each row.
+ * Motive (gomotive.com) does not expose a bulk trailer-location
+ * endpoint — `/v1/assets` gives us the asset list (with metadata) but
+ * not real-time GPS. To get a trailer's current coordinates we have
+ * to call `/v1/assets/{asset_id}/locate` per asset. We fan out via
+ * Promise.all so total wall time is roughly one Motive call, not N.
  *
- * Server caches per-org for 10 minutes — the panel polls every 60s
- * client-side but the cache absorbs duplicate fetches and avoids
- * hammering Motive's rate limit. Same TTL pattern as the truck
- * locations endpoint.
+ * The caller passes the Motive asset IDs it actually cares about
+ * (from the linked-trailer set) so we don't waste API budget
+ * locating vehicles or unmapped equipment. Bad / unknown IDs return
+ * silently as "no location" — the panel handles missing pins.
+ *
+ * Server caches per-org for 10 minutes; the panel polls every 60s
+ * client-side but the cache absorbs duplicate fetches and protects
+ * Motive's rate limit.
  */
 import { auth } from '@clerk/nextjs/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseServer } from '@/lib/supabase-server';
 
 const CACHE_TTL = 10 * 60 * 1000;
-const cache = new Map<string, { locations: MotiveTrailerLocation[]; fetchedAt: number }>();
+const cache = new Map<string, { key: string; locations: MotiveTrailerLocation[]; fetchedAt: number }>();
 
 export interface MotiveTrailerLocation {
   trailerId:   string;       // Motive asset id (matches trailers.motive_vehicle_id)
@@ -31,24 +34,31 @@ export interface MotiveTrailerLocation {
   locatedAt:   string;
 }
 
-interface MotiveAssetRow {
-  asset: {
-    id: number;
-    current_location: {
-      description: string;
-      lat: number;
-      lon: number;
-      located_at: string;
-    } | null;
-  };
+/** Shape returned by /v1/assets/{id}/locate — only the fields we use. */
+interface MotiveLocateResponse {
+  asset_location?: {
+    location?:    string | null;
+    lat?:         number | null;
+    lon?:         number | null;
+    located_at?:  string | null;
+  } | null;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const { orgId } = await auth();
   if (!orgId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  // Parse + dedupe + sort ids so the cache key is stable regardless of
+  // the order the panel sends them in.
+  const idsParam = req.nextUrl.searchParams.get('ids') ?? '';
+  const ids = Array.from(new Set(
+    idsParam.split(',').map(s => s.trim()).filter(Boolean)
+  )).sort();
+  if (!ids.length) return NextResponse.json({ locations: [] });
+
+  const cacheKey = ids.join(',');
   const cached = cache.get(orgId);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL)
+  if (cached && cached.key === cacheKey && Date.now() - cached.fetchedAt < CACHE_TTL)
     return NextResponse.json({ locations: cached.locations });
 
   const db = getSupabaseServer();
@@ -62,37 +72,37 @@ export async function GET() {
   const apiKey = (settingsRow as { motive_api_key: string | null }).motive_api_key;
   if (!apiKey) return NextResponse.json({ locations: [] });
 
-  let res: Response;
-  try {
-    res = await fetch('https://api.keeptruckin.com/v2/assets?per_page=50', {
-      headers: { 'X-Api-Key': apiKey, Accept: 'application/json' },
-      next: { revalidate: 0 },
-    });
-  } catch (err) {
-    console.error('Motive trailer-locations fetch error:', err);
-    return NextResponse.json({ error: 'Failed to reach Motive API' }, { status: 502 });
-  }
+  // Fan out per-asset /locate calls in parallel. We swallow individual
+  // failures (network blip, asset deregistered, no recent ping) so one
+  // bad ID doesn't blank out the whole map.
+  const results = await Promise.all(ids.map(async (id): Promise<MotiveTrailerLocation | null> => {
+    try {
+      const res = await fetch(`https://api.gomotive.com/v1/assets/${encodeURIComponent(id)}/locate`, {
+        headers: { 'X-Api-Key': apiKey, Accept: 'application/json' },
+        next: { revalidate: 0 },
+      });
+      if (!res.ok) {
+        if (res.status !== 404)
+          console.error('Motive locate error for asset', id, res.status, await res.text());
+        return null;
+      }
+      const json = await res.json() as MotiveLocateResponse;
+      const loc = json.asset_location;
+      if (!loc || typeof loc.lat !== 'number' || typeof loc.lon !== 'number') return null;
+      return {
+        trailerId:   id,
+        description: loc.location ?? '',
+        lat:         loc.lat,
+        lon:         loc.lon,
+        locatedAt:   loc.located_at ?? new Date().toISOString(),
+      };
+    } catch (err) {
+      console.error('Motive locate fetch failed for asset', id, err);
+      return null;
+    }
+  }));
 
-  if (!res.ok) {
-    const text = await res.text();
-    console.error('Motive trailer-locations API error:', res.status, text);
-    return NextResponse.json({ error: `Motive API responded ${res.status}` }, { status: 502 });
-  }
-
-  const json = await res.json() as { assets?: MotiveAssetRow[] };
-  // Each asset may or may not have a current_location depending on
-  // whether Motive's tracker has reported recently. Skip assets
-  // without one so the map only shows pins we can actually plot.
-  const locations: MotiveTrailerLocation[] = (json.assets ?? [])
-    .filter(a => a.asset.current_location && typeof a.asset.current_location.lat === 'number')
-    .map(a => ({
-      trailerId:   String(a.asset.id),
-      description: a.asset.current_location!.description,
-      lat:         a.asset.current_location!.lat,
-      lon:         a.asset.current_location!.lon,
-      locatedAt:   a.asset.current_location!.located_at,
-    }));
-
-  cache.set(orgId, { locations, fetchedAt: Date.now() });
+  const locations = results.filter((r): r is MotiveTrailerLocation => r !== null);
+  cache.set(orgId, { key: cacheKey, locations, fetchedAt: Date.now() });
   return NextResponse.json({ locations });
 }

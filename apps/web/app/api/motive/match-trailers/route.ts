@@ -47,24 +47,26 @@ export async function POST(req: NextRequest) {
   }
 
   const motiveList = motiveTrailers.map(t =>
-    `- Motive ID ${t.id}: Unit #${t.number}${t.year ? `, ${t.year}` : ''}${t.make ? ` ${t.make}` : ''}${t.model ? ` ${t.model}` : ''}${t.type ? ` (${t.type})` : ''}`
+    `- Motive ID ${t.id}: Unit #${t.number}${t.year ? `, ${t.year}` : ''}${t.make ? ` ${t.make}` : ''}${t.model ? ` ${t.model}` : ''}${t.type ? ` [asset_type=${t.type}]` : ' [asset_type=unknown]'}`
   ).join('\n');
 
   const trailerList = calendarTrailers.map(t =>
     `- Trailer ID ${t.id}: "${t.name}"${t.trailerNumber ? `, Unit #${t.trailerNumber}` : ''}${t.category ? `, Category: ${t.category}` : ''}${t.notes ? `, Notes: ${t.notes.slice(0, 60)}` : ''}`
   ).join('\n');
 
-  const prompt = `You are matching trailers from a Motive (KeepTruckin) account to trailers in a dispatch calendar.
+  const prompt = `You are matching TRAILERS from a Motive (gomotive.com) account to trailers in a dispatch calendar.
 
-Motive trailers:
+IMPORTANT: The Motive list below comes from /v1/assets which returns BOTH vehicles (trucks/tractors) AND trailers/equipment mixed together. Each row has an asset_type tag. You must IGNORE any row whose asset_type indicates a vehicle (e.g. "Vehicle", "Truck", "Tractor", "Car") and only match trailer-like assets. Trailer-like asset_type values include: "Trailer", "Reefer", "Refrigerated Trailer", "Flatbed", "Flat Bed", "Dry Van", "Container", "Chassis", "Equipment", and similar. When asset_type is missing or unknown, fall back to the unit number / make / model — if it clearly looks like a trailer keep it, otherwise omit.
+
+Motive assets (mixed vehicles + trailers):
 ${motiveList}
 
 Calendar trailers:
 ${trailerList}
 
-Match each Motive trailer to the most likely calendar trailer based on unit numbers, names, and any descriptive fields. Unit number matches (Unit #142 ↔ Unit #142) are HIGH confidence. Name similarity is MEDIUM. Reefer ↔ Reefer category, Flat Bed ↔ Flat Bed etc. is MEDIUM hint, not a match on its own. Guesses are LOW.
+For each Motive TRAILER (not vehicle), find the most likely calendar trailer based on unit numbers, names, and descriptive fields. Unit number matches (Unit #142 ↔ Unit #142) are HIGH confidence. Name similarity is MEDIUM. Reefer ↔ Reefer category, Flat Bed ↔ Flat Bed etc. is a MEDIUM hint, not a match on its own. Guesses are LOW.
 
-Only include matches you are reasonably sure about. If a Motive trailer has no clear match, omit it.
+Only include matches you are reasonably sure about. Skip vehicles entirely. If a Motive trailer has no clear match, omit it.
 
 Respond with ONLY a JSON array, no explanation:
 [{"motiveId":"<string>","trailerId":<number>,"confidence":"high"|"medium"|"low"}, ...]`;

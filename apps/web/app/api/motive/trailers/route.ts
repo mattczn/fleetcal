@@ -1,20 +1,22 @@
 /**
  * GET /api/motive/trailers
  *
- * Lists trailers / non-vehicle equipment from the org's Motive
- * (KeepTruckin) account. Motive separates these from trucks: the
- * truck endpoint is /vehicle_locations (or /vehicles), and trailers
- * sit at /v2/assets where `asset_type` distinguishes trailer vs other
- * equipment.
+ * Lists all assets from the org's Motive (gomotive.com) account.
+ * The /v1/assets endpoint returns the mixed fleet — vehicles AND
+ * trailers/equipment side-by-side, each tagged with asset_type. We
+ * pass the whole list through to the AI matcher in /match-trailers
+ * which filters to trailers based on the asset_type field plus name
+ * heuristics.
  *
- * Used by the trailer-matcher in Settings → Integrations to suggest
- * which calendar trailer maps to which Motive asset. The shape is
- * normalized to match what the vehicles endpoint returns so the same
- * AI match prompt structure can be reused.
+ * Why return everything instead of filtering server-side: Motive
+ * orgs sometimes register trailers with non-obvious asset_type
+ * values ("Refrigerated Trailer", "Container", etc.) — letting the
+ * AI inspect the full list with the type field gives it the best
+ * shot at correct classification rather than us guessing at the
+ * exact strings Motive uses.
  *
- * Returns { trailers: MotiveTrailer[] }. Returns 400 when the org
- * has no motive_api_key configured (matches the vehicles route's
- * behavior).
+ * Used by the trailer-matcher in Settings → Integrations. Returns
+ * 400 if motive_api_key isn't configured.
  */
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
@@ -26,17 +28,17 @@ export interface MotiveTrailer {
   year:   number | null;
   make:   string | null;
   model:  string | null;
-  type:   string | null;   // Motive's asset_type — "Trailer", "Container", etc.
+  type:   string | null;   // asset_type from Motive — "Trailer", "Container", "Vehicle", etc.
 }
 
-/** Raw asset shape from Motive's /v2/assets — the part we care about. */
+/** Raw asset shape from Motive's /v1/assets — only the fields we use. */
 interface MotiveAssetRow {
   asset: {
     id:          number;
     name?:       string | null;
-    asset_type?: string | null;   // e.g. "Trailer", "Container"
+    asset_type?: string | null;
     properties?: {
-      identifier?: string | null;  // unit number (we map to .number)
+      identifier?: string | null;
       year?:       number | null;
       make?:       string | null;
       model?:      string | null;
@@ -59,11 +61,7 @@ export async function GET() {
 
   let res: Response;
   try {
-    // Motive's assets endpoint. asset_type=Trailer would filter to
-    // only trailers; leave broad so reefers/containers/whatever the
-    // user tags them as also surface. The matcher's AI step pairs by
-    // unit number anyway.
-    res = await fetch('https://api.keeptruckin.com/v2/assets?per_page=50', {
+    res = await fetch('https://api.gomotive.com/v1/assets?per_page=100', {
       headers: { 'X-Api-Key': apiKey, Accept: 'application/json' },
       next: { revalidate: 0 },
     });

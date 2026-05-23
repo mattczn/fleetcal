@@ -73,13 +73,29 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
+  // Stable comma-separated list of Motive asset IDs to locate. Motive
+  // has no bulk-locate endpoint — the server fans out per-asset calls
+  // — so we only ask for IDs we actually have linked trailers for.
+  const motiveIds = useMemo(() => {
+    return trailers
+      .filter(t => !t.activeTo && !!t.motiveVehicleId)
+      .map(t => t.motiveVehicleId!)
+      .sort()
+      .join(',');
+  }, [trailers]);
+
   // ── Poll trailer locations ────────────────────────────────────────────
   useEffect(() => {
+    if (!motiveIds) {
+      setLocations({});
+      setLocLoading(false);
+      return;
+    }
     let cancelled = false;
     const fetchLocs = async () => {
       setLocLoading(true);
       try {
-        const res = await fetch('/api/motive/trailer-locations');
+        const res = await fetch(`/api/motive/trailer-locations?ids=${encodeURIComponent(motiveIds)}`);
         if (!res.ok) {
           setLocError(`Motive returned ${res.status}`);
           return;
@@ -99,7 +115,7 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
     void fetchLocs();
     const id = setInterval(fetchLocs, POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [motiveIds]);
 
   // ── Compute usage + grouping ──────────────────────────────────────────
   // Group every trailer into Active / Idle / No GPS. Active is shown
