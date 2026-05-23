@@ -342,12 +342,11 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
   }, []);
 
   // ── Submit ────────────────────────────────────────────────────────
-  const handleSubmit = useCallback(async () => {
-    if (!assetId && !(includeTrailer && trailerId)) {
-      Alert.alert("Pick equipment", "Select a truck (and optionally a trailer) to inspect.");
-      return;
-    }
-
+  // Two-step: tapping the bottom button opens a confirm alert ("Submit
+  // this inspection?") with Confirm / Keep editing. Submission is
+  // irreversible per DOT recordkeeping, so an accidental tap shouldn't
+  // be able to lock in a rubber-stamp.
+  const performSubmit = useCallback(async () => {
     const buildItems = (defs: ChecklistItem[]): InspectionItemPayload[] =>
       defs.map(d => ({
         id:      d.id,
@@ -426,6 +425,32 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
     [items],
   );
 
+  // Wrapper that runs validation, then pops a confirm Alert before
+  // actually firing the submit. Validation lives here (not in
+  // performSubmit) so the alert is only ever shown for an inspection
+  // that's actually going to go through.
+  const handleSubmit = useCallback(() => {
+    if (!assetId && !(includeTrailer && trailerId)) {
+      Alert.alert("Pick equipment", "Select a truck (and optionally a trailer) to inspect.");
+      return;
+    }
+    const truckPart   = assetId && selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "";
+    const trailerPart = includeTrailer && selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "";
+    const equipmentLine = [truckPart, trailerPart].filter(Boolean).join(" + ");
+    const defectLine    = failCount > 0
+      ? `\n\n${failCount} defect${failCount === 1 ? "" : "s"} will be reported.`
+      : "";
+    Alert.alert(
+      "Submit this inspection?",
+      `${equipmentLine}${defectLine}\n\nOnce submitted, the report is final.`,
+      [
+        { text: "Keep editing", style: "cancel" },
+        { text: "Confirm",      style: "default", onPress: () => void performSubmit() },
+      ],
+      { cancelable: true },
+    );
+  }, [assetId, trailerId, includeTrailer, selectedAsset, selectedTrailer, failCount, performSubmit]);
+
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       {/* Header */}
@@ -451,7 +476,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
           <PickerRow
             icon={<Truck size={16} color="#1a73e8" />}
             label="Truck"
-            value={selectedAsset ? `${selectedAsset.name}${selectedAsset.unit ? ` · #${selectedAsset.unit}` : ""}` : "Pick a truck"}
+            value={selectedAsset ? truckLabel(selectedAsset.name, selectedAsset.unit) : "Pick a truck"}
             onPress={() => setPickerOpen("asset")}
             disabled={optsLoading}
           />
@@ -475,7 +500,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
               <PickerRow
                 icon={<Container size={16} color="#1a73e8" />}
                 label="Trailer"
-                value={selectedTrailer ? `${selectedTrailer.name}${selectedTrailer.trailerNumber ? ` · #${selectedTrailer.trailerNumber}` : ""}` : "Pick a trailer"}
+                value={selectedTrailer ? trailerLabel(selectedTrailer.name, selectedTrailer.trailerNumber) : "Pick a trailer"}
                 onPress={() => setPickerOpen("trailer")}
                 disabled={optsLoading}
               />
@@ -591,7 +616,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       {pickerOpen === "asset" && (
         <PickerOverlay
           title="Pick truck"
-          options={assets.map(a => ({ id: a.id, label: `${a.name}${a.unit ? ` · #${a.unit}` : ""}` }))}
+          options={assets.map(a => ({ id: a.id, label: truckLabel(a.name, a.unit) }))}
           onPick={(id) => { setAssetId(id); setPickerOpen(null); }}
           onClose={() => setPickerOpen(null)}
         />
@@ -599,7 +624,7 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       {pickerOpen === "trailer" && (
         <PickerOverlay
           title="Pick trailer"
-          options={trailers.map(t => ({ id: t.id, label: `${t.name}${t.trailerNumber ? ` · #${t.trailerNumber}` : ""}` }))}
+          options={trailers.map(t => ({ id: t.id, label: trailerLabel(t.name, t.trailerNumber) }))}
           onPick={(id) => { setTrailerId(id); setPickerOpen(null); }}
           onClose={() => setPickerOpen(null)}
         />
@@ -904,6 +929,20 @@ function PickerOverlay({ title, options, onPick, onClose }: {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+// Equipment label format per user spec: always prefix with the type
+// word ("Truck …", "Trailer #…") so a screenful of pickers/labels
+// makes the equipment type unambiguous. Trailer numbers are the
+// natural identifier — name field is often a duplicate of the number,
+// so we prefer the number when present.
+function truckLabel(name: string, unit: string | null | undefined): string {
+  return `Truck ${name}${unit ? ` #${unit}` : ""}`;
+}
+
+function trailerLabel(name: string, trailerNumber: string | null | undefined): string {
+  if (trailerNumber) return `Trailer #${trailerNumber}`;
+  return `Trailer ${name}`;
+}
 
 function groupBySection(items: ChecklistItem[]): { name: string; items: ChecklistItem[] }[] {
   const map = new Map<string, ChecklistItem[]>();
