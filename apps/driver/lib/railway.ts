@@ -338,17 +338,35 @@ export const railway = {
     );
   },
 
-  /** Submit one inspection report. Returns the saved row. */
+  /** Submit one inspection report. Returns the saved row.
+   *  durationSeconds = wall clock from form open to submit (compliance
+   *  signal — rubber-stamping a 59-item list takes about 8 s).
+   *  locationLat/Lon = GPS at submit (proves the driver was with the
+   *  truck and gives DOT a coord for any roadside follow-up). */
   submitInspection(body: {
-    assetId?:      number | null;
-    trailerId?:    number | null;
-    items:         InspectionItemPayload[];
-    trailerItems?: InspectionItemPayload[];
-    notes?:        string;
-    signedBy?:     string;
+    assetId?:         number | null;
+    trailerId?:       number | null;
+    items:            InspectionItemPayload[];
+    trailerItems?:    InspectionItemPayload[];
+    notes?:           string;
+    signedBy?:        string;
+    durationSeconds?: number | null;
+    locationLat?:     number | null;
+    locationLon?:     number | null;
   }) {
     return req<{ inspection: { id: string; submitted_at: string; has_defects: boolean } }>(
       "POST", "/v1/driver/inspections", body,
+    );
+  },
+  /** Upload one photo against an existing inspection. Pass `itemId`
+   *  to tie it to a specific failed checklist row, or omit it for a
+   *  general photo (truck nameplate, odometer, etc.). */
+  uploadInspectionPhoto(reportId: string, form: FormData) {
+    return req<{ photo: { id: string; item_id: string | null; storage_path: string; caption: string | null; uploaded_at: string } }>(
+      "POST",
+      `/v1/driver/inspections/${reportId}/photos`,
+      form,
+      { isFormData: true },
     );
   },
   /** Inspections this driver has submitted today (driver's UTC date).

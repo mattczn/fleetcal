@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
   View, Text, SectionList, TouchableOpacity, ActivityIndicator, RefreshControl, ScrollView,
-  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -10,13 +9,10 @@ import { Calendar, MapPin, CalendarCheck, Truck, CalendarDays, List } from "luci
 import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { EmptyState } from "@/components/EmptyState";
 import { DayView, type DayViewHandle } from "@/components/DayView";
-import InspectionCard from "@/components/InspectionCard";
-import InspectionFormScreen from "@/components/InspectionFormScreen";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { needsConfirmation } from "@/lib/loadStatus";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
-import { railway } from "@/lib/railway";
 import {
   RelayChip, NonRevChip, StatusPill, DiagonalStripes,
   fmtTimeRangeShort, loadNumLabel,
@@ -180,20 +176,10 @@ export default function ScheduleScreen() {
     enabled:  !!driver,
   });
 
-  // Today's inspections for the prompt card. Light query — driver-
-  // scoped + day-filtered server-side, returns 0-3 rows in practice.
-  const { data: inspectionData, isLoading: inspectionLoading, refetch: refetchInspections } = useQuery({
-    queryKey: ["inspections", "today", driver?.driverId],
-    queryFn:  () => railway.todaysInspections(),
-    enabled:  !!driver,
-    staleTime: 60_000,
-  });
-  const todaysInspections = inspectionData?.inspections ?? [];
-
-  // Form modal state. Inspection form is full-screen so we use Modal
-  // rather than a tab/route — simpler back-button semantics for a flow
-  // that should always close back to the schedule.
-  const [inspectionFormOpen, setInspectionFormOpen] = useState(false);
+  // Daily inspection prompt now lives on the Active loads tab (the
+  // primary screen drivers land on), not here. The card was originally
+  // placed here but the user moved it because Active is what gets
+  // opened every shift, whereas Schedule is a planning view.
 
   // Pre-fetch full details for every load whose time window touches the
   // ±24h band. The list endpoint already returns enough to render cards,
@@ -356,14 +342,6 @@ export default function ScheduleScreen() {
       </View>
 
       <View style={{ flex: 1, backgroundColor: "#f8f9fa" }}>
-        {/* Daily-inspection prompt — sits at the top of the content area
-            and changes color based on whether anything's been submitted
-            today. Tap → opens the full inspection form modal. */}
-        <InspectionCard
-          loading={inspectionLoading}
-          inspections={todaysInspections}
-          onStart={() => setInspectionFormOpen(true)}
-        />
       {isLoading ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="large" color="#1a73e8" />
@@ -428,27 +406,6 @@ export default function ScheduleScreen() {
         </View>
       )}
       </View>
-
-      {/* Inspection form — full-screen modal. On submit, refetch the
-          today's-inspections query so the card flips to its green
-          state and lists the new entry. */}
-      <Modal
-        visible={inspectionFormOpen}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setInspectionFormOpen(false)}
-      >
-        <SafeAreaView style={{ flex: 1, backgroundColor: "white" }} edges={["top"]}>
-          <InspectionFormScreen
-            driverName={driver?.name ?? "Driver"}
-            onClose={() => setInspectionFormOpen(false)}
-            onSubmitted={() => {
-              setInspectionFormOpen(false);
-              void refetchInspections();
-            }}
-          />
-        </SafeAreaView>
-      </Modal>
     </SafeAreaView>
   );
 }

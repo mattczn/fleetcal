@@ -58,18 +58,18 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
             <AlertTriangle size={18} color="white" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[txt(700), { fontSize: 14, color: "#7f1d1d" }]}>
+            <Text style={[txt(700), { fontSize: 16, color: "#7f1d1d" }]}>
               Complete today&apos;s inspection
             </Text>
-            <Text style={[txt(500), { fontSize: 12, color: "#991b1b", marginTop: 1 }]}>
+            <Text style={[txt(500), { fontSize: 13, color: "#991b1b", marginTop: 2 }]}>
               Required before your first run.
             </Text>
           </View>
           <View style={{
-            paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
+            paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
             backgroundColor: "#dc2626",
           }}>
-            <Text style={[txt(700), { color: "white", fontSize: 12 }]}>Start</Text>
+            <Text style={[txt(700), { color: "white", fontSize: 13 }]}>Start</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -93,12 +93,12 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
             : <Check size={20} color="white" />}
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[txt(700), { fontSize: 14, color: hasDefects ? "#78350f" : "#14532d" }]}>
+          <Text style={[txt(700), { fontSize: 16, color: hasDefects ? "#78350f" : "#14532d" }]}>
             {hasDefects
               ? `Inspected today — ${inspections.filter(i => i.has_defects).length} defect${inspections.filter(i => i.has_defects).length === 1 ? "" : "s"} reported`
               : completed > 1 ? `Inspected today (${completed})` : "Inspected today"}
           </Text>
-          <Text style={[txt(500), { fontSize: 12, color: hasDefects ? "#92400e" : "#166534", marginTop: 1 }]}>
+          <Text style={[txt(500), { fontSize: 13, color: hasDefects ? "#92400e" : "#166534", marginTop: 2 }]}>
             {summarize(inspections)}
           </Text>
         </View>
@@ -132,12 +132,17 @@ export default function InspectionCard({ loading, inspections, onStart }: Props)
   );
 }
 
+// marginTop sits in normal flow below the blue header — the
+// SafeAreaView outside this card already covers the dynamic island,
+// so the extra breathing room here is purely visual padding between
+// the tab bar and the card body. Bumped from 10 → 16 after the card
+// moved to the Active tab (where the header bar is denser).
 const cardBase = {
   marginHorizontal: 14,
-  marginTop:        10,
+  marginTop:        16,
   borderRadius:     12,
   borderWidth:      1,
-  padding:          14,
+  padding:          16,
 };
 
 function summarize(list: TodayInspectionSummary[]): string {

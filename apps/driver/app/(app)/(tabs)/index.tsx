@@ -8,18 +8,22 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Dimensions,
+  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox, AlertTriangle } from "lucide-react-native";
 import { SyncStatusPill } from "@/components/SyncStatusPill";
 import { NotificationsBell } from "@/components/NotificationsBell";
+import InspectionCard from "@/components/InspectionCard";
+import InspectionFormScreen from "@/components/InspectionFormScreen";
 import { fetchLoadsForDriver, fetchLoad } from "@/lib/api/loads";
 import { LoadCard } from "@/components/LoadCard";
 import { EmptyState } from "@/components/EmptyState";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
+import { railway } from "@/lib/railway";
 import type { Load } from "@/lib/types";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -65,6 +69,23 @@ export default function LoadsScreen() {
     queryFn:  () => fetchLoadsForDriver(driver!.driverId, driver!.orgId),
     enabled:  !!driver,
   });
+
+  // Today's inspections drive the prompt card at the top of the
+  // Active tab. Light query — driver-scoped + day-filtered server-side,
+  // returns 0–3 rows in practice. Refetched after submit so the card
+  // flips state immediately.
+  const {
+    data: inspectionData,
+    isLoading: inspectionLoading,
+    refetch: refetchInspections,
+  } = useQuery({
+    queryKey: ["inspections", "today", driver?.driverId],
+    queryFn:  () => railway.todaysInspections(),
+    enabled:  !!driver,
+    staleTime: 60_000,
+  });
+  const todaysInspections = inspectionData?.inspections ?? [];
+  const [inspectionFormOpen, setInspectionFormOpen] = useState(false);
 
   // Time-based bucketing — string-compare naive YYYY-MM-DDTHH:mm
   // timestamps against ±6h / ±24h offsets from now.
@@ -240,22 +261,61 @@ export default function LoadsScreen() {
               data={data}
               keyExtractor={(item) => item.id}
               style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }}
-              contentContainerStyle={{ padding: 16, paddingBottom: 40, flexGrow: 1 }}
+              contentContainerStyle={{ paddingHorizontal: 0, paddingTop: 4, paddingBottom: 40, flexGrow: 1 }}
               refreshControl={
                 <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#1a73e8" />
               }
-              renderItem={({ item }) => <LoadCard load={item} />}
-              ListEmptyComponent={
-                <EmptyState
-                  title={emptyLabels[tabIdx].title}
-                  subtitle={emptyLabels[tabIdx].subtitle}
-                  Icon={Inbox}
+              // Inspection card is pinned to the top of the Active tab
+              // only — Upcoming/Recent don't need it. Wrapping the card
+              // (which already has its own marginHorizontal/marginTop)
+              // in a plain View lets the FlatList container drop its
+              // padding so the card sits flush.
+              ListHeaderComponent={tabIdx === 0 ? (
+                <InspectionCard
+                  loading={inspectionLoading}
+                  inspections={todaysInspections}
+                  onStart={() => setInspectionFormOpen(true)}
                 />
+              ) : null}
+              renderItem={({ item }) => (
+                <View style={{ paddingHorizontal: 16 }}>
+                  <LoadCard load={item} />
+                </View>
+              )}
+              ListEmptyComponent={
+                <View style={{ paddingHorizontal: 16, paddingTop: 16, flexGrow: 1 }}>
+                  <EmptyState
+                    title={emptyLabels[tabIdx].title}
+                    subtitle={emptyLabels[tabIdx].subtitle}
+                    Icon={Inbox}
+                  />
+                </View>
               }
             />
           ))}
         </ScrollView>
       )}
+
+      {/* Inspection form — full-screen modal. On submit, refetch the
+          today's-inspections query so the card flips to its green
+          state and lists the new entry. */}
+      <Modal
+        visible={inspectionFormOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setInspectionFormOpen(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: "white" }} edges={["top"]}>
+          <InspectionFormScreen
+            driverName={driver?.name ?? "Driver"}
+            onClose={() => setInspectionFormOpen(false)}
+            onSubmitted={() => {
+              setInspectionFormOpen(false);
+              void refetchInspections();
+            }}
+          />
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }

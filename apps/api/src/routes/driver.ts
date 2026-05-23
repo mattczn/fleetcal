@@ -773,11 +773,16 @@ driver.get("/suggested-asset", async (c) => {
 // dispatch surface.
 driver.get("/assets", async (c) => {
   const orgId = c.get("orgId");
+  // Filter out retired assets (active_to is set) — drivers shouldn't see
+  // them in pickers for fuel reports, inspections, or maintenance.
+  // hidden=false covers admin-hidden trucks; active_to IS NULL covers
+  // ones that have been formally retired via the lifecycle flow.
   const { data, error } = await supabase
     .from("assets")
     .select("id, name, unit, truck, color, type, sort_order")
     .eq("org_id", orgId)
     .eq("hidden", false)
+    .is("active_to", null)
     .order("sort_order", { ascending: true });
   if (error) {
     console.error("[GET /v1/driver/assets] failed:", error);
@@ -799,10 +804,13 @@ driver.get("/assets", async (c) => {
 
 driver.get("/trailers", async (c) => {
   const orgId = c.get("orgId");
+  // Same retirement filter as /assets — keep retired trailers out of
+  // the driver-facing pickers.
   const { data, error } = await supabase
     .from("trailers")
     .select("id, name, trailer_number, category, sort_order")
     .eq("org_id", orgId)
+    .is("active_to", null)
     .order("sort_order", { ascending: true });
   if (error) {
     console.error("[GET /v1/driver/trailers] failed:", error);
@@ -2549,12 +2557,15 @@ interface InspectionItem {
 }
 
 interface InspectionBody {
-  assetId?:      number | null;
-  trailerId?:    number | null;
-  items:         InspectionItem[];
-  trailerItems?: InspectionItem[];
-  notes?:        string;
-  signedBy?:     string;
+  assetId?:        number | null;
+  trailerId?:      number | null;
+  items:           InspectionItem[];
+  trailerItems?:   InspectionItem[];
+  notes?:          string;
+  signedBy?:       string;
+  durationSeconds?: number | null;
+  locationLat?:    number | null;
+  locationLon?:    number | null;
 }
 
 driver.post("/inspections", async (c) => {
@@ -2593,20 +2604,32 @@ driver.post("/inspections", async (c) => {
 
   const today = new Date().toISOString().slice(0, 10);
 
+  // Sanitize duration + coords — clamp to plausible ranges so a bogus
+  // client value can't poison the row. Duration capped at 24h (anything
+  // longer means a stuck form, not a real inspection).
+  const dur = Number.isFinite(body.durationSeconds) && body.durationSeconds! >= 0
+    ? Math.min(Math.round(body.durationSeconds!), 24 * 3600)
+    : null;
+  const lat = Number.isFinite(body.locationLat) && Math.abs(body.locationLat!) <=  90 ? body.locationLat! : null;
+  const lon = Number.isFinite(body.locationLon) && Math.abs(body.locationLon!) <= 180 ? body.locationLon! : null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: saved, error } = await (supabase as any)
     .from("inspection_reports")
     .insert({
-      org_id:          orgId,
-      driver_id:       driverId,
-      asset_id:        body.assetId    ?? null,
-      trailer_id:      body.trailerId  ?? null,
-      inspection_date: today,
-      items:           body.items,
-      trailer_items:   body.trailerItems ?? null,
-      notes:           body.notes ?? null,
-      has_defects:     hasDefects,
-      signed_by:       signedBy,
+      org_id:           orgId,
+      driver_id:        driverId,
+      asset_id:         body.assetId    ?? null,
+      trailer_id:       body.trailerId  ?? null,
+      inspection_date:  today,
+      items:            body.items,
+      trailer_items:    body.trailerItems ?? null,
+      notes:            body.notes ?? null,
+      has_defects:      hasDefects,
+      signed_by:        signedBy,
+      duration_seconds: dur,
+      location_lat:     lat,
+      location_lon:     lon,
     })
     .select("id, submitted_at, has_defects")
     .maybeSingle();
@@ -2616,6 +2639,80 @@ driver.post("/inspections", async (c) => {
   }
 
   return c.json({ inspection: saved });
+});
+
+// POST /v1/driver/inspections/:id/photos — upload one photo against
+// an existing inspection. itemId is optional — when present, the
+// photo is tied to that specific checklist row (so the dispatch view
+// can show "Service brakes — fail [📷 photo]"); when absent, it's a
+// general "this is the truck I inspected" photo.
+//
+// Pattern mirrors /maintenance-reports/:id/photos exactly so the
+// driver client's upload helper is interchangeable. Bucket created
+// out-of-band: `inspection-photos`.
+const INSPECTION_PHOTO_BUCKET = "inspection-photos";
+
+driver.post("/inspections/:id/photos", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const id       = c.req.param("id");
+
+  // Confirm the inspection exists in this org AND was filed by this
+  // driver — drivers can only attach photos to their own inspections.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rep, error: repErr } = await (supabase as any)
+    .from("inspection_reports")
+    .select("id, driver_id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (repErr) return c.json({ error: "fetch_failed", detail: repErr.message }, 500);
+  if (!rep) return c.json({ error: "not_found" }, 404);
+  if ((rep as { driver_id: number }).driver_id !== driverId) {
+    return c.json({ error: "not_authorized" }, 403);
+  }
+
+  let body: { file?: File; itemId?: string; caption?: string };
+  try { body = await c.req.parseBody() as { file?: File; itemId?: string; caption?: string }; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] }, 400); }
+  const file = body.file;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: "validation_failed", errors: ["file required"] }, 400);
+  }
+
+  const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${id}/${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: uploadErr } = await supabase.storage
+    .from(INSPECTION_PHOTO_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[POST /v1/driver/inspections/:id/photos] storage:", uploadErr);
+    return c.json({ error: "upload_failed", detail: uploadErr.message }, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("inspection_photos")
+    .insert({
+      report_id:    id,
+      item_id:      body.itemId ?? null,
+      storage_path: storagePath,
+      caption:      body.caption ?? null,
+    })
+    .select("id, item_id, storage_path, caption, uploaded_at")
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(INSPECTION_PHOTO_BUCKET).remove([storagePath]);
+    console.error("[POST /v1/driver/inspections/:id/photos] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message }, 500);
+  }
+  return c.json({ photo: data });
 });
 
 driver.get("/inspections/today", async (c) => {
