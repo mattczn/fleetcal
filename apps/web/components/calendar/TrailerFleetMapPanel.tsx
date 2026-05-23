@@ -47,19 +47,41 @@ const STATUS_PIN_COLOR = {
 
 const POLL_MS = 60_000;
 
-/** Build a colored circle marker (HTMLElement) for the map. */
-function makePinElement(color: string): HTMLDivElement {
+/** Build a colored circle marker (HTMLElement) for the map plus a
+ *  pre-attached label element that's hidden until the marker is
+ *  selected. The label element is returned alongside so the
+ *  selection-effect can flip it on/off without recreating the pin. */
+function makePinElement(color: string, label: string): { wrapper: HTMLDivElement; labelEl: HTMLDivElement } {
   const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:relative;width:20px;height:20px;cursor:pointer;';
+  wrapper.style.cssText = 'position:relative;cursor:pointer;display:flex;flex-direction:column;align-items:center;';
+
+  const labelEl = document.createElement('div');
+  labelEl.textContent = label;
+  labelEl.style.cssText = [
+    'display:none',
+    'margin-bottom:4px',
+    'padding:2px 8px',
+    'background:#ffffff',
+    'color:#202124',
+    'border:1px solid rgba(0,0,0,0.15)',
+    'border-radius:6px',
+    'font-size:11px',
+    'font-weight:700',
+    'white-space:nowrap',
+    'box-shadow:0 1px 4px rgba(0,0,0,0.25)',
+    'pointer-events:none',
+  ].join(';');
+
   const dot = document.createElement('div');
   dot.style.cssText = `
-    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
     width:16px;height:16px;border-radius:50%;
     background:${color};border:2.5px solid white;
     box-shadow:0 1px 6px rgba(0,0,0,0.35);
   `;
+
+  wrapper.appendChild(labelEl);
   wrapper.appendChild(dot);
-  return wrapper;
+  return { wrapper, labelEl };
 }
 
 /** Format an ISO timestamp as a coarse "X ago" string. Returns null
@@ -102,6 +124,10 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
   const markersRef   = useRef<Map<string, google.maps.marker.AdvancedMarkerElement>>(new Map());
+  // Pin label elements keyed by trailer id — separate from the markers
+  // map so we can toggle visibility on selection change without
+  // recreating any pins. Cleared together with markersRef.
+  const labelsRef    = useRef<Map<string, HTMLDivElement>>(new Map());
 
   const [locations,  setLocations]  = useState<Record<string, MotiveTrailerLocation>>({});
   const [locLoading, setLocLoading] = useState(false);
@@ -216,16 +242,23 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
       for (const entry of allPinned) {
         const color = STATUS_PIN_COLOR[entry.usage.status];
         const lastSeen = formatLastSeen(entry.loc.locatedAt);
+        // Label content prefers the trailer number (what dispatchers
+        // actually call them) and falls back to the display name.
+        const labelText = entry.trailer.trailerNumber
+          ? `#${entry.trailer.trailerNumber}`
+          : entry.trailer.name;
+        const { wrapper, labelEl } = makePinElement(color, labelText);
         const marker = new google.maps.marker.AdvancedMarkerElement({
           map,
           position: { lat: entry.loc.lat, lng: entry.loc.lon },
-          content: makePinElement(color),
+          content: wrapper,
           // Hover title gives the dispatcher a quick read without
           // clicking through to the sidebar.
           title: lastSeen ? `${entry.trailer.name} · ${lastSeen}` : entry.trailer.name,
         });
         marker.addListener('click', () => setSelectedTrailerId(entry.trailer.id));
         markersRef.current.set(String(entry.trailer.id), marker);
+        labelsRef.current.set(String(entry.trailer.id), labelEl);
         bounds.extend({ lat: entry.loc.lat, lng: entry.loc.lon });
       }
       if (allPinned.length > 1) map.fitBounds(bounds, 60);
@@ -235,19 +268,47 @@ export default function TrailerFleetMapPanel({ onClose }: Props) {
       cancelled = true;
       markersRef.current.forEach(m => { m.map = null; });
       markersRef.current.clear();
+      labelsRef.current.clear();
       mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups.active.length, groups.idle.length]);
 
-  // ── Pan to selected trailer's pin ─────────────────────────────────────
+  // ── Selection effect ──────────────────────────────────────────────────
+  // Three things happen when a trailer becomes selected (whether the
+  // click came from a pin or a sidebar row):
+  //   1. The map pans/zooms to the pin.
+  //   2. The pin's label (trailer #) appears above the dot, and the
+  //      pin's zIndex is bumped so it draws on top of nearby pins.
+  //   3. The matching sidebar row scrolls into view — without this the
+  //      highlight is invisible when the row is below the fold.
   useEffect(() => {
-    if (selectedTrailerId == null || !mapRef.current) return;
-    const marker = markersRef.current.get(String(selectedTrailerId));
-    if (!marker?.position) return;
-    const pos = marker.position as google.maps.LatLngLiteral;
-    mapRef.current.panTo(pos);
-    mapRef.current.setZoom(Math.max(mapRef.current.getZoom() ?? 8, 11));
+    // Hide every label first so old selections clear out.
+    labelsRef.current.forEach(el => { el.style.display = 'none'; });
+    markersRef.current.forEach(m => { m.zIndex = undefined; });
+
+    if (selectedTrailerId == null) return;
+
+    const key = String(selectedTrailerId);
+    const marker = markersRef.current.get(key);
+    const labelEl = labelsRef.current.get(key);
+
+    if (labelEl) labelEl.style.display = 'block';
+    if (marker)  marker.zIndex = 999;
+
+    if (marker?.position && mapRef.current) {
+      const pos = marker.position as google.maps.LatLngLiteral;
+      mapRef.current.panTo(pos);
+      mapRef.current.setZoom(Math.max(mapRef.current.getZoom() ?? 8, 11));
+    }
+
+    // Scroll the sidebar row into view. We use a data attribute rather
+    // than threading refs through Section so the lookup stays simple
+    // even as the row list re-orders (search filtering, etc.).
+    if (typeof document !== 'undefined') {
+      const row = document.querySelector<HTMLElement>(`[data-trailer-row-id="${selectedTrailerId}"]`);
+      row?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, [selectedTrailerId]);
 
   // ── Sidebar row helpers ───────────────────────────────────────────────
@@ -470,6 +531,7 @@ function Section({
         return (
           <button
             key={trailer.id}
+            data-trailer-row-id={trailer.id}
             onClick={() => onSelect(trailer.id)}
             className="w-full text-left px-4 py-2.5 transition-colors"
             style={{
