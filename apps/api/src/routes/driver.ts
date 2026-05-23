@@ -2533,4 +2533,112 @@ driver.get("/fuel-reports", async (c) => {
   });
 });
 
+// ─── Inspections (DVIR) ───────────────────────────────────────────────
+//
+// Drivers submit one or more inspection reports per day — usually a
+// pre-trip first thing in the morning, plus another whenever they
+// switch equipment. The schedule-tab card states (red / green) are
+// derived from /today.
+
+interface InspectionItem {
+  id:      string;
+  section: string;
+  label:   string;
+  status:  "pass" | "fail" | "na";
+  notes?:  string;
+}
+
+interface InspectionBody {
+  assetId?:      number | null;
+  trailerId?:    number | null;
+  items:         InspectionItem[];
+  trailerItems?: InspectionItem[];
+  notes?:        string;
+  signedBy?:     string;
+}
+
+driver.post("/inspections", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  let body: InspectionBody;
+  try {
+    body = await c.req.json() as InspectionBody;
+  } catch {
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  if (body.assetId == null && body.trailerId == null) {
+    return c.json({ error: "validation_failed", errors: ["Pick a truck and/or trailer to inspect."] }, 400);
+  }
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return c.json({ error: "validation_failed", errors: ["At least one checklist item is required."] }, 400);
+  }
+
+  const allItems = [...(body.items ?? []), ...(body.trailerItems ?? [])];
+  const hasDefects = allItems.some(i => i.status === "fail");
+
+  // Driver-name fallback for the signature — most clients should pass
+  // it explicitly, but if not, derive from the drivers row.
+  let signedBy = body.signedBy?.trim();
+  if (!signedBy) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await (supabase as any)
+      .from("drivers")
+      .select("name, first_name, last_name")
+      .eq("id", driverId)
+      .maybeSingle();
+    const d = data as { name?: string | null; first_name?: string | null; last_name?: string | null } | null;
+    signedBy = (d?.name ?? `${d?.first_name ?? ""} ${d?.last_name ?? ""}`.trim()) || "Driver";
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: saved, error } = await (supabase as any)
+    .from("inspection_reports")
+    .insert({
+      org_id:          orgId,
+      driver_id:       driverId,
+      asset_id:        body.assetId    ?? null,
+      trailer_id:      body.trailerId  ?? null,
+      inspection_date: today,
+      items:           body.items,
+      trailer_items:   body.trailerItems ?? null,
+      notes:           body.notes ?? null,
+      has_defects:     hasDefects,
+      signed_by:       signedBy,
+    })
+    .select("id, submitted_at, has_defects")
+    .maybeSingle();
+  if (error) {
+    console.error("[POST /v1/driver/inspections] failed:", error);
+    return c.json({ error: "insert_failed", detail: error.message }, 500);
+  }
+
+  return c.json({ inspection: saved });
+});
+
+driver.get("/inspections/today", async (c) => {
+  const driverId = c.get("driverId");
+  const orgId    = c.get("orgId");
+  const today = new Date().toISOString().slice(0, 10);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("inspection_reports")
+    .select(`
+      id, asset_id, trailer_id, inspection_date, has_defects, submitted_at, signed_by,
+      asset:assets(name, unit),
+      trailer:trailers(name, trailer_number)
+    `)
+    .eq("org_id", orgId)
+    .eq("driver_id", driverId)
+    .eq("inspection_date", today)
+    .order("submitted_at", { ascending: false });
+  if (error) {
+    console.error("[GET /v1/driver/inspections/today] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message }, 500);
+  }
+  return c.json({ inspections: data ?? [] });
+});
+
 export default driver;

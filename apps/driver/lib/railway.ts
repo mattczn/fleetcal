@@ -337,4 +337,45 @@ export const railway = {
       { ruleKey, enabled },
     );
   },
+
+  /** Submit one inspection report. Returns the saved row. */
+  submitInspection(body: {
+    assetId?:      number | null;
+    trailerId?:    number | null;
+    items:         InspectionItemPayload[];
+    trailerItems?: InspectionItemPayload[];
+    notes?:        string;
+    signedBy?:     string;
+  }) {
+    return req<{ inspection: { id: string; submitted_at: string; has_defects: boolean } }>(
+      "POST", "/v1/driver/inspections", body,
+    );
+  },
+  /** Inspections this driver has submitted today (driver's UTC date).
+   *  Drives the schedule-tab card state. */
+  todaysInspections() {
+    return req<{ inspections: TodayInspectionSummary[] }>(
+      "GET", "/v1/driver/inspections/today",
+    );
+  },
 };
+
+export interface InspectionItemPayload {
+  id:      string;
+  section: string;
+  label:   string;
+  status:  "pass" | "fail" | "na";
+  notes?:  string;
+}
+
+export interface TodayInspectionSummary {
+  id:               string;
+  asset_id:         number | null;
+  trailer_id:       number | null;
+  inspection_date:  string;
+  has_defects:      boolean;
+  submitted_at:     string;
+  signed_by:        string;
+  asset?:           { name: string; unit: string | null } | null;
+  trailer?:         { name: string; trailer_number: string | null } | null;
+}
