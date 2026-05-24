@@ -203,6 +203,17 @@ events.get("/:id", async (c) => {
       partnerJoined.stops = ((pStopsRaw ?? []) as unknown as StopRow[])
         .map(rowToStop)
         .sort((a, b) => a.sequence - b.sequence);
+      // Mirror documentCounts onto the partner. Both legs share the
+      // same load_id and therefore the same set of load_documents, so
+      // POD/BOL/etc. counts are identical. Without this the calendar
+      // store overwrites the partner leg with documentCounts=undefined
+      // and the POD doc-icon overlay disappears from one half of the
+      // relay even though the document exists — the bug the user
+      // reported as "POD icon sometimes doesn't show up even though
+      // the POD was uploaded".
+      if (joined.documentCounts) {
+        partnerJoined.documentCounts = joined.documentCounts;
+      }
       return c.json({ loads: [joined, partnerJoined] } satisfies GetEventResponse);
     }
   }
