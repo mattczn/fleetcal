@@ -3,8 +3,20 @@ import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 
 export async function DELETE() {
-  const { orgId } = await auth();
+  const { orgId, orgRole } = await auth();
   if (!orgId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  // Owner-only — this endpoint nukes every asset, driver, and event
+  // in the org. Admins and dispatchers can't trigger it even by
+  // hitting the route directly. The UI hides the button for non-
+  // owners but a 403 here is the actual security boundary.
+  // Clerk roles ship with the "org:" prefix in the JWT claim.
+  if (orgRole !== 'org:owner') {
+    return NextResponse.json(
+      { error: 'Forbidden', reason: 'owner_required', role: orgRole ?? null },
+      { status: 403 },
+    );
+  }
 
   const db = getSupabase();
 

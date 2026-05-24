@@ -4461,6 +4461,14 @@ function ResetDemoButton() {
   const resetOnboarding = useOnboardingStore(s => s.resetOnboarding);
   const [busy, setBusy] = useState(false);
 
+  // Owner-only — this action wipes every asset, driver, and event in
+  // the org. Admins and dispatchers shouldn't be able to nuke prod
+  // data even by accident. The API endpoint also rechecks the role
+  // server-side (defense in depth) so a curl bypass still 403s.
+  const { role, isLoading: permsLoading } = usePermissions();
+  if (permsLoading) return null;
+  if (role !== 'owner') return null;
+
   const handleReset = async () => {
     if (!confirm('Delete all assets, events, and drivers for this org and re-enter demo mode?')) return;
     setBusy(true);
