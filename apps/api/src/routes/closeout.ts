@@ -45,7 +45,7 @@ const LOAD_COLS =
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by,follow_ups,is_tonu," +
-  "verified_at,verified_by,invoice_doc_ids," +
+  "verified_at,verified_by,invoice_doc_ids,document_counts," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 // Grace window before missing-POD fires. Driver / office gets a full

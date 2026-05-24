@@ -127,7 +127,7 @@ const LOAD_COLS =
   "load_price,rate_con_pdf,accessorials,ref_nums,notes,internal_notes," +
   "commodity,weight," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
-  "verified_at,verified_by,invoice_doc_ids,audit_log," +
+  "verified_at,verified_by,invoice_doc_ids,document_counts,audit_log," +
   "deleted_at,created_at,updated_at";
 
 const EVENT_COLS =

@@ -131,6 +131,15 @@ export function joinEventLoadToApp(
                       ? (l!.follow_ups as LoadFollowUp[])
                       : [],
     isTonu:         (l?.is_tonu as boolean | null | undefined) ?? false,
+    // Denormalized doc counts (POD, BOL, etc.) maintained by the
+    // load_documents_refresh_counts trigger. Drives the green
+    // doc-icon overlay on calendar cards. Stored as jsonb so any
+    // doc kind can have its own icon without a schema change. Empty
+    // object means no docs; the UI treats {} the same as missing.
+    // Skip attaching when empty to keep the wire payload lean.
+    documentCounts: (l && l.document_counts && typeof l.document_counts === 'object' && Object.keys(l.document_counts as Record<string, number>).length > 0)
+                      ? (l.document_counts as Record<string, number>)
+                      : undefined,
     // Load-row soft-delete timestamp. Distinct from `deletedAt`
     // (event-level) — a cancelled-keep-load has the EVENT deleted
     // but the LOAD alive; a full delete has both. Search-result

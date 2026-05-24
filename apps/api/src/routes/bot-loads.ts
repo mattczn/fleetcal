@@ -22,7 +22,7 @@ const LOAD_COLS =
   "accessorials,rate_con_pdf,ref_nums," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
   "verified_at,verified_by,invoice_doc_ids," +
-  "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
+  "document_counts,audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 const STOP_COLS =
   "id,event_id,sequence,type,facility_name,address,city,state,timezone," +

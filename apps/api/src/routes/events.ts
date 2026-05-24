@@ -63,7 +63,7 @@ const LOAD_COLS =
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
-  "verified_at,verified_by,invoice_doc_ids," +
+  "verified_at,verified_by,invoice_doc_ids,document_counts," +
   "audit_log,created_by_name,customer_id,deleted_at,created_at,updated_at";
 
 interface StopRow {
@@ -142,25 +142,9 @@ async function fetchEventJoined(
 
   const joined = joinEventLoadToApp(evRow, loadRow);
   joined.stops = stops;
-
-  // Document counts by kind — drives the green POD doc icon on the
-  // calendar card. Loads share doc counts across relay legs, so we
-  // key by load_id. Non-revenue events have no load → skip.
-  if (joined.loadId) {
-    const { data: docs } = await supabase
-      .from("load_documents")
-      .select("kind")
-      .eq("org_id", orgId)
-      .eq("load_id", joined.loadId);
-    if (docs && docs.length > 0) {
-      const counts: Record<string, number> = {};
-      for (const d of docs as Array<{ kind: string }>) {
-        counts[d.kind] = (counts[d.kind] ?? 0) + 1;
-      }
-      joined.documentCounts = counts;
-    }
-  }
-
+  // documentCounts is denormalized onto loads.document_counts and
+  // populated by joinEventLoadToApp directly off the load row. No
+  // extra query needed — the trigger guarantees it's fresh.
   return joined;
 }
 
@@ -203,17 +187,10 @@ events.get("/:id", async (c) => {
       partnerJoined.stops = ((pStopsRaw ?? []) as unknown as StopRow[])
         .map(rowToStop)
         .sort((a, b) => a.sequence - b.sequence);
-      // Mirror documentCounts onto the partner. Both legs share the
-      // same load_id and therefore the same set of load_documents, so
-      // POD/BOL/etc. counts are identical. Without this the calendar
-      // store overwrites the partner leg with documentCounts=undefined
-      // and the POD doc-icon overlay disappears from one half of the
-      // relay even though the document exists — the bug the user
-      // reported as "POD icon sometimes doesn't show up even though
-      // the POD was uploaded".
-      if (joined.documentCounts) {
-        partnerJoined.documentCounts = joined.documentCounts;
-      }
+      // No need to mirror documentCounts onto the partner — both legs
+      // share load_id, and joinEventLoadToApp pulls document_counts
+      // directly from the load row, so partnerJoined already has
+      // the same counts as joined.
       return c.json({ loads: [joined, partnerJoined] } satisfies GetEventResponse);
     }
   }
