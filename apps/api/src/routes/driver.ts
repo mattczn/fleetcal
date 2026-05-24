@@ -14,6 +14,7 @@ import {
   DOCUMENT_KINDS,
   DEFAULT_DRIVER_VISIBLE_DOC_KINDS,
   NOTIFICATION_RULE_KEYS,
+  driverVisibleDocumentKinds,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -686,11 +687,15 @@ driver.get("/org-settings", async (c) => {
   // upload at least POD/BOL to do their job. An admin who genuinely
   // wants to lock down a specific kind can disable it individually;
   // a wholesale empty result is treated as a config glitch.
+  // Use the canonical resolver from @fleetcal/types — it merges
+  // stored rows over per-kind defaults (matching the dispatcher
+  // Settings panel's display logic), then filters to enabled +
+  // driverVisible. Without this, a sparse document_types array
+  // would silently exclude every kind that wasn't explicitly toggled
+  // even though the panel shows them as on.
   let driverUploadKinds: string[];
   if (row?.document_types && Array.isArray(row.document_types)) {
-    driverUploadKinds = row.document_types
-      .filter((t) => t.enabled && t.driverVisible)
-      .map((t) => t.kind);
+    driverUploadKinds = driverVisibleDocumentKinds(row.document_types);
   } else if (row?.driver_visible_doc_kinds) {
     driverUploadKinds = row.driver_visible_doc_kinds;
   } else {
@@ -1383,11 +1388,13 @@ driver.get("/loads/:id/documents", async (c) => {
     driver_visible_doc_kinds: string[] | null;
     document_types: Array<{ kind: string; enabled: boolean; driverVisible: boolean }> | null;
   } | null;
+  // Same canonical resolver as /org-settings — see note there. Critical
+  // that both endpoints stay in lockstep, otherwise the picker (driven
+  // by /org-settings) and the read list (driven by this endpoint) can
+  // diverge, leaving the driver to upload kinds they then can't see.
   let visibleKinds: string[];
   if (s?.document_types && Array.isArray(s.document_types)) {
-    visibleKinds = s.document_types
-      .filter((t) => t.enabled && t.driverVisible)
-      .map((t) => t.kind);
+    visibleKinds = driverVisibleDocumentKinds(s.document_types);
   } else if (s?.driver_visible_doc_kinds) {
     visibleKinds = s.driver_visible_doc_kinds;
   } else {

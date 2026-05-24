@@ -442,7 +442,30 @@ export const DEFAULT_DOCUMENT_TYPES: readonly import("./domain").DocumentTypeCon
 function resolveTypes(
   types: import("./domain").DocumentTypeConfig[] | null | undefined,
 ): readonly import("./domain").DocumentTypeConfig[] {
-  return types ?? DEFAULT_DOCUMENT_TYPES;
+  // If the entire config is missing, the org has never customized
+  // — use the canonical defaults.
+  if (!types) return DEFAULT_DOCUMENT_TYPES;
+  // Otherwise merge stored rows over per-kind defaults. The dispatcher
+  // Settings → Documents panel applies the same defaulting logic when
+  // rendering (line 1180-1182 in apps/web/app/settings/page.tsx) —
+  // without it here, the panel and the API silently disagree: the
+  // panel shows POD/BOL as enabled+visible (defaulting because they
+  // aren't in the stored array), while the API thinks they don't
+  // exist and excludes them from upload pickers + driver reads. That
+  // asymmetry was the cause of the "POD uploads land as 'other' / I
+  // can't see PODs in the driver app" bug — orgs whose stored
+  // document_types was sparse (only had rate_con or a couple of kinds)
+  // looked correct in the panel but were effectively missing every
+  // other kind on the server.
+  return DOCUMENT_KINDS.map((kind) => {
+    const stored = types.find((t) => t.kind === kind);
+    if (stored) return stored;
+    return {
+      kind,
+      enabled:       true,
+      driverVisible: !(DRIVER_HIDDEN_DOC_KINDS as readonly string[]).includes(kind),
+    };
+  });
 }
 
 /** Kinds visible in upload pickers across the whole product. */
