@@ -677,6 +677,15 @@ driver.get("/org-settings", async (c) => {
   // picker; we send only the resolved list (not the full per-kind
   // record) because the driver UI doesn't need the enabled/visibility
   // breakdown — it only cares which kinds it may show.
+  //
+  // Hardening: if document_types is set but every row resolves to
+  // not-visible (admin clicked through settings into a bad state, or
+  // a partial save dropped the array), fall through to defaults
+  // instead of returning []. An empty list silently breaks the
+  // driver's upload picker AND read filter — drivers MUST be able to
+  // upload at least POD/BOL to do their job. An admin who genuinely
+  // wants to lock down a specific kind can disable it individually;
+  // a wholesale empty result is treated as a config glitch.
   let driverUploadKinds: string[];
   if (row?.document_types && Array.isArray(row.document_types)) {
     driverUploadKinds = row.document_types
@@ -687,7 +696,15 @@ driver.get("/org-settings", async (c) => {
   } else {
     // Default: everything except rate_con + invoice. Matches the
     // server-side default used by the docs-list endpoint.
-    driverUploadKinds = ["pod", "bol", "scale", "lumper", "receipt", "driver_sheet", "relay_handoff", "other"];
+    driverUploadKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
+  }
+  if (driverUploadKinds.length === 0) {
+    console.warn(
+      "[GET /v1/driver/org-settings] document_types resolved to empty for org",
+      orgId,
+      "— falling back to defaults",
+    );
+    driverUploadKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
   }
   return c.json({ settings: { showDriverPay, timezone, driverUploadKinds } });
 });
@@ -1346,8 +1363,21 @@ driver.get("/loads/:id/documents", async (c) => {
   } else {
     visibleKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
   }
-  // Empty allow-list → short-circuit; no docs visible.
-  if (visibleKinds.length === 0) return c.json({ documents: [] });
+  // Hardening: if the resolved set ends up empty, fall back to the
+  // global defaults rather than silently returning zero documents.
+  // The previous "return [] immediately" behavior was indistinguishable
+  // on the client from "driver has no docs on this load" and made it
+  // impossible for drivers to see a dispatcher-uploaded POD when an
+  // admin accidentally wiped the document_types config. Matches the
+  // same fallback the /org-settings endpoint applies to driverUploadKinds.
+  if (visibleKinds.length === 0) {
+    console.warn(
+      "[GET /v1/driver/loads/:id/documents] visibleKinds empty for org",
+      orgId,
+      "— falling back to defaults",
+    );
+    visibleKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
+  }
 
   const { data: ev } = await supabase
     .from("events")

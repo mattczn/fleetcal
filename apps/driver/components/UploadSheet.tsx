@@ -387,6 +387,23 @@ export function UploadSheet({ eventId, loadNum, orgId, driverId, driverName, vis
           <Text style={[txt(800), { fontSize: 11, letterSpacing: 1, color: "#5f6368", textTransform: "uppercase", marginBottom: 8 }]}>
             Document type
           </Text>
+          {/* Defense-in-depth: if the server's allow-list arrives empty
+              (org-config corruption, brand-new org pre-defaults, etc.),
+              show a clear error instead of an invisible/blank chip rail
+              that silently breaks the upload flow. */}
+          {allowedKinds.length === 0 && (
+            <View style={{
+              padding: 12, borderRadius: 10, marginBottom: 12,
+              backgroundColor: "#fef3c7", borderWidth: 1, borderColor: "#fde68a",
+            }}>
+              <Text style={[txt(700), { fontSize: 13, color: "#92400e", marginBottom: 2 }]}>
+                No document types configured
+              </Text>
+              <Text style={[txt(500), { fontSize: 12, color: "#92400e" }]}>
+                Ask dispatch to enable document types in Settings → Documents.
+              </Text>
+            </View>
+          )}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
             {allowedKinds.map((k) => {
               const preset = KIND_PRESETS[k];
