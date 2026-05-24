@@ -706,8 +706,38 @@ driver.get("/org-settings", async (c) => {
     );
     driverUploadKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
   }
+  driverUploadKinds = ensureMandatoryDriverKinds(driverUploadKinds, orgId, "org-settings");
   return c.json({ settings: { showDriverPay, timezone, driverUploadKinds } });
 });
+
+// POD + BOL are operationally required for trucking workflows — proof
+// of delivery is what drives invoicing, BOL is the freight contract.
+// There's no legitimate fleet config where drivers should be blocked
+// from seeing or uploading these. The dispatcher settings panel's
+// driverVisible toggle is for the niche kinds (scale, lumper, etc.);
+// these two are non-negotiable floor. Logs once per request when the
+// floor had to add anything so we can spot orgs whose config wiped them.
+const MANDATORY_DRIVER_KINDS = ["pod", "bol"] as const;
+
+function ensureMandatoryDriverKinds(
+  kinds: string[],
+  orgId: string,
+  source: string,
+): string[] {
+  const set = new Set(kinds);
+  const added: string[] = [];
+  for (const k of MANDATORY_DRIVER_KINDS) {
+    if (!set.has(k)) { set.add(k); added.push(k); }
+  }
+  if (added.length > 0) {
+    console.warn(
+      `[${source}] org ${orgId} config missing mandatory driver kinds`,
+      added,
+      "— added to allow-list",
+    );
+  }
+  return [...set];
+}
 
 // Pull the IANA portion ("America/Denver") out of values like
 // "Mountain Time (America/Denver)" stored on rate_con_settings.
@@ -1378,6 +1408,12 @@ driver.get("/loads/:id/documents", async (c) => {
     );
     visibleKinds = [...DEFAULT_DRIVER_VISIBLE_DOC_KINDS];
   }
+  // POD + BOL floor — see ensureMandatoryDriverKinds for the rationale.
+  // Without this, a dispatcher who flipped POD's driverVisible off in
+  // settings can't be seen by their drivers even after the dispatcher
+  // uploads one — which is precisely the bug the user reported when
+  // their PODs weren't showing in the driver app.
+  visibleKinds = ensureMandatoryDriverKinds(visibleKinds, orgId, "loads/:id/documents");
 
   const { data: ev } = await supabase
     .from("events")
