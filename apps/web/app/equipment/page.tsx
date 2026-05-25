@@ -668,8 +668,24 @@ function InspectionDetail({
   }, [id]);
   if (loading) return <div className="flex items-center justify-center py-10"><Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} /></div>;
   if (!data)   return <div className="text-sm px-4 py-6" style={{ color: '#dc2626' }}>Could not load report.</div>;
-  const allItems = [...data.items, ...data.trailerItems];
-  const defects = allItems.filter(i => i.status === 'fail');
+
+  // Split defects + general photos by the equipment they belong to.
+  // Inspections cover one truck and possibly one trailer at the same
+  // time; the dispatcher needs to see at a glance which physical
+  // piece each defect is on. Keeps the audit/maintenance triage
+  // workflow clean — "fix everything on Trailer #5567" vs. "fix
+  // everything on Truck Big Red" without re-reading each item.
+  const truckDefects   = data.items.filter(i => i.status === 'fail');
+  const trailerDefects = data.trailerItems.filter(i => i.status === 'fail');
+  const totalDefects   = truckDefects.length + trailerDefects.length;
+  const passCount      = data.items.length + data.trailerItems.length - totalDefects;
+  const truckGeneralPhotos   = data.photos.filter(p => p.itemId == null && p.target === 'truck');
+  const trailerGeneralPhotos = data.photos.filter(p => p.itemId == null && p.target === 'trailer');
+  const orphanGeneralPhotos  = data.photos.filter(p => p.itemId == null && p.target == null);
+
+  const truckLabel   = data.asset   ? `Truck ${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : 'Truck';
+  const trailerLabel = data.trailer ? `Trailer ${data.trailer.trailer_number ? `#${data.trailer.trailer_number}` : data.trailer.name}` : 'Trailer';
+
   return (
     <>
       <MapBlock lat={data.locationLat} lon={data.locationLon} />
@@ -684,26 +700,28 @@ function InspectionDetail({
           <Field icon={<Truck size={12} />} label="Trailer">
             {data.trailer ? `${data.trailer.name}${data.trailer.trailer_number ? ` #${data.trailer.trailer_number}` : ''}` : '—'}
           </Field>
-          <Field icon={<FileText size={12} />} label="Items">{allItems.length - defects.length} passed · {defects.length} failed</Field>
+          <Field icon={<FileText size={12} />} label="Items">{passCount} passed · {totalDefects} failed</Field>
         </div>
 
-        {defects.length > 0 && (
-          <FieldSection label={`Defects (${defects.length})`}>
-            <div className="flex flex-col gap-1.5">
-              {defects.map(item => (
-                <div key={item.id} className="text-[12px] py-2 px-3 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
-                  <div style={{ color: '#7f1d1d', fontWeight: 600 }}>{item.label}</div>
-                  <div className="text-[10px] mt-0.5" style={{ color: '#991b1b' }}>{item.section}</div>
-                  {item.notes && <div className="text-[12px] mt-1.5" style={{ color: 'var(--gc-text-1)' }}>{item.notes}</div>}
-                  <PhotoGrid
-                    photos={data.photos.filter(p => p.itemId === item.id).map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-                    onOpenLightbox={onOpenLightbox}
-                    compact
-                  />
-                </div>
-              ))}
-            </div>
-          </FieldSection>
+        {/* Truck defects — only shown when the inspection covered a
+            truck AND at least one item failed. */}
+        {data.asset && truckDefects.length > 0 && (
+          <EquipmentDefectsSection
+            equipmentLabel={truckLabel}
+            target="truck"
+            defects={truckDefects}
+            photos={data.photos}
+            onOpenLightbox={onOpenLightbox}
+          />
+        )}
+        {data.trailer && trailerDefects.length > 0 && (
+          <EquipmentDefectsSection
+            equipmentLabel={trailerLabel}
+            target="trailer"
+            defects={trailerDefects}
+            photos={data.photos}
+            onOpenLightbox={onOpenLightbox}
+          />
         )}
 
         {data.notes && (
@@ -712,20 +730,81 @@ function InspectionDetail({
           </FieldSection>
         )}
 
-        {(() => {
-          const general = data.photos.filter(p => p.itemId == null);
-          if (general.length === 0) return null;
-          return (
-            <FieldSection label={`General photos (${general.length})`}>
-              <PhotoGrid
-                photos={general.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-                onOpenLightbox={onOpenLightbox}
-              />
-            </FieldSection>
-          );
-        })()}
+        {/* General photos — split by equipment so they line up with
+            the defect sections above. orphanGeneralPhotos are pre-
+            target-column rows (legacy data); shown last under a
+            neutral label. */}
+        {truckGeneralPhotos.length > 0 && (
+          <FieldSection label={`${truckLabel} — General photos (${truckGeneralPhotos.length})`}>
+            <PhotoGrid
+              photos={truckGeneralPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
+              onOpenLightbox={onOpenLightbox}
+            />
+          </FieldSection>
+        )}
+        {trailerGeneralPhotos.length > 0 && (
+          <FieldSection label={`${trailerLabel} — General photos (${trailerGeneralPhotos.length})`}>
+            <PhotoGrid
+              photos={trailerGeneralPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
+              onOpenLightbox={onOpenLightbox}
+            />
+          </FieldSection>
+        )}
+        {orphanGeneralPhotos.length > 0 && (
+          <FieldSection label={`General photos (${orphanGeneralPhotos.length})`}>
+            <PhotoGrid
+              photos={orphanGeneralPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
+              onOpenLightbox={onOpenLightbox}
+            />
+          </FieldSection>
+        )}
       </div>
     </>
+  );
+}
+
+// Renders one equipment's failed checklist items as red cards,
+// each with the item's section, label, driver notes, and any photos
+// the driver attached specifically to that item. Used twice in the
+// inspection panel — once per truck, once per trailer — so the
+// dispatcher sees defects grouped by the physical thing that needs
+// the work.
+function EquipmentDefectsSection({
+  equipmentLabel, target, defects, photos, onOpenLightbox,
+}: {
+  equipmentLabel: string;
+  target: 'truck' | 'trailer';
+  defects: Array<{ id: string; section: string; label: string; status: 'pass'|'fail'|'na'; notes?: string }>;
+  photos: Array<{ id: string; itemId: string | null; target: 'truck' | 'trailer' | null; signedUrl: string | null; caption: string | null; uploadedAt: string }>;
+  onOpenLightbox: (urls: string[], index: number) => void;
+}) {
+  void target; // target prop kept for future filtering symmetry
+  return (
+    <FieldSection label={`${equipmentLabel} — Defects (${defects.length})`}>
+      <div className="flex flex-col gap-1.5">
+        {defects.map(item => {
+          const itemPhotos = photos.filter(p => p.itemId === item.id);
+          return (
+            <div key={item.id} className="text-[12px] py-2 px-3 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+              <div style={{ color: '#7f1d1d', fontWeight: 600 }}>{item.label}</div>
+              <div className="text-[10px] mt-0.5" style={{ color: '#991b1b' }}>{item.section}</div>
+              {item.notes && <div className="text-[12px] mt-1.5" style={{ color: 'var(--gc-text-1)' }}>{item.notes}</div>}
+              {itemPhotos.length > 0 && (
+                // Non-compact size so photos read as the primary
+                // evidence rather than tiny decoration. Lightbox
+                // opens on click.
+                <div className="mt-2">
+                  <PhotoGrid
+                    photos={itemPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
+                    onOpenLightbox={onOpenLightbox}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </FieldSection>
   );
 }
 
