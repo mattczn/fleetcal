@@ -770,6 +770,77 @@ class RailwayClient {
     return this.req<void>('DELETE', `/v1/fuel-reports/${id}`);
   }
 
+  // ── Inspection reports (DVIRs) ──────────────────────────────────────
+  listInspectionReports(query: {
+    assetId?: number; trailerId?: number; driverId?: number;
+    from?: string; to?: string; defectsOnly?: boolean;
+    limit?: number; offset?: number;
+  } = {}) {
+    const qs = new URLSearchParams();
+    if (query.assetId)    qs.set('assetId',    String(query.assetId));
+    if (query.trailerId)  qs.set('trailerId',  String(query.trailerId));
+    if (query.driverId)   qs.set('driverId',   String(query.driverId));
+    if (query.from)       qs.set('from',       query.from);
+    if (query.to)         qs.set('to',         query.to);
+    if (query.defectsOnly) qs.set('defectsOnly', 'true');
+    if (query.limit)      qs.set('limit',      String(query.limit));
+    if (query.offset)     qs.set('offset',     String(query.offset));
+    const s = qs.toString();
+    return this.req<{
+      inspections: Array<{
+        id: string;
+        driverId: number;
+        driverName: string;
+        assetId: number | null;
+        assetName: string | null;
+        trailerId: number | null;
+        trailerName: string | null;
+        inspectionDate: string;
+        hasDefects: boolean;
+        defectCount: number;
+        itemCount: number;
+        photoCount: number;
+        durationSeconds: number | null;
+        submittedAt: string;
+        signedBy: string;
+      }>;
+      total: number;
+      limit: number;
+      offset: number;
+    }>('GET', `/v1/inspection-reports${s ? `?${s}` : ''}`);
+  }
+  getInspectionReport(id: string) {
+    return this.req<{
+      inspection: {
+        id: string;
+        driverId: number;
+        driver: { name: string | null; phone: string | null } | null;
+        assetId: number | null;
+        asset:   { name: string | null; unit: string | null; type: string | null } | null;
+        trailerId: number | null;
+        trailer: { name: string | null; trailer_number: string | null } | null;
+        inspectionDate: string;
+        items:        Array<{ id: string; section: string; label: string; status: 'pass'|'fail'|'na'; notes?: string }>;
+        trailerItems: Array<{ id: string; section: string; label: string; status: 'pass'|'fail'|'na'; notes?: string }>;
+        notes: string | null;
+        hasDefects: boolean;
+        signedBy: string;
+        submittedAt: string;
+        durationSeconds: number | null;
+        locationLat: number | null;
+        locationLon: number | null;
+        photos: Array<{
+          id: string;
+          itemId: string | null;
+          target: 'truck' | 'trailer' | null;
+          caption: string | null;
+          signedUrl: string | null;
+          uploadedAt: string;
+        }>;
+      };
+    }>('GET', `/v1/inspection-reports/${id}`);
+  }
+
   // ── Maintenance reports ───────────────────────────────────────────────
   listMaintenanceReports(query: ListMaintenanceReportsQuery = {}) {
     const qs = new URLSearchParams();

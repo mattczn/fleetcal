@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Fuel, Wrench } from 'lucide-react';
+import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Fuel, Wrench, Package } from 'lucide-react';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
@@ -26,6 +26,7 @@ const NAV_LINKS: Array<{
   { href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
   { href: '/fuel',        label: 'Fuel',           icon: Fuel,            cap: 'fuel.access',        module: 'fuel' },
   { href: '/maintenance', label: 'Maintenance',    icon: Wrench,          cap: 'maintenance.access', module: 'maintenance' },
+  { href: '/equipment',   label: 'Equipment',      icon: Package,         cap: 'maintenance.access', module: 'maintenance' },
   { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',     module: 'payroll' },
 ];
 
