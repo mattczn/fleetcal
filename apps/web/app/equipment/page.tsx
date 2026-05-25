@@ -23,7 +23,7 @@ import { useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon, AlertTriangle,
-  Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Activity,
+  Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Activity, Check,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -52,6 +52,20 @@ type InspectionRow = {
 
 type Tab = 'maintenance' | 'inspections' | 'fuel';
 type SortDir = 'desc' | 'asc';
+
+// MediaList — every photo for the currently-open report, grouped by
+// source (defect item, general, etc.) so the side-panel can show
+// captions linking each photo back to where it came from. Built by
+// the detail components and passed up via onOpenMedia.
+type MediaList = {
+  initialIndex: number; // which photo the user clicked
+  items: Array<{
+    id: string;
+    signedUrl: string | null;
+    caption: string | null;
+    section?: string; // e.g. "Truck Big Red · Tires"
+  }>;
+};
 
 // Combined equipment picker — same list covers trucks + trailers. The
 // caller resolves the type+id from the selected value so the server
@@ -108,20 +122,32 @@ export default function EquipmentPage() {
 
   const [panel, setPanel] = useState<PanelData | null>(null);
 
-  // Driver-id → name map for cases where the report row has a junk
-  // submittedBy ("driver:30" was the visible bug). We always trust
-  // the drivers list lookup when available; fall back to submittedBy
-  // only if the driver was deleted or the report predates the API
-  // populating driver names.
+  // Resolver maps for the row tables + detail panels. Everywhere we
+  // would otherwise render "Driver #30" / "Asset #37" we now look up
+  // the real label by id. Maps are built from the lists we already
+  // fetch for the filter dropdowns so there's no extra network cost.
   const driverNameById = useMemo(() => {
     const m = new Map<number, string>();
     for (const d of drivers) m.set(d.id, d.name);
     return m;
   }, [drivers]);
+  const assetLabelById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const a of assets) m.set(a.id, `${a.name}${a.unit ? ` #${a.unit}` : ''}`);
+    return m;
+  }, [assets]);
+  const trailerLabelById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const t of trailers) m.set(t.id, t.trailerNumber ? `#${t.trailerNumber}` : t.name);
+    return m;
+  }, [trailers]);
 
-  // Lightbox lives at page level so any of the three detail
-  // components can open one without managing its own state.
-  const [lightbox, setLightbox] = useState<{ urls: string[]; index: number } | null>(null);
+  // Media side-panel — opens to the right of the main detail panel
+  // when the dispatcher clicks any photo. Shows every photo from the
+  // current report in a scrollable column so all uploads are visible
+  // at once. Lives at page level so the main panel doesn't need to
+  // know about it.
+  const [sideMedia, setSideMedia] = useState<MediaList | null>(null);
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--gc-bg)' }}>
@@ -160,6 +186,8 @@ export default function EquipmentPage() {
             equipment={equipment}
             sortDir={sortDir}
             driverNameById={driverNameById}
+            assetLabelById={assetLabelById}
+            trailerLabelById={trailerLabelById}
             onOpen={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
             openId={panel?.kind === 'maintenance' ? panel.id : null}
           />
@@ -179,6 +207,7 @@ export default function EquipmentPage() {
             equipment={equipment}
             sortDir={sortDir}
             driverNameById={driverNameById}
+            assetLabelById={assetLabelById}
             onOpen={(r) => setPanel({ kind: 'fuel', id: r.id, report: r })}
             openId={panel?.kind === 'fuel' ? panel.id : null}
           />
@@ -189,16 +218,20 @@ export default function EquipmentPage() {
         <DetailPanel
           panel={panel}
           driverNameById={driverNameById}
-          onClose={() => setPanel(null)}
-          onOpenLightbox={(urls, index) => setLightbox({ urls, index })}
+          assetLabelById={assetLabelById}
+          trailerLabelById={trailerLabelById}
+          sideMediaOpen={!!sideMedia}
+          onClose={() => { setPanel(null); setSideMedia(null); }}
+          onOpenMedia={(list) => setSideMedia(list)}
         />
       )}
-      {lightbox && (
-        <Lightbox
-          urls={lightbox.urls}
-          index={lightbox.index}
-          onClose={() => setLightbox(null)}
-          onIndex={(i) => setLightbox({ ...lightbox, index: i })}
+      {/* Side media panel — only renders when a photo has been
+          clicked. Sits to the right of the main panel; both are
+          centered together as a group. */}
+      {panel && sideMedia && (
+        <MediaSidePanel
+          media={sideMedia}
+          onClose={() => setSideMedia(null)}
         />
       )}
     </div>
@@ -324,12 +357,14 @@ function FilterDropdown({ label, children }: { label: string; children: React.Re
 const PAGE_SIZE = 25;
 
 function MaintenanceList({
-  driverId, equipment, sortDir, driverNameById, onOpen, openId,
+  driverId, equipment, sortDir, driverNameById, assetLabelById, trailerLabelById, onOpen, openId,
 }: {
   driverId: number | null;
   equipment: EquipmentSelection;
   sortDir: SortDir;
   driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
+  trailerLabelById: Map<number, string>;
   onOpen: (r: MaintenanceReport) => void;
   openId: string | null;
 }) {
@@ -376,7 +411,7 @@ function MaintenanceList({
         <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
           <Cell><DateCell iso={r.reportedAt} /></Cell>
           <Cell>{resolveDriverName(r.driverId, r.submittedBy, driverNameById)}</Cell>
-          <Cell>{equipmentLabelFromReport(r)}</Cell>
+          <Cell>{resolveEquipmentLabel(r.assetId, r.trailerId, assetLabelById, trailerLabelById)}</Cell>
           <Cell>
             <span style={{ color: 'var(--gc-text-1)' }}>
               {r.description.length > 70 ? r.description.slice(0, 70) + '…' : r.description}
@@ -476,12 +511,13 @@ function InspectionsList({
 // ─── Fuel ─────────────────────────────────────────────────────────────
 
 function FuelList({
-  driverId, equipment, sortDir, driverNameById, onOpen, openId,
+  driverId, equipment, sortDir, driverNameById, assetLabelById, onOpen, openId,
 }: {
   driverId: number | null;
   equipment: EquipmentSelection;
   sortDir: SortDir;
   driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
   onOpen: (r: FuelReport) => void;
   openId: string | null;
 }) {
@@ -527,7 +563,7 @@ function FuelList({
         <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
           <Cell><DateCell iso={r.reportedAt} /></Cell>
           <Cell>{resolveDriverName(r.driverId, r.submittedBy, driverNameById)}</Cell>
-          <Cell>{r.assetId ? `Asset #${r.assetId}` : '—'}</Cell>
+          <Cell>{assetLabelById.get(r.assetId) ?? `Asset #${r.assetId}`}</Cell>
           <Cell>{r.state}</Cell>
           <Cell><span className="font-mono">{r.dieselGallons.toFixed(1)}</span></Cell>
         </Row>
@@ -546,12 +582,16 @@ function FuelList({
 // containing block.
 
 function DetailPanel({
-  panel, driverNameById, onClose, onOpenLightbox,
+  panel, driverNameById, assetLabelById, trailerLabelById,
+  sideMediaOpen, onClose, onOpenMedia,
 }: {
   panel: PanelData;
   driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
+  trailerLabelById: Map<number, string>;
+  sideMediaOpen: boolean;
   onClose: () => void;
-  onOpenLightbox: (urls: string[], index: number) => void;
+  onOpenMedia: (list: MediaList) => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -573,7 +613,14 @@ function DetailPanel({
     <div
       ref={overlayRef}
       className="fixed inset-0 flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.45)', zIndex: 1000 }}
+      style={{
+        background: 'rgba(0,0,0,0.45)',
+        zIndex: 1000,
+        // Slide the centered group leftward when the side media panel
+        // is open so both panels stay visible without the main one
+        // pinning to the screen edge.
+        gap: sideMediaOpen ? 12 : 0,
+      }}
       onClick={e => { if (e.target === overlayRef.current) onClose(); }}
     >
       <div
@@ -602,9 +649,9 @@ function DetailPanel({
             so this wrapper is just a flex container that fills the
             available height between the header and the bottom edge. */}
         <div className="flex-1 flex min-h-0" style={{ background: 'var(--gc-bg)' }}>
-          {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
-          {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id}                                            onOpenLightbox={onOpenLightbox} />}
-          {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
+          {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id}                                                                                                              onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById}                                       onOpenMedia={onOpenMedia} />}
         </div>
       </div>
     </div>
@@ -618,11 +665,13 @@ function DetailPanel({
 }
 
 function MaintenanceDetail({
-  report, driverNameById, onOpenLightbox,
+  report, driverNameById, assetLabelById, trailerLabelById, onOpenMedia,
 }: {
   report: MaintenanceReport;
   driverNameById: Map<number, string>;
-  onOpenLightbox: (urls: string[], index: number) => void;
+  assetLabelById: Map<number, string>;
+  trailerLabelById: Map<number, string>;
+  onOpenMedia: (list: MediaList) => void;
 }) {
   const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
   if (report.photos && report.photos.length > 0) {
@@ -636,12 +685,12 @@ function MaintenanceDetail({
       mapLon={report.longitude}
       mapState={report.state}
       media={mediaSections}
-      onOpenLightbox={onOpenLightbox}
+      onOpenMedia={onOpenMedia}
     >
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
         <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
         <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
-        <Field icon={<Truck size={12} />} label="Equipment">{equipmentLabelFromReport(report)}</Field>
+        <Field icon={<Truck size={12} />} label="Equipment">{resolveEquipmentLabel(report.assetId, report.trailerId, assetLabelById, trailerLabelById)}</Field>
         <Field icon={<FileText size={12} />} label="Status"><StatusPill status={report.status} /></Field>
       </div>
       <FieldSection label="Description">
@@ -652,10 +701,10 @@ function MaintenanceDetail({
 }
 
 function InspectionDetail({
-  id, onOpenLightbox,
+  id, onOpenMedia,
 }: {
   id: string;
-  onOpenLightbox: (urls: string[], index: number) => void;
+  onOpenMedia: (list: MediaList) => void;
 }) {
   type DetailData = Awaited<ReturnType<typeof railway.getInspectionReport>>['inspection'];
   const [data, setData] = useState<DetailData | null>(null);
@@ -737,7 +786,7 @@ function InspectionDetail({
       mapLat={data.locationLat}
       mapLon={data.locationLon}
       media={mediaSections}
-      onOpenLightbox={onOpenLightbox}
+      onOpenMedia={onOpenMedia}
     >
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
         <Field icon={<Clock size={12} />} label="Submitted">{new Date(data.submittedAt).toLocaleString()}</Field>
@@ -758,6 +807,7 @@ function InspectionDetail({
       {data.trailer && trailerDefects.length > 0 && (
         <EquipmentDefectsSection equipmentLabel={trailerLabel} defects={trailerDefects} />
       )}
+      {totalDefects === 0 && <AllPassedBadge passCount={passCount} />}
 
       {data.notes && (
         <FieldSection label="Driver notes">
@@ -765,6 +815,32 @@ function InspectionDetail({
         </FieldSection>
       )}
     </TwoColumnBody>
+  );
+}
+
+// AllPassedBadge — fills the right column when there are zero
+// defects. Same visual weight as the defect cards (so the empty
+// state doesn't disappear into whitespace) but green so the
+// dispatcher can audit at a glance.
+function AllPassedBadge({ passCount }: { passCount: number }) {
+  return (
+    <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+      <div
+        className="flex items-center gap-3 rounded-lg py-3 px-4"
+        style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}
+      >
+        <div
+          className="rounded-full flex items-center justify-center shrink-0"
+          style={{ width: 32, height: 32, background: '#16a34a' }}
+        >
+          <Check size={18} color="#fff" strokeWidth={3} />
+        </div>
+        <div>
+          <div className="text-[13px] font-semibold" style={{ color: '#14532d' }}>All passed</div>
+          <div className="text-[11px]" style={{ color: '#166534' }}>{passCount} {passCount === 1 ? 'item' : 'items'} checked, no defects reported.</div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -795,11 +871,12 @@ function EquipmentDefectsSection({
 }
 
 function FuelDetail({
-  report, driverNameById, onOpenLightbox,
+  report, driverNameById, assetLabelById, onOpenMedia,
 }: {
   report: FuelReport;
   driverNameById: Map<number, string>;
-  onOpenLightbox: (urls: string[], index: number) => void;
+  assetLabelById: Map<number, string>;
+  onOpenMedia: (list: MediaList) => void;
 }) {
   const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
   if (report.photos && report.photos.length > 0) {
@@ -814,11 +891,20 @@ function FuelDetail({
       mapLon={report.longitude}
       mapState={report.state}
       media={mediaSections}
-      onOpenLightbox={onOpenLightbox}
+      onOpenMedia={onOpenMedia}
+      // Narrower media column for fuel — receipts are typically just
+      // one or two photos, and the meta grid + (empty) right side
+      // benefits from the extra horizontal width.
+      leftWidth={280}
     >
-      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+      {/* 3-col grid uses the wider right column. Fuel has no defect
+          cards / notes so the meta is everything the dispatcher sees;
+          giving each field more horizontal room keeps numbers
+          (diesel, odometer) on one line. */}
+      <div className="grid grid-cols-3 gap-x-5 gap-y-3 text-[12px]">
         <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
         <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
+        <Field icon={<Truck size={12} />} label="Asset">{assetLabelById.get(report.assetId) ?? `Asset #${report.assetId}`}</Field>
         <Field icon={<MapPin size={12} />} label="State">{report.state}</Field>
         <Field icon={<FuelIcon size={12} />} label="Diesel">{report.dieselGallons.toFixed(2)} gal</Field>
         <Field icon={<FuelIcon size={12} />} label="DEF">{report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—'}</Field>
@@ -919,7 +1005,7 @@ function MapBlock({ lat, lon, state, height = 320 }: { lat: number | null | unde
 // goes top-left for "where", bottom-left for "what evidence", and
 // the entire right column for "the writeup".
 function TwoColumnBody({
-  mapLat, mapLon, mapState, media, onOpenLightbox, children,
+  mapLat, mapLon, mapState, media, onOpenMedia, children, leftWidth = 340,
 }: {
   mapLat:   number | null | undefined;
   mapLon:   number | null | undefined;
@@ -932,26 +1018,29 @@ function TwoColumnBody({
     label?: string;
     photos: Array<{ id: string; signedUrl: string | null; caption: string | null }>;
   }>;
-  onOpenLightbox: (urls: string[], index: number) => void;
+  onOpenMedia: (list: MediaList) => void;
   /** Right-column scrollable text content. */
   children: React.ReactNode;
+  /** Left column width — narrower for fuel (text-heavy reports
+   *  don't need a wide media gutter when there are usually just
+   *  one or two receipts). */
+  leftWidth?: number;
 }) {
   const totalPhotos = media.reduce((n, sec) => n + sec.photos.length, 0);
-  // Build one URL list across every section so paging in the
-  // lightbox walks through the entire report's media in order.
-  // Then map per-section back to index offsets when launching.
-  const allUrls: string[] = [];
-  const sectionOffsets: number[] = [];
+  // Flatten every photo (with section label) so clicking any tile
+  // can open the side panel pre-scrolled to that exact photo.
+  const flatItems: MediaList['items'] = [];
   for (const sec of media) {
-    sectionOffsets.push(allUrls.length);
-    for (const p of sec.photos) if (p.signedUrl) allUrls.push(p.signedUrl);
+    for (const p of sec.photos) {
+      flatItems.push({ id: p.id, signedUrl: p.signedUrl, caption: p.caption, section: sec.label });
+    }
   }
   return (
     <div className="flex-1 flex min-h-0">
       {/* Left column — map fixed on top, scrollable media below */}
       <div
         className="flex flex-col shrink-0"
-        style={{ width: 340, borderRight: '1px solid var(--gc-border-light)' }}
+        style={{ width: leftWidth, borderRight: '1px solid var(--gc-border-light)' }}
       >
         <MapBlock lat={mapLat} lon={mapLon} state={mapState} height={250} />
         <div
@@ -962,47 +1051,47 @@ function TwoColumnBody({
             Media {totalPhotos > 0 ? `(${totalPhotos})` : ''}
           </div>
           {totalPhotos === 0 ? (
-            <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-              No photos attached to this report.
-            </div>
+            <NoMediaPlaceholder />
           ) : (
             <div className="flex flex-col gap-3">
-              {media.map((sec, i) => {
-                if (sec.photos.length === 0) return null;
-                // Offset into the unified URL list so the lightbox
-                // can page across the whole report from any tile.
-                const sectionStart = sectionOffsets[i];
-                let urlPos = sectionStart;
-                return (
-                  <div key={i}>
-                    {sec.label && (
-                      <div className="text-[10px] font-medium mb-1.5" style={{ color: 'var(--gc-text-2)' }}>
-                        {sec.label}
+              {(() => {
+                // Walk the same order we flattened so each tile knows
+                // its index in flatItems and can open the side panel
+                // at exactly that photo.
+                let cursor = 0;
+                return media.map((sec, i) => {
+                  if (sec.photos.length === 0) return null;
+                  return (
+                    <div key={i}>
+                      {sec.label && (
+                        <div className="text-[10px] font-medium mb-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                          {sec.label}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {sec.photos.map(p => {
+                          const myIdx = cursor++;
+                          return p.signedUrl ? (
+                            <button
+                              key={p.id}
+                              onClick={() => onOpenMedia({ initialIndex: myIdx, items: flatItems })}
+                              title={p.caption ?? sec.label ?? 'View photo'}
+                              style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={p.signedUrl} alt={p.caption ?? ''} style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--gc-border)' }} />
+                            </button>
+                          ) : (
+                            <div key={p.id} style={{ width: 96, height: 96, borderRadius: 8, background: 'var(--gc-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--gc-text-3)' }}>
+                              no preview
+                            </div>
+                          );
+                        })}
                       </div>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      {sec.photos.map(p => {
-                        const here = p.signedUrl ? urlPos++ : -1;
-                        return p.signedUrl ? (
-                          <button
-                            key={p.id}
-                            onClick={() => onOpenLightbox(allUrls, here)}
-                            title={p.caption ?? sec.label ?? 'View photo'}
-                            style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={p.signedUrl} alt={p.caption ?? ''} style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--gc-border)' }} />
-                          </button>
-                        ) : (
-                          <div key={p.id} style={{ width: 96, height: 96, borderRadius: 8, background: 'var(--gc-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--gc-text-3)' }}>
-                            no preview
-                          </div>
-                        );
-                      })}
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
         </div>
@@ -1016,133 +1105,123 @@ function TwoColumnBody({
   );
 }
 
-function PhotoGrid({
-  photos, onOpenLightbox, compact = false,
-}: {
-  photos: { id: string; signedUrl: string | null; caption: string | null }[];
-  onOpenLightbox: (urls: string[], index: number) => void;
-  compact?: boolean;
-}) {
-  if (photos.length === 0) return null;
-  const sz = compact ? 64 : 96;
-  // Collect all URLs in display order so the lightbox can paginate.
-  const urls = photos.map(p => p.signedUrl).filter((u): u is string => !!u);
+// NoMediaPlaceholder — centered icon + label, used when a report
+// arrived without any attached photos. Better than blank space.
+function NoMediaPlaceholder() {
   return (
-    <div className="flex flex-wrap gap-2 mt-2">
-      {photos.map(p => (
-        p.signedUrl ? (
-          <button
-            key={p.id}
-            onClick={() => onOpenLightbox(urls, urls.indexOf(p.signedUrl as string))}
-            title={p.caption ?? 'View photo'}
-            style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={p.signedUrl} alt={p.caption ?? ''} style={{ width: sz, height: sz, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--gc-border)' }} />
-          </button>
-        ) : (
-          <div key={p.id} style={{ width: sz, height: sz, borderRadius: 8, background: 'var(--gc-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--gc-text-3)' }}>
-            no preview
-          </div>
-        )
-      ))}
+    <div className="flex flex-col items-center justify-center text-center" style={{ minHeight: 200 }}>
+      <div
+        className="rounded-full flex items-center justify-center mb-2"
+        style={{ width: 48, height: 48, background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}
+      >
+        <Camera size={22} />
+      </div>
+      <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>No photos uploaded</div>
     </div>
   );
 }
 
-// ─── In-page photo lightbox ──────────────────────────────────────────
-// Higher z-index than the detail panel so it stacks on top. Esc to
-// close. ← / → arrows to page when there's more than one photo.
+// MediaSidePanel — sits to the right of the main detail panel and
+// shows every photo in the report in a vertical scroll. Each tile
+// is rendered at the side-panel's full inner width so the dispatcher
+// can read details + scrub through all the evidence without paging.
+// Initial scroll lands on the tile the user clicked.
+function MediaSidePanel({ media, onClose }: { media: MediaList; onClose: () => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
 
-function Lightbox({ urls, index, onClose, onIndex }: {
-  urls: string[];
-  index: number;
-  onClose: () => void;
-  onIndex: (i: number) => void;
-}) {
+  // Auto-scroll to the photo the user clicked the moment the panel
+  // mounts. Wrapped in a microtask so the layout has settled.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const target = containerRef.current.querySelector<HTMLElement>(`[data-photo-idx="${media.initialIndex}"]`);
+    if (target) target.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }, [media.initialIndex]);
+
+  // Esc closes only the side panel, not the main panel — Esc handler
+  // for the main panel is registered there and only fires if this
+  // one didn't already swallow it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape')     onClose();
-      if (e.key === 'ArrowRight') onIndex(Math.min(index + 1, urls.length - 1));
-      if (e.key === 'ArrowLeft')  onIndex(Math.max(index - 1, 0));
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [index, urls.length, onClose, onIndex]);
+    window.addEventListener('keydown', onKey, true /* capture */);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
 
-  const url = urls[index];
-  if (!url) return null;
   return (
     <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.92)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 32,
-      }}
+      onClick={e => e.stopPropagation()}
+      className="flex flex-col rounded-2xl overflow-hidden"
+      style={{ width: 480, height: 660, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
     >
-      <button
-        onClick={onClose}
-        aria-label="Close"
-        style={{
-          position: 'absolute', top: 18, right: 18,
-          width: 36, height: 36, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.12)', color: 'white',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          border: 'none', cursor: 'pointer',
-        }}
-      >
-        <X size={18} />
-      </button>
-      {urls.length > 1 && index > 0 && (
-        <button
-          onClick={e => { e.stopPropagation(); onIndex(index - 1); }}
-          aria-label="Previous photo"
-          style={{
-            position: 'absolute', left: 18, top: '50%', transform: 'translateY(-50%)',
-            width: 44, height: 44, borderRadius: '50%',
-            background: 'rgba(255,255,255,0.12)', color: 'white',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            border: 'none', cursor: 'pointer', fontSize: 22,
-          }}
-        >‹</button>
-      )}
-      {urls.length > 1 && index < urls.length - 1 && (
-        <button
-          onClick={e => { e.stopPropagation(); onIndex(index + 1); }}
-          aria-label="Next photo"
-          style={{
-            position: 'absolute', right: 18, top: '50%', transform: 'translateY(-50%)',
-            width: 44, height: 44, borderRadius: '50%',
-            background: 'rgba(255,255,255,0.12)', color: 'white',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            border: 'none', cursor: 'pointer', fontSize: 22,
-          }}
-        >›</button>
-      )}
-      {urls.length > 1 && (
-        <div style={{
-          position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-50%)',
-          background: 'rgba(0,0,0,0.55)', color: 'white',
-          padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600,
-        }}>
-          {index + 1} / {urls.length}
+      <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
+        <Camera size={14} style={{ color: 'var(--gc-text-2)' }} />
+        <div className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+          Media ({media.items.length})
         </div>
-      )}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={url}
-        alt=""
-        onClick={e => e.stopPropagation()}
-        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 6 }}
-      />
+        <div className="flex-1" />
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded-full transition-colors shrink-0"
+          style={{ color: 'var(--gc-text-3)' }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-y-auto px-4 py-4"
+        style={{ background: 'var(--gc-bg)' }}
+      >
+        <div className="flex flex-col gap-4">
+          {media.items.map((item, idx) => (
+            <div key={item.id} data-photo-idx={idx} className="flex flex-col gap-1.5">
+              {item.section && (
+                <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>
+                  {item.section}
+                </div>
+              )}
+              {item.signedUrl ? (
+                <a
+                  href={item.signedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open full size in new tab"
+                  style={{ display: 'block', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--gc-border)' }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={item.signedUrl}
+                    alt={item.caption ?? ''}
+                    style={{ width: '100%', height: 'auto', objectFit: 'cover', display: 'block' }}
+                  />
+                </a>
+              ) : (
+                <div className="rounded-lg flex items-center justify-center text-[12px]"
+                  style={{ height: 200, background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-3)' }}>
+                  Preview unavailable
+                </div>
+              )}
+              {item.caption && (
+                <div className="text-[11px]" style={{ color: 'var(--gc-text-2)' }}>{item.caption}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
-// MiniMap removed — replaced by MapBlock (positioned at top of the
-// panel body to match the MovementDetailPanel layout).
+// PhotoGrid + Lightbox removed — replaced by the in-line tile
+// rendering inside TwoColumnBody (left column) plus the
+// MediaSidePanel that opens to the right of the main panel for
+// full-size browsing.
 
 // ─── Table primitives ────────────────────────────────────────────────
 
@@ -1271,9 +1350,18 @@ function equipmentLabel(asset: string | null, trailer: string | null): string {
   if (asset && trailer) return `${asset} + ${trailer}`;
   return asset ?? trailer ?? '—';
 }
-function equipmentLabelFromReport(r: MaintenanceReport): string {
-  if (r.assetId)   return `Asset #${r.assetId}`;
-  if (r.trailerId) return `Trailer #${r.trailerId}`;
+// Resolve a maintenance report's equipment label (truck OR trailer)
+// to the actual asset/trailer name. Falls back to the bare ID when
+// the asset has been hard-deleted from the org but the report still
+// references it.
+function resolveEquipmentLabel(
+  assetId: number | undefined,
+  trailerId: number | undefined,
+  assetLabelById: Map<number, string>,
+  trailerLabelById: Map<number, string>,
+): string {
+  if (assetId)   return assetLabelById.get(assetId)     ?? `Asset #${assetId}`;
+  if (trailerId) return `Trailer ${trailerLabelById.get(trailerId) ?? `#${trailerId}`}`;
   return '—';
 }
 // Resolve the driver's display name. Fuel + maintenance reports
