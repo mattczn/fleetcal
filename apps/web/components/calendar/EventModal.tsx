@@ -423,6 +423,57 @@ function UploadedDocsPanel({
   // that's genuinely missing (deleted from storage) would loop forever
   // between <img onError> and the parent re-minting the same dead URL.
   const refreshedUrlsRef = useRef<Set<string>>(new Set());
+  // Per-doc render diagnosis. Populated when the <img> fires onError
+  // AND the refresh-once retry has been exhausted — we then fetch the
+  // first 16 bytes off the signed URL and sniff the magic number to
+  // figure out what the file actually is. The #1 cause of "this one
+  // JPG won't render but others do" is an iPhone HEIC saved with a
+  // .jpg extension — browsers don't decode HEIC, so showing the user
+  // a clear message ("This is HEIC, not JPG — please re-upload as
+  // JPG or PNG") is much better than a broken-image glyph.
+  const [previewError, setPreviewError] = useState<{
+    docId: string;
+    kind: 'heic' | 'empty' | 'http' | 'unknown';
+    detail: string;
+  } | null>(null);
+
+  // Best-effort byte sniffer. Reads the first chunk of the response
+  // body and matches against well-known magic numbers. Runs once per
+  // doc — gated by the docId compare in the onError handler.
+  const diagnosePreview = useCallback(async (docId: string, url: string) => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        setPreviewError({ docId, kind: 'http', detail: `HTTP ${res.status}` });
+        return;
+      }
+      const blob = await res.blob();
+      if (blob.size === 0) {
+        setPreviewError({ docId, kind: 'empty', detail: '0 bytes' });
+        return;
+      }
+      const buf = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+      // HEIC/HEIF: bytes 4–11 spell "ftyp" + brand code (heic, heix,
+      // mif1, msf1, hevc, hevx). The first 4 bytes are the box length
+      // and are arbitrary, so we anchor on offset 4.
+      const isFtyp = buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70;
+      if (isFtyp) {
+        const brand = String.fromCharCode(buf[8], buf[9], buf[10], buf[11]);
+        const heicBrands = new Set(['heic', 'heix', 'mif1', 'msf1', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs']);
+        if (heicBrands.has(brand)) {
+          setPreviewError({ docId, kind: 'heic', detail: `HEIC (brand: ${brand})` });
+          return;
+        }
+      }
+      // JPG starts with FF D8 FF — if we got here with a valid JPG the
+      // browser's decoder choked on something inside (corrupt EXIF,
+      // truncated, etc.). Show the bytes so it can be reported.
+      const hex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      setPreviewError({ docId, kind: 'unknown', detail: `bytes: ${hex}` });
+    } catch (err) {
+      setPreviewError({ docId, kind: 'unknown', detail: (err as Error).message });
+    }
+  }, []);
   // Inline kind editor — when the user clicks the pencil on a row,
   // an inline chip picker appears under that row. Server auto-renames
   // the fileName when kind changes (PATCH /v1/documents/:id), so a
@@ -556,6 +607,15 @@ function UploadedDocsPanel({
     (mime ?? '').startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(name ?? '');
 
   const selected = selectedId ? docs.find(d => d.id === selectedId) ?? null : null;
+
+  // Drop stale preview diagnostics when the user switches docs — the
+  // diagnosis is keyed by docId but clearing eagerly avoids a flicker
+  // where the previous error briefly shows for the wrong doc.
+  useEffect(() => {
+    if (!selected || (previewError && previewError.docId !== selected.id)) {
+      setPreviewError(null);
+    }
+  }, [selected, previewError]);
 
   // Upload header — always rendered when loadId is known so the user
   // can add docs even from the empty state.
@@ -837,6 +897,13 @@ function UploadedDocsPanel({
       <div className="flex-1 overflow-auto flex items-center justify-center" style={{ background: '#1a1a1a' }}>
         {!signedUrl ? (
           <Loader2 size={20} className="animate-spin" style={{ color: '#ffffff' }} />
+        ) : previewError && previewError.docId === selected.id ? (
+          <PreviewErrorPanel
+            fileName={selected.fileName}
+            kind={previewError.kind}
+            detail={previewError.detail}
+            signedUrl={signedUrl}
+          />
         ) : isImage(selected.mimeType, selected.fileName) ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -844,12 +911,19 @@ function UploadedDocsPanel({
             alt={selected.fileName}
             style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
             onError={() => {
-              if (!onSignedUrlError) return;
-              // Only ask the parent to re-mint once per URL — see
-              // refreshedUrlsRef comment above for the loop guard.
-              if (refreshedUrlsRef.current.has(signedUrl)) return;
-              refreshedUrlsRef.current.add(signedUrl);
-              onSignedUrlError();
+              // First failure: maybe the cached signed URL expired. Ask
+              // parent to re-mint and try again. The dedupe ref keeps
+              // us from looping if the same URL is handed back.
+              if (onSignedUrlError && !refreshedUrlsRef.current.has(signedUrl)) {
+                refreshedUrlsRef.current.add(signedUrl);
+                onSignedUrlError();
+                return;
+              }
+              // Refresh already attempted (or no callback wired) — the
+              // problem is the file itself. Sniff the bytes so we can
+              // tell the user WHY ("HEIC, not JPG" / "empty file" /
+              // raw header bytes) instead of just showing a broken icon.
+              void diagnosePreview(selected.id, signedUrl);
             }}
           />
         ) : (
@@ -858,10 +932,12 @@ function UploadedDocsPanel({
             title={selected.fileName}
             style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }}
             onError={() => {
-              if (!onSignedUrlError) return;
-              if (refreshedUrlsRef.current.has(signedUrl)) return;
-              refreshedUrlsRef.current.add(signedUrl);
-              onSignedUrlError();
+              if (onSignedUrlError && !refreshedUrlsRef.current.has(signedUrl)) {
+                refreshedUrlsRef.current.add(signedUrl);
+                onSignedUrlError();
+                return;
+              }
+              void diagnosePreview(selected.id, signedUrl);
             }}
           />
         )}
@@ -883,6 +959,49 @@ function UploadedDocsPanel({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Inline "this preview can't render" panel shown inside UploadedDocsPanel
+ * when the <img>/<iframe> errors after a signed-URL retry. Pulls double
+ * duty as a diagnostic — `detail` carries either a human reason (HEIC
+ * detected, empty file, HTTP status) or the raw header bytes. The
+ * Download button always works, so the user can grab the file even
+ * when the in-browser preview can't render it.
+ */
+function PreviewErrorPanel({
+  fileName, kind, detail, signedUrl,
+}: {
+  fileName: string;
+  kind: 'heic' | 'empty' | 'http' | 'unknown';
+  detail: string;
+  signedUrl: string;
+}) {
+  const headline =
+    kind === 'heic'    ? 'This file is HEIC, not JPG' :
+    kind === 'empty'   ? 'This file is empty (0 bytes)' :
+    kind === 'http'    ? "Couldn't load this file" :
+                         "This file can't be previewed";
+  const body =
+    kind === 'heic'    ? "iPhones sometimes save photos as HEIC even when the extension is .jpg — browsers can't decode HEIC. Ask the driver to re-upload, or convert to JPG/PNG on your end. (Tip: on iPhone, Settings → Camera → Formats → Most Compatible saves real JPGs.)" :
+    kind === 'empty'   ? 'The upload finished but the file has no contents. It was probably interrupted mid-upload. Delete it and re-upload.' :
+    kind === 'http'    ? 'The storage URL responded with an error. Try downloading the file directly — if that works, this is a viewer bug. If it fails too, the file is gone from storage.' :
+                         "The browser's image decoder rejected this file. Try downloading and opening locally — if it opens fine elsewhere, the file is using an unusual encoding (CMYK JPG, progressive markers, etc.).";
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 px-6 py-8 text-center" style={{ color: '#ffffff', maxWidth: 520 }}>
+      <AlertCircle size={32} style={{ color: '#fbbc04' }} />
+      <div className="text-base font-semibold">{headline}</div>
+      <div className="text-xs leading-relaxed" style={{ color: '#cccccc' }}>{body}</div>
+      <div className="text-[10px] font-mono mt-1" style={{ color: '#888888' }}>{fileName} · {detail}</div>
+      <a
+        href={signedUrl}
+        download={fileName}
+        className="text-xs font-medium px-3 py-1.5 rounded transition-colors mt-2"
+        style={{ color: '#ffffff', border: '1px solid #ffffff44', background: '#ffffff11' }}>
+        <Download size={11} style={{ display: 'inline', marginRight: 4 }} /> Download original
+      </a>
     </div>
   );
 }
