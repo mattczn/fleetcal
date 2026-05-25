@@ -313,6 +313,15 @@ interface CalendarStore extends ModalState {
   theme: 'light' | 'dark' | 'system';
   setTheme: (t: 'light' | 'dark' | 'system') => void;
 
+  /** Multiplier applied to every font-size on the calendar event
+   *  cards (title, route, time, status overlay, etc). 1.0 = current
+   *  default; the AppearancePanel exposes four presets: 0.9 / 1.0 /
+   *  1.15 / 1.3. Stored as a number rather than an enum so future
+   *  fine-grained controls (e.g. a slider) can drop in without a
+   *  store migration. */
+  cardFontScale: number;
+  setCardFontScale: (n: number) => void;
+
   isDemo: boolean;
   hydrateDemoMode: () => void;
   exitDemoMode: () => void;
@@ -580,6 +589,9 @@ export const useCalendarStore = create<CalendarStore>()(
   documentTypes: null,
   hydrateDocumentTypes: (types) =>
     set({ documentTypes: types ?? null }),
+
+  cardFontScale: 1.0,
+  setCardFontScale: (n) => set({ cardFontScale: n }),
 
   theme: 'light',
   setTheme: (t) => {
@@ -2058,6 +2070,7 @@ export const useCalendarStore = create<CalendarStore>()(
         sectionOrder:       state.sectionOrder,
         driverPayPct:       state.driverPayPct,
         theme:              state.theme,
+        cardFontScale:      state.cardFontScale,
         assetCategories:    state.assetCategories,
         showStatusOverlay:   state.showStatusOverlay,
         showConfirmedOverlay: state.showConfirmedOverlay,

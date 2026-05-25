@@ -501,8 +501,27 @@ const THEMES: { value: 'light' | 'dark' | 'system'; label: string; icon: React.R
   { value: 'dark',   label: 'Dark',   icon: <Moon size={14} /> },
 ];
 
+// Card font-size presets — scale factor applied to every text size
+// on the calendar event card (title, route, broker, status, etc.).
+// Four steps cover the practical range: smaller for big-monitor
+// users who want more density, larger for laptop/cabin-screen users
+// who lose readability at the default. Stored as a number in the
+// Zustand store so future fine-grained controls (slider) drop in
+// without a migration.
+const CARD_FONT_SIZES: { value: number; label: string }[] = [
+  { value: 0.9,  label: 'Small'       },
+  { value: 1.0,  label: 'Default'     },
+  { value: 1.15, label: 'Large'       },
+  { value: 1.3,  label: 'Extra Large' },
+];
+
 function AppearancePanel() {
-  const { theme, setTheme, showStatusOverlay, setShowStatusOverlay, showUnassigned, setShowUnassigned } = useCalendarStore();
+  const {
+    theme, setTheme,
+    showStatusOverlay, setShowStatusOverlay,
+    showUnassigned, setShowUnassigned,
+    cardFontScale, setCardFontScale,
+  } = useCalendarStore();
   return (
     <SettingsPanel
       title="Appearance"
@@ -540,6 +559,36 @@ function AppearancePanel() {
         title="Calendar"
         description="Control what's shown on load cards."
       >
+        <SettingsField
+          label="Card text size"
+          hint="Scales every text element on the load cards. Default works for most monitors; bump it up if you're on a laptop or cabin screen and the title is too cramped."
+        >
+          <div className="grid grid-cols-4 gap-2 mt-2">
+            {CARD_FONT_SIZES.map(s => {
+              const active = Math.abs((cardFontScale ?? 1.0) - s.value) < 0.01;
+              return (
+                <button
+                  key={s.value}
+                  onClick={() => setCardFontScale(s.value)}
+                  className="flex items-center justify-center font-semibold transition-all"
+                  style={{
+                    padding: '10px 8px',
+                    borderRadius: SETTINGS_RADIUS.control,
+                    border: `1.5px solid ${active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.borderStrong}`,
+                    background: active ? SETTINGS_COLORS.blueLight : SETTINGS_COLORS.panelBg,
+                    color: active ? SETTINGS_COLORS.blue : SETTINGS_COLORS.text,
+                    cursor: 'pointer',
+                    // Preview the actual scale on the button label so the
+                    // choice is visible before you make it.
+                    fontSize: Math.round(13 * s.value),
+                  }}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+        </SettingsField>
         <SettingsField
           inline
           label="Status overlay"

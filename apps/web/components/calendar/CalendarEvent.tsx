@@ -42,7 +42,22 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
     events, currentDate, dragState, setDragState, rowHeight,
     showStatusOverlay, showConfirmedOverlay, showPodOverlay, showBillingOverlay,
     drivers, openEditModal, cardFields, customers, calendarTimezone,
+    cardFontScale,
   } = useCalendarStore();
+
+  // Apply the user's preferred card font-scale (Settings → Appearance
+  // → Calendar card text). Compact / Default / Large / Extra Large
+  // map to scales 0.9 / 1.0 / 1.15 / 1.3 in the panel. Each individual
+  // size below is rounded to the nearest 0.5px so character anti-
+  // aliasing stays crisp.
+  const scale = cardFontScale ?? 1.0;
+  const fs = (basePx: number) => Math.round(basePx * scale * 2) / 2;
+  const fsTitle        = fs(11);  // main title
+  const fsField        = fs(10);  // user-configured row fields (route, broker, etc.)
+  const fsStatus       = fs(9);   // status overlay text
+  const fsCompactTitle = fs(10);  // triage-mode title
+  const fsCompactTime  = fs(9);   // triage-mode time
+  const fsRelayNotice  = fs(10);  // "Edit in modal to move relay legs"
   // Event times are stored in HOME_TZ; shift to view tz for display +
   // positioning so they track the user's timezone selector alongside
   // NowLine. See lib/time-utils.ts for the conversion rationale.
@@ -205,10 +220,10 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       {compact ? (
         /* Compact / triage mode: just title + time in one tight row */
         <div className="px-1.5 flex items-center h-full gap-1 overflow-hidden">
-          <div className="text-[10px] font-extrabold leading-none truncate flex-1 min-w-0" style={{ color: 'white' }}>
+          <div className="font-extrabold leading-none truncate flex-1 min-w-0" style={{ color: 'white', fontSize: fsCompactTitle }}>
             {displayTitle}
           </div>
-          <div className="text-[9px] font-semibold tabular-nums shrink-0" style={{ color: 'rgba(255,255,255,0.8)' }}>
+          <div className="font-semibold tabular-nums shrink-0" style={{ color: 'rgba(255,255,255,0.8)', fontSize: fsCompactTime }}>
             {startTime}
           </div>
         </div>
@@ -221,7 +236,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
               background: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center',
               padding: '4px 6px', textAlign: 'center',
             }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>
+              <span style={{ fontSize: fsRelayNotice, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>
                 Edit in modal to move relay legs
               </span>
             </div>
@@ -279,7 +294,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           )}
           {/* Title — always shown */}
           <div className="flex items-start gap-1">
-            <div className="text-[11px] font-extrabold leading-tight break-words min-w-0" style={{ color: 'white', paddingRight: isRelay ? 22 : 0 }}>
+            <div className="font-extrabold leading-tight break-words min-w-0" style={{ color: 'white', paddingRight: isRelay ? 22 : 0, fontSize: fsTitle }}>
               {displayTitle}
             </div>
           </div>
@@ -297,7 +312,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             const minHeight = 20 + i * 14;
             if (height <= minHeight) return null;
             return (
-              <div key={key} className="text-[10px] font-medium leading-tight truncate" style={{ color: 'rgba(255,255,255,0.85)' }}>
+              <div key={key} className="font-medium leading-tight truncate" style={{ color: 'rgba(255,255,255,0.85)', fontSize: fsField }}>
                 {value}
               </div>
             );
@@ -315,8 +330,8 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             <div className="rounded-full shrink-0" style={{ width: 5, height: 5, background: s.dot }} />
             {height > 30 && (
               <span
-                className="text-[9px] font-bold uppercase tracking-wide truncate"
-                style={{ color: s.dot, lineHeight: 1 }}
+                className="font-bold uppercase tracking-wide truncate"
+                style={{ color: s.dot, lineHeight: 1, fontSize: fsStatus }}
               >
                 {s.label}
               </span>
