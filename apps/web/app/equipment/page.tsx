@@ -407,19 +407,29 @@ function MaintenanceList({
       count={sorted.length}
       page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
     >
-      {pageRows.map(r => (
-        <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
-          <Cell><DateCell iso={r.reportedAt} /></Cell>
-          <Cell>{resolveDriverName(r.driverId, r.submittedBy, driverNameById)}</Cell>
-          <Cell>{resolveEquipmentLabel(r.assetId, r.trailerId, assetLabelById, trailerLabelById)}</Cell>
-          <Cell>
-            <span style={{ color: 'var(--gc-text-1)' }}>
-              {r.description.length > 70 ? r.description.slice(0, 70) + '…' : r.description}
-            </span>
-          </Cell>
-          <Cell><StatusPill status={r.status} /></Cell>
-        </Row>
-      ))}
+      {pageRows.map(r => {
+        // Prefer API-embedded names (see comment in FuelList).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const embedded = r as any;
+        const driverLabel = embedded.driverName as string | undefined
+          ?? resolveDriverName(r.driverId, r.submittedBy, driverNameById);
+        const equipmentLabel = (embedded.assetName as string | undefined)
+          ?? (embedded.trailerName ? `Trailer ${embedded.trailerName}` : undefined)
+          ?? resolveEquipmentLabel(r.assetId, r.trailerId, assetLabelById, trailerLabelById);
+        return (
+          <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
+            <Cell><DateCell iso={r.reportedAt} /></Cell>
+            <Cell>{driverLabel}</Cell>
+            <Cell>{equipmentLabel}</Cell>
+            <Cell>
+              <span style={{ color: 'var(--gc-text-1)' }}>
+                {r.description.length > 70 ? r.description.slice(0, 70) + '…' : r.description}
+              </span>
+            </Cell>
+            <Cell><StatusPill status={r.status} /></Cell>
+          </Row>
+        );
+      })}
     </TableShell>
   );
 }
@@ -559,15 +569,29 @@ function FuelList({
       count={sorted.length}
       page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
     >
-      {pageRows.map(r => (
-        <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
-          <Cell><DateCell iso={r.reportedAt} /></Cell>
-          <Cell>{resolveDriverName(r.driverId, r.submittedBy, driverNameById)}</Cell>
-          <Cell>{assetLabelById.get(r.assetId) ?? `Asset #${r.assetId}`}</Cell>
-          <Cell>{r.state}</Cell>
-          <Cell><span className="font-mono">{r.dieselGallons.toFixed(1)}</span></Cell>
-        </Row>
-      ))}
+      {pageRows.map(r => {
+        // Prefer the names the API joined into the response —
+        // they're authoritative and don't depend on a separate
+        // /v1/drivers + /v1/assets fetch having completed yet.
+        // Fall back to the page-level maps (for cached responses)
+        // then to the bare ID as final resort.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const embedded = r as any;
+        const driverLabel = embedded.driverName as string | undefined
+          ?? resolveDriverName(r.driverId, r.submittedBy, driverNameById);
+        const assetLabel  = embedded.assetName as string | undefined
+          ?? assetLabelById.get(r.assetId)
+          ?? `Asset #${r.assetId}`;
+        return (
+          <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
+            <Cell><DateCell iso={r.reportedAt} /></Cell>
+            <Cell>{driverLabel}</Cell>
+            <Cell>{assetLabel}</Cell>
+            <Cell>{r.state}</Cell>
+            <Cell><span className="font-mono">{r.dieselGallons.toFixed(1)}</span></Cell>
+          </Row>
+        );
+      })}
     </TableShell>
   );
 }
@@ -689,8 +713,18 @@ function MaintenanceDetail({
     >
       <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
         <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
-        <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
-        <Field icon={<Truck size={12} />} label="Equipment">{resolveEquipmentLabel(report.assetId, report.trailerId, assetLabelById, trailerLabelById)}</Field>
+        <Field icon={<User  size={12} />} label="Driver">{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (report as any).driverName as string
+          ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById)
+        }</Field>
+        <Field icon={<Truck size={12} />} label="Equipment">{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (report as any).assetName as string
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ?? ((report as any).trailerName ? `Trailer ${(report as any).trailerName}` : undefined)
+          ?? resolveEquipmentLabel(report.assetId, report.trailerId, assetLabelById, trailerLabelById)
+        }</Field>
         <Field icon={<FileText size={12} />} label="Status"><StatusPill status={report.status} /></Field>
       </div>
       <FieldSection label="Description">
@@ -903,8 +937,17 @@ function FuelDetail({
           (diesel, odometer) on one line. */}
       <div className="grid grid-cols-3 gap-x-5 gap-y-3 text-[12px]">
         <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
-        <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
-        <Field icon={<Truck size={12} />} label="Asset">{assetLabelById.get(report.assetId) ?? `Asset #${report.assetId}`}</Field>
+        <Field icon={<User  size={12} />} label="Driver">{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (report as any).driverName as string
+          ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById)
+        }</Field>
+        <Field icon={<Truck size={12} />} label="Asset">{
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (report as any).assetName as string
+          ?? assetLabelById.get(report.assetId)
+          ?? `Asset #${report.assetId}`
+        }</Field>
         <Field icon={<MapPin size={12} />} label="State">{report.state}</Field>
         <Field icon={<FuelIcon size={12} />} label="Diesel">{report.dieselGallons.toFixed(2)} gal</Field>
         <Field icon={<FuelIcon size={12} />} label="DEF">{report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—'}</Field>

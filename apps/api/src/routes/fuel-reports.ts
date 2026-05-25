@@ -218,10 +218,14 @@ fuelReports.get("/", async (c) => {
   const limit       = clampLimit(url.searchParams.get("limit") ?? undefined);
   const offset      = Math.max(0, Number(url.searchParams.get("offset") ?? "0") || 0);
 
+  // Join drivers + assets so each row carries its own labels — no
+  // separate /v1/drivers / /v1/assets fetch needed on the dispatch
+  // side, and orphaned IDs (driver hard-deleted while the report
+  // stayed) still surface a label via the join's null shape.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q: any = supabase
     .from("fuel_reports")
-    .select(COLS, { count: "exact" })
+    .select(`${COLS}, driver:drivers(name), asset:assets(name, unit)`, { count: "exact" })
     .eq("org_id", orgId)
     .order("reported_at", { ascending: false });
 
@@ -240,10 +244,27 @@ fuelReports.get("/", async (c) => {
     console.error("[GET /v1/fuel-reports] list failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const rows = (data ?? []) as FuelReportRow[];
+  type JoinedRow = FuelReportRow & {
+    driver?: { name: string | null } | { name: string | null }[] | null;
+    asset?:  { name: string | null; unit: string | null } | Array<{ name: string | null; unit: string | null }> | null;
+  };
+  const rows = (data ?? []) as JoinedRow[];
   const photoMap = await fetchPhotosForFuelReports(rows.map(r => r.id));
   const res: ListFuelReportsResponse = {
-    fuelReports: rows.map(r => rowToFuelReport(r, photoMap.get(r.id))),
+    fuelReports: rows.map(r => {
+      const driver = Array.isArray(r.driver) ? r.driver[0] ?? null : r.driver ?? null;
+      const asset  = Array.isArray(r.asset)  ? r.asset[0]  ?? null : r.asset  ?? null;
+      const fr = rowToFuelReport(r as FuelReportRow, photoMap.get(r.id));
+      // Tack on the joined labels — every FuelReport now carries the
+      // names the dispatcher will display, no client-side lookup.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const out = fr as any;
+      if (driver?.name) out.driverName = driver.name;
+      if (asset) {
+        out.assetName = `${asset.name ?? ''}${asset.unit ? ` #${asset.unit}` : ''}`.trim();
+      }
+      return out;
+    }),
     total:       count ?? rows.length,
     limit,
     offset,

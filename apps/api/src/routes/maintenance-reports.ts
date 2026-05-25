@@ -205,10 +205,14 @@ maintenanceReports.get("/", async (c) => {
   const limit  = clampLimit(url.searchParams.get("limit") ?? undefined);
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? "0") || 0);
 
+  // Join drivers + assets + trailers so each row carries its own
+  // labels. Same pattern as fuel-reports — eliminates the client-
+  // side lookup that previously failed when the list/asset fetches
+  // landed after the user opened the panel.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let q: any = supabase
     .from("maintenance_reports")
-    .select(REPORT_COLS, { count: "exact" })
+    .select(`${REPORT_COLS}, driver:drivers(name), asset:assets(name, unit), trailer:trailers(name, trailer_number)`, { count: "exact" })
     .eq("org_id", orgId)
     .order("reported_at", { ascending: false });
 
@@ -227,10 +231,26 @@ maintenanceReports.get("/", async (c) => {
     console.error("[GET /v1/maintenance-reports] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const rows = (data ?? []) as unknown as MaintenanceReportRow[];
+  type JoinedRow = MaintenanceReportRow & {
+    driver?:  { name: string | null } | { name: string | null }[] | null;
+    asset?:   { name: string | null; unit: string | null } | Array<{ name: string | null; unit: string | null }> | null;
+    trailer?: { name: string | null; trailer_number: string | null } | Array<{ name: string | null; trailer_number: string | null }> | null;
+  };
+  const rows = (data ?? []) as unknown as JoinedRow[];
   const photoMap = await fetchPhotosForReports(rows.map(r => r.id));
   const res: ListMaintenanceReportsResponse = {
-    reports: rows.map(r => rowToReport(r, photoMap.get(r.id))),
+    reports: rows.map(r => {
+      const driver  = Array.isArray(r.driver)  ? r.driver[0]  ?? null : r.driver  ?? null;
+      const asset   = Array.isArray(r.asset)   ? r.asset[0]   ?? null : r.asset   ?? null;
+      const trailer = Array.isArray(r.trailer) ? r.trailer[0] ?? null : r.trailer ?? null;
+      const rep = rowToReport(r as MaintenanceReportRow, photoMap.get(r.id));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const out = rep as any;
+      if (driver?.name) out.driverName = driver.name;
+      if (asset)   out.assetName   = `${asset.name ?? ''}${asset.unit ? ` #${asset.unit}` : ''}`.trim();
+      if (trailer) out.trailerName = trailer.trailer_number ? `#${trailer.trailer_number}` : (trailer.name ?? '');
+      return out;
+    }),
     total:   count ?? rows.length,
     limit,
     offset,
