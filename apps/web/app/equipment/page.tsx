@@ -597,9 +597,11 @@ function DetailPanel({
           </button>
         </div>
 
-        {/* Body — scrollable. Each detail component owns its own
-            map-on-top layout so the height carries through. */}
-        <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+        {/* Body — two-column. TwoColumnBody owns its own internal
+            scroll (left media + right text both scroll independently)
+            so this wrapper is just a flex container that fills the
+            available height between the header and the bottom edge. */}
+        <div className="flex-1 flex min-h-0" style={{ background: 'var(--gc-bg)' }}>
           {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
           {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id}                                            onOpenLightbox={onOpenLightbox} />}
           {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
@@ -622,31 +624,30 @@ function MaintenanceDetail({
   driverNameById: Map<number, string>;
   onOpenLightbox: (urls: string[], index: number) => void;
 }) {
+  const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
+  if (report.photos && report.photos.length > 0) {
+    mediaSections.push({
+      photos: report.photos.map((p: MaintenanceReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null })),
+    });
+  }
   return (
-    <>
-      <MapBlock lat={report.latitude} lon={report.longitude} state={report.state} />
-      <div className="px-4 py-3">
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
-          <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
-          <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
-          <Field icon={<Truck size={12} />} label="Equipment">{equipmentLabelFromReport(report)}</Field>
-          <Field icon={<FileText size={12} />} label="Status"><StatusPill status={report.status} /></Field>
-        </div>
-
-        <FieldSection label="Description">
-          <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{report.description}</p>
-        </FieldSection>
-
-        {report.photos && report.photos.length > 0 && (
-          <FieldSection label={`Photos (${report.photos.length})`}>
-            <PhotoGrid
-              photos={report.photos.map((p: MaintenanceReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null }))}
-              onOpenLightbox={onOpenLightbox}
-            />
-          </FieldSection>
-        )}
+    <TwoColumnBody
+      mapLat={report.latitude}
+      mapLon={report.longitude}
+      mapState={report.state}
+      media={mediaSections}
+      onOpenLightbox={onOpenLightbox}
+    >
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+        <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
+        <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
+        <Field icon={<Truck size={12} />} label="Equipment">{equipmentLabelFromReport(report)}</Field>
+        <Field icon={<FileText size={12} />} label="Status"><StatusPill status={report.status} /></Field>
       </div>
-    </>
+      <FieldSection label="Description">
+        <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{report.description}</p>
+      </FieldSection>
+    </TwoColumnBody>
   );
 }
 
@@ -679,130 +680,115 @@ function InspectionDetail({
   const trailerDefects = data.trailerItems.filter(i => i.status === 'fail');
   const totalDefects   = truckDefects.length + trailerDefects.length;
   const passCount      = data.items.length + data.trailerItems.length - totalDefects;
-  const truckGeneralPhotos   = data.photos.filter(p => p.itemId == null && p.target === 'truck');
-  const trailerGeneralPhotos = data.photos.filter(p => p.itemId == null && p.target === 'trailer');
-  const orphanGeneralPhotos  = data.photos.filter(p => p.itemId == null && p.target == null);
 
   const truckLabel   = data.asset   ? `Truck ${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : 'Truck';
   const trailerLabel = data.trailer ? `Trailer ${data.trailer.trailer_number ? `#${data.trailer.trailer_number}` : data.trailer.name}` : 'Trailer';
 
+  // Build the media sections for the left-column gallery. Order
+  // matches the right-column reading order so a dispatcher scanning
+  // the right can scan the left in lockstep:
+  //   per-defect photos (in defect-row order), then general photos.
+  const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
+  // Truck per-defect photos
+  for (const def of truckDefects) {
+    const itemPhotos = data.photos.filter(p => p.itemId === def.id);
+    if (itemPhotos.length > 0) {
+      mediaSections.push({
+        label: `${truckLabel} · ${def.label}`,
+        photos: itemPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? def.label })),
+      });
+    }
+  }
+  // Trailer per-defect photos
+  for (const def of trailerDefects) {
+    const itemPhotos = data.photos.filter(p => p.itemId === def.id);
+    if (itemPhotos.length > 0) {
+      mediaSections.push({
+        label: `${trailerLabel} · ${def.label}`,
+        photos: itemPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption ?? def.label })),
+      });
+    }
+  }
+  // General (non-item) photos grouped by target.
+  const truckGeneral   = data.photos.filter(p => p.itemId == null && p.target === 'truck');
+  const trailerGeneral = data.photos.filter(p => p.itemId == null && p.target === 'trailer');
+  const orphanGeneral  = data.photos.filter(p => p.itemId == null && p.target == null);
+  if (truckGeneral.length > 0) {
+    mediaSections.push({
+      label: `${truckLabel} · General`,
+      photos: truckGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
+    });
+  }
+  if (trailerGeneral.length > 0) {
+    mediaSections.push({
+      label: `${trailerLabel} · General`,
+      photos: trailerGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
+    });
+  }
+  if (orphanGeneral.length > 0) {
+    mediaSections.push({
+      label: 'General',
+      photos: orphanGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
+    });
+  }
+
   return (
-    <>
-      <MapBlock lat={data.locationLat} lon={data.locationLon} />
-      <div className="px-4 py-3">
-        <div className="grid grid-cols-3 gap-x-6 gap-y-3 text-[12px]">
-          <Field icon={<Clock size={12} />} label="Submitted">{new Date(data.submittedAt).toLocaleString()}</Field>
-          <Field icon={<User  size={12} />} label="Signed by">{data.signedBy}</Field>
-          <Field icon={<Clock size={12} />} label="Duration">{data.durationSeconds != null ? fmtDuration(data.durationSeconds) : '—'}</Field>
-          <Field icon={<Truck size={12} />} label="Truck">
-            {data.asset ? `${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : '—'}
-          </Field>
-          <Field icon={<Truck size={12} />} label="Trailer">
-            {data.trailer ? `${data.trailer.name}${data.trailer.trailer_number ? ` #${data.trailer.trailer_number}` : ''}` : '—'}
-          </Field>
-          <Field icon={<FileText size={12} />} label="Items">{passCount} passed · {totalDefects} failed</Field>
-        </div>
-
-        {/* Truck defects — only shown when the inspection covered a
-            truck AND at least one item failed. */}
-        {data.asset && truckDefects.length > 0 && (
-          <EquipmentDefectsSection
-            equipmentLabel={truckLabel}
-            target="truck"
-            defects={truckDefects}
-            photos={data.photos}
-            onOpenLightbox={onOpenLightbox}
-          />
-        )}
-        {data.trailer && trailerDefects.length > 0 && (
-          <EquipmentDefectsSection
-            equipmentLabel={trailerLabel}
-            target="trailer"
-            defects={trailerDefects}
-            photos={data.photos}
-            onOpenLightbox={onOpenLightbox}
-          />
-        )}
-
-        {data.notes && (
-          <FieldSection label="Driver notes">
-            <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{data.notes}</p>
-          </FieldSection>
-        )}
-
-        {/* General photos — split by equipment so they line up with
-            the defect sections above. orphanGeneralPhotos are pre-
-            target-column rows (legacy data); shown last under a
-            neutral label. */}
-        {truckGeneralPhotos.length > 0 && (
-          <FieldSection label={`${truckLabel} — General photos (${truckGeneralPhotos.length})`}>
-            <PhotoGrid
-              photos={truckGeneralPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-              onOpenLightbox={onOpenLightbox}
-            />
-          </FieldSection>
-        )}
-        {trailerGeneralPhotos.length > 0 && (
-          <FieldSection label={`${trailerLabel} — General photos (${trailerGeneralPhotos.length})`}>
-            <PhotoGrid
-              photos={trailerGeneralPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-              onOpenLightbox={onOpenLightbox}
-            />
-          </FieldSection>
-        )}
-        {orphanGeneralPhotos.length > 0 && (
-          <FieldSection label={`General photos (${orphanGeneralPhotos.length})`}>
-            <PhotoGrid
-              photos={orphanGeneralPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-              onOpenLightbox={onOpenLightbox}
-            />
-          </FieldSection>
-        )}
+    <TwoColumnBody
+      mapLat={data.locationLat}
+      mapLon={data.locationLon}
+      media={mediaSections}
+      onOpenLightbox={onOpenLightbox}
+    >
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+        <Field icon={<Clock size={12} />} label="Submitted">{new Date(data.submittedAt).toLocaleString()}</Field>
+        <Field icon={<User  size={12} />} label="Signed by">{data.signedBy}</Field>
+        <Field icon={<Clock size={12} />} label="Duration">{data.durationSeconds != null ? fmtDuration(data.durationSeconds) : '—'}</Field>
+        <Field icon={<Truck size={12} />} label="Items">{passCount} passed · {totalDefects} failed</Field>
+        <Field icon={<Truck size={12} />} label="Truck">
+          {data.asset ? `${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : '—'}
+        </Field>
+        <Field icon={<Truck size={12} />} label="Trailer">
+          {data.trailer ? `${data.trailer.name}${data.trailer.trailer_number ? ` #${data.trailer.trailer_number}` : ''}` : '—'}
+        </Field>
       </div>
-    </>
+
+      {data.asset && truckDefects.length > 0 && (
+        <EquipmentDefectsSection equipmentLabel={truckLabel} defects={truckDefects} />
+      )}
+      {data.trailer && trailerDefects.length > 0 && (
+        <EquipmentDefectsSection equipmentLabel={trailerLabel} defects={trailerDefects} />
+      )}
+
+      {data.notes && (
+        <FieldSection label="Driver notes">
+          <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{data.notes}</p>
+        </FieldSection>
+      )}
+    </TwoColumnBody>
   );
 }
 
-// Renders one equipment's failed checklist items as red cards,
-// each with the item's section, label, driver notes, and any photos
-// the driver attached specifically to that item. Used twice in the
-// inspection panel — once per truck, once per trailer — so the
-// dispatcher sees defects grouped by the physical thing that needs
-// the work.
+// Renders one equipment's failed checklist items as red cards.
+// Photos are no longer inline — they live in the left-column media
+// gallery with labels linking back to the item, so the dispatcher
+// can read the writeup on the right while scanning evidence on the
+// left without losing context.
 function EquipmentDefectsSection({
-  equipmentLabel, target, defects, photos, onOpenLightbox,
+  equipmentLabel, defects,
 }: {
   equipmentLabel: string;
-  target: 'truck' | 'trailer';
   defects: Array<{ id: string; section: string; label: string; status: 'pass'|'fail'|'na'; notes?: string }>;
-  photos: Array<{ id: string; itemId: string | null; target: 'truck' | 'trailer' | null; signedUrl: string | null; caption: string | null; uploadedAt: string }>;
-  onOpenLightbox: (urls: string[], index: number) => void;
 }) {
-  void target; // target prop kept for future filtering symmetry
   return (
     <FieldSection label={`${equipmentLabel} — Defects (${defects.length})`}>
       <div className="flex flex-col gap-1.5">
-        {defects.map(item => {
-          const itemPhotos = photos.filter(p => p.itemId === item.id);
-          return (
-            <div key={item.id} className="text-[12px] py-2 px-3 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
-              <div style={{ color: '#7f1d1d', fontWeight: 600 }}>{item.label}</div>
-              <div className="text-[10px] mt-0.5" style={{ color: '#991b1b' }}>{item.section}</div>
-              {item.notes && <div className="text-[12px] mt-1.5" style={{ color: 'var(--gc-text-1)' }}>{item.notes}</div>}
-              {itemPhotos.length > 0 && (
-                // Non-compact size so photos read as the primary
-                // evidence rather than tiny decoration. Lightbox
-                // opens on click.
-                <div className="mt-2">
-                  <PhotoGrid
-                    photos={itemPhotos.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-                    onOpenLightbox={onOpenLightbox}
-                  />
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {defects.map(item => (
+          <div key={item.id} className="text-[12px] py-2 px-3 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+            <div style={{ color: '#7f1d1d', fontWeight: 600 }}>{item.label}</div>
+            <div className="text-[10px] mt-0.5" style={{ color: '#991b1b' }}>{item.section}</div>
+            {item.notes && <div className="text-[12px] mt-1.5" style={{ color: 'var(--gc-text-1)' }}>{item.notes}</div>}
+          </div>
+        ))}
       </div>
     </FieldSection>
   );
@@ -815,28 +801,30 @@ function FuelDetail({
   driverNameById: Map<number, string>;
   onOpenLightbox: (urls: string[], index: number) => void;
 }) {
+  const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
+  if (report.photos && report.photos.length > 0) {
+    mediaSections.push({
+      label: 'Receipts',
+      photos: report.photos.map((p: FuelReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null })),
+    });
+  }
   return (
-    <>
-      <MapBlock lat={report.latitude} lon={report.longitude} state={report.state} />
-      <div className="px-4 py-3">
-        <div className="grid grid-cols-3 gap-x-6 gap-y-3 text-[12px]">
-          <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
-          <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
-          <Field icon={<MapPin size={12} />} label="State">{report.state}</Field>
-          <Field icon={<FuelIcon size={12} />} label="Diesel">{report.dieselGallons.toFixed(2)} gal</Field>
-          <Field icon={<FuelIcon size={12} />} label="DEF">{report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—'}</Field>
-          <Field icon={<Activity size={12} />} label="Odometer">{report.odometer != null ? `${report.odometer.toLocaleString()} mi` : '—'}</Field>
-        </div>
-        {report.photos && report.photos.length > 0 && (
-          <FieldSection label={`Receipts (${report.photos.length})`}>
-            <PhotoGrid
-              photos={report.photos.map((p: FuelReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null }))}
-              onOpenLightbox={onOpenLightbox}
-            />
-          </FieldSection>
-        )}
+    <TwoColumnBody
+      mapLat={report.latitude}
+      mapLon={report.longitude}
+      mapState={report.state}
+      media={mediaSections}
+      onOpenLightbox={onOpenLightbox}
+    >
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+        <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
+        <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
+        <Field icon={<MapPin size={12} />} label="State">{report.state}</Field>
+        <Field icon={<FuelIcon size={12} />} label="Diesel">{report.dieselGallons.toFixed(2)} gal</Field>
+        <Field icon={<FuelIcon size={12} />} label="DEF">{report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—'}</Field>
+        <Field icon={<Activity size={12} />} label="Odometer">{report.odometer != null ? `${report.odometer.toLocaleString()} mi` : '—'}</Field>
       </div>
-    </>
+    </TwoColumnBody>
   );
 }
 
@@ -874,7 +862,7 @@ function FieldSection({ label, children }: { label: string; children: React.Reac
 // movements panel's 420 because our reports have more meta + photos
 // to show below). Falls back to a "no GPS" placeholder when the
 // report lacks coords.
-function MapBlock({ lat, lon, state }: { lat: number | null | undefined; lon: number | null | undefined; state?: string }) {
+function MapBlock({ lat, lon, state, height = 320 }: { lat: number | null | undefined; lon: number | null | undefined; state?: string; height?: number }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const hasCoords = lat != null && lon != null;
   useEffect(() => {
@@ -896,7 +884,7 @@ function MapBlock({ lat, lon, state }: { lat: number | null | undefined; lon: nu
     return () => { cancelled = true; };
   }, [lat, lon, hasCoords]);
   return (
-    <div className="relative shrink-0" style={{ height: 320 }}>
+    <div className="relative shrink-0" style={{ height }}>
       {hasCoords ? (
         <>
           <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
@@ -920,6 +908,110 @@ function MapBlock({ lat, lon, state }: { lat: number | null | undefined; lon: nu
           <MapPin size={14} style={{ marginRight: 6 }} /> No GPS attached to this report
         </div>
       )}
+    </div>
+  );
+}
+
+// TwoColumnBody — splits the panel body into a fixed-width left
+// column (map on top, media below) and a flex-1 right column for
+// text. Used by all three detail components so the layout reads the
+// same across maintenance / inspection / fuel: dispatcher's eye
+// goes top-left for "where", bottom-left for "what evidence", and
+// the entire right column for "the writeup".
+function TwoColumnBody({
+  mapLat, mapLon, mapState, media, onOpenLightbox, children,
+}: {
+  mapLat:   number | null | undefined;
+  mapLon:   number | null | undefined;
+  mapState?: string;
+  /** Sections of media to render in the bottom-left. Each section
+   *  has its own sub-label (item name, "General", etc.) so an
+   *  inspection's photos stay attributable to which defect they
+   *  belong to even though they're all collected here. */
+  media: Array<{
+    label?: string;
+    photos: Array<{ id: string; signedUrl: string | null; caption: string | null }>;
+  }>;
+  onOpenLightbox: (urls: string[], index: number) => void;
+  /** Right-column scrollable text content. */
+  children: React.ReactNode;
+}) {
+  const totalPhotos = media.reduce((n, sec) => n + sec.photos.length, 0);
+  // Build one URL list across every section so paging in the
+  // lightbox walks through the entire report's media in order.
+  // Then map per-section back to index offsets when launching.
+  const allUrls: string[] = [];
+  const sectionOffsets: number[] = [];
+  for (const sec of media) {
+    sectionOffsets.push(allUrls.length);
+    for (const p of sec.photos) if (p.signedUrl) allUrls.push(p.signedUrl);
+  }
+  return (
+    <div className="flex-1 flex min-h-0">
+      {/* Left column — map fixed on top, scrollable media below */}
+      <div
+        className="flex flex-col shrink-0"
+        style={{ width: 340, borderRight: '1px solid var(--gc-border-light)' }}
+      >
+        <MapBlock lat={mapLat} lon={mapLon} state={mapState} height={250} />
+        <div
+          className="flex-1 overflow-y-auto px-3 py-3"
+          style={{ background: 'var(--gc-surface)', borderTop: '1px solid var(--gc-border-light)' }}
+        >
+          <div className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--gc-text-3)' }}>
+            Media {totalPhotos > 0 ? `(${totalPhotos})` : ''}
+          </div>
+          {totalPhotos === 0 ? (
+            <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+              No photos attached to this report.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {media.map((sec, i) => {
+                if (sec.photos.length === 0) return null;
+                // Offset into the unified URL list so the lightbox
+                // can page across the whole report from any tile.
+                const sectionStart = sectionOffsets[i];
+                let urlPos = sectionStart;
+                return (
+                  <div key={i}>
+                    {sec.label && (
+                      <div className="text-[10px] font-medium mb-1.5" style={{ color: 'var(--gc-text-2)' }}>
+                        {sec.label}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {sec.photos.map(p => {
+                        const here = p.signedUrl ? urlPos++ : -1;
+                        return p.signedUrl ? (
+                          <button
+                            key={p.id}
+                            onClick={() => onOpenLightbox(allUrls, here)}
+                            title={p.caption ?? sec.label ?? 'View photo'}
+                            style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={p.signedUrl} alt={p.caption ?? ''} style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--gc-border)' }} />
+                          </button>
+                        ) : (
+                          <div key={p.id} style={{ width: 96, height: 96, borderRadius: 8, background: 'var(--gc-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--gc-text-3)' }}>
+                            no preview
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Right column — scrollable text */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 min-w-0">
+        {children}
+      </div>
     </div>
   );
 }
