@@ -18,6 +18,15 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Firebase: google-services.json / GoogleService-Info.plist are NOT
+# gitignored — Firebase's own docs treat them as public configuration
+# (the API key in them is scoped to package name + signing cert hash
+# and can't be used to send pushes or read data without those). They
+# need to be in the repo for EAS Build to pick them up. The REAL
+# secret is the FCM V1 service-account JSON, which lives on Expo's
+# servers (uploaded via expo.dev credentials page) and never touches
+# this repo.
+
 # Metro
 .metro-health-check*
 
