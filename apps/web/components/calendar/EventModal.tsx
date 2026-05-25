@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -389,7 +389,7 @@ const PDF_ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // Renders a PDF data URL to canvas elements via PDF.js with zoom controls.
 function UploadedDocsPanel({
-  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange,
+  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange, onSignedUrlError,
 }: {
   docs: import('@/lib/db').LoadDocument[];
   /** Generated invoices for this load. Rendered as virtual rows at the
@@ -406,6 +406,10 @@ function UploadedDocsPanel({
   /** Fires after a successful upload or delete so the parent can
    *  re-fetch the docs list. */
   onChange?: () => void;
+  /** Fires when the <img> / <iframe> fails to render — almost always a
+   *  stale signed URL. Parent re-mints and pushes a fresh `signedUrl`
+   *  back in via props on the next render. */
+  onSignedUrlError?: () => void;
 }) {
   const addFileRef = useRef<HTMLInputElement>(null);
   // Two-stage upload: pick file → choose kind → commit. Pending file
@@ -414,6 +418,11 @@ function UploadedDocsPanel({
   const [uploading,     setUploading]     = useState(false);
   const [uploadError,   setUploadError]   = useState<string | null>(null);
   const [deletingId,    setDeletingId]    = useState<string | null>(null);
+  // Tracks signed URLs we've already asked the parent to refresh so a
+  // broken/expired URL only triggers ONE refetch — otherwise an asset
+  // that's genuinely missing (deleted from storage) would loop forever
+  // between <img onError> and the parent re-minting the same dead URL.
+  const refreshedUrlsRef = useRef<Set<string>>(new Set());
   // Inline kind editor — when the user clicks the pencil on a row,
   // an inline chip picker appears under that row. Server auto-renames
   // the fileName when kind changes (PATCH /v1/documents/:id), so a
@@ -830,9 +839,31 @@ function UploadedDocsPanel({
           <Loader2 size={20} className="animate-spin" style={{ color: '#ffffff' }} />
         ) : isImage(selected.mimeType, selected.fileName) ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={signedUrl} alt={selected.fileName} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          <img
+            src={signedUrl}
+            alt={selected.fileName}
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+            onError={() => {
+              if (!onSignedUrlError) return;
+              // Only ask the parent to re-mint once per URL — see
+              // refreshedUrlsRef comment above for the loop guard.
+              if (refreshedUrlsRef.current.has(signedUrl)) return;
+              refreshedUrlsRef.current.add(signedUrl);
+              onSignedUrlError();
+            }}
+          />
         ) : (
-          <iframe src={signedUrl} title={selected.fileName} style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }} />
+          <iframe
+            src={signedUrl}
+            title={selected.fileName}
+            style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }}
+            onError={() => {
+              if (!onSignedUrlError) return;
+              if (refreshedUrlsRef.current.has(signedUrl)) return;
+              refreshedUrlsRef.current.add(signedUrl);
+              onSignedUrlError();
+            }}
+          />
         )}
       </div>
       {deleteTarget && (
@@ -1982,6 +2013,20 @@ export default function EventModal() {
     })();
     return () => { cancelled = true; };
   }, [selectedDocId, loadDocuments]);
+
+  // Forces a fresh signed URL mint for the currently-selected doc.
+  // Used as the <img> onError fallback inside UploadedDocsPanel —
+  // Supabase signed URLs default to a 1-hour TTL and the cached URL
+  // shipped on the original docs list response goes stale once the
+  // dispatcher leaves the modal open past the hour mark. Catching
+  // the load error + re-minting recovers automatically without
+  // needing them to close + reopen the modal.
+  const refreshSelectedDocUrl = useCallback(async () => {
+    if (!selectedDocId) return;
+    const { getLoadDocumentSignedUrl } = await import('@/lib/db');
+    const url = await getLoadDocumentSignedUrl(selectedDocId);
+    if (url) setSelectedDocUrl(url);
+  }, [selectedDocId]);
   const [pdfObjectUrl,  setPdfObjectUrl]  = useState('');
   const [pdfRetryKey,   setPdfRetryKey]   = useState(0);
   const [isDragOver,    setIsDragOver]    = useState(false);
@@ -3971,6 +4016,7 @@ export default function EventModal() {
                 selectedId={selectedDocId}
                 onSelect={setSelectedDocId}
                 signedUrl={selectedDocUrl}
+                onSignedUrlError={refreshSelectedDocUrl}
                 headerColor={headerColor}
                 loadId={(() => {
                   const ev = events.find(e => e.id === modalEventId);
