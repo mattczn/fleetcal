@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Fuel, Wrench, Package } from 'lucide-react';
+import { Calendar, BarChart2, Users, LayoutDashboard, FileCheck2, Receipt, Package } from 'lucide-react';
 import type { Capability, OrgModule } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
@@ -24,8 +24,13 @@ const NAV_LINKS: Array<{
   { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
   { href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',    module: 'closeout' },
   { href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
-  { href: '/fuel',        label: 'Fuel',           icon: Fuel,            cap: 'fuel.access',        module: 'fuel' },
-  { href: '/maintenance', label: 'Maintenance',    icon: Wrench,          cap: 'maintenance.access', module: 'maintenance' },
+  // Equipment subsumes the old Fuel + Maintenance nav links — one
+  // page with three sub-tabs (Inspections / Maintenance / Fuel). The
+  // /fuel and /maintenance routes still exist as redirects to
+  // /equipment for stale bookmarks but they're no longer in the nav.
+  // Gated on the maintenance module since any fleet using inspections
+  // / maintenance has it on; fuel-only orgs are vanishingly rare in
+  // practice.
   { href: '/equipment',   label: 'Equipment',      icon: Package,         cap: 'maintenance.access', module: 'maintenance' },
   { href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',     module: 'payroll' },
 ];

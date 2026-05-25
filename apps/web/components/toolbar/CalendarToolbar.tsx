@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Fuel, Wrench, Container } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Package, Container } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -936,26 +936,19 @@ export default function CalendarToolbar() {
                   Payroll
                 </Link>
               </Authorize>
-              <Authorize cap="fuel.access" module="fuel">
-                <Link href="/fuel" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <Fuel size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Fuel
-                </Link>
-              </Authorize>
+              {/* Fuel + Maintenance consolidated into Equipment.
+                  Single entry-point here; the sub-tab is selected via
+                  ?tab= so users who click "Fuel" or "Maintenance" from
+                  a deep link land on the right view. */}
               <Authorize cap="maintenance.access" module="maintenance">
-                <Link href="/maintenance" onClick={() => setMoreOpen(false)}
+                <Link href="/equipment" onClick={() => setMoreOpen(false)}
                   className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
                   style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
                   onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
                   onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                 >
-                  <Wrench size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Maintenance
+                  <Package size={15} style={{ color: 'var(--gc-text-3)' }} />
+                  Equipment
                 </Link>
               </Authorize>
             </div>

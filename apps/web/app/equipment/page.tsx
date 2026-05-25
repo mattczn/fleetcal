@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Package, Wrench, ClipboardCheck, Fuel as FuelIcon, AlertTriangle, Camera, Loader2, ChevronRight, MapPin } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -65,7 +66,17 @@ type Tab = 'maintenance' | 'inspections' | 'fuel';
 // ─── Page ─────────────────────────────────────────────────────────────
 
 export default function EquipmentPage() {
-  const [tab, setTab] = useState<Tab>('inspections');
+  // Honor ?tab=fuel / ?tab=maintenance / ?tab=inspections so deep
+  // links (or redirects from the legacy /fuel and /maintenance routes)
+  // land on the right sub-tab. Falls back to inspections when the
+  // param is missing or unrecognized — inspections is the highest-
+  // signal default since it surfaces compliance issues first.
+  const searchParams = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams?.get('tab');
+    return t === 'fuel' || t === 'maintenance' || t === 'inspections' ? t : 'inspections';
+  })();
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--gc-bg)' }}>
