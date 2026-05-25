@@ -211,32 +211,59 @@ export default function CalendarHeader() {
               borderRight: '1px solid var(--gc-border-light)',
             }}
           >
-            {/* Icon + stacked name/unit — clickable to open the asset
-                detail modal (combined current-location + movement
-                history). */}
-            <button
-              className="flex items-center gap-2 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
-              onClick={() => setDetailPanel({ asset, location: loc ?? null })}
-              title="View location + movement history"
-              onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-            >
-              <Truck size={28} style={{ color: asset.color, flexShrink: 0 }} />
-              <div className="flex flex-col min-w-0 text-left" style={{ gap: 1 }}>
-                <span
-                  className="text-[13px] font-semibold truncate leading-tight"
-                  style={{ color: 'var(--gc-text-1)' }}
+            {/* Icon + name/unit — responsive layout driven by column
+                width (rw). At ≥130px we use the original horizontal
+                layout (icon on the left, name + unit stacked to the
+                right). Below 130px the icon drops above the name so
+                the name gets the full column width — even a long
+                "Freightliner" stays on one line at typical narrow
+                widths. Unit number hides entirely under ~90px since
+                neither line fits cleanly below a 5-char name.
+                Clickable to open the asset detail modal. */}
+            {(() => {
+              const isVertical  = rw < 130;
+              const showUnit    = rw >= 90;
+              const iconSize    = isVertical ? 18 : 28;
+              const unitLabel   = asset.unit ? `#${asset.unit}` : asset.type;
+              return (
+                <button
+                  className={
+                    isVertical
+                      ? "flex flex-col items-center gap-0.5 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
+                      : "flex items-center gap-2 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
+                  }
+                  onClick={() => setDetailPanel({ asset, location: loc ?? null })}
+                  title={`${asset.name}${asset.unit ? ` · #${asset.unit}` : ""} — View location + movement history`}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
-                  {asset.name}
-                </span>
-                <span
-                  className="text-[11px] font-medium truncate leading-tight"
-                  style={{ color: 'var(--gc-text-3)' }}
-                >
-                  {asset.unit ? `#${asset.unit}` : asset.type}
-                </span>
-              </div>
-            </button>
+                  <Truck size={iconSize} style={{ color: asset.color, flexShrink: 0 }} />
+                  <div
+                    className={
+                      isVertical
+                        ? "flex flex-col items-center min-w-0 max-w-full text-center"
+                        : "flex flex-col min-w-0 text-left"
+                    }
+                    style={{ gap: 1 }}
+                  >
+                    <span
+                      className="text-[13px] font-semibold truncate leading-tight"
+                      style={{ color: 'var(--gc-text-1)', maxWidth: '100%' }}
+                    >
+                      {asset.name}
+                    </span>
+                    {showUnit && (
+                      <span
+                        className="text-[11px] font-medium truncate leading-tight"
+                        style={{ color: 'var(--gc-text-3)', maxWidth: '100%' }}
+                      >
+                        {unitLabel}
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })()}
 
             {loc && age ? (
               <button
