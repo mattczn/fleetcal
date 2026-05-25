@@ -18,11 +18,12 @@
  * 200-row dump was slow to scan + slow to render on bigger orgs.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { createPortal } from 'react-dom';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon, AlertTriangle,
-  Camera, Loader2, MapPin, X,
+  Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Activity,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -537,11 +538,12 @@ function FuelList({
 
 // ─── Centered detail panel ───────────────────────────────────────────
 //
-// Per user spec: centered on screen, the PANEL itself is transparent
-// (no card background) — only the map keeps a solid frame because
-// the tiles need an opaque container. Everything else (meta grid,
-// photos, defect cards) sits on the dimmed backdrop. Text is light
-// so it reads against the dark backdrop without a panel surface.
+// Styled to match MovementDetailPanel from the calendar so the panels
+// across the app read as one design language: 780×660 light surface,
+// rounded-2xl, dimmed backdrop, header with a colored category dot +
+// title + close button, scrollable body with field grid + map +
+// photos. Portal to document.body to escape any transformed ancestor
+// containing block.
 
 function DetailPanel({
   panel, driverNameById, onClose, onOpenLightbox,
@@ -551,62 +553,66 @@ function DetailPanel({
   onClose: () => void;
   onOpenLightbox: (urls: string[], index: number) => void;
 }) {
-  // Esc to close.
+  const overlayRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  return (
+  // Each report type gets its own header dot + title — gives the
+  // dispatcher a one-glance signal of what kind of report they
+  // opened. Colors match the tab icons.
+  const meta = panel.kind === 'maintenance'
+    ? { color: '#f59e0b', title: 'Maintenance report' }
+    : panel.kind === 'inspection'
+    ? { color: '#1a73e8', title: 'Inspection report' }
+    : { color: '#16a34a', title: 'Fuel report' };
+
+  const content = (
     <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 80,
-        background: 'rgba(15, 23, 42, 0.78)', // dim backdrop — text needs contrast
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 24,
-      }}
+      ref={overlayRef}
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)', zIndex: 1000 }}
+      onClick={e => { if (e.target === overlayRef.current) onClose(); }}
     >
-      {/* Stop-propagation wrapper so clicking inside doesn't dismiss.
-          The wrapper itself has NO background — the user explicitly
-          wants the panel transparent except for the map. Photos and
-          map components carry their own visual presence. */}
       <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          width: 'min(720px, 100%)',
-          maxHeight: '90vh',
-          overflow: 'auto',
-          color: '#f1f5f9', // light text for the dark backdrop
-          position: 'relative',
-        }}
+        className="relative flex flex-col rounded-2xl overflow-hidden"
+        style={{ width: 780, height: 660, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
       >
-        <div className="flex items-center mb-4">
-          <span className="text-sm font-bold uppercase tracking-wider" style={{ color: '#cbd5e1' }}>
-            {panel.kind === 'maintenance' ? 'Maintenance report'
-             : panel.kind === 'inspection' ? 'Inspection report'
-             : 'Fuel report'}
-          </span>
-          <div className="flex-1" />
+        {/* Header — mirrors MovementDetailPanel: color dot + title + X */}
+        <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
+          <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: meta.color }} />
+          <div className="flex-1 min-w-0">
+            <div className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>{meta.title}</div>
+          </div>
           <button
             onClick={onClose}
-            aria-label="Close"
-            className="p-1.5 rounded-full transition-colors"
-            style={{ background: 'rgba(255,255,255,0.12)', color: 'white' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.22)'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; }}
+            className="p-1.5 rounded-full transition-colors shrink-0"
+            style={{ color: 'var(--gc-text-3)' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
           >
             <X size={16} />
           </button>
         </div>
 
-        {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
-        {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id}                                            onOpenLightbox={onOpenLightbox} />}
-        {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
+        {/* Body — scrollable. Each detail component owns its own
+            map-on-top layout so the height carries through. */}
+        <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+          {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
+          {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id}                                            onOpenLightbox={onOpenLightbox} />}
+          {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} onOpenLightbox={onOpenLightbox} />}
+        </div>
       </div>
     </div>
   );
+
+  // Portal so the fixed overlay isn't clipped by an ancestor's
+  // containing block (transforms / filters / contain). Same pattern
+  // as MovementDetailPanel.
+  if (typeof document === 'undefined') return null;
+  return createPortal(content, document.body);
 }
 
 function MaintenanceDetail({
@@ -618,26 +624,28 @@ function MaintenanceDetail({
 }) {
   return (
     <>
-      <MetaGrid items={[
-        { label: 'Reported',   value: new Date(report.reportedAt).toLocaleString() },
-        { label: 'Driver',     value: resolveDriverName(report.driverId, report.submittedBy, driverNameById) },
-        { label: 'Equipment',  value: equipmentLabelFromReport(report) },
-        { label: 'Status',     value: <StatusPill status={report.status} /> },
-      ]} />
-      <Section title="Description">
-        <p className="text-sm whitespace-pre-wrap" style={{ color: '#f1f5f9' }}>{report.description}</p>
-      </Section>
-      {report.photos && report.photos.length > 0 && (
-        <Section title={`Photos (${report.photos.length})`}>
-          <PhotoGrid
-            photos={report.photos.map((p: MaintenanceReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null }))}
-            onOpenLightbox={onOpenLightbox}
-          />
-        </Section>
-      )}
-      {report.latitude != null && report.longitude != null
-        ? <Section title="Location"><MiniMap lat={report.latitude} lon={report.longitude} state={report.state} /></Section>
-        : <Section title="Location"><NoLocation /></Section>}
+      <MapBlock lat={report.latitude} lon={report.longitude} state={report.state} />
+      <div className="px-4 py-3">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
+          <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
+          <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
+          <Field icon={<Truck size={12} />} label="Equipment">{equipmentLabelFromReport(report)}</Field>
+          <Field icon={<FileText size={12} />} label="Status"><StatusPill status={report.status} /></Field>
+        </div>
+
+        <FieldSection label="Description">
+          <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{report.description}</p>
+        </FieldSection>
+
+        {report.photos && report.photos.length > 0 && (
+          <FieldSection label={`Photos (${report.photos.length})`}>
+            <PhotoGrid
+              photos={report.photos.map((p: MaintenanceReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null }))}
+              onOpenLightbox={onOpenLightbox}
+            />
+          </FieldSection>
+        )}
+      </div>
     </>
   );
 }
@@ -658,60 +666,65 @@ function InspectionDetail({
       .catch(err => { console.error('[equipment] inspection detail:', err); setData(null); })
       .finally(() => setLoading(false));
   }, [id]);
-  if (loading) return <div className="flex items-center justify-center py-10"><Loader2 size={20} className="animate-spin" /></div>;
-  if (!data)   return <div className="text-sm" style={{ color: '#dc2626' }}>Could not load report.</div>;
+  if (loading) return <div className="flex items-center justify-center py-10"><Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} /></div>;
+  if (!data)   return <div className="text-sm px-4 py-6" style={{ color: '#dc2626' }}>Could not load report.</div>;
   const allItems = [...data.items, ...data.trailerItems];
   const defects = allItems.filter(i => i.status === 'fail');
   return (
     <>
-      <MetaGrid items={[
-        { label: 'Submitted', value: new Date(data.submittedAt).toLocaleString() },
-        { label: 'Signed by', value: data.signedBy },
-        { label: 'Truck',     value: data.asset   ? `${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : '—' },
-        { label: 'Trailer',   value: data.trailer ? `${data.trailer.name}${data.trailer.trailer_number ? ` #${data.trailer.trailer_number}` : ''}` : '—' },
-        { label: 'Duration',  value: data.durationSeconds != null ? fmtDuration(data.durationSeconds) : '—' },
-        { label: 'Items',     value: `${allItems.length - defects.length} passed · ${defects.length} failed` },
-      ]} />
+      <MapBlock lat={data.locationLat} lon={data.locationLon} />
+      <div className="px-4 py-3">
+        <div className="grid grid-cols-3 gap-x-6 gap-y-3 text-[12px]">
+          <Field icon={<Clock size={12} />} label="Submitted">{new Date(data.submittedAt).toLocaleString()}</Field>
+          <Field icon={<User  size={12} />} label="Signed by">{data.signedBy}</Field>
+          <Field icon={<Clock size={12} />} label="Duration">{data.durationSeconds != null ? fmtDuration(data.durationSeconds) : '—'}</Field>
+          <Field icon={<Truck size={12} />} label="Truck">
+            {data.asset ? `${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : '—'}
+          </Field>
+          <Field icon={<Truck size={12} />} label="Trailer">
+            {data.trailer ? `${data.trailer.name}${data.trailer.trailer_number ? ` #${data.trailer.trailer_number}` : ''}` : '—'}
+          </Field>
+          <Field icon={<FileText size={12} />} label="Items">{allItems.length - defects.length} passed · {defects.length} failed</Field>
+        </div>
 
-      {defects.length > 0 && (
-        <Section title={`Defects (${defects.length})`} accent="#fca5a5">
-          {defects.map(item => (
-            <div key={item.id} className="text-sm py-2 px-3 mb-1.5 rounded" style={{ background: 'rgba(127, 29, 29, 0.45)', border: '1px solid rgba(252, 165, 165, 0.5)' }}>
-              <div style={{ color: '#fecaca', fontWeight: 600 }}>{item.label}</div>
-              <div className="text-xs mt-0.5" style={{ color: '#fca5a5' }}>{item.section}</div>
-              {item.notes && <div className="text-sm mt-1.5" style={{ color: '#f1f5f9' }}>{item.notes}</div>}
-              <PhotoGrid
-                photos={data.photos.filter(p => p.itemId === item.id).map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-                onOpenLightbox={onOpenLightbox}
-                compact
-              />
+        {defects.length > 0 && (
+          <FieldSection label={`Defects (${defects.length})`}>
+            <div className="flex flex-col gap-1.5">
+              {defects.map(item => (
+                <div key={item.id} className="text-[12px] py-2 px-3 rounded-lg" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+                  <div style={{ color: '#7f1d1d', fontWeight: 600 }}>{item.label}</div>
+                  <div className="text-[10px] mt-0.5" style={{ color: '#991b1b' }}>{item.section}</div>
+                  {item.notes && <div className="text-[12px] mt-1.5" style={{ color: 'var(--gc-text-1)' }}>{item.notes}</div>}
+                  <PhotoGrid
+                    photos={data.photos.filter(p => p.itemId === item.id).map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
+                    onOpenLightbox={onOpenLightbox}
+                    compact
+                  />
+                </div>
+              ))}
             </div>
-          ))}
-        </Section>
-      )}
+          </FieldSection>
+        )}
 
-      {data.notes && (
-        <Section title="Driver notes">
-          <p className="text-sm whitespace-pre-wrap" style={{ color: '#f1f5f9' }}>{data.notes}</p>
-        </Section>
-      )}
+        {data.notes && (
+          <FieldSection label="Driver notes">
+            <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{data.notes}</p>
+          </FieldSection>
+        )}
 
-      {(() => {
-        const general = data.photos.filter(p => p.itemId == null);
-        if (general.length === 0) return null;
-        return (
-          <Section title={`General photos (${general.length})`}>
-            <PhotoGrid
-              photos={general.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
-              onOpenLightbox={onOpenLightbox}
-            />
-          </Section>
-        );
-      })()}
-
-      {data.locationLat != null && data.locationLon != null
-        ? <Section title="Location"><MiniMap lat={data.locationLat} lon={data.locationLon} /></Section>
-        : <Section title="Location"><NoLocation /></Section>}
+        {(() => {
+          const general = data.photos.filter(p => p.itemId == null);
+          if (general.length === 0) return null;
+          return (
+            <FieldSection label={`General photos (${general.length})`}>
+              <PhotoGrid
+                photos={general.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption }))}
+                onOpenLightbox={onOpenLightbox}
+              />
+            </FieldSection>
+          );
+        })()}
+      </div>
     </>
   );
 }
@@ -725,49 +738,109 @@ function FuelDetail({
 }) {
   return (
     <>
-      <MetaGrid items={[
-        { label: 'Reported',  value: new Date(report.reportedAt).toLocaleString() },
-        { label: 'Driver',    value: resolveDriverName(report.driverId, report.submittedBy, driverNameById) },
-        { label: 'State',     value: report.state },
-        { label: 'Diesel',    value: `${report.dieselGallons.toFixed(2)} gal` },
-        { label: 'DEF',       value: report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—' },
-        { label: 'Odometer',  value: report.odometer != null ? `${report.odometer.toLocaleString()} mi` : '—' },
-      ]} />
-      {report.photos && report.photos.length > 0 && (
-        <Section title={`Receipts (${report.photos.length})`}>
-          <PhotoGrid
-            photos={report.photos.map((p: FuelReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null }))}
-            onOpenLightbox={onOpenLightbox}
-          />
-        </Section>
-      )}
-      {report.latitude != null && report.longitude != null
-        ? <Section title="Location"><MiniMap lat={report.latitude} lon={report.longitude} state={report.state} /></Section>
-        : <Section title="Location"><NoLocation /></Section>}
+      <MapBlock lat={report.latitude} lon={report.longitude} state={report.state} />
+      <div className="px-4 py-3">
+        <div className="grid grid-cols-3 gap-x-6 gap-y-3 text-[12px]">
+          <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
+          <Field icon={<User  size={12} />} label="Driver">{resolveDriverName(report.driverId, report.submittedBy, driverNameById)}</Field>
+          <Field icon={<MapPin size={12} />} label="State">{report.state}</Field>
+          <Field icon={<FuelIcon size={12} />} label="Diesel">{report.dieselGallons.toFixed(2)} gal</Field>
+          <Field icon={<FuelIcon size={12} />} label="DEF">{report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—'}</Field>
+          <Field icon={<Activity size={12} />} label="Odometer">{report.odometer != null ? `${report.odometer.toLocaleString()} mi` : '—'}</Field>
+        </div>
+        {report.photos && report.photos.length > 0 && (
+          <FieldSection label={`Receipts (${report.photos.length})`}>
+            <PhotoGrid
+              photos={report.photos.map((p: FuelReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null }))}
+              onOpenLightbox={onOpenLightbox}
+            />
+          </FieldSection>
+        )}
+      </div>
     </>
   );
 }
 
 // ─── Panel helpers ────────────────────────────────────────────────────
 
-function Section({ title, accent, children }: { title: string; accent?: string; children: React.ReactNode }) {
+// Field — label + value pair, mirrors MovementDetailPanel's helper.
+// Used in the grid below the map. Uppercase 10px label, 12px value.
+function Field({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
   return (
-    <div className="mb-5">
-      <div className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: accent ?? '#94a3b8' }}>{title}</div>
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>
+        {icon}{label}
+      </div>
+      <div style={{ color: 'var(--gc-text-1)' }}>{children}</div>
+    </div>
+  );
+}
+
+// FieldSection — top-bordered block under the grid for narrative
+// content (description, photos, defect cards). Same vocabulary as
+// the movements panel's footer area.
+function FieldSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+      <div className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--gc-text-3)' }}>
+        {label}
+      </div>
       {children}
     </div>
   );
 }
 
-function MetaGrid({ items }: { items: { label: string; value: React.ReactNode }[] }) {
+// MapBlock — the top section of the panel body. Mirrors the
+// MovementDetailPanel layout: fixed 320px height (smaller than the
+// movements panel's 420 because our reports have more meta + photos
+// to show below). Falls back to a "no GPS" placeholder when the
+// report lacks coords.
+function MapBlock({ lat, lon, state }: { lat: number | null | undefined; lon: number | null | undefined; state?: string }) {
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const hasCoords = lat != null && lon != null;
+  useEffect(() => {
+    if (!hasCoords || !mapContainer.current) return;
+    let cancelled = false;
+    loadGoogleMaps().then(google => {
+      if (cancelled || !mapContainer.current) return;
+      const map = new google.maps.Map(mapContainer.current, {
+        center: { lat: lat as number, lng: lon as number },
+        zoom: 13, mapId: MAP_ID,
+        disableDefaultUI: false, clickableIcons: false,
+        gestureHandling: 'greedy',
+      });
+      new google.maps.marker.AdvancedMarkerElement({
+        position: { lat: lat as number, lng: lon as number },
+        map,
+      });
+    });
+    return () => { cancelled = true; };
+  }, [lat, lon, hasCoords]);
   return (
-    <div className="grid grid-cols-2 gap-4 mb-5">
-      {items.map(it => (
-        <div key={it.label}>
-          <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#94a3b8' }}>{it.label}</div>
-          <div className="text-sm" style={{ color: '#f1f5f9' }}>{it.value}</div>
+    <div className="relative shrink-0" style={{ height: 320 }}>
+      {hasCoords ? (
+        <>
+          <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
+          <a
+            href={`https://maps.google.com/?q=${lat},${lon}`}
+            target="_blank" rel="noopener noreferrer"
+            className="absolute bottom-2 right-2 flex items-center gap-1 text-[11px] font-medium rounded-md px-2 py-1"
+            style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(4px)', border: '1px solid var(--gc-border)', color: 'var(--gc-blue)', textDecoration: 'none' }}
+          >
+            <ExternalLink size={10} /> Open in Maps
+          </a>
+          {state && (
+            <div className="absolute bottom-2 left-2 text-[10px] font-mono rounded px-1.5 py-0.5"
+              style={{ background: 'rgba(255,255,255,0.92)', backdropFilter: 'blur(4px)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-3)' }}>
+              {(lat as number).toFixed(4)}, {(lon as number).toFixed(4)} · {state}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="flex items-center justify-center h-full text-[12px]" style={{ color: 'var(--gc-text-3)', background: 'var(--gc-bg)' }}>
+          <MapPin size={14} style={{ marginRight: 6 }} /> No GPS attached to this report
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -780,12 +853,12 @@ function PhotoGrid({
   compact?: boolean;
 }) {
   if (photos.length === 0) return null;
-  const sz = compact ? 70 : 110;
+  const sz = compact ? 64 : 96;
   // Collect all URLs in display order so the lightbox can paginate.
   const urls = photos.map(p => p.signedUrl).filter((u): u is string => !!u);
   return (
     <div className="flex flex-wrap gap-2 mt-2">
-      {photos.map((p, i) => (
+      {photos.map(p => (
         p.signedUrl ? (
           <button
             key={p.id}
@@ -794,22 +867,14 @@ function PhotoGrid({
             style={{ padding: 0, border: 'none', background: 'transparent', cursor: 'pointer' }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={p.signedUrl} alt={p.caption ?? ''} style={{ width: sz, height: sz, objectFit: 'cover', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)' }} />
+            <img src={p.signedUrl} alt={p.caption ?? ''} style={{ width: sz, height: sz, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--gc-border)' }} />
           </button>
         ) : (
-          <div key={p.id} style={{ width: sz, height: sz, borderRadius: 8, background: 'rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#cbd5e1' }}>
+          <div key={p.id} style={{ width: sz, height: sz, borderRadius: 8, background: 'var(--gc-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--gc-text-3)' }}>
             no preview
           </div>
         )
       ))}
-    </div>
-  );
-}
-
-function NoLocation() {
-  return (
-    <div className="text-xs flex items-center gap-1.5 py-3 px-3 rounded" style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1' }}>
-      <MapPin size={12} /> No GPS attached to this report
     </div>
   );
 }
@@ -905,57 +970,8 @@ function Lightbox({ urls, index, onClose, onIndex }: {
   );
 }
 
-// ─── Static-ish Google Map (one marker) ───────────────────────────────
-//
-// Uses the JS API singleton already loaded by other panels (Movements,
-// RouteMapPanel). A new map instance per panel open is cheap.
-//
-function MiniMap({ lat, lon, state }: { lat: number; lon: number; state?: string }) {
-  const ref = useState<HTMLDivElement | null>(null);
-  const [el, setEl] = ref;
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!el) return;
-    let cancelled = false;
-    loadGoogleMaps().then(() => {
-      if (cancelled || !el) return;
-      const map = new google.maps.Map(el, {
-        center: { lat, lng: lon },
-        zoom:   13,
-        disableDefaultUI: true,
-        zoomControl:      true,
-        mapId: MAP_ID,
-      });
-      new google.maps.marker.AdvancedMarkerElement({
-        position: { lat, lng: lon },
-        map,
-      });
-    }).catch((err) => {
-      console.warn('[equipment] map load failed:', err);
-      if (!cancelled) setError('Map unavailable — check NEXT_PUBLIC_GOOGLE_MAPS_API_KEY');
-    });
-    return () => { cancelled = true; };
-  }, [el, lat, lon]);
-  return (
-    <div>
-      <div
-        ref={setEl}
-        style={{ width: '100%', height: 220, borderRadius: 10, background: 'var(--gc-bg)', border: '1px solid var(--gc-border)', overflow: 'hidden' }}
-      />
-      <div className="flex items-center justify-between mt-2 text-xs">
-        <a
-          href={`https://maps.google.com/?q=${lat},${lon}`}
-          target="_blank" rel="noreferrer"
-          style={{ color: '#1a73e8', fontWeight: 600 }}
-        >
-          Open in Google Maps
-        </a>
-        <span style={{ color: 'var(--gc-text-3)' }}>{lat.toFixed(4)}, {lon.toFixed(4)}{state ? ` · ${state}` : ''}</span>
-      </div>
-      {error && <div className="text-xs mt-1" style={{ color: '#dc2626' }}>{error}</div>}
-    </div>
-  );
-}
+// MiniMap removed — replaced by MapBlock (positioned at top of the
+// panel body to match the MovementDetailPanel layout).
 
 // ─── Table primitives ────────────────────────────────────────────────
 
