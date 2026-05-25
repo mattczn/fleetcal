@@ -36,19 +36,21 @@ async function fileSize(uri: string): Promise<number> {
  * unless `force` is set (used by the multi-page PDF path because each
  * page needs to be smaller than the per-page budget regardless).
  */
+// Always runs a single transcode pass through ImageManipulator JPEG so
+// the output is provably JPEG bytes regardless of source format. Used
+// to short-circuit when the input was already under the byte cap, but
+// that leaked HEIC (iPhone source) through with a fake .jpg mime —
+// unrenderable in browsers. The decode/encode cost is trivial vs. the
+// upload itself.
 async function compressImage(
   uri: string,
   opts: { targetBytes: number; maxWidth: number; force?: boolean } = {
     targetBytes: MAX_TOTAL_BYTES, maxWidth: 2000,
   },
 ): Promise<{ uri: string; mimeType: string }> {
-  if (!opts.force) {
-    const initial = await fileSize(uri);
-    if (initial > 0 && initial <= opts.targetBytes) {
-      return { uri, mimeType: "image/jpeg" };
-    }
-  }
-  const qualities = [0.7, 0.55, 0.4, 0.3, 0.2];
+  // Walk down a quality ladder, starting high so small inputs come out
+  // near-lossless. Stop as soon as we're under the target.
+  const qualities = [0.95, 0.85, 0.7, 0.55, 0.4, 0.3, 0.2];
   let result = uri;
   for (const q of qualities) {
     const out = await ImageManipulator.manipulateAsync(

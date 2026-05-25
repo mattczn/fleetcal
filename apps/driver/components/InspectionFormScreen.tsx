@@ -31,6 +31,7 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { railway, type InspectionItemPayload } from "@/lib/railway";
+import { normalizeImageForUpload } from "@/lib/imageNormalize";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -420,9 +421,12 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       const photoFailures: string[] = [];
       for (const ph of photos) {
         try {
+          // Force-transcode to real JPEG — iPhone HEIC photos slip
+          // through with a fake .jpg name + mime otherwise.
+          const norm = await normalizeImageForUpload(ph.uri, ph.fileName);
           const form = new FormData();
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          form.append("file", { uri: ph.uri, name: ph.fileName, type: ph.mimeType } as any);
+          form.append("file", { uri: norm.uri, name: norm.fileName, type: norm.mimeType } as any);
           if (ph.itemId) form.append("itemId", ph.itemId);
           form.append("target", ph.target);
           await railway.uploadInspectionPhoto(inspection.id, form);

@@ -13,6 +13,7 @@ import { Fuel, Truck, MapPin, Gauge, Check, ChevronDown, Camera, X, Receipt } fr
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
+import { normalizeImageForUpload } from "@/lib/imageNormalize";
 import type { FuelReport } from "@fleetcal/types";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
@@ -287,9 +288,13 @@ export default function FuelScreen() {
       const uploadFailures: string[] = [];
       for (const r of receipts) {
         try {
+          // Force-transcode to real JPEG before upload. iPhone HEIC
+          // photos otherwise sneak through with a fake .jpg name + mime
+          // and aren't renderable in the dispatch web modal.
+          const norm = await normalizeImageForUpload(r.uri, r.fileName);
           const form = new FormData();
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          form.append("file", { uri: r.uri, name: r.fileName ?? "receipt.jpg", type: r.mimeType ?? "image/jpeg" } as any);
+          form.append("file", { uri: norm.uri, name: norm.fileName, type: norm.mimeType } as any);
           await railway.uploadFuelReceipt(fuelReport.id, form);
         } catch (err) {
           console.warn("[fuel] receipt upload failed:", err);
