@@ -126,6 +126,17 @@ export const railway = {
     return req<{ ok: true }>("POST", "/v1/driver/notifications/mark-viewed");
   },
 
+  /** Report current OS-level permission state to the API so dispatch
+   *  can see whether the driver can actually receive pushes / has GPS
+   *  consent. Pass undefined for any field that isn't supported on the
+   *  current platform (e.g. notifications on web). */
+  reportPermissions(body: {
+    notifications?: "granted" | "denied" | "undetermined" | null;
+    location?:      "granted" | "denied" | "undetermined" | null;
+  }) {
+    return req<{ ok: true }>("POST", "/v1/driver/permissions", body);
+  },
+
   // Notifications inbox — every push the driver has been sent in the
   // last 48h (default). Includes acknowledgement state so the UI can
   // distinguish "still pending action" from "done."

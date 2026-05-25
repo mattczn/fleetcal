@@ -345,6 +345,45 @@ driver.post("/notifications/mark-viewed", async (c) => {
   return c.json({ ok: true });
 });
 
+// POST /v1/driver/permissions — driver app reports current OS-level
+// permission state for notifications + location. Called on launch
+// and on AppState foreground change so a driver who toggled either
+// off in Settings shows up in the dispatch profile right away.
+//
+// Accepts a partial body — either or both fields can be omitted
+// (e.g. unsupported on a particular platform). NULL stored when
+// omitted, distinguishing "never reported" from "reported as denied."
+driver.post("/permissions", async (c) => {
+  const driverId = c.get("driverId");
+  type Perm = "granted" | "denied" | "undetermined";
+  let body: { notifications?: Perm | null; location?: Perm | null };
+  try { body = await c.req.json(); }
+  catch { return c.json({ error: "invalid_json" }, 400); }
+  const validate = (v: unknown): Perm | null | undefined => {
+    if (v === undefined) return undefined; // leave existing value
+    if (v === null) return null;
+    return v === "granted" || v === "denied" || v === "undetermined" ? v : undefined;
+  };
+  const n = validate(body.notifications);
+  const l = validate(body.location);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const update: Record<string, any> = { permissions_updated_at: new Date().toISOString() };
+  if (n !== undefined) update.notifications_permission = n;
+  if (l !== undefined) update.location_permission      = l;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any)
+    .from("drivers")
+    .update(update)
+    .eq("id", driverId);
+  if (error) {
+    console.error("[POST /v1/driver/permissions] failed:", error);
+    return c.json({ error: "update_failed", detail: error.message }, 500);
+  }
+  return c.json({ ok: true });
+});
+
 driver.get("/notification-prefs", async (c) => {
   const driverId = c.get("driverId");
   const { data, error } = await sbAny

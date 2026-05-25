@@ -158,6 +158,18 @@ export interface Driver {
    *  API's driverAuth middleware with a ~2-min in-process throttle so
    *  it's "approximately when active" not a precise heartbeat. */
   lastSeenAt?: string | null;
+
+  /** OS-level permission status reported by the driver app on launch +
+   *  AppState foreground change. 'granted' = pushes / GPS work.
+   *  'denied' = user tapped Don't Allow or revoked in Settings —
+   *  notifications won't reach them and GPS-stamped events won't have
+   *  coords. 'undetermined' = the OS dialog has never shown; user
+   *  hasn't been prompted yet. null = no report received (driver on
+   *  an old bundle or never opened the app since this shipped). */
+  notificationsPermission?: 'granted' | 'denied' | 'undetermined' | null;
+  locationPermission?:      'granted' | 'denied' | 'undetermined' | null;
+  /** Last time the driver app reported its permission state. */
+  permissionsUpdatedAt?: string | null;
 }
 
 export type DriverDocumentKind = 'license' | 'medical_card' | 'mvr' | 'other';

@@ -23,6 +23,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useDriverSession } from "@/lib/useDriverSession";
 import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
+import { useReportDevicePermissions } from "@/lib/useReportDevicePermissions";
 import { railway } from "@/lib/railway";
 import type { Load } from "@/lib/types";
 
@@ -53,6 +54,10 @@ export default function LoadsScreen() {
   const driver  = session.status === "matched" ? session.driver : null;
   useLoadsRealtime(driver?.driverId, driver?.orgId);
   const pushStatus = usePushRegistration(driver?.driverId, driver?.orgId);
+  // Observe-only — never prompts. Pings the API with the current
+  // OS-level notification + location permissions so dispatch can
+  // see them in the driver's profile.
+  useReportDevicePermissions(driver?.driverId);
 
   const [activeTab, setActiveTab] = useState<TabIdx>(0);
   const pagerRef = useRef<ScrollView>(null);

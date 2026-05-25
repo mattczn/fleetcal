@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { X, Check, Plus, Truck, Users, Phone, Clock, Trash2, DollarSign, Download, Loader2 } from 'lucide-react';
+import { X, Check, Plus, Truck, Users, Phone, Clock, Trash2, DollarSign, Download, Loader2, Bell, MapPin } from 'lucide-react';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
@@ -121,6 +121,48 @@ function lastSeenDotColor(iso: string | null | undefined): string {
   if (hours <= 24)        return '#22c55e';  // green-500
   if (hours <= 24 * 14)   return '#f59e0b';  // amber-500
   return '#9ca3af';                           // gray-400
+}
+
+/** Driver-device permission row — small label + colored badge.
+ *  Color mapping:
+ *    granted       → green   (works as expected)
+ *    denied        → red     (driver tapped Don't Allow / revoked)
+ *    undetermined  → amber   (OS dialog hasn't been shown yet)
+ *    null + opened → grey    (driver app is on a build before this
+ *                              shipped — they need an OTA reload)
+ *    null + never  → grey, "—" (driver hasn't opened the app at all) */
+function PermissionRow({
+  icon, label, status, never,
+}: {
+  icon:   React.ReactNode;
+  label:  string;
+  status: 'granted' | 'denied' | 'undetermined' | null | undefined;
+  /** True when the driver has never opened the app — we render "—"
+   *  instead of "Unknown" so the dispatcher doesn't confuse "haven't
+   *  reported yet" with "permission unknown" for an active driver. */
+  never: boolean;
+}) {
+  const { text, color } = permLabel(status, never);
+  return (
+    <div className="text-xs mt-1 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+      <span className="inline-flex items-center justify-center shrink-0" style={{ width: 14, height: 14, color }}>
+        {icon}
+      </span>
+      <span>{label}:</span>
+      <span style={{ fontWeight: 600, color }}>{text}</span>
+    </div>
+  );
+}
+
+function permLabel(
+  status: 'granted' | 'denied' | 'undetermined' | null | undefined,
+  never: boolean,
+): { text: string; color: string } {
+  if (never)                       return { text: '—',           color: '#9ca3af' };
+  if (status === 'granted')        return { text: 'Granted',     color: '#16a34a' };  // green-600
+  if (status === 'denied')         return { text: 'Denied',      color: '#dc2626' };  // red-600
+  if (status === 'undetermined')   return { text: 'Not prompted', color: '#f59e0b' };  // amber-500
+  return { text: 'Unknown', color: '#9ca3af' };  // null/undefined → not yet reported
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -618,6 +660,24 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
             />
             <span>Driver app: {lastSeenLabel(driver.lastSeenAt)}</span>
           </div>
+          {/* OS-level permission state on the driver's device. Pushed
+              up by the driver app on launch + on AppState foreground
+              change. "Denied" here usually means the driver tapped
+              Don't Allow on the iOS prompt or revoked permission in
+              Settings — explains why their pushes never land or why
+              their inspection submits have no GPS coords. */}
+          <PermissionRow
+            icon={<Bell size={11} />}
+            label="Notifications"
+            status={driver.notificationsPermission}
+            never={!driver.lastSeenAt}
+          />
+          <PermissionRow
+            icon={<MapPin size={11} />}
+            label="Location"
+            status={driver.locationPermission}
+            never={!driver.lastSeenAt}
+          />
         </div>
       </div>
 

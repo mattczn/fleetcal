@@ -36,14 +36,22 @@ interface DbDriverRow {
   active_from: string;
   active_to: string | null;
   last_seen_at: string | null;
+  notifications_permission: string | null;
+  location_permission:      string | null;
+  permissions_updated_at:   string | null;
 }
 
 export const DRIVER_COLS =
   "id,name,first_name,last_name,phone,notes," +
   "email,address,license_number,license_state,license_exp,medical_card_exp,dob," +
-  "active_from,active_to,last_seen_at";
+  "active_from,active_to,last_seen_at," +
+  "notifications_permission,location_permission,permissions_updated_at";
 
 export function rowToDriver(r: DbDriverRow): Driver {
+  const asPerm = (v: string | null): Driver["notificationsPermission"] => {
+    if (v === "granted" || v === "denied" || v === "undetermined") return v;
+    return null;
+  };
   return {
     id:             r.id,
     name:           r.name,
@@ -61,6 +69,9 @@ export function rowToDriver(r: DbDriverRow): Driver {
     activeFrom:     r.active_from,
     activeTo:       r.active_to,
     lastSeenAt:     r.last_seen_at ?? null,
+    notificationsPermission: asPerm(r.notifications_permission),
+    locationPermission:      asPerm(r.location_permission),
+    permissionsUpdatedAt:    r.permissions_updated_at ?? null,
   };
 }
 
