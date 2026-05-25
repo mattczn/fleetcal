@@ -1507,10 +1507,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         <InternalNotesModal
           load={current as Load}
           actorName={user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined}
-          // z-[230] sits above the review queue (z-180) and any open
-          // EventModal (z-200) so the notes panel is always reachable
-          // and dismissible without keyboard ambiguity.
-          zIndex={230}
+          // Always one tier above our own Shell. Sized off `zIndex` so
+          // that when the queue is hoisted (e.g. opened from the load
+          // modal at z-250), our nested overlays follow rather than
+          // getting stranded behind the queue panel.
+          zIndex={zIndex + 50}
           onClose={() => setNotesOpen(false)}
           onSaved={() => { /* nothing to refresh — note appears
                               optimistically in the modal's local thread */ }}
@@ -1524,9 +1525,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           confirmLabel="Delete"
           cancelLabel="Cancel"
           destructive
-          // Sits above the review queue (z-180) but below the notes
-          // modal (z-230) so behavior matches expected stacking.
-          zIndex={240}
+          // Above the queue Shell (and above the notes modal, see
+          // above) — destructive confirms are always topmost.
+          zIndex={zIndex + 60}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => {
             const id = deleteTarget.id;
@@ -1559,6 +1560,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           ctaWhenLow="Pick at least 2"
           kindLabel={KIND_LABEL}
           kindTint={KIND_TINT}
+          zIndex={zIndex + 60}
         />
       )}
 
@@ -1586,6 +1588,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           emptyMessage="Every document on this load is already a PDF."
           kindLabel={KIND_LABEL}
           kindTint={KIND_TINT}
+          zIndex={zIndex + 60}
         />
       )}
 
@@ -1848,6 +1851,7 @@ function DocSelectionDialog({
   actionIcon, actionLabel, ctaWhenLow,
   kindLabel, kindTint,
   emptyMessage,
+  zIndex = 240,
 }: {
   title: string;
   description: string;
@@ -1867,12 +1871,16 @@ function DocSelectionDialog({
   kindLabel: Record<string, string>;
   kindTint:  Record<string, { bg: string; fg: string }>;
   emptyMessage?: string;
+  /** Override stacking so this dialog can sit above a hoisted parent
+   *  (e.g. ReviewQueue opened from the load modal at z-250). Defaults
+   *  to 240 — fine for the standalone closeout page case. */
+  zIndex?: number;
 }) {
   const count = selected.size;
   const canConfirm = count >= minSelect && !busy;
   return (
     <div className="fixed inset-0 flex items-center justify-center px-4"
-      style={{ background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
+      style={{ background: 'rgba(0,0,0,0.5)', zIndex }}
       onMouseDown={e => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div className="rounded-2xl flex flex-col w-full"
         style={{
