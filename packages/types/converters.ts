@@ -30,6 +30,22 @@ type LoadDbInsert  = Database["public"]["Tables"]["loads"]["Insert"];
  *   - comma-separated string          (oldest)
  * This parser handles all three so a long-lived load still reads cleanly.
  */
+// Reads the joined asset embed off an event row when the calling
+// endpoint included `asset:assets(name, unit)` in its select.
+// Returns "Name #Unit" / "Name" / undefined based on what's present.
+// Tolerates PostgREST shapes: foreign-key join returns either an
+// object or an array depending on cardinality declaration.
+function readJoinedAssetName(e: Record<string, unknown>): string | undefined {
+  const raw = (e as { asset?: unknown }).asset;
+  if (!raw) return undefined;
+  const a = Array.isArray(raw) ? (raw[0] as Record<string, unknown> | undefined) : (raw as Record<string, unknown>);
+  if (!a) return undefined;
+  const name = (a.name as string | null | undefined) ?? undefined;
+  const unit = (a.unit as string | null | undefined) ?? undefined;
+  if (!name) return undefined;
+  return unit ? `${name} #${unit}` : name;
+}
+
 function parseRefNums(raw: string | null | undefined): RefNum[] | undefined {
   if (!raw) return undefined;
   try {
@@ -76,6 +92,13 @@ export function joinEventLoadToApp(
     end:            e.end as string,
     status:         ((e.status as LoadStatus | null) ?? "scheduled") as LoadStatus,
     assetId:        e.asset_id as number,
+    // assetName comes from the joined asset:assets(name, unit) embed
+    // when the calling endpoint includes it (e.g. /v1/events/:id).
+    // Falls back to undefined when the join is absent so callers that
+    // didn't ask for it don't accidentally get partial data — the
+    // dispatch mobile and web UIs both display `load.assetName` for
+    // the truck label and were rendering blank without this wiring.
+    assetName:      readJoinedAssetName(e),
     driverId:       (e.driver_id as number | null) ?? undefined,
     driverName:     (e.driver_name as string | null) ?? undefined,
     eventKind:      ((e.event_kind as EventKind | null) ?? "revenue") as EventKind,

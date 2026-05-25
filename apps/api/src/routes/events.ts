@@ -122,7 +122,7 @@ async function fetchEventJoined(
 ): Promise<Load | null> {
   const { data: ev, error: evErr } = await supabase
     .from("events")
-    .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
+    .select(`${EVENT_COLS}, load:loads(${LOAD_COLS}), asset:assets(name, unit)`)
     .eq("id", eventId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -170,7 +170,7 @@ events.get("/:id", async (c) => {
   if (joined.loadId && joined.relayRole) {
     const { data: partnerRowsRaw } = await supabase
       .from("events")
-      .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
+      .select(`${EVENT_COLS}, load:loads(${LOAD_COLS}), asset:assets(name, unit)`)
       .eq("load_id", joined.loadId)
       .eq("org_id", orgId)
       .neq("id", id)
