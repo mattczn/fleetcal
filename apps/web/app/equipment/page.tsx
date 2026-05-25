@@ -220,18 +220,10 @@ export default function EquipmentPage() {
           driverNameById={driverNameById}
           assetLabelById={assetLabelById}
           trailerLabelById={trailerLabelById}
-          sideMediaOpen={!!sideMedia}
+          sideMedia={sideMedia}
           onClose={() => { setPanel(null); setSideMedia(null); }}
           onOpenMedia={(list) => setSideMedia(list)}
-        />
-      )}
-      {/* Side media panel — only renders when a photo has been
-          clicked. Sits to the right of the main panel; both are
-          centered together as a group. */}
-      {panel && sideMedia && (
-        <MediaSidePanel
-          media={sideMedia}
-          onClose={() => setSideMedia(null)}
+          onCloseSideMedia={() => setSideMedia(null)}
         />
       )}
     </div>
@@ -607,22 +599,31 @@ function FuelList({
 
 function DetailPanel({
   panel, driverNameById, assetLabelById, trailerLabelById,
-  sideMediaOpen, onClose, onOpenMedia,
+  sideMedia, onClose, onOpenMedia, onCloseSideMedia,
 }: {
   panel: PanelData;
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
-  sideMediaOpen: boolean;
+  sideMedia: MediaList | null;
   onClose: () => void;
   onOpenMedia: (list: MediaList) => void;
+  onCloseSideMedia: () => void;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Esc closes the media side panel first (one Esc per layer)
+        // — keeps the main report panel open so the dispatcher can
+        // close the photos without losing their place in the report.
+        if (sideMedia) onCloseSideMedia();
+        else onClose();
+      }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, onCloseSideMedia, sideMedia]);
 
   // Each report type gets its own header dot + title — gives the
   // dispatcher a one-glance signal of what kind of report they
@@ -640,16 +641,21 @@ function DetailPanel({
       style={{
         background: 'rgba(0,0,0,0.45)',
         zIndex: 1000,
-        // Slide the centered group leftward when the side media panel
-        // is open so both panels stay visible without the main one
-        // pinning to the screen edge.
-        gap: sideMediaOpen ? 12 : 0,
+        // When the side media panel is open, render it as a flex
+        // SIBLING of the main panel so they sit side-by-side and
+        // both are centered as a group. The earlier rendering had
+        // the media panel as a separate fixed overlay which is why
+        // it ended up unattached in the corner of the viewport.
+        gap: sideMedia ? 12 : 0,
+        // Padding so the two-panel combo (920 + 12 + 520 = 1452px)
+        // doesn't pin to the screen edges on common widths.
+        padding: 24,
       }}
       onClick={e => { if (e.target === overlayRef.current) onClose(); }}
     >
       <div
-        className="relative flex flex-col rounded-2xl overflow-hidden"
-        style={{ width: 780, height: 660, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        className="relative flex flex-col rounded-2xl overflow-hidden shrink-0"
+        style={{ width: 920, height: 720, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
       >
         {/* Header — mirrors MovementDetailPanel: color dot + title + X */}
         <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -678,6 +684,16 @@ function DetailPanel({
           {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById}                                       onOpenMedia={onOpenMedia} />}
         </div>
       </div>
+
+      {/* Side media panel — flex sibling of the main panel so they
+          sit attached side-by-side. Same surface + height as main
+          so the visual reads as one paired modal. */}
+      {sideMedia && (
+        <MediaSidePanel
+          media={sideMedia}
+          onClose={onCloseSideMedia}
+        />
+      )}
     </div>
   );
 
@@ -926,10 +942,11 @@ function FuelDetail({
       mapState={report.state}
       media={mediaSections}
       onOpenMedia={onOpenMedia}
-      // Narrower media column for fuel — receipts are typically just
-      // one or two photos, and the meta grid + (empty) right side
-      // benefits from the extra horizontal width.
-      leftWidth={280}
+      // Narrower media column for fuel — receipts are typically
+      // one or two photos. Gives the meta grid the wider right
+      // column it needs to keep numbers (diesel, odometer) on one
+      // line and the asset name un-truncated.
+      leftWidth={320}
     >
       {/* 3-col grid uses the wider right column. Fuel has no defect
           cards / notes so the meta is everything the dispatcher sees;
@@ -1048,7 +1065,7 @@ function MapBlock({ lat, lon, state, height = 320 }: { lat: number | null | unde
 // goes top-left for "where", bottom-left for "what evidence", and
 // the entire right column for "the writeup".
 function TwoColumnBody({
-  mapLat, mapLon, mapState, media, onOpenMedia, children, leftWidth = 340,
+  mapLat, mapLon, mapState, media, onOpenMedia, children, leftWidth = 400,
 }: {
   mapLat:   number | null | undefined;
   mapLon:   number | null | undefined;
@@ -1064,9 +1081,10 @@ function TwoColumnBody({
   onOpenMedia: (list: MediaList) => void;
   /** Right-column scrollable text content. */
   children: React.ReactNode;
-  /** Left column width — narrower for fuel (text-heavy reports
-   *  don't need a wide media gutter when there are usually just
-   *  one or two receipts). */
+  /** Left column width — defaults to 400 (was 340 when the panel
+   *  was 780 wide; 920 - 400 right = 520 right column, healthy text
+   *  space). Fuel passes 320 since receipts are usually 1-2 photos
+   *  and the right column gets more horizontal density. */
   leftWidth?: number;
 }) {
   const totalPhotos = media.reduce((n, sec) => n + sec.photos.length, 0);
@@ -1078,17 +1096,24 @@ function TwoColumnBody({
       flatItems.push({ id: p.id, signedUrl: p.signedUrl, caption: p.caption, section: sec.label });
     }
   }
+  // If there's no GPS, give the media column the full left-column
+  // height instead of a "No GPS" placeholder eating 280px. With
+  // GPS, keep the original split (map on top, media below).
+  const hasMap = mapLat != null && mapLon != null;
   return (
     <div className="flex-1 flex min-h-0">
-      {/* Left column — map fixed on top, scrollable media below */}
+      {/* Left column — map fixed on top (when GPS present), media below */}
       <div
         className="flex flex-col shrink-0"
         style={{ width: leftWidth, borderRight: '1px solid var(--gc-border-light)' }}
       >
-        <MapBlock lat={mapLat} lon={mapLon} state={mapState} height={250} />
+        {hasMap && <MapBlock lat={mapLat} lon={mapLon} state={mapState} height={280} />}
         <div
           className="flex-1 overflow-y-auto px-3 py-3"
-          style={{ background: 'var(--gc-surface)', borderTop: '1px solid var(--gc-border-light)' }}
+          style={{
+            background: 'var(--gc-surface)',
+            borderTop: hasMap ? '1px solid var(--gc-border-light)' : undefined,
+          }}
         >
           <div className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--gc-text-3)' }}>
             Media {totalPhotos > 0 ? `(${totalPhotos})` : ''}
@@ -1164,11 +1189,12 @@ function NoMediaPlaceholder() {
   );
 }
 
-// MediaSidePanel — sits to the right of the main detail panel and
-// shows every photo in the report in a vertical scroll. Each tile
-// is rendered at the side-panel's full inner width so the dispatcher
-// can read details + scrub through all the evidence without paging.
-// Initial scroll lands on the tile the user clicked.
+// MediaSidePanel — rendered as a flex SIBLING of the main detail
+// panel inside the same overlay container, so the two sit attached
+// side-by-side, centered together as a paired modal. NOT
+// position: fixed (the parent is fixed; this is just a flex child).
+// Esc handling lives in the parent DetailPanel so it can decide
+// whether Esc closes the side panel first or the whole modal.
 function MediaSidePanel({ media, onClose }: { media: MediaList; onClose: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -1180,25 +1206,11 @@ function MediaSidePanel({ media, onClose }: { media: MediaList; onClose: () => v
     if (target) target.scrollIntoView({ block: 'start', behavior: 'auto' });
   }, [media.initialIndex]);
 
-  // Esc closes only the side panel, not the main panel — Esc handler
-  // for the main panel is registered there and only fires if this
-  // one didn't already swallow it.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true /* capture */);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
-
   return (
     <div
       onClick={e => e.stopPropagation()}
-      className="flex flex-col rounded-2xl overflow-hidden"
-      style={{ width: 480, height: 660, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+      className="flex flex-col rounded-2xl overflow-hidden shrink-0"
+      style={{ width: 520, height: 720, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
     >
       <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
         <Camera size={14} style={{ color: 'var(--gc-text-2)' }} />
