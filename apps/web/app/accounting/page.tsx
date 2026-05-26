@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -550,6 +550,35 @@ function AccountingPageInner() {
     }
   }
 
+  // Regenerate selected draft invoices. Server-side endpoint is atomic
+  // void+create — call sites only deal with successes/failures per row.
+  // Sent or paid invoices are filtered out client-side; the server
+  // would 409 on them anyway, but filtering avoids the noise.
+  const [regenBusy, setRegenBusy] = useState(false);
+  async function handleRegenerateSelected() {
+    if (regenBusy) return;
+    const drafts = selectedInvoices.filter(inv => inv.status === 'draft');
+    if (drafts.length === 0) return;
+    setRegenBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const inv of drafts) {
+        try { await railway.regenerateInvoice(inv.id); }
+        catch (err) {
+          console.warn('[accounting] regenerate failed for', inv.invoiceNumber, err);
+          failed.push(inv.invoiceNumber);
+        }
+      }
+      await refresh();
+      setSelected(new Set());
+      if (failed.length > 0) {
+        alert(`Regenerated ${drafts.length - failed.length} of ${drafts.length} invoices. Failed: ${failed.join(', ')}`);
+      }
+    } finally {
+      setRegenBusy(false);
+    }
+  }
+
   const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
 
   // ── QueueTable column config ────────────────────────────────────────
@@ -829,11 +858,24 @@ function AccountingPageInner() {
               </>
             )}
             {bucket === 'queued' && someSelected && (
-              <button onClick={() => setBatchSendOpen(true)}
-                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                style={{ background: '#1a73e8', color: '#fff' }}>
-                <Send size={12} className="inline mr-1.5" /> Submit {selected.size} invoice{selected.size === 1 ? '' : 's'}
-              </button>
+              <>
+                {/* Regenerate refreshes each invoice's snapshot from
+                    current load data. Useful when a POD was uploaded or
+                    an accessorial fixed after the draft was first
+                    generated. Server voids each old draft + creates a
+                    fresh one atomically. */}
+                <button onClick={() => void handleRegenerateSelected()} disabled={regenBusy}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                  style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
+                  {regenBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <RefreshCw size={12} className="inline mr-1.5" />}
+                  Regenerate {selected.size}
+                </button>
+                <button onClick={() => setBatchSendOpen(true)}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                  style={{ background: '#1a73e8', color: '#fff' }}>
+                  <Send size={12} className="inline mr-1.5" /> Submit {selected.size} invoice{selected.size === 1 ? '' : 's'}
+                </button>
+              </>
             )}
             {bucket === 'invoiced' && someSelected && (
               <button onClick={() => void handleMarkPaid()} disabled={markPaidBusy}

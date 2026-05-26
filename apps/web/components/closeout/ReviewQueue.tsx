@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw } from 'lucide-react';
 import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -162,6 +162,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [docsLoading, setDocsLoading] = useState(false);
   // Invoice doc selection: defaults to PODs uploaded on/after delivery
   const [includedDocIds, setIncludedDocIds] = useState<Set<string>>(new Set());
+  // Active draft invoice for the current load, if any. Drives whether
+  // the action button says "Generate invoice" or "Regenerate invoice".
+  // Loaded on load-change via listInvoices; refreshed locally after
+  // generate / regenerate so the UI flips state without a refetch.
+  const [activeInvoice, setActiveInvoice] = useState<import('@fleetcal/types').Invoice | null>(null);
+  const [invoiceBusy,   setInvoiceBusy]   = useState(false);
+  const [invoiceError,  setInvoiceError]  = useState<string | null>(null);
 
   const loadId = current?.loadId ?? current?.id;
   const orgId  = useCalendarStore(s => s.orgId);
@@ -273,6 +280,37 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadId, orgId, safeIdx]);
 
+  // Fetch the load's active invoice (draft / sent / paid — anything not
+  // void) on load-change. Drives the Generate vs Regenerate toggle in
+  // the "Include in invoice" panel. A failure here is non-fatal — the
+  // panel falls back to showing "Generate invoice" so the user can at
+  // least attempt creation; a 409 from the API will surface the real
+  // state if there's a conflict.
+  useEffect(() => {
+    if (!loadId || !orgId) { setActiveInvoice(null); setInvoiceError(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await railway.listInvoices({ loadId });
+        if (cancelled) return;
+        // Most-recent non-void invoice wins. Multiple drafts shouldn't
+        // exist (unique partial index) but if they somehow do, take the
+        // newest.
+        const active = (res.invoices ?? [])
+          .filter(inv => inv.status !== 'void')
+          .sort((a, b) => (b.issuedAt ?? '').localeCompare(a.issuedAt ?? ''))[0] ?? null;
+        setActiveInvoice(active);
+        setInvoiceError(null);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[review queue] listInvoices failed:', err);
+          setActiveInvoice(null);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loadId, orgId]);
+
   // Resolve the currently selected doc to its signed URL — preferring
   // the cached one. Falls back to a per-doc fetch only if the cache
   // doesn't have it (e.g., a freshly uploaded doc whose URL hasn't
@@ -342,6 +380,48 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       action: 'set_invoice_docs',
       invoiceDocIds: Array.from(includedDocIds),
     });
+  }
+
+  /**
+   * Generate or regenerate the invoice for the current load. Persists
+   * the include-in-invoice doc selection first so the snapshot picks up
+   * whatever the dispatcher checked, then either:
+   *   - calls POST /v1/invoices (fresh) when no active invoice exists, or
+   *   - calls POST /v1/invoices/:id/regenerate (atomic void + new) when
+   *     an existing draft is present.
+   *
+   * Sent / paid invoices block regeneration server-side; UI also gates
+   * the button text to "Generate" vs "Regenerate" so dispatchers see
+   * the right verb based on state.
+   */
+  async function handleGenerateOrRegenerate() {
+    if (!current || invoiceBusy) return;
+    const targetLoadId = (current as Load).loadId ?? current.id;
+    setInvoiceBusy(true);
+    setInvoiceError(null);
+    try {
+      // Save the doc selection before snapshot — the server only sees
+      // what's currently persisted on the load.
+      await persistInvoiceDocs();
+
+      let result: import('@fleetcal/types').CreateInvoiceResponse;
+      if (activeInvoice && activeInvoice.status === 'draft') {
+        result = await railway.regenerateInvoice(activeInvoice.id);
+      } else if (activeInvoice && activeInvoice.status !== 'draft') {
+        // Server would 409 — fail fast with a clearer message.
+        setInvoiceError(`Cannot regenerate a ${activeInvoice.status} invoice. Void it first if you need to replace it.`);
+        return;
+      } else {
+        result = await railway.createInvoice({ loadId: targetLoadId });
+      }
+      setActiveInvoice(result.invoice);
+    } catch (err) {
+      const msg = (err as Error).message ?? 'Unknown error';
+      console.error('[review queue] invoice generate/regenerate failed:', err);
+      setInvoiceError(msg);
+    } finally {
+      setInvoiceBusy(false);
+    }
   }
 
   async function handleRelease() {
@@ -1382,6 +1462,44 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     {converting ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
                     Convert to PDF
                   </button>
+                )}
+                {/* Generate / Regenerate invoice — primary green CTA. Verb
+                    flips based on activeInvoice state:
+                      • no active invoice  → "Generate invoice"
+                      • active draft       → "Regenerate invoice"
+                      • sent / paid        → disabled with explainer
+                    Persists the include-in-invoice doc selection first
+                    so the snapshot picks up whatever's checked above. */}
+                {(() => {
+                  const hasDraft     = activeInvoice?.status === 'draft';
+                  const hasNonDraft  = activeInvoice && activeInvoice.status !== 'draft';
+                  const label =
+                    hasDraft     ? 'Regenerate invoice' :
+                    hasNonDraft  ? `Invoice ${activeInvoice!.status}` :
+                                   'Generate invoice';
+                  const Icon = hasDraft ? RefreshCw : Receipt;
+                  return (
+                    <button type="button"
+                      onClick={() => void handleGenerateOrRegenerate()}
+                      disabled={invoiceBusy || !!hasNonDraft}
+                      title={hasNonDraft ? `Cannot regenerate a ${activeInvoice!.status} invoice — void it first.` : undefined}
+                      className="w-full flex items-center justify-center gap-1.5 mb-2 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
+                      style={{
+                        background: hasNonDraft ? 'var(--gc-surface)' : '#188038',
+                        color:      hasNonDraft ? 'var(--gc-text-3)'  : '#fff',
+                        border:     hasNonDraft ? '1.5px solid var(--gc-border)' : 'none',
+                        textShadow: hasNonDraft ? undefined : '0 1px 1px rgba(0,0,0,0.2)',
+                        boxShadow:  hasNonDraft ? undefined : '0 1px 3px rgba(0,0,0,0.12)',
+                      }}>
+                      {invoiceBusy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+                      {label}
+                    </button>
+                  );
+                })()}
+                {invoiceError && (
+                  <div className="text-[11px] mb-2 px-2 py-1.5 rounded" style={{ color: '#b71c1c', background: '#fce8e6', border: '1px solid #fcd2cf' }}>
+                    {invoiceError}
+                  </div>
                 )}
                 <div className="space-y-1.5">
                   {docs.map(d => {

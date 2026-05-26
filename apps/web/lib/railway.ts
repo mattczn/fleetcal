@@ -699,6 +699,16 @@ class RailwayClient {
     return this.req<VoidInvoiceResponse>('POST', `/v1/invoices/${id}/void`, body);
   }
   /**
+   * Void the existing draft + create a fresh invoice with current load
+   * data. Same body shape as createInvoice (all fields optional —
+   * invoice_number carries through by default). Refuses to act on
+   * sent/paid/void invoices server-side. Returns the new invoice in
+   * the same response shape as createInvoice.
+   */
+  regenerateInvoice(id: string, body: Partial<CreateInvoiceRequest> = {}) {
+    return this.req<CreateInvoiceResponse>('POST', `/v1/invoices/${id}/regenerate`, body);
+  }
+  /**
    * Fetch the rendered invoice PDF as a Blob. Uses authed fetch under
    * the hood; callers turn the Blob into either a download link or
    * an object URL for inline viewing.
