@@ -35,7 +35,18 @@ import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { QueueTable, QueueColumnsButton, usePersistedColumnPrefs, type QueueColumn } from '@/components/queue/QueueTable';
 
-type Tab = 'pending' | 'flagged' | 'all';
+type Tab = 'pending' | 'flagged' | 'all' | 'released';
+
+// Maps the closeout UI's bucket name to the API tab. `released` (UI) →
+// `released_all` (API) — the API name is more specific to avoid
+// colliding with the accounting page's narrower `released` bucket
+// which means just billing_status='verified'.
+const API_TAB: Record<Tab, 'pending' | 'flagged' | 'all' | 'released_all'> = {
+  pending:  'pending',
+  flagged:  'flagged',
+  all:      'all',
+  released: 'released_all',
+};
 
 const PAGE_SIZE = 50;
 
@@ -59,7 +70,8 @@ type ColKey =
   | 'driver'
   | 'rate'
   | 'accessorials'
-  | 'total';
+  | 'total'
+  | 'billingStatus';
 
 interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
 
@@ -122,9 +134,10 @@ const ACTIONS_COL_WIDTH = 240;
 const COLS_STORAGE_KEY = 'closeout-cols-v1';
 
 const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
-  { value: 'pending', label: 'Pending', subtitle: 'Awaiting POD',     tint: '#1a73e8' },
-  { value: 'flagged', label: 'Flagged', subtitle: 'Needs follow-up',  tint: '#b45309' },
-  { value: 'all',     label: 'All',     subtitle: 'Everything',       tint: '#5f6368' },
+  { value: 'pending',  label: 'Pending',  subtitle: 'Awaiting POD',      tint: '#1a73e8' },
+  { value: 'flagged',  label: 'Flagged',  subtitle: 'Needs follow-up',   tint: '#b45309' },
+  { value: 'released', label: 'Released', subtitle: 'Done & beyond',     tint: '#15803d' },
+  { value: 'all',      label: 'All',      subtitle: 'Everything',        tint: '#5f6368' },
 ];
 
 function ageDays(deliveredEnd: string): number {
@@ -164,16 +177,19 @@ export default function CloseoutView() {
   const [tab, setTab] = useState<Tab>('pending');
   // Per-tab page state — switching tabs preserves where you were.
   const [pageByTab, setPageByTab] = useState<Record<Tab, number>>({
-    pending: 0, flagged: 0, all: 0,
+    pending: 0, flagged: 0, all: 0, released: 0,
   });
-  // Live counts shown on both bucket tiles. Pre-fetched on mount and
+  // Live counts shown on bucket tiles. Pre-fetched on mount and
   // refreshed alongside the main queue fetch — keeps the inactive
   // tile's number accurate without forcing a tab switch.
-  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0 });
+  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0, released: 0 });
   // Sum of load values per bucket (mirrors /accounting's bucket tiles).
   // Server returns this in the queue response (deduped by loadId for
   // relays). Refreshed alongside the count totals.
-  const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0 });
+  // NOTE: released bucket intentionally leaves load $ at 0 — the
+  // released view is a history surface for dispatchers WITHOUT
+  // accounting access, so we don't pre-aggregate billing $ on it.
+  const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0, released: 0 });
   const page = pageByTab[tab];
   const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
 
@@ -242,7 +258,7 @@ export default function CloseoutView() {
     setError(null);
     try {
       const offset = page * PAGE_SIZE;
-      const { loads, docCounts, total } = await railway.listCloseoutQueue(tab, {
+      const { loads, docCounts, total } = await railway.listCloseoutQueue(API_TAB[tab], {
         limit:  PAGE_SIZE,
         offset,
         q:      searchQuery || undefined,
@@ -281,20 +297,24 @@ export default function CloseoutView() {
   // tile's count doesn't get stale.
   async function refreshBucketTotals() {
     try {
-      const [p, f, a] = await Promise.all([
-        railway.listCloseoutQueue('pending', { limit: 1 }).catch(() => null),
-        railway.listCloseoutQueue('flagged', { limit: 1 }).catch(() => null),
-        railway.listCloseoutQueue('all',     { limit: 1 }).catch(() => null),
+      const [p, f, a, r] = await Promise.all([
+        railway.listCloseoutQueue('pending',      { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('flagged',      { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('all',          { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('released_all', { limit: 1 }).catch(() => null),
       ]);
       setBucketTotals({
-        pending: p?.total ?? 0,
-        flagged: f?.total ?? 0,
-        all:     a?.total ?? 0,
+        pending:  p?.total ?? 0,
+        flagged:  f?.total ?? 0,
+        all:      a?.total ?? 0,
+        released: r?.total ?? 0,
       });
       setBucketLoadValue({
-        pending: p?.totalLoadValue ?? 0,
-        flagged: f?.totalLoadValue ?? 0,
-        all:     a?.totalLoadValue ?? 0,
+        pending:  p?.totalLoadValue ?? 0,
+        flagged:  f?.totalLoadValue ?? 0,
+        all:      a?.totalLoadValue ?? 0,
+        // Intentionally 0 — released bucket doesn't surface aggregate $.
+        released: 0,
       });
     } catch { /* best-effort */ }
   }
@@ -380,6 +400,7 @@ export default function CloseoutView() {
         return (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
       case 'total':
         return (row.loadPrice ?? 0) + (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+      case 'billingStatus': return row.billingStatus ?? '';
     }
   };
 
@@ -407,6 +428,7 @@ export default function CloseoutView() {
         const accSum = (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
         return moneyFmt.format((row.loadPrice ?? 0) + accSum);
       }
+      case 'billingStatus': return row.billingStatus ?? '';
     }
   };
 
@@ -713,6 +735,7 @@ export default function CloseoutView() {
         case 'rate':         return r.loadPrice ?? 0;
         case 'accessorials': return (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
         case 'total':        return (r.loadPrice ?? 0) + (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        case 'billingStatus': return r.billingStatus ?? '';
       }
     };
 
@@ -952,6 +975,35 @@ export default function CloseoutView() {
       },
     });
 
+    // Billing-pipeline status pill. Visible only on the Released
+    // bucket (effectiveHidden suppresses it elsewhere). Lets a
+    // dispatcher without accounting access see at a glance where a
+    // released load is in the billing pipeline. We don't differentiate
+    // Queued vs Invoiced (both are billing_status='invoiced'); pulling
+    // the active invoice row to make that distinction would mean a
+    // separate API call. If the user asks for finer detail later, this
+    // is the column to expand.
+    cols.push({
+      key: 'billingStatus', label: 'Billing', width: 110,
+      align: 'left', sortable: true,
+      sortValue: r => r.billingStatus ?? '',
+      render: r => {
+        const bs = r.billingStatus;
+        const tint =
+          bs === 'verified' ? { bg: '#dcfce7', fg: '#166534', label: 'Released'  } :
+          bs === 'invoiced' ? { bg: '#dbeafe', fg: '#1d4ed8', label: 'Invoiced'  } :
+          bs === 'paid'     ? { bg: '#dcfce7', fg: '#15803d', label: 'Paid'      } :
+                              null;
+        if (!tint) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        return (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-bold uppercase tracking-wider"
+            style={{ background: tint.bg, color: tint.fg }}>
+            {tint.label}
+          </span>
+        );
+      },
+    });
+
     // Row utilities — Star + Notes pinned to the LEFT, immediately
     // to the right of the select checkbox. unshift so it lands as
     // the first user-defined column in the pinned-left partition
@@ -1076,7 +1128,17 @@ export default function CloseoutView() {
               const active = tab === b.value;
               const count = bucketTotals[b.value];
               const value = bucketLoadValue[b.value];
-              const Icon = b.value === 'pending' ? Clock : b.value === 'flagged' ? Flag : FileCheck2;
+              const Icon =
+                b.value === 'pending'  ? Clock :
+                b.value === 'flagged'  ? Flag  :
+                b.value === 'released' ? CheckCircle2 :
+                                         FileCheck2;
+              // The Released bucket is a history surface for dispatchers
+              // who don't have accounting.access — billing $ aggregates
+              // would leak revenue data outside the accounting role.
+              // Keep the row spacing consistent by always reserving the
+              // line; just blank the text on Released.
+              const showValue = b.value !== 'released';
               return (
                 <button key={b.value}
                   onClick={() => setTab(b.value)}
@@ -1092,7 +1154,7 @@ export default function CloseoutView() {
                     <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
                   </div>
                   <div className="mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-                    {moneyFmt.format(value)}
+                    {showValue ? moneyFmt.format(value) : ' '}
                   </div>
                   <div className="mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
                     {b.subtitle}
@@ -1184,7 +1246,14 @@ export default function CloseoutView() {
               </button>
             )}
             <QueueColumnsButton
-              columns={tableColumns}
+              // Filter the column picker to only what's relevant for
+              // the current tab: hide `total` from the picker on
+              // Released, hide `billingStatus` everywhere else.
+              columns={tableColumns.filter(c =>
+                tab === 'released'
+                  ? c.key !== 'total'
+                  : c.key !== 'billingStatus'
+              )}
               hiddenColumns={hiddenCols}
               onHiddenColumnsChange={setHiddenCols}
               columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
@@ -1232,7 +1301,22 @@ export default function CloseoutView() {
                 total={total}
                 onPageChange={setPage}
                 onPageSizeChange={(n) => { setTablePageSize(n); setPage(0); }}
-                hiddenColumns={hiddenCols}
+                // Tab-aware visibility:
+                //   • Released bucket hides the per-row "Total" column
+                //     (per spec — no billing $ aggregates leak to
+                //     non-accounting users).
+                //   • Non-released buckets hide the billingStatus pill
+                //     (everything in pending/flagged shares the same
+                //     pre-released state; the column would be useless).
+                hiddenColumns={(() => {
+                  const h = new Set(hiddenCols);
+                  if (tab === 'released') {
+                    h.add('total');
+                  } else {
+                    h.add('billingStatus');
+                  }
+                  return h;
+                })()}
                 onHiddenColumnsChange={setHiddenCols}
                 columnOrder={colOrder}
                 onColumnOrderChange={setColOrder}
@@ -1604,9 +1688,10 @@ function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?
     );
   }
   const messages: Record<Tab, { icon: React.ReactNode; title: string; sub: string }> = {
-    pending: { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up', sub: 'Every overdue load has been released or flagged.' },
-    flagged: { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads', sub: 'Anything that needs follow-up will show here.' },
-    all:     { icon: <FileCheck2   size={28} style={{ color: '#5f6368' }} />, title: 'Nothing to close out', sub: 'No loads are awaiting release or follow-up.' },
+    pending:  { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up',         sub: 'Every overdue load has been released or flagged.' },
+    flagged:  { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads',      sub: 'Anything that needs follow-up will show here.' },
+    all:      { icon: <FileCheck2   size={28} style={{ color: '#5f6368' }} />, title: 'Nothing to close out',  sub: 'No loads are awaiting release or follow-up.' },
+    released: { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'No released loads yet', sub: 'Loads you release for billing will appear here.' },
   };
   const m = messages[tab];
   return (

@@ -239,7 +239,7 @@ class RailwayClient {
   }
   // ── Closeout / POD verification queue ─────────────────────────────────
   listCloseoutQueue(
-    tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' = 'pending',
+    tab: 'pending' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' | 'released_all' = 'pending',
     opts?: { limit?: number; offset?: number; q?: string },
   ) {
     const params = new URLSearchParams({ tab });

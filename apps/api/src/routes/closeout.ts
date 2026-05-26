@@ -141,7 +141,7 @@ function buildDeliveryEndMap(rows: Array<{ end?: string | null; load?: { id?: st
   return m;
 }
 
-type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all";
+type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all" | "released_all";
 
 closeout.get("/queue", async (c) => {
   const orgId = c.get("orgId");
@@ -185,6 +185,12 @@ closeout.get("/queue", async (c) => {
     } else if (tab === "verified") q = q.eq("load.billing_status", "verified");
     else if   (tab === "invoiced") q = q.eq("load.billing_status", "invoiced");
     else if   (tab === "paid")     q = q.eq("load.billing_status", "paid");
+    // released_all = "released from closeout review", regardless of
+    // billing pipeline stage. Mirrors the data set the accounting page
+    // shows across its Released / Queued / Invoiced / Paid buckets,
+    // surfaced in closeout as a single read-only history view for
+    // dispatchers who don't have accounting.access.
+    else if   (tab === "released_all") q = q.in("load.billing_status", ["verified", "invoiced", "paid"]);
     return q;
   };
 
