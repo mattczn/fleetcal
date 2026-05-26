@@ -1307,41 +1307,96 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     return badRequest(c, [`invoice ${badStatus.invoiceNumber} is ${badStatus.status}; batch send only works on drafts`]);
   }
 
-  // Resolve the broker for each invoice. Primary source is the
-  // invoice's frozen customer_id (captured at draft time). If that's
-  // null — usually because the dispatcher generated the invoice
-  // BEFORE setting the broker on the load — fall back to the load's
-  // CURRENT customer_id so the send still goes through. The accounting
-  // table already shows this fallback to users, so matching it here
-  // means "what you see is what we send to". Hard-fails only if both
-  // are null (truly no broker anywhere).
+  // Resolve the broker for each invoice. Three-level fallback chain,
+  // matching what the accounting table renders client-side so "what
+  // you see is what we send to":
+  //   1. invoice.customer_id   (frozen at draft time)
+  //   2. load.customer_id      (current FK on the load row)
+  //   3. customers.name === load.broker (text-only broker setups —
+  //      common when a dispatcher typed a broker name into the load
+  //      without picking a real customer record from the picker)
+  //
+  // For invoices that hit fallback level 2 or 3, the resolved id is
+  // also written back to the LOAD's customer_id field (best-effort)
+  // so future ops use the FK directly. Snapshot text on the invoice
+  // intentionally stays as-is for audit integrity — Regenerate is
+  // the explicit refresh path.
+  //
+  // Hard-fails only if all three levels miss.
   const loadIdsForFallback = Array.from(new Set(
     allInvoices.filter(i => !i.customerId).map(i => i.loadId),
   ));
-  const loadCustomerById = new Map<string, string | null>();
+  const loadRowsById = new Map<string, { id: string; customer_id: string | null; broker: string | null }>();
   if (loadIdsForFallback.length > 0) {
     const { data: loadRows } = await supabase
       .from("loads")
-      .select("id,customer_id")
+      .select("id,customer_id,broker")
       .eq("org_id", orgId)
       .in("id", loadIdsForFallback);
-    for (const row of (loadRows ?? []) as Array<{ id: string; customer_id: string | null }>) {
-      loadCustomerById.set(row.id, row.customer_id);
+    for (const row of (loadRows ?? []) as Array<{ id: string; customer_id: string | null; broker: string | null }>) {
+      loadRowsById.set(row.id, row);
+    }
+  }
+  // Fallback level 3: name-match customers by load.broker text.
+  // Only fetch customers if we'll actually need them (some load has
+  // null customer_id but non-empty broker text).
+  const brokerNamesNeeded = Array.from(new Set(
+    Array.from(loadRowsById.values())
+      .filter(l => !l.customer_id && l.broker)
+      .map(l => l.broker as string),
+  ));
+  const customerByName = new Map<string, { id: string; name: string }>();
+  if (brokerNamesNeeded.length > 0) {
+    const { data: custRows } = await supabase
+      .from("customers")
+      .select("id,name")
+      .eq("org_id", orgId)
+      .in("name", brokerNamesNeeded);
+    for (const row of (custRows ?? []) as Array<{ id: string; name: string }>) {
+      customerByName.set(row.name, row);
     }
   }
   const resolvedCustomerByInvoiceId = new Map<string, string>();
+  const loadIdsToBackfill = new Set<string>();
   const stillNoBroker: string[] = [];
   for (const inv of allInvoices) {
-    const cid = inv.customerId ?? loadCustomerById.get(inv.loadId) ?? null;
+    let cid: string | null = inv.customerId ?? null;
+    if (!cid) {
+      const loadRow = loadRowsById.get(inv.loadId);
+      if (loadRow?.customer_id) {
+        cid = loadRow.customer_id;
+      } else if (loadRow?.broker) {
+        const matched = customerByName.get(loadRow.broker);
+        if (matched) {
+          cid = matched.id;
+          loadIdsToBackfill.add(loadRow.id);
+        }
+      }
+    }
     if (!cid) stillNoBroker.push(inv.invoiceNumber);
     else resolvedCustomerByInvoiceId.set(inv.id, cid);
   }
   if (stillNoBroker.length > 0) {
-    return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no broker on either the invoice or the load — set one before batch sending`]);
+    return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no broker on the invoice OR load. Open the load and pick a customer from the broker picker (not just typed text).`]);
   }
 
-  // Group by resolved customer_id (frozen → load fallback). Preserves
-  // order within each group.
+  // Best-effort: backfill load.customer_id for any load we name-matched
+  // a customer to. This is one UPDATE per load; failures here are
+  // non-fatal (the send already has the resolved cid).
+  for (const loadId of loadIdsToBackfill) {
+    const inv = allInvoices.find(i => i.loadId === loadId);
+    const cid = inv ? resolvedCustomerByInvoiceId.get(inv.id) : undefined;
+    if (!cid) continue;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await supabase.from("loads").update({ customer_id: cid } as any)
+        .eq("id", loadId).eq("org_id", orgId);
+    } catch (err) {
+      console.warn("[batch-send] customer_id backfill skipped for load", loadId, err);
+    }
+  }
+
+  // Group by resolved customer_id. Preserves order within each group.
   const byBroker = new Map<string, Invoice[]>();
   for (const inv of allInvoices) {
     const cid = resolvedCustomerByInvoiceId.get(inv.id)!;
@@ -1605,40 +1660,39 @@ invoices.post("/:id/void", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// POST /v1/invoices/:id/regenerate — refresh a draft from current load data
+// POST /v1/invoices/:id/regenerate — refresh from current load data
 // ─────────────────────────────────────────────────────────────────────────
 //
 // Use case: dispatcher uploaded a missing POD, fixed an accessorial, or
 // updated a stop after the invoice was already drafted. The on-disk
 // snapshot is now stale. Regenerate rebuilds the snapshot from latest
 // load data and refreshes the packet PDF, keeping the same invoice id
-// + number so the row's history (created_at, audit links) stays intact.
+// + number so the row's history stays intact.
 //
-// Constraints:
-//   - Only acts on draft invoices. Sent/paid invoices have left the
-//     building (broker has them) — refusing to mutate them is a
-//     deliberate safety. Use void + create-new manually for those.
-//   - Same id + same invoice_number is preserved. Numbering continuity
-//     across drafts is critical for downstream reconciliation, and
-//     drafts haven't been sent so there's no audit-trail value in
-//     preserving the previous snapshot.
+// Status semantics:
+//   - draft  → refresh in place (most common path)
+//   - void   → revive to draft + refresh. Recovers invoices that got
+//              stuck void by an earlier failed regenerate run. Treated
+//              as "the latest attempt is what counts" — drafts that
+//              never shipped have no audit-trail value to preserve.
+//   - sent   → 409. Broker has it; void it manually first if you need
+//              to replace.
+//   - paid   → 409. Same reasoning + accounting just doesn't want
+//              paid invoices mutating under it.
 //
 // Why UPDATE-in-place rather than void + insert:
-//   The schema's `idx_invoices_number_per_org` unique index covers ALL
-//   statuses including void, so a void+insert flow with the same
-//   invoice_number trips a 23505 unique violation. Updating the
-//   existing row dodges that entirely and is functionally equivalent
-//   for drafts.
+//   `idx_invoices_number_per_org` is unconditional (covers void too),
+//   so a void+insert flow with the same invoice_number trips 23505.
+//   UPDATE on the same row sidesteps it entirely.
 
 invoices.post("/:id/regenerate", async (c) => {
   const orgId = c.get("orgId");
   const id = c.req.param("id");
-  // Same body shape as create. loadId is optional here — we already
-  // know it from the existing invoice. Other fields are overrides.
+  // Same body shape as create. loadId is optional — we already know it
+  // from the existing invoice. Other fields are overrides.
   const body = await c.req.json<Partial<CreateInvoiceRequest>>().catch(() => ({} as Partial<CreateInvoiceRequest>));
 
-  // 1. Load the existing invoice. Refuse to regenerate anything beyond
-  //    a draft — see header comment.
+  // 1. Load the existing invoice.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existingRow, error: fetchErr } = await supabase
     .from("invoices")
@@ -1650,12 +1704,13 @@ invoices.post("/:id/regenerate", async (c) => {
     return c.json({ error: "not_found", detail: "invoice not found" } satisfies ApiErrorResponse, 404);
   }
   const existing = existingRow as unknown as InvoiceRow;
-  if (existing.status !== "draft") {
+  if (existing.status === "sent" || existing.status === "paid") {
     return c.json(
-      { error: "invalid_state", detail: `cannot regenerate ${existing.status} invoice — only drafts can be regenerated` } satisfies ApiErrorResponse,
+      { error: "invalid_state", detail: `cannot regenerate ${existing.status} invoice — void it first if you need to replace it` } satisfies ApiErrorResponse,
       409,
     );
   }
+  const wasVoided = existing.status === "void";
   const loadId = existing.load_id;
   const carryInvoiceNumber = body.invoiceNumber ?? existing.invoice_number;
 
@@ -1667,28 +1722,29 @@ invoices.post("/:id/regenerate", async (c) => {
   }
   const { snapshot, total, load, dueAt } = result;
 
-  // 3. Update the existing row in place. invoice_number stays the same;
-  //    customer_id refreshes from the load (covers the case where the
-  //    dispatcher set the broker AFTER the original draft); issued_at
-  //    refreshes so the broker sees today's date on the rebuilt packet.
-  const updateRow = {
+  // 3. Update the existing row in place. Reviving a void invoice means
+  //    flipping status back to draft + clearing void_reason; otherwise
+  //    we just refresh the data fields.
+  const updateRow: Record<string, unknown> = {
     customer_id: load.customer_id,
     total,
     issued_at:   new Date().toISOString(),
     due_at:      dueAt,
     snapshot,
-    // invoice_number could change if the caller passed an override; in
-    // the common case carryInvoiceNumber === existing.invoice_number
-    // and this is a no-op.
     invoice_number: carryInvoiceNumber,
   };
+  if (wasVoided) {
+    updateRow.status      = "draft";
+    updateRow.void_reason = null;
+  }
+  // Acceptable starting states: draft or void. Sent/paid were rejected above.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: updatedRow, error: updateErr } = await supabase
     .from("invoices")
     .update(updateRow as any)
     .eq("id", existing.id)
     .eq("org_id", orgId)
-    .eq("status", "draft") // race-condition guard: refuse if status changed under us
+    .in("status", ["draft", "void"])
     .select(INVOICE_COLS)
     .single();
   if (updateErr) {
@@ -1708,9 +1764,18 @@ invoices.post("/:id/regenerate", async (c) => {
     );
   }
 
+  // 4. If we revived a void invoice, mirror billing_status back to
+  //    'invoiced' on the load (the original void had flipped it to
+  //    verified, or it could be in any state if other ops touched it).
+  if (wasVoided) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await supabase.from("loads").update({ billing_status: "invoiced" } as any)
+      .eq("id", load.id).eq("org_id", orgId);
+  }
+
   const newInvoice = rowToInvoice(updatedRow as unknown as InvoiceRow);
 
-  // 4. Replace the archived packet doc. persistInvoicePacket clears any
+  // 5. Replace the archived packet doc. persistInvoicePacket clears any
   //    prior packet rows for this invoice id automatically before
   //    writing the new one.
   try {
