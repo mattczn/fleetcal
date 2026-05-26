@@ -129,15 +129,50 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
 
 // ── Auto-matcher ───────────────────────────────────────────────────────
 //
-// Given a freshly-ingested transaction, find the best-matching driver
-// fuel_report from the same org and return its id + confidence score.
-// Scoring (max 100):
-//   • Driver name match (case-insensitive substring): +50
-//   • Asset / truck match (matched_truck === driver_report unit): +30
-//   • Diesel gallons within ±5%: +15
-//   • Date proximity (±24h = full credit, decays linearly to 0 at ±72h): up to +5
+// Two scoring modes, chosen by inspecting the transaction's driver_name:
 //
-// Threshold 70+ → auto_matched. Lower → unmatched (dispatch decides).
+// 1. STANDARD MODE — the receipt's PURCHASED BY name is the actual
+//    driver. Score signals:
+//       • Driver name match (substring either direction): +50
+//       • Asset / truck unit match:                       +30
+//       • Diesel gallons within ±5%:                      +15
+//       • Date proximity (same day = +5, ±1 = +3, ±2 = +1): up to +5
+//    Threshold: ≥70 → auto_matched.
+//
+// 2. BUY-ON-BEHALF MODE — the receipt is from someone known to fuel
+//    other drivers' trucks (Curzon brothers in this org). The name on
+//    the receipt is NOT the driver who used the fuel, so we drop the
+//    name signal entirely and require a stronger gallons + date match
+//    to compensate. Score signals:
+//       • Exact gallons (±0.5 gal absolute):              +60
+//       • Gallons within ±2%:                             +40
+//       • Gallons within ±5%:                             +25
+//       • Same calendar day:                              +30
+//       • ±1 day:                                         +15
+//       • Asset / truck unit match (rare on Mudflap):     +20
+//    Threshold: ≥70. So a typical match = same-day + exact gallons = 90.
+//    Multiple drivers with similar gallons on the same day won't
+//    cleanly auto-match (only ONE candidate scores ≥70 in that case),
+//    and dispatch handles the rest manually.
+//
+// The buy-on-behalf list is currently hardcoded. When other carriers
+// onboard we'll surface it in org_settings; for now Curzon Trucking's
+// two owners are the only known cases.
+
+/** Names on a fuel receipt that mean "this person bought fuel for
+ *  ANOTHER driver". Case-insensitive substring match against the
+ *  Mudflap PURCHASED BY field. Add new entries here if more
+ *  not-driving purchasers show up. */
+const BUY_ON_BEHALF_NAMES = [
+  "michael curzon",
+  "jonathan curzon",
+];
+
+function isBuyOnBehalfReceipt(driverNameOnReceipt: string | null | undefined): boolean {
+  if (!driverNameOnReceipt) return false;
+  const lower = driverNameOnReceipt.toLowerCase();
+  return BUY_ON_BEHALF_NAMES.some(n => lower.includes(n));
+}
 
 interface FuelReportCandidate {
   id:              string;
@@ -149,7 +184,16 @@ interface FuelReportCandidate {
   asset_unit?:     string;    // joined
 }
 
-function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
+/** Day-difference between a date-only string ("YYYY-MM-DD") and a
+ *  full ISO timestamp. Anchored to UTC to avoid TZ surprises. */
+function dayDiff(txDate: string, reportedAt: string): number {
+  const t = new Date(txDate).getTime();
+  const r = new Date(reportedAt).getTime();
+  if (isNaN(t) || isNaN(r)) return Number.POSITIVE_INFINITY;
+  return Math.abs(t - r) / 86_400_000;
+}
+
+function scoreMatchStandard(tx: FuelTransactionRow, r: FuelReportCandidate): number {
   let score = 0;
 
   // Driver name (case-insensitive substring either direction)
@@ -170,18 +214,48 @@ function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
     if (diff <= 0.05) score += 15;
   }
 
-  // Date proximity — tx.transaction_date is date-only, report has full
-  // timestamp. Compare on calendar days; ±0 = 5, ±1 = 3, ±2 = 1, more = 0.
-  try {
-    const txTime = new Date(tx.transaction_date).getTime();
-    const rTime  = new Date(r.reported_at).getTime();
-    const diffDays = Math.abs(txTime - rTime) / 86_400_000;
-    if (diffDays <= 1) score += 5;
-    else if (diffDays <= 2) score += 3;
-    else if (diffDays <= 3) score += 1;
-  } catch { /* ignore date parse errors */ }
+  // Date proximity (calendar days).
+  const d = dayDiff(tx.transaction_date, r.reported_at);
+  if      (d <= 1) score += 5;
+  else if (d <= 2) score += 3;
+  else if (d <= 3) score += 1;
 
   return score;
+}
+
+function scoreMatchBuyOnBehalf(tx: FuelTransactionRow, r: FuelReportCandidate): number {
+  let score = 0;
+
+  // Gallons — the strongest signal when we can't trust the name.
+  // Tiered: tight tolerance gets a big bump, looser gets less.
+  if (tx.diesel_gallons != null && r.diesel_gallons > 0) {
+    const txG  = Number(tx.diesel_gallons);
+    const absD = Math.abs(txG - r.diesel_gallons);
+    const pctD = absD / r.diesel_gallons;
+    if      (absD <= 0.5)  score += 60;   // exact-to-half-gallon
+    else if (pctD <= 0.02) score += 40;
+    else if (pctD <= 0.05) score += 25;
+  }
+
+  // Date proximity. Same-day is weighted heavier here than in
+  // standard mode because we're leaning on gallons+date to do the
+  // work the name signal normally does.
+  const d = dayDiff(tx.transaction_date, r.reported_at);
+  if      (d <= 1) score += 30;
+  else if (d <= 2) score += 15;
+
+  // Asset match (when present, Mudflap rarely fills this in).
+  if (tx.matched_truck && r.asset_unit && String(tx.matched_truck).trim() === String(r.asset_unit).trim()) {
+    score += 20;
+  }
+
+  return score;
+}
+
+function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
+  return isBuyOnBehalfReceipt(tx.driver_name)
+    ? scoreMatchBuyOnBehalf(tx, r)
+    : scoreMatchStandard(tx, r);
 }
 
 async function tryAutoMatch(

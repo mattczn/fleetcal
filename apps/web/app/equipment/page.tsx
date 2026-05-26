@@ -180,7 +180,12 @@ export default function EquipmentPage() {
         )}
       </div>
 
-      <div className="flex-1 px-6 py-5">
+      {/* Tab content. min-h-0 lets the flex child shrink below its
+          natural content height so overflow-y-auto can actually clip
+          + scroll. Without min-h-0 the column blows past the viewport
+          and gets cut off by body's global overflow:hidden, with no
+          way to reach the bottom rows. */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
         {tab === 'maintenance' && (
           <MaintenanceList
             driverId={driverId}
