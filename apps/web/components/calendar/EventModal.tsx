@@ -894,22 +894,32 @@ function UploadedDocsPanel({
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-auto flex items-center justify-center" style={{ background: '#1a1a1a' }}>
+      <div className="flex-1 overflow-auto" style={{ background: '#1a1a1a', textAlign: 'center' }}>
         {!signedUrl ? (
-          <Loader2 size={20} className="animate-spin" style={{ color: '#ffffff' }} />
+          <div className="flex items-center justify-center" style={{ height: '100%' }}>
+            <Loader2 size={20} className="animate-spin" style={{ color: '#ffffff' }} />
+          </div>
         ) : previewError && previewError.docId === selected.id ? (
-          <PreviewErrorPanel
-            fileName={selected.fileName}
-            kind={previewError.kind}
-            detail={previewError.detail}
-            signedUrl={signedUrl}
-          />
+          <div className="flex items-center justify-center" style={{ height: '100%' }}>
+            <PreviewErrorPanel
+              fileName={selected.fileName}
+              kind={previewError.kind}
+              detail={previewError.detail}
+              signedUrl={signedUrl}
+            />
+          </div>
         ) : isImage(selected.mimeType, selected.fileName) ? (
+          // Block layout (no flex centering) so tall images can OVERFLOW
+          // the panel and scroll vertically. Previous version flex-centered
+          // with maxHeight:100% — the image was always sized to fit the
+          // viewport, leaving nothing to scroll. Most PODs are portrait
+          // phone shots and need to scroll to see the bottom signatures.
+          // Width caps at 100% so wide landscape images don't blow out.
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={signedUrl}
             alt={selected.fileName}
-            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+            style={{ maxWidth: '100%', height: 'auto', display: 'block', margin: '0 auto' }}
             onError={() => {
               // First failure: maybe the cached signed URL expired. Ask
               // parent to re-mint and try again. The dedupe ref keeps
