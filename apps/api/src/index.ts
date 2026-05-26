@@ -38,6 +38,7 @@ import checkCallsRoute from "./routes/check-calls.js";
 import stopsRoute from "./routes/stops.js";
 import driverRoute from "./routes/driver.js";
 import fuelReportsRoute from "./routes/fuel-reports.js";
+import { fuelTxApiKey, fuelTxClerk } from "./routes/fuel-transactions.js";
 import maintenanceReportsRoute from "./routes/maintenance-reports.js";
 import inspectionReportsRoute from "./routes/inspection-reports.js";
 import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
@@ -121,6 +122,7 @@ authed.route("/stops", stopsRoute);
 // mounted from inside loadsRoute as /loads/:loadId/check-calls.
 authed.route("/check-calls", checkCallsRoute);
 authed.route("/fuel-reports", fuelReportsRoute);
+authed.route("/fuel-transactions", fuelTxClerk);
 authed.route("/movements", movementsRoute);
 authed.route("/cost-analysis", costAnalysisRoute);
 authed.route("/maintenance-reports", maintenanceReportsRoute);
@@ -148,6 +150,11 @@ app.route("/v1/driver", driverRoute);
 // Same precedence trick — mounted before /v1 so the Clerk middleware
 // doesn't intercept. INTERNAL_CRON_TOKEN gates access.
 app.route("/v1/internal", internalRoute);
+
+// Fuel transactions inbound-email — API key auth, NOT Clerk. Must
+// mount before /v1 so /v1/fuel-transactions/inbound-email resolves
+// here instead of falling through to the Clerk-authed branch.
+app.route("/v1/fuel-transactions", fuelTxApiKey);
 
 app.route("/v1", authed);
 

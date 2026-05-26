@@ -13,6 +13,7 @@
 import type {
   Accessorial, Asset, CheckCall, Customer, CustomerContact, Dispatcher, Driver,
   FuelReport, FuelReportMatchStatus,
+  FuelTransaction, FuelTransactionMatchStatus, FuelTransactionProvider,
   InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry,
   MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
   MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
@@ -1137,6 +1138,106 @@ export interface UpdateFuelReportRequest {
   matchStatus?:   FuelReportMatchStatus;
 }
 export interface UpdateFuelReportResponse { fuelReport: FuelReport; }
+
+// ── /v1/fuel-transactions ───────────────────────────────────────────────
+//
+// Card-side fuel transactions ingested from the fleet card provider.
+// See FuelTransaction in domain.ts for field semantics.
+
+/** POST /v1/fuel-transactions/inbound-email — Google Apps Script
+ *  forwards a raw Mudflap email here. Auth: X-Api-Key header. The
+ *  API parses the email, inserts a fuel_transactions row, and runs
+ *  the auto-matcher. Idempotent on (provider, providerTransactionId). */
+export interface InboundFuelEmailRequest {
+  /** Full raw MIME content of the email. */
+  raw:     string;
+  /** Optional base64-encoded PDF attachment (Mudflap sends a PDF
+   *  receipt alongside the HTML email). */
+  pdfB64?: string;
+}
+export interface InboundFuelEmailResponse {
+  ok:                  boolean;
+  transactionId?:      string;
+  /** 'inserted' on first ingest, 'duplicate' on re-ingest of the same
+   *  provider_transaction_id. Both are non-errors. */
+  result?:             'inserted' | 'duplicate';
+  matchConfidence?:    number;
+  matchStatus?:        FuelTransactionMatchStatus;
+  /** Populated on parse failure so the GAS can log it. */
+  error?:              string;
+}
+
+/** POST /v1/fuel-transactions/import — bulk-load from a CSV / old DB.
+ *  Pre-parsed transactions, no email parsing involved. Idempotent. */
+export interface BulkImportFuelTransactionsRequest {
+  transactions: Array<Omit<FuelTransaction,
+    'id' | 'orgId' | 'createdAt' | 'updatedAt' | 'fuelReportId' |
+    'matchStatus' | 'matchConfidence' | 'matchNotes' | 'matchedAt' | 'matchedBy'
+  > & {
+    /** Carry the legacy id forward for traceability. */
+    legacyFormResponseId?: number;
+  }>;
+}
+export interface BulkImportFuelTransactionsResponse {
+  inserted:   number;
+  duplicates: number;
+  failed:     Array<{ providerTransactionId: string; error: string }>;
+}
+
+/** GET /v1/fuel-transactions — list with filters. */
+export interface ListFuelTransactionsRequest {
+  matchStatus?: FuelTransactionMatchStatus | 'all';
+  from?:        string;
+  to?:         string;
+  q?:           string;
+  limit?:       number;
+  offset?:      number;
+}
+export interface ListFuelTransactionsResponse {
+  fuelTransactions: FuelTransaction[];
+  total:            number;
+  limit:            number;
+  offset:           number;
+}
+
+/** PATCH /v1/fuel-transactions/:id/match — manual link / unlink. */
+export interface MatchFuelTransactionRequest {
+  /** null to unlink. */
+  fuelReportId: string | null;
+  matchNotes?:  string;
+}
+export interface MatchFuelTransactionResponse { fuelTransaction: FuelTransaction; }
+
+// Re-export the enums for caller convenience.
+export type { FuelTransactionMatchStatus, FuelTransactionProvider };
+
+// ── /v1/org-api-keys ────────────────────────────────────────────────────
+
+export interface CreateOrgApiKeyRequest {
+  name:   string;
+  scopes: string[];
+}
+export interface CreateOrgApiKeyResponse {
+  id:        string;
+  /** Plaintext key — shown ONCE, never retrievable. Caller must
+   *  store it somewhere safe immediately. */
+  key:       string;
+  keyPrefix: string;
+  name:      string;
+  scopes:    string[];
+  createdAt: string;
+}
+export interface ListOrgApiKeysResponse {
+  apiKeys: Array<{
+    id:         string;
+    name:       string;
+    keyPrefix:  string;
+    scopes:     string[];
+    createdAt:  string;
+    createdBy?: string;
+    lastUsedAt?:string;
+  }>;
+}
 
 // ── /v1/driver/maintenance-reports + /v1/maintenance-reports ────────────
 

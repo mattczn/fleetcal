@@ -985,6 +985,77 @@ export interface FuelReport {
   photos?:        FuelReportPhoto[];
 }
 
+// ── Fuel transactions (card-side) ───────────────────────────────────────
+//
+// The card provider (Mudflap, EFS, WEX, etc.) sends a receipt per
+// fuel-up via email. A poller forwards those receipts to FleetCal via
+// POST /v1/fuel-transactions/inbound-email. Each receipt becomes one
+// row here.
+//
+// Pairs with FuelReport (driver-submitted) via fuelReportId. The
+// matcher attempts to auto-link on insert; dispatch can override via
+// the manual-match endpoint.
+
+export type FuelTransactionProvider = 'mudflap' | 'efs' | 'wex' | 'comdata' | 'other';
+export const FUEL_TRANSACTION_PROVIDERS: readonly FuelTransactionProvider[] = [
+  'mudflap', 'efs', 'wex', 'comdata', 'other',
+];
+
+export type FuelTransactionMatchStatus =
+  | 'unmatched'         // no driver report linked
+  | 'auto_matched'      // matcher found a high-confidence pair
+  | 'manual_matched'    // dispatcher manually linked
+  | 'no_match_needed';  // dispatcher confirmed there's no driver report
+export const FUEL_TRANSACTION_MATCH_STATUSES: readonly FuelTransactionMatchStatus[] = [
+  'unmatched', 'auto_matched', 'manual_matched', 'no_match_needed',
+];
+
+export interface FuelTransaction {
+  id:                     string;
+  orgId:                  string;
+
+  provider:               FuelTransactionProvider;
+  /** Provider's own transaction id (e.g. Mudflap's "T895913162369"). */
+  providerTransactionId:  string;
+
+  /** Date-only — Mudflap receipts don't include time. */
+  transactionDate:        string;
+  driverName?:            string;     // short name as printed on receipt
+  location?:              string;     // "Maverik #695 - American Fork, UT"
+  matchedTruck?:          string;     // unit number from receipt
+
+  // Diesel
+  dieselGallons?:         number;
+  dieselRetailPrice?:     number;
+  dieselDiscountPrice?:   number;
+  dieselTotal?:           number;
+
+  // DEF
+  defGallons?:            number;
+  defRetailPrice?:        number;
+  defDiscountPrice?:      number;
+  defTotal?:              number;
+
+  totalCharged:           number;
+  totalSaved:             number;
+  paymentLast4?:          string;
+
+  // Match to a driver report
+  fuelReportId?:          string;
+  matchStatus:            FuelTransactionMatchStatus;
+  matchConfidence?:       number;     // 0-100
+  matchNotes?:            string;
+  matchedAt?:             string;
+  matchedBy?:             string;
+
+  /** Set when this row was bulk-imported from the legacy my-calendar
+   *  database. Holds the old fuel_form_responses.id back-pointer. */
+  legacyFormResponseId?:  number;
+
+  createdAt:              string;
+  updatedAt?:             string;
+}
+
 // ── Maintenance ─────────────────────────────────────────────────────────
 //
 // Two-layer model:
