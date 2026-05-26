@@ -37,6 +37,11 @@
 const OLD_SUPA_URL = process.env.OLD_SUPA_URL || "https://vgglyebsbbgooqmguzmi.supabase.co";
 const OLD_SUPA_KEY = process.env.OLD_SUPA_KEY;
 const FLEETCAL_API_URL = process.env.FLEETCAL_API_URL;
+// Auth: either a Clerk session JWT (short-lived, fetched from the web
+// app DevTools) OR a long-lived org API key with scope 'fuel.import'.
+// API key wins when both are set — it's the saner path for one-off
+// imports because Clerk tokens age out in 60s mid-script.
+const FLEETCAL_API_KEY = process.env.FLEETCAL_API_KEY;
 const FLEETCAL_CLERK_BEARER = process.env.FLEETCAL_CLERK_BEARER;
 
 if (!OLD_SUPA_KEY) {
@@ -47,8 +52,8 @@ if (!FLEETCAL_API_URL) {
   console.error("FLEETCAL_API_URL required");
   process.exit(1);
 }
-if (!FLEETCAL_CLERK_BEARER) {
-  console.error("FLEETCAL_CLERK_BEARER required — see header comment");
+if (!FLEETCAL_API_KEY && !FLEETCAL_CLERK_BEARER) {
+  console.error("Provide either FLEETCAL_API_KEY (preferred) or FLEETCAL_CLERK_BEARER.");
   process.exit(1);
 }
 
@@ -150,13 +155,18 @@ function toPayloadRow(r: OldRow): ImportPayload["transactions"][number] {
 }
 
 async function postBatch(payload: ImportPayload): Promise<ImportResult> {
+  // Prefer the API key when both are set — it doesn't expire mid-run.
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (FLEETCAL_API_KEY) {
+    headers["X-Api-Key"] = FLEETCAL_API_KEY;
+  } else if (FLEETCAL_CLERK_BEARER) {
+    headers["Authorization"] = `Bearer ${FLEETCAL_CLERK_BEARER}`;
+  }
+
   const res = await fetch(`${FLEETCAL_API_URL}/v1/fuel-transactions/import`, {
     method: "POST",
-    headers: {
-      "Content-Type":  "application/json",
-      Authorization:   `Bearer ${FLEETCAL_CLERK_BEARER}`,
-    },
-    body: JSON.stringify(payload),
+    headers,
+    body:   JSON.stringify(payload),
   });
   if (!res.ok) {
     throw new Error(`fleetcal import ${res.status}: ${await res.text()}`);

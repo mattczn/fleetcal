@@ -363,17 +363,14 @@ fuelTxApiKey.post("/inbound-email", requireApiKey("fuel.ingest"), async (c) => {
   return c.json(res, 201);
 });
 
-// ── Clerk-authed endpoints below ──────────────────────────────────────
-
-fuelTxClerk.use("*", requireModule("fuel"), requireCapability("fuel.access"));
-
-// POST /v1/fuel-transactions/import — bulk historical import.
-// Skips auto-matching (drivers weren't in FleetCal at the time these
-// records were created, so there's nothing to match against). Caller
-// can re-trigger matching later via a separate endpoint if needed.
-fuelTxClerk.post("/import", async (c) => {
+// Shared handler for /import — runs under either Clerk auth or API
+// key auth (with scope 'fuel.import'). Bulk historical migration is
+// often kicked off from a one-off terminal, where chasing 60s Clerk
+// tokens is hostile UX; the api-key path lets a script run cleanly.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function bulkImportHandler(c: any): Promise<Response> {
   const orgId = c.get("orgId");
-  const body  = await c.req.json<BulkImportFuelTransactionsRequest>().catch(() => null);
+  const body  = (await c.req.json().catch(() => null)) as BulkImportFuelTransactionsRequest | null;
   if (!body || !Array.isArray(body.transactions) || body.transactions.length === 0) {
     return c.json({ error: "bad_request", detail: "transactions[] required" } satisfies ApiErrorResponse, 400);
   }
@@ -421,7 +418,22 @@ fuelTxClerk.post("/import", async (c) => {
 
   const res: BulkImportFuelTransactionsResponse = { inserted, duplicates, failed };
   return c.json(res);
-});
+}
+
+// Mount the import handler on the API-key router with scope 'fuel.import'.
+// Must be registered BEFORE the clerk path mounts the same route, since
+// /v1/fuel-transactions/* requests resolve against the open app router
+// first (see index.ts mount order). Same handler, two auth surfaces.
+fuelTxApiKey.post("/import", requireApiKey("fuel.import"), bulkImportHandler);
+
+// ── Clerk-authed endpoints below ──────────────────────────────────────
+
+fuelTxClerk.use("*", requireModule("fuel"), requireCapability("fuel.access"));
+
+// POST /v1/fuel-transactions/import — bulk historical import (Clerk path).
+// Skips auto-matching (drivers weren't in FleetCal at the time these
+// records were created, so there's nothing to match against).
+fuelTxClerk.post("/import", bulkImportHandler);
 
 // GET /v1/fuel-transactions — list with filters.
 fuelTxClerk.get("/", async (c) => {
