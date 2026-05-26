@@ -2706,6 +2706,17 @@ export default function EventModal() {
       if (f.type === 'number') out[f.id] = v === '' ? undefined : parseFloat(String(v));
       else out[f.id] = v;
     });
+    // customerId is an internal FK, deliberately absent from ALL_FIELDS
+    // (it has no dedicated UI field — it's set by the broker picker as
+    // a side-effect of choosing a real customer record, and by the
+    // broker→customer sync effect when the typed text matches a
+    // known customer's name). It MUST be included in the save payload
+    // though, otherwise the FK never reaches the DB and downstream
+    // batch-send / invoice flows can't reliably resolve the recipient.
+    // Empty-string is normalised to null so a "(cleared)" picker write
+    // actually clears the FK rather than landing as garbage.
+    const cid = fieldValues['customerId'];
+    out['customerId'] = (cid === undefined || cid === '') ? null : cid;
     return out;
   };
 

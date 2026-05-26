@@ -1307,93 +1307,41 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     return badRequest(c, [`invoice ${badStatus.invoiceNumber} is ${badStatus.status}; batch send only works on drafts`]);
   }
 
-  // Resolve the broker for each invoice. Three-level fallback chain,
-  // matching what the accounting table renders client-side so "what
-  // you see is what we send to":
+  // Resolve the broker for each invoice. Two-level fallback chain:
   //   1. invoice.customer_id   (frozen at draft time)
-  //   2. load.customer_id      (current FK on the load row)
-  //   3. customers.name === load.broker (text-only broker setups —
-  //      common when a dispatcher typed a broker name into the load
-  //      without picking a real customer record from the picker)
+  //   2. load.customer_id      (current FK on the load row — picks up
+  //      the case where the dispatcher set the broker AFTER drafting)
   //
-  // For invoices that hit fallback level 2 or 3, the resolved id is
-  // also written back to the LOAD's customer_id field (best-effort)
-  // so future ops use the FK directly. Snapshot text on the invoice
-  // intentionally stays as-is for audit integrity — Regenerate is
-  // the explicit refresh path.
+  // No text-name guessing. The broker picker writes load.customer_id
+  // (the leak in EventModal.doSave was fixed in a separate change);
+  // if customer_id is missing on both, the load genuinely has no
+  // linked customer record and the user must open the load and pick
+  // one from the broker picker.
   //
-  // Hard-fails only if all three levels miss.
+  // Hard-fails only if both levels miss.
   const loadIdsForFallback = Array.from(new Set(
     allInvoices.filter(i => !i.customerId).map(i => i.loadId),
   ));
-  const loadRowsById = new Map<string, { id: string; customer_id: string | null; broker: string | null }>();
+  const loadCustomerById = new Map<string, string | null>();
   if (loadIdsForFallback.length > 0) {
     const { data: loadRows } = await supabase
       .from("loads")
-      .select("id,customer_id,broker")
+      .select("id,customer_id")
       .eq("org_id", orgId)
       .in("id", loadIdsForFallback);
-    for (const row of (loadRows ?? []) as Array<{ id: string; customer_id: string | null; broker: string | null }>) {
-      loadRowsById.set(row.id, row);
-    }
-  }
-  // Fallback level 3: name-match customers by load.broker text.
-  // Only fetch customers if we'll actually need them (some load has
-  // null customer_id but non-empty broker text).
-  const brokerNamesNeeded = Array.from(new Set(
-    Array.from(loadRowsById.values())
-      .filter(l => !l.customer_id && l.broker)
-      .map(l => l.broker as string),
-  ));
-  const customerByName = new Map<string, { id: string; name: string }>();
-  if (brokerNamesNeeded.length > 0) {
-    const { data: custRows } = await supabase
-      .from("customers")
-      .select("id,name")
-      .eq("org_id", orgId)
-      .in("name", brokerNamesNeeded);
-    for (const row of (custRows ?? []) as Array<{ id: string; name: string }>) {
-      customerByName.set(row.name, row);
+    for (const row of (loadRows ?? []) as Array<{ id: string; customer_id: string | null }>) {
+      loadCustomerById.set(row.id, row.customer_id);
     }
   }
   const resolvedCustomerByInvoiceId = new Map<string, string>();
-  const loadIdsToBackfill = new Set<string>();
   const stillNoBroker: string[] = [];
   for (const inv of allInvoices) {
-    let cid: string | null = inv.customerId ?? null;
-    if (!cid) {
-      const loadRow = loadRowsById.get(inv.loadId);
-      if (loadRow?.customer_id) {
-        cid = loadRow.customer_id;
-      } else if (loadRow?.broker) {
-        const matched = customerByName.get(loadRow.broker);
-        if (matched) {
-          cid = matched.id;
-          loadIdsToBackfill.add(loadRow.id);
-        }
-      }
-    }
+    const cid = inv.customerId ?? loadCustomerById.get(inv.loadId) ?? null;
     if (!cid) stillNoBroker.push(inv.invoiceNumber);
     else resolvedCustomerByInvoiceId.set(inv.id, cid);
   }
   if (stillNoBroker.length > 0) {
-    return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no broker on the invoice OR load. Open the load and pick a customer from the broker picker (not just typed text).`]);
-  }
-
-  // Best-effort: backfill load.customer_id for any load we name-matched
-  // a customer to. This is one UPDATE per load; failures here are
-  // non-fatal (the send already has the resolved cid).
-  for (const loadId of loadIdsToBackfill) {
-    const inv = allInvoices.find(i => i.loadId === loadId);
-    const cid = inv ? resolvedCustomerByInvoiceId.get(inv.id) : undefined;
-    if (!cid) continue;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await supabase.from("loads").update({ customer_id: cid } as any)
-        .eq("id", loadId).eq("org_id", orgId);
-    } catch (err) {
-      console.warn("[batch-send] customer_id backfill skipped for load", loadId, err);
-    }
+    return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no linked customer. Open the load and pick a broker from the customer picker (not just freeform text).`]);
   }
 
   // Group by resolved customer_id. Preserves order within each group.
