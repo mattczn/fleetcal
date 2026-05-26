@@ -426,35 +426,93 @@ invoices.post("/", async (c) => {
   const invoiceNumber = body.invoiceNumber?.trim()
     || `${prefix}${load.internal_load_id}`;
 
-  const insertRow = {
-    org_id:          orgId,
-    load_id:         load.id,
-    customer_id:     load.customer_id,
-    invoice_number:  invoiceNumber,
-    status:          "draft" as InvoiceStatus,
-    total,
-    issued_at:       new Date().toISOString(),
-    due_at:          dueAt,
-    snapshot,
-  };
-
+  // Look for a void invoice on this load. If one exists, REVIVE it
+  // instead of inserting a fresh row. Reason: the schema's
+  // idx_invoices_number_per_org index is unconditional (void rows keep
+  // their number reserved), so a fresh insert with the load's natural
+  // invoice_number trips 23505 every time on a previously-voided load.
+  // Reviving the most recent void is semantically identical to "create
+  // a new draft for this load" — same load_id, same number, freshly
+  // computed snapshot/total — and avoids the dead-end UX where a load
+  // with a stale void becomes uninvoiceable.
+  //
+  // Ordered newest-first so if multiple voids somehow exist we pick
+  // the latest. Only fires when no active (non-void) invoice exists —
+  // an active draft/sent/paid invoice still trips the partial unique
+  // index downstream and returns 409 as expected.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase
+  const { data: voidRows } = await supabase
     .from("invoices")
-    .insert(insertRow as any)
     .select(INVOICE_COLS)
-    .single();
+    .eq("org_id", orgId)
+    .eq("load_id", load.id)
+    .eq("status", "void")
+    .order("issued_at", { ascending: false })
+    .limit(1);
+  const existingVoid = ((voidRows ?? [])[0] as unknown as InvoiceRow | undefined);
+
+  let data: unknown;
+  let error: { code?: string; message: string } | null = null;
+
+  if (existingVoid) {
+    // Revive: flip status back to draft, refresh snapshot/total/dates,
+    // clear void_reason. Same single-row UPDATE the regenerate
+    // endpoint uses for the void→draft case.
+    const updateRow = {
+      customer_id:     load.customer_id,
+      invoice_number:  invoiceNumber,
+      status:          "draft" as InvoiceStatus,
+      void_reason:     null,
+      total,
+      issued_at:       new Date().toISOString(),
+      due_at:          dueAt,
+      snapshot,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const upd = await supabase
+      .from("invoices")
+      .update(updateRow as any)
+      .eq("id", existingVoid.id)
+      .eq("org_id", orgId)
+      .eq("status", "void")
+      .select(INVOICE_COLS)
+      .single();
+    data  = upd.data;
+    error = upd.error;
+  } else {
+    const insertRow = {
+      org_id:          orgId,
+      load_id:         load.id,
+      customer_id:     load.customer_id,
+      invoice_number:  invoiceNumber,
+      status:          "draft" as InvoiceStatus,
+      total,
+      issued_at:       new Date().toISOString(),
+      due_at:          dueAt,
+      snapshot,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ins = await supabase
+      .from("invoices")
+      .insert(insertRow as any)
+      .select(INVOICE_COLS)
+      .single();
+    data  = ins.data;
+    error = ins.error;
+  }
 
   if (error) {
-    // 23505 = unique_violation — most likely the open-invoice-per-load
-    // partial index or the per-org invoice_number uniqueness.
+    // 23505 = unique_violation — at this point most likely an
+    // active invoice already exists for this load (partial unique
+    // index `idx_invoices_load_active` excludes void, so this catches
+    // the genuine duplicate case after the revive branch is taken).
     if ((error as { code?: string }).code === "23505") {
       return c.json(
         { error: "invoice_exists", detail: "an active invoice already exists for this load or invoice number" } satisfies ApiErrorResponse,
         409,
       );
     }
-    console.error("[POST /v1/invoices] insert failed:", error);
+    console.error("[POST /v1/invoices] write failed:", error);
     return c.json({ error: "insert_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
 
@@ -476,7 +534,8 @@ invoices.post("/", async (c) => {
   }
 
   const res: CreateInvoiceResponse = { invoice: newInvoice };
-  return c.json(res, 201);
+  // 201 for fresh insert, 200 for the void→draft revive.
+  return c.json(res, existingVoid ? 200 : 201);
 });
 
 // ─────────────────────────────────────────────────────────────────────────
