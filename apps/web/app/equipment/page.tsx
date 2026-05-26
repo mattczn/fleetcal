@@ -151,7 +151,14 @@ export default function EquipmentPage() {
   const [sideMedia, setSideMedia] = useState<MediaList | null>(null);
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+    // h-screen (not min-h-screen) so the outer column has a FIXED
+    // height equal to the viewport. Without that bound, the flex-1
+    // tab-content child can grow past the viewport and the
+    // overflow-y-auto on it never kicks in (the body's global
+    // overflow:hidden then clips the bottom unreachable). Pages that
+    // need to scroll inside a flex-1 child MUST use h-screen here,
+    // not min-h-screen.
+    <div className="h-screen flex flex-col" style={{ background: 'var(--gc-bg)' }}>
       <ManagementHeader title="Equipment" icon={Package} />
 
       {/* Tab bar */}
@@ -1186,7 +1193,14 @@ function FuelDetail({
 // from the email + the match status. The two-column TwoColumnBody
 // would feel empty here, so we use a single-column scroll body.
 
-function FuelTransactionDetail({ transaction: t }: { transaction: FuelTransaction }) {
+function FuelTransactionDetail({ transaction: initial }: { transaction: FuelTransaction }) {
+  // Local mutable copy of the transaction so manual link / unlink
+  // / no-match actions can refresh the displayed match status without
+  // re-fetching the whole list. Falls back to the prop when the user
+  // opens a different transaction.
+  const [t, setT] = useState<FuelTransaction>(initial);
+  useEffect(() => { setT(initial); }, [initial]);
+
   return (
     <div className="flex-1 overflow-auto px-5 py-4" style={{ background: 'var(--gc-bg)' }}>
       <div className="grid grid-cols-3 gap-x-5 gap-y-3 text-[12px]" style={{ maxWidth: 720 }}>
@@ -1218,21 +1232,12 @@ function FuelTransactionDetail({ transaction: t }: { transaction: FuelTransactio
             </span>
           )}
         </div>
-        {t.fuelReportId && (
-          <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-2)' }}>
-            Linked driver report: <span className="font-mono">{t.fuelReportId}</span>
-          </div>
-        )}
         {t.matchNotes && (
           <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>{t.matchNotes}</div>
         )}
-        {!t.fuelReportId && (
-          <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>
-            No driver report linked. The matcher couldn&apos;t pair this transaction (likely
-            because the driver didn&apos;t submit a fuel-up via the app at this stop). Manual
-            linking UI is on the roadmap; for now, the transaction stays as-is.
-          </div>
-        )}
+
+        {/* Match controls — render different affordances based on state. */}
+        <MatchControls transaction={t} onChange={setT} />
       </FieldSection>
 
       <FieldSection label="Provenance">
@@ -1244,6 +1249,239 @@ function FuelTransactionDetail({ transaction: t }: { transaction: FuelTransactio
           )}
         </div>
       </FieldSection>
+    </div>
+  );
+}
+
+// ─── Match controls (link / unlink / no-match) ───────────────────────
+//
+// Behaviour:
+//   • If the transaction is already linked to a fuel_report: show a
+//     summary of the linked report + an Unlink button.
+//   • If unmatched: show a "Find driver report to link" button that
+//     opens a candidate list (fuel_reports within ±3 days of the
+//     transaction date). Each candidate has a Link button. Also offers
+//     "Mark as no driver report needed" for cases where dispatch
+//     confirms there's no app submission to pair with.
+
+function MatchControls({
+  transaction: t,
+  onChange,
+}: {
+  transaction: FuelTransaction;
+  onChange: (next: FuelTransaction) => void;
+}) {
+  const [busy, setBusy]   = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function callMatch(fuelReportId: string | null, notes?: string) {
+    setBusy(true); setError(null);
+    try {
+      const res = await railway.matchFuelTransaction(t.id, { fuelReportId, matchNotes: notes });
+      onChange(res.fuelTransaction);
+    } catch (err) {
+      setError((err as Error).message ?? 'failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (t.fuelReportId) {
+    return (
+      <div className="mt-3">
+        <LinkedReportRow reportId={t.fuelReportId} />
+        <div className="flex items-center gap-2 mt-2">
+          <button
+            disabled={busy}
+            onClick={() => void callMatch(null)}
+            className="text-[11px] font-semibold px-2.5 py-1.5 rounded transition-colors disabled:opacity-50"
+            style={{ background: 'var(--gc-surface)', color: '#dc2626', border: '1px solid #fecaca' }}
+          >
+            Unlink
+          </button>
+        </div>
+        {error && <div className="text-[11px] mt-2" style={{ color: '#dc2626' }}>{error}</div>}
+      </div>
+    );
+  }
+
+  // Unmatched. Show candidate finder.
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      <CandidatePicker
+        transactionDate={t.transactionDate}
+        targetGallons={t.dieselGallons}
+        busy={busy}
+        onPick={(reportId) => void callMatch(reportId)}
+      />
+      <button
+        disabled={busy}
+        onClick={() => {
+          // Mark no-match-needed. The server treats this as 'no_match_needed'
+          // when fuelReportId is null AND matchNotes mentions skip — we use
+          // the matchNotes field as the signal here. (The API can be
+          // extended later with an explicit field if we want fancier UX.)
+          // For now we just leave the row "unlinked" but in a more
+          // intentional state — see API: PATCH /match with null reports.
+          // To mark 'no_match_needed', we pass null + a sentinel note.
+          void callMatch(null, 'no driver report exists');
+        }}
+        className="text-[11px] font-semibold px-2.5 py-1.5 rounded transition-colors disabled:opacity-50 self-start"
+        style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+      >
+        Mark as no driver report needed
+      </button>
+      {error && <div className="text-[11px]" style={{ color: '#dc2626' }}>{error}</div>}
+    </div>
+  );
+}
+
+// Renders the linked driver report inline. Best-effort fetch — if it
+// fails (deleted report, etc.) we just show the id so the dispatcher
+// can investigate.
+function LinkedReportRow({ reportId }: { reportId: string }) {
+  const [report, setReport] = useState<FuelReport | null>(null);
+  const [error,  setError]  = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    // Use listFuelReports filtered by no specific arg — easiest path
+    // since there's no /v1/fuel-reports/:id endpoint exposed yet. The
+    // report carries driverId/assetId; we'll show them as-is.
+    railway.listFuelReports({ limit: 500 })
+      .then(r => {
+        if (cancelled) return;
+        const found = r.fuelReports.find(x => x.id === reportId);
+        setReport(found ?? null);
+      })
+      .catch(err => { if (!cancelled) setError((err as Error).message); });
+    return () => { cancelled = true; };
+  }, [reportId]);
+  if (error) {
+    return <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>Linked: <span className="font-mono">{reportId}</span> (couldn&apos;t fetch details: {error})</div>;
+  }
+  if (!report) {
+    return <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>Loading linked report…</div>;
+  }
+  return (
+    <div className="rounded p-2.5 mt-2" style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+      <div className="text-[11px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+        Linked driver report
+      </div>
+      <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-2)' }}>
+        Reported {new Date(report.reportedAt).toLocaleString()} · {report.dieselGallons.toFixed(1)} diesel gal{report.state ? ` · ${report.state}` : ''}
+      </div>
+      <div className="text-[10px] font-mono mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+        Driver #{report.driverId} · Asset #{report.assetId}
+      </div>
+    </div>
+  );
+}
+
+// Loads pending fuel_reports within ±3 days of the transaction date
+// and renders them as a list with a Link button on each. Sorts by
+// gallons-closeness to targetGallons so the most likely match is at
+// the top.
+function CandidatePicker({
+  transactionDate, targetGallons, busy, onPick,
+}: {
+  transactionDate: string;
+  targetGallons:   number | null | undefined;
+  busy:            boolean;
+  onPick:          (reportId: string) => void;
+}) {
+  const [open,    setOpen]    = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [rows,    setRows]    = useState<FuelReport[]>([]);
+  const [error,   setError]   = useState<string | null>(null);
+
+  async function loadCandidates() {
+    setLoading(true); setError(null);
+    try {
+      const fromD = new Date(transactionDate); fromD.setDate(fromD.getDate() - 3);
+      const toD   = new Date(transactionDate); toD.setDate(toD.getDate()   + 3);
+      const res = await railway.listFuelReports({
+        from: fromD.toISOString(),
+        to:   toD.toISOString(),
+        // Show ALL reports in the window — not just pending — because
+        // the dispatcher might be re-linking a manual one. The API
+        // allows reassigning even if the report is currently matched
+        // to a different transaction.
+        limit: 200,
+      });
+      setRows(res.fuelReports);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => { setOpen(true); void loadCandidates(); }}
+        className="text-[11px] font-semibold px-2.5 py-1.5 rounded transition-colors self-start"
+        style={{ background: '#1a73e8', color: '#fff' }}
+      >
+        Find driver report to link
+      </button>
+    );
+  }
+
+  // Sort by gallons-distance from target (closest first) — that's the
+  // signal the matcher cares about most when names don't help.
+  const sorted = [...rows].sort((a, b) => {
+    if (targetGallons == null) return 0;
+    const da = Math.abs(a.dieselGallons - targetGallons);
+    const db = Math.abs(b.dieselGallons - targetGallons);
+    return da - db;
+  });
+
+  return (
+    <div className="rounded p-2.5" style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[11px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+          Driver reports near {new Date(transactionDate).toLocaleDateString()}
+        </div>
+        <button onClick={() => setOpen(false)} className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Close</button>
+      </div>
+      {loading && <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Loading candidates…</div>}
+      {error && <div className="text-[11px]" style={{ color: '#dc2626' }}>{error}</div>}
+      {!loading && !error && sorted.length === 0 && (
+        <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+          No driver fuel reports in the ±3 day window.
+        </div>
+      )}
+      <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
+        {sorted.map(r => {
+          const diff = targetGallons != null ? Math.abs(r.dieselGallons - targetGallons) : null;
+          const close = diff != null && diff <= 0.5;
+          return (
+            <div key={r.id} className="flex items-center gap-2 rounded px-2 py-1.5"
+              style={{ background: close ? '#dcfce7' : 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+              <div className="flex-1 min-w-0 text-[11px]">
+                <div style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+                  Driver #{r.driverId} · Asset #{r.assetId}
+                </div>
+                <div style={{ color: 'var(--gc-text-3)' }}>
+                  {new Date(r.reportedAt).toLocaleString()} · {r.dieselGallons.toFixed(1)} gal
+                  {diff != null && diff > 0.001 && ` (${diff > 0 ? '±' : ''}${diff.toFixed(1)} from receipt)`}
+                  {r.matchStatus === 'matched' && ' · already linked'}
+                </div>
+              </div>
+              <button
+                disabled={busy}
+                onClick={() => onPick(r.id)}
+                className="text-[10.5px] font-semibold px-2 py-1 rounded transition-colors disabled:opacity-50"
+                style={{ background: '#1a73e8', color: '#fff' }}
+              >
+                Link
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
