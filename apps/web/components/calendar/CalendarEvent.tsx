@@ -249,11 +249,22 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
           )}
           {/* Layer overlays in the bottom-right corner. Stacked side-by-side
               when both apply so a confirmed + POD'd load shows both icons.
-              Each gated on its toolbar toggle. */}
+              Each gated on its toolbar toggle.
+              Relay behaviour:
+                - Confirmed checkmark renders on BOTH legs independently —
+                  `event.confirmedAt` is per-event, so each driver's own
+                  confirmation lights up only their leg.
+                - POD icon renders on the DELIVERY leg only. The pickup
+                  driver hasn't dropped yet when the POD goes up, so a
+                  POD badge on the pickup card would mis-suggest "this
+                  leg is done". Same `documentCounts` data is on both
+                  legs (shared via load_id), we just don't surface it
+                  on the pickup card. */}
           {(() => {
             const podCount      = event.documentCounts?.pod ?? 0;
-            const showCheck     = !isRelay && event.confirmedAt && showConfirmedOverlay;
-            const showPod       = !isRelay && podCount > 0      && showPodOverlay;
+            const showCheck     = event.confirmedAt && showConfirmedOverlay;
+            const podAllowedHere = !isRelay || relayRole === 'delivery';
+            const showPod       = podAllowedHere && podCount > 0 && showPodOverlay;
             if (!showCheck && !showPod) return null;
             return (
               <div style={{
