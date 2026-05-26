@@ -970,8 +970,18 @@ function AccountingPageInner() {
       )}
       {batchSendOpen && (
         <BatchSendDialog
-          invoices={selectedInvoices}
-          customerById={customerById}
+          // Pre-resolve broker per invoice via the same load-based
+          // lookup the table uses — so a stale invoice (drafted before
+          // the broker was set) groups under the load's CURRENT broker
+          // rather than under "(no broker set)".
+          rows={(() => {
+            const byInvId = new Map(paged.map(r => [r.invoice?.id, r.load] as const));
+            return selectedInvoices.map(inv => {
+              const load = byInvId.get(inv.id);
+              const broker = load ? findCustomerForLoad(load) ?? null : null;
+              return { invoice: inv, broker };
+            });
+          })()}
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchSendOpen(false)}
           onComplete={() => { setBatchSendOpen(false); setSelected(new Set()); void refresh(); }} />
@@ -1351,32 +1361,36 @@ function ResultStrip({ tone, label }: { tone: { bg: string; fg: string; border: 
 // ─── Batch send dialog ──────────────────────────────────────────────────
 
 interface BatchSendDialogProps {
-  invoices:     Invoice[];
-  customerById: Map<string, Customer>;
+  /** Each invoice pre-paired with the broker the table currently shows
+   *  for it. The parent resolves this via findCustomerForLoad — falling
+   *  back to load.broker name match when the invoice's frozen
+   *  customer_id is null. Lets a stale invoice still group + send to
+   *  the broker that's currently set on the load, instead of the modal
+   *  saying "(no broker set)" when the table clearly shows one. */
+  rows:         Array<{ invoice: Invoice; broker: Customer | null }>;
   onOpenBroker?: (brokerId: string) => void;
   onClose:      () => void;
   onComplete:   () => void;
 }
 
-function BatchSendDialog({ invoices, customerById, onOpenBroker, onClose, onComplete }: BatchSendDialogProps) {
+function BatchSendDialog({ rows, onOpenBroker, onClose, onComplete }: BatchSendDialogProps) {
   const [bccSelf, setBccSelf]       = useState(true);
   const [attachLoadDocs, setAttach] = useState(true);
   const [busy, setBusy]             = useState(false);
   const [result, setResult]         = useState<BatchSendInvoicesResponse | null>(null);
 
+  const invoices = useMemo(() => rows.map(r => r.invoice), [rows]);
+
   const groups = useMemo(() => {
     const byBroker = new Map<string, { broker: Customer | null; rows: Invoice[] }>();
-    for (const inv of invoices) {
-      const key = inv.customerId ?? '__missing__';
+    for (const { invoice, broker } of rows) {
+      const key = broker?.id ?? '__missing__';
       const cur = byBroker.get(key);
-      if (cur) cur.rows.push(inv);
-      else byBroker.set(key, {
-        broker: inv.customerId ? customerById.get(inv.customerId) ?? null : null,
-        rows:   [inv],
-      });
+      if (cur) cur.rows.push(invoice);
+      else byBroker.set(key, { broker, rows: [invoice] });
     }
     return Array.from(byBroker.values());
-  }, [invoices, customerById]);
+  }, [rows]);
 
   const missingBroker = groups.some(g => !g.broker);
   const missingEmail  = groups.some(g => g.broker && !g.broker.invoiceEmail);

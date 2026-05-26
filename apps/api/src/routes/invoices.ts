@@ -1306,15 +1306,45 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
   if (badStatus) {
     return badRequest(c, [`invoice ${badStatus.invoiceNumber} is ${badStatus.status}; batch send only works on drafts`]);
   }
-  const noBroker = allInvoices.find(i => !i.customerId);
-  if (noBroker) {
-    return badRequest(c, [`invoice ${noBroker.invoiceNumber} has no broker (customer_id) — set one before batch sending`]);
+
+  // Resolve the broker for each invoice. Primary source is the
+  // invoice's frozen customer_id (captured at draft time). If that's
+  // null — usually because the dispatcher generated the invoice
+  // BEFORE setting the broker on the load — fall back to the load's
+  // CURRENT customer_id so the send still goes through. The accounting
+  // table already shows this fallback to users, so matching it here
+  // means "what you see is what we send to". Hard-fails only if both
+  // are null (truly no broker anywhere).
+  const loadIdsForFallback = Array.from(new Set(
+    allInvoices.filter(i => !i.customerId).map(i => i.loadId),
+  ));
+  const loadCustomerById = new Map<string, string | null>();
+  if (loadIdsForFallback.length > 0) {
+    const { data: loadRows } = await supabase
+      .from("loads")
+      .select("id,customer_id")
+      .eq("org_id", orgId)
+      .in("id", loadIdsForFallback);
+    for (const row of (loadRows ?? []) as Array<{ id: string; customer_id: string | null }>) {
+      loadCustomerById.set(row.id, row.customer_id);
+    }
+  }
+  const resolvedCustomerByInvoiceId = new Map<string, string>();
+  const stillNoBroker: string[] = [];
+  for (const inv of allInvoices) {
+    const cid = inv.customerId ?? loadCustomerById.get(inv.loadId) ?? null;
+    if (!cid) stillNoBroker.push(inv.invoiceNumber);
+    else resolvedCustomerByInvoiceId.set(inv.id, cid);
+  }
+  if (stillNoBroker.length > 0) {
+    return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no broker on either the invoice or the load — set one before batch sending`]);
   }
 
-  // Group by customer_id. Preserves order within each group.
+  // Group by resolved customer_id (frozen → load fallback). Preserves
+  // order within each group.
   const byBroker = new Map<string, Invoice[]>();
   for (const inv of allInvoices) {
-    const cid = inv.customerId!;
+    const cid = resolvedCustomerByInvoiceId.get(inv.id)!;
     const list = byBroker.get(cid) ?? [];
     list.push(inv);
     byBroker.set(cid, list);
@@ -1448,15 +1478,24 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     // Flip all invoices in this group to sent + archive each packet.
     const sentInvoiceIds: string[] = [];
     for (const { invoice: inv, packet } of built) {
+      // If this invoice's customer_id was null and we resolved via the
+      // load fallback, write the resolved id back to the row so future
+      // queries / listings don't keep needing the fallback. Snapshot
+      // text (broker name in the PDF) stays as-is for audit integrity;
+      // a dispatcher who cares about that can Regenerate first.
+      const updateRow: Record<string, unknown> = {
+        status:      "sent",
+        sent_at:     new Date().toISOString(),
+        sent_to:     recipient,
+        sent_method: "email",
+      };
+      if (!inv.customerId) {
+        updateRow.customer_id = customerId;
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await supabase
         .from("invoices")
-        .update({
-          status:      "sent",
-          sent_at:     new Date().toISOString(),
-          sent_to:     recipient,
-          sent_method: "email",
-        } as any)
+        .update(updateRow as any)
         .eq("id", inv.id)
         .eq("org_id", orgId)
         .eq("status", "draft")
