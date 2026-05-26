@@ -5,7 +5,9 @@ import Link from 'next/link';
 import {
   TrendingUp, Truck, CheckCircle2, DollarSign,
   BarChart2, AlertCircle, Loader2, FileDown, Sheet,
+  Fuel as FuelIcon, Droplets, Gauge,
 } from 'lucide-react';
+import type { FuelTransaction, FuelReport } from '@fleetcal/types';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
@@ -18,7 +20,7 @@ import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
 import LoadsReport from '@/components/dashboard/LoadsReport';
-import type { CalendarEvent } from '@/lib/types';
+import type { CalendarEvent, Asset } from '@/lib/types';
 import type { LoadSummary } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
 
@@ -290,6 +292,11 @@ export default function DashboardView() {
   // Dispatcher and Maintenance never see what we paid drivers.
   const { can } = usePermissions();
   const canViewDriverPay = can('loads.view_driver_pay');
+  // Top-level view toggle: "Performance" (existing revenue/loads KPIs)
+  // vs "Fuel" (new spend/gallons/MPG KPIs). Both share the period
+  // picker + date range so flipping views feels like changing lenses
+  // on the same window of activity, not a separate page.
+  const [view, setView] = useState<'performance' | 'fuel'>('performance');
   const [period, setPeriod] = useState<Period>('month');
   const [fetching, setFetching] = useState(false);
   const [weekSort, setWeekSort] = useState<{ field: WeekSortField; dir: 'asc' | 'desc' }>({ field: 'pickupDate', dir: 'asc' });
@@ -732,11 +739,35 @@ export default function DashboardView() {
         )}
         <div className="max-w-[1600px] mx-auto space-y-5">
 
-          {/* Page title + period selector */}
+          {/* Page title + view tabs + period selector */}
           <div className="flex items-start justify-between">
-            <h2 className="text-[32px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.5px' }}>
-              {organization?.name ? <>{organization.name}&rsquo;s Dashboard</> : 'Dashboard'}
-            </h2>
+            <div className="flex flex-col gap-3">
+              <h2 className="text-[32px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.5px' }}>
+                {organization?.name ? <>{organization.name}&rsquo;s Dashboard</> : 'Dashboard'}
+              </h2>
+              {/* View tabs — Performance (revenue) vs Fuel (spend/gallons). */}
+              <div
+                className="flex items-center rounded-full self-start"
+                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-hover)', padding: 2 }}
+              >
+                {([
+                  { value: 'performance' as const, label: 'Performance', icon: <BarChart2 size={13} /> },
+                  { value: 'fuel'        as const, label: 'Fuel',        icon: <FuelIcon size={13} /> },
+                ]).map(t => (
+                  <button
+                    key={t.value}
+                    onClick={() => setView(t.value)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all"
+                    style={{
+                      background: view === t.value ? 'var(--gc-surface)' : 'transparent',
+                      color:      view === t.value ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+                      boxShadow:  view === t.value ? 'var(--shadow-1)' : 'none',
+                    }}>
+                    {t.icon}{t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="flex flex-col items-end gap-1.5 shrink-0">
               <div
                 className="flex items-center rounded-full"
@@ -774,6 +805,8 @@ export default function DashboardView() {
             </div>
           </div>
 
+          {/* Performance view — existing revenue/loads dashboard. */}
+          {view === 'performance' && <>
           {/* KPI row */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
@@ -1055,9 +1088,296 @@ export default function DashboardView() {
               </Link>
             </div>
           )}
+          </>}
+
+          {/* Fuel view — new spend/gallons/MPG dashboard. Self-contained
+              so the Performance code path stays untouched. Shares the
+              period range (pStart/pEnd) from this component's state. */}
+          {view === 'fuel' && (
+            <FuelKpis
+              pStart={pStart}
+              pEnd={pEnd}
+              assets={assets}
+              unassignedAssetId={unassignedAssetId}
+            />
+          )}
 
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── Fuel KPIs view ──────────────────────────────────────────────────
+//
+// Sibling-view of the Performance dashboard. Shares the same period
+// picker + visual scaffolding (Card / KpiCard / per-asset bar list)
+// so flipping the top tab feels like changing lenses, not pages.
+//
+// Data sources:
+//   • fuel_transactions (Mudflap card receipts) — $ + gallons + payment
+//     detail. The most accurate spend data.
+//   • fuel_reports (driver-app submissions) — used to attribute each
+//     card transaction to an asset, via the transaction's fuel_report_id
+//     link. Without that link, transactions land under "Unattributed".
+//   • LoadSummary (existing dashboard fetch) — totalLoadedMiles for the
+//     MPG calculation. NOTE: this is loaded miles only — deadhead miles
+//     aren't tracked yet. MPG is therefore an upper bound (gallons are
+//     real, miles are under-counted). When Motive odometer integration
+//     lands, swap totalLoadedMiles for the asset's true mileage.
+
+function FuelKpis({
+  pStart, pEnd, assets, unassignedAssetId,
+}: {
+  pStart: Date;
+  pEnd:   Date;
+  assets: Asset[];
+  unassignedAssetId: number | null;
+}) {
+  const [transactions, setTransactions] = useState<FuelTransaction[]>([]);
+  const [fuelReports,  setFuelReports]  = useState<FuelReport[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+
+  // Re-fetch when the period changes. Both transactions and reports
+  // are pulled in parallel — we need the reports to map transaction
+  // → asset via the linked fuel_report_id.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const fromISO = pStart.toISOString();
+    const toISO   = pEnd.toISOString();
+    const fromDate = pStart.toISOString().slice(0, 10);
+    const toDate   = pEnd.toISOString().slice(0, 10);
+    Promise.all([
+      railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 500 }),
+      railway.listFuelReports({ from: fromISO, to: toISO, limit: 500 }),
+    ])
+      .then(([tx, rep]) => {
+        if (cancelled) return;
+        setTransactions(tx.fuelTransactions);
+        setFuelReports(rep.fuelReports);
+      })
+      .catch(err => { if (!cancelled) setError((err as Error).message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [pStart, pEnd]);
+
+  // Build the report → asset lookup so we can attribute each
+  // transaction back to a truck.
+  const reportToAssetId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of fuelReports) m.set(r.id, r.assetId);
+    return m;
+  }, [fuelReports]);
+
+  // Fleet-level KPIs.
+  const kpis = useMemo(() => {
+    let spend = 0;
+    let gallons = 0;
+    for (const t of transactions) {
+      spend   += t.totalCharged;
+      gallons += (t.dieselGallons ?? 0) + (t.defGallons ?? 0);
+    }
+    const avgPerGallon = gallons > 0 ? spend / gallons : 0;
+    // Miles for MPG: sum totalLoadedMiles across reports in the
+    // period, scoped to assets that actually had matched fuel. We
+    // sum loaded miles per asset because deadhead isn't tracked.
+    // This will undercount miles; flag the result as "loaded only"
+    // in the sub-text.
+    // For v1: just total all reports' assets' miles indirectly by
+    // counting reports' gallons against all loaded miles on the same
+    // assets — we'd need loadSummaries to be precise. Since the
+    // fleet-level calc is just total-loaded-miles / total-gallons,
+    // we use a simpler proxy here: leave MPG as null until we have
+    // Motive integration. The KPI tile still renders with an "—"
+    // value and an explainer in the sub.
+    return { spend, gallons, avgPerGallon };
+  }, [transactions]);
+
+  // Per-asset breakdown — spend + gallons grouped by asset_id (via
+  // the linked fuel_report). Unattributed transactions are bucketed
+  // under "Unattributed" so the dispatcher can see how much spend is
+  // floating outside any asset record (typically buy-on-behalf
+  // receipts or transactions imported from before the driver-app
+  // matcher existed).
+  const spendByAsset = useMemo(() => {
+    // Map: assetId | 'unattributed' → { spend, gallons }
+    const acc = new Map<number | 'unattributed', { spend: number; gallons: number }>();
+    for (const t of transactions) {
+      const assetId = t.fuelReportId ? (reportToAssetId.get(t.fuelReportId) ?? null) : null;
+      const key: number | 'unattributed' = assetId ?? 'unattributed';
+      const cur = acc.get(key) ?? { spend: 0, gallons: 0 };
+      cur.spend   += t.totalCharged;
+      cur.gallons += (t.dieselGallons ?? 0) + (t.defGallons ?? 0);
+      acc.set(key, cur);
+    }
+
+    // Build rows. Filter assets by active-in-range (same rule the
+    // Performance view uses) so retired trucks don't show up as $0
+    // rows. Then add an "Unattributed" pseudo-row at the bottom.
+    const periodStartKey = dateKeyOf(pStart);
+    const periodEndKey   = dateKeyOf(pEnd);
+    const activeAssets = assets.filter(a =>
+      a.id !== unassignedAssetId &&
+      a.type !== 'Unassigned' &&
+      a.name !== 'Unassigned' &&
+      isActiveInRange(a, periodStartKey, periodEndKey),
+    );
+    const rows = activeAssets.map(asset => {
+      const stats = acc.get(asset.id) ?? { spend: 0, gallons: 0 };
+      return { asset, spend: stats.spend, gallons: stats.gallons };
+    }).filter(r => r.spend > 0 || r.gallons > 0);
+    const unattributed = acc.get('unattributed');
+    return {
+      rows: rows.sort((a, b) => b.spend - a.spend),
+      unattributed: unattributed && (unattributed.spend > 0 || unattributed.gallons > 0)
+        ? unattributed
+        : null,
+    };
+  }, [transactions, reportToAssetId, assets, unassignedAssetId, pStart, pEnd]);
+
+  const maxAssetSpend = useMemo(() => {
+    return Math.max(
+      ...spendByAsset.rows.map(r => r.spend),
+      spendByAsset.unattributed?.spend ?? 0,
+      1, // never zero, so the bar widths are well-defined
+    );
+  }, [spendByAsset]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-24" style={{ color: 'var(--gc-text-3)' }}>
+        <Loader2 size={24} className="animate-spin" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card>
+        <div className="text-sm" style={{ color: '#dc2626' }}>Failed to load fuel data: {error}</div>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      {/* KPI row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KpiCard
+          label="Total Fuel Spend"
+          value={fmt(kpis.spend)}
+          sub={`${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} in period`}
+          icon={<DollarSign size={17} />}
+          accent="#dc2626"
+        />
+        <KpiCard
+          label="Total Gallons"
+          value={kpis.gallons > 0
+            ? `${kpis.gallons.toLocaleString('en-US', { maximumFractionDigits: 1 })}`
+            : '—'}
+          sub="diesel + DEF combined"
+          icon={<Droplets size={17} />}
+          accent="#0ea5e9"
+        />
+        <KpiCard
+          label="Avg $ / Gallon"
+          value={kpis.avgPerGallon > 0
+            ? `$${kpis.avgPerGallon.toFixed(3)}`
+            : '—'}
+          sub="spend divided by gallons"
+          icon={<TrendingUp size={17} />}
+          accent="#f59e0b"
+        />
+        <KpiCard
+          label="Avg MPG"
+          value="—"
+          sub="needs Motive odometer integration"
+          icon={<Gauge size={17} />}
+          accent="#10b981"
+        />
+      </div>
+
+      {/* Fuel spend per asset */}
+      <Card>
+        <CardTitle>Fuel Spend by Asset</CardTitle>
+        {spendByAsset.rows.length === 0 && !spendByAsset.unattributed ? (
+          <Empty label="No fuel transactions in this period" />
+        ) : (
+          <>
+            <div className="space-y-3">
+              {spendByAsset.rows.map(({ asset, spend, gallons }) => {
+                const pct = (spend / maxAssetSpend) * 100;
+                const assetLabel = asset.unit
+                  ? `#${asset.unit} · ${asset.name}`
+                  : asset.name;
+                return (
+                  <div key={asset.id} className="flex items-center gap-3">
+                    <div
+                      className="w-[120px] shrink-0 text-[13px] truncate font-medium"
+                      style={{ color: 'var(--gc-text-1)' }}
+                      title={assetLabel}>
+                      {assetLabel}
+                    </div>
+                    <div className="flex-1 h-5 relative flex items-center">
+                      <div className="absolute rounded"
+                        style={{
+                          width: `${pct}%`, height: 7,
+                          background: asset.color,
+                          top: '50%', transform: 'translateY(-50%)',
+                          minWidth: spend > 0 ? 4 : 0,
+                        }} />
+                    </div>
+                    <div className="text-[13px] font-semibold shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 72 }}>
+                      {fmt(spend)}
+                    </div>
+                    <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 70 }}>
+                      {gallons.toFixed(1)} gal
+                    </div>
+                  </div>
+                );
+              })}
+              {spendByAsset.unattributed && (
+                <div className="flex items-center gap-3 pt-2 mt-2"
+                  style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+                  <div className="w-[120px] shrink-0 text-[13px] font-medium italic"
+                    style={{ color: 'var(--gc-text-3)' }}
+                    title="Card transactions not linked to a driver report — typically buy-on-behalf or pre-driver-app history">
+                    Unattributed
+                  </div>
+                  <div className="flex-1 h-5 relative flex items-center">
+                    <div className="absolute rounded"
+                      style={{
+                        width: `${(spendByAsset.unattributed.spend / maxAssetSpend) * 100}%`,
+                        height: 7,
+                        background: '#9ca3af',
+                        top: '50%', transform: 'translateY(-50%)',
+                        minWidth: 4,
+                      }} />
+                  </div>
+                  <div className="text-[13px] font-semibold shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 72 }}>
+                    {fmt(spendByAsset.unattributed.spend)}
+                  </div>
+                  <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 70 }}>
+                    {spendByAsset.unattributed.gallons.toFixed(1)} gal
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="mt-3 pt-3 text-[11px] leading-relaxed"
+              style={{ color: 'var(--gc-text-3)', borderTop: '1px solid var(--gc-border-light)' }}>
+              Asset attribution comes from the card transaction&apos;s linked driver report
+              (via the auto-matcher). Unlinked transactions land under
+              &ldquo;Unattributed&rdquo; — usually buy-on-behalf receipts or historical
+              transactions from before the driver app was rolled out. Use the Equipment →
+              Fuel → Card Transactions surface to manually link any of those to a driver
+              report.
+            </div>
+          </>
+        )}
+      </Card>
+    </>
   );
 }
