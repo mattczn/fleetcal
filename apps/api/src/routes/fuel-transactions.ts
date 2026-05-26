@@ -160,18 +160,30 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
 // two owners are the only known cases.
 
 /** Names on a fuel receipt that mean "this person bought fuel for
- *  ANOTHER driver". Case-insensitive substring match against the
- *  Mudflap PURCHASED BY field. Add new entries here if more
- *  not-driving purchasers show up. */
-const BUY_ON_BEHALF_NAMES = [
-  "michael curzon",
-  "jonathan curzon",
-];
+ *  ANOTHER driver". Loaded per-org from
+ *  org_settings.fuel_settings.buyOnBehalfNames — see the FuelSettings
+ *  type in @fleetcal/types domain.ts. The matcher uses
+ *  case-insensitive substring matches.
+ *
+ *  Loaded once per /inbound-email request via loadOrgBuyOnBehalfNames()
+ *  and threaded through to the scorer so we don't re-hit the DB inside
+ *  the per-candidate loop. */
+async function loadOrgBuyOnBehalfNames(orgId: string): Promise<string[]> {
+  const { data } = await supabase
+    .from("org_settings")
+    .select("fuel_settings")
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const settings = (data as { fuel_settings: { buyOnBehalfNames?: string[] } | null } | null)?.fuel_settings;
+  const names = settings?.buyOnBehalfNames ?? [];
+  // Normalize at load time — every callsite expects lowercase strings.
+  return names.map(n => (n ?? "").toString().toLowerCase().trim()).filter(Boolean);
+}
 
-function isBuyOnBehalfReceipt(driverNameOnReceipt: string | null | undefined): boolean {
-  if (!driverNameOnReceipt) return false;
+function isBuyOnBehalfReceipt(driverNameOnReceipt: string | null | undefined, buyOnBehalfNames: string[]): boolean {
+  if (!driverNameOnReceipt || buyOnBehalfNames.length === 0) return false;
   const lower = driverNameOnReceipt.toLowerCase();
-  return BUY_ON_BEHALF_NAMES.some(n => lower.includes(n));
+  return buyOnBehalfNames.some(n => lower.includes(n));
 }
 
 interface FuelReportCandidate {
@@ -252,8 +264,8 @@ function scoreMatchBuyOnBehalf(tx: FuelTransactionRow, r: FuelReportCandidate): 
   return score;
 }
 
-function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
-  return isBuyOnBehalfReceipt(tx.driver_name)
+function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate, buyOnBehalfNames: string[]): number {
+  return isBuyOnBehalfReceipt(tx.driver_name, buyOnBehalfNames)
     ? scoreMatchBuyOnBehalf(tx, r)
     : scoreMatchStandard(tx, r);
 }
@@ -261,6 +273,7 @@ function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
 async function tryAutoMatch(
   orgId: string,
   txRow: FuelTransactionRow,
+  buyOnBehalfNames: string[],
 ): Promise<{ fuelReportId: string; confidence: number } | null> {
   // Pull candidate reports within ±3 days of the transaction date and
   // still in 'pending' match status. Limit to a reasonable batch — a
@@ -299,7 +312,7 @@ async function tryAutoMatch(
 
   let best: { id: string; score: number } | null = null;
   for (const c of candidates) {
-    const s = scoreMatch(txRow, c);
+    const s = scoreMatch(txRow, c, buyOnBehalfNames);
     if (!best || s > best.score) best = { id: c.id, score: s };
   }
   if (!best || best.score < 70) return null;
@@ -311,7 +324,8 @@ async function applyAutoMatch(
   txId: string,
   txRow: FuelTransactionRow,
 ): Promise<{ status: FuelTransactionMatchStatus; confidence?: number }> {
-  const matched = await tryAutoMatch(orgId, txRow);
+  const buyOnBehalfNames = await loadOrgBuyOnBehalfNames(orgId);
+  const matched = await tryAutoMatch(orgId, txRow, buyOnBehalfNames);
   if (!matched) return { status: "unmatched" };
 
   // Two-sided update — flip both ends of the link in a single round

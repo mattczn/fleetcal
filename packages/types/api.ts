@@ -791,6 +791,12 @@ export interface UpdateOrgSettingsRequest {
    *  (the UI ships the whole shape on save). Omit to leave unchanged.
    *  null clears back to the server default. */
   notificationRules?: import("./notifications").NotificationRules | null;
+  /** Motive integration config — sync toggles + cadences. Merged
+   *  shallowly with the existing row so a single-field PATCH works. */
+  motiveSettings?:   import("./domain").MotiveSettings | null;
+  /** Fuel-side carrier-specific config (currently just the
+   *  buy-on-behalf names list used by the fuel auto-matcher). */
+  fuelSettings?:     import("./domain").FuelSettings | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 
@@ -1210,6 +1216,65 @@ export interface MatchFuelTransactionResponse { fuelTransaction: FuelTransaction
 
 // Re-export the enums for caller convenience.
 export type { FuelTransactionMatchStatus, FuelTransactionProvider };
+
+// ── /v1/odometer-readings ───────────────────────────────────────────────
+//
+// Source-agnostic odometer storage. Backed by the motive_odometer_readings
+// table (table name kept for backward compat). Three writers:
+//   1. Motive snapshot cron — vehicle_id set, asset_id null, source='motive'
+//   2. Bulk historical import (this endpoint) — asset_id set, vehicle_id
+//      optional, source='import'
+//   3. Manual entry UI (future) — source='manual'
+
+/**
+ * POST /v1/odometer-readings/import — bulk historical / one-off import.
+ *
+ * Each reading MUST reference an asset (by id) or a Motive vehicle id.
+ * Most imports come from a non-Motive system, so assetId is the
+ * normal path. Server validates the asset exists in the org and that
+ * the reading's capturedAt falls within the asset's active window
+ * (activeFrom..activeTo) — readings outside the window get skipped
+ * with a per-row error so historical "the truck wasn't ours yet" or
+ * "the truck was already retired" data doesn't pollute the chart.
+ *
+ * Idempotent on (asset_id or vehicle_id, calendar_day) — re-running
+ * a CSV after fixing a column is safe.
+ */
+export interface BulkImportOdometerReadingsRequest {
+  readings: Array<{
+    /** At least ONE of assetId / motiveVehicleId must be set. If both
+     *  are present, we trust assetId. */
+    assetId?:         number;
+    motiveVehicleId?: number;
+    /** Number on the vehicle's door / unit. Stored as label fallback
+     *  if we don't have it via the asset lookup. */
+    vehicleNumber?:   string;
+    /** Reading in miles. Either the actual gauge reading or the
+     *  computed cumulative value from the source system. */
+    odometerMiles:    number;
+    /** When the reading was taken in the SOURCE system (the truck's
+     *  fueling/inspection/log timestamp). Required so we can validate
+     *  against the asset's active window. */
+    capturedAt:       string;     // ISO timestamp
+    /** Optional Motive-style true_odometer if your source has the
+     *  distinction. Falls back to odometerMiles when omitted. */
+    trueOdometerMiles?: number;
+    /** Same as Motive's located_at — when the source system thinks
+     *  the reading was actually taken (vs when it was recorded).
+     *  Optional. */
+    locatedAt?:       string;
+  }>;
+}
+export interface BulkImportOdometerReadingsResponse {
+  inserted:   number;
+  duplicates: number;
+  /** Rows skipped because the captured_at fell outside the asset's
+   *  active window. Common during initial import — surfaced
+   *  separately so the user can see what they imported vs what was
+   *  intentionally dropped. */
+  outOfWindow: number;
+  failed:     Array<{ identifier: string; error: string }>;
+}
 
 // ── /v1/org-api-keys ────────────────────────────────────────────────────
 

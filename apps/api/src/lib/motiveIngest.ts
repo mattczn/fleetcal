@@ -436,14 +436,48 @@ export async function syncIncrementalAllOrgs(): Promise<SyncResult[]> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: orgs, error } = await (supabase as any)
     .from("org_settings")
-    .select("org_id, motive_api_key")
+    .select("org_id, motive_api_key, motive_settings")
     .not("motive_api_key", "is", null);
   if (error) {
     console.error("[motiveIngest] orgs lookup:", error);
     return [];
   }
+
+  type OrgRow = {
+    org_id: string;
+    motive_settings: {
+      drivingPeriodsSyncEnabled?: boolean;
+      drivingPeriodsSyncIntervalMinutes?: number;
+    } | null;
+  };
+
   const results: SyncResult[] = [];
-  for (const row of (orgs ?? []) as Array<{ org_id: string }>) {
+  const nowMs = Date.now();
+
+  for (const row of (orgs ?? []) as OrgRow[]) {
+    const settings = row.motive_settings ?? null;
+    // Master switch — defaults true. Customers can pause sync via
+    // settings UI without yanking the API key.
+    if (settings && settings.drivingPeriodsSyncEnabled === false) continue;
+
+    // Per-org interval throttling. The scheduler ticks every 5 min
+    // globally; if this org wants slower cadence (e.g. 30 min for a
+    // very low-throughput carrier) we skip until enough time has
+    // passed.
+    const intervalMin = settings?.drivingPeriodsSyncIntervalMinutes;
+    if (intervalMin && intervalMin > 5) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: state } = await (supabase as any)
+        .from("motive_sync_state")
+        .select("last_synced_at")
+        .eq("org_id", row.org_id)
+        .eq("feed", "driving_periods")
+        .maybeSingle();
+      const lastMs = state?.last_synced_at ? new Date(state.last_synced_at).getTime() : 0;
+      const ageMin = lastMs > 0 ? (nowMs - lastMs) / 60_000 : Infinity;
+      if (ageMin < intervalMin) continue;
+    }
+
     try {
       results.push(await syncIncremental(row.org_id));
     } catch (err) {
@@ -557,13 +591,55 @@ export async function snapshotOdometers(orgId: string): Promise<OdometerSnapshot
 }
 
 export async function snapshotOdometersAllOrgs(): Promise<OdometerSnapshotResult[]> {
+  // Pull every org with a Motive key. We also need motive_settings to
+  // decide whether to actually fire the snapshot for each org — see
+  // below for the per-org enabled + interval check.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: orgs } = await (supabase as any)
     .from("org_settings")
-    .select("org_id, motive_api_key")
+    .select("org_id, motive_api_key, motive_settings")
     .not("motive_api_key", "is", null);
+
+  type OrgRow = {
+    org_id: string;
+    motive_settings: {
+      odometerSyncEnabled?: boolean;
+      odometerSyncIntervalHours?: number;
+    } | null;
+  };
+
   const results: OdometerSnapshotResult[] = [];
-  for (const row of (orgs ?? []) as Array<{ org_id: string }>) {
+  const nowMs = Date.now();
+
+  for (const row of (orgs ?? []) as OrgRow[]) {
+    const settings = row.motive_settings ?? null;
+    // Master switch — defaults true when the org has a key but
+    // hasn't explicitly configured the toggle. Customers who want to
+    // pause sync without removing the key set this to false.
+    if (settings && settings.odometerSyncEnabled === false) continue;
+
+    // Per-org interval throttling. The scheduler ticks once an hour
+    // globally; if this org wants e.g. 4-hour cadence, skip orgs
+    // whose newest snapshot is fresher than that.
+    const intervalH = settings?.odometerSyncIntervalHours;
+    if (intervalH && intervalH > 1) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: latest } = await (supabase as any)
+        .from("motive_odometer_readings")
+        .select("captured_at")
+        .eq("org_id", row.org_id)
+        .order("captured_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const lastMs = latest?.captured_at ? new Date(latest.captured_at).getTime() : 0;
+      const ageHours = lastMs > 0 ? (nowMs - lastMs) / 3_600_000 : Infinity;
+      if (ageHours < intervalH) {
+        // Too soon — skip this org this tick. The scheduler will
+        // catch them on the next hour.
+        continue;
+      }
+    }
+
     try {
       results.push(await snapshotOdometers(row.org_id));
     } catch (err) {

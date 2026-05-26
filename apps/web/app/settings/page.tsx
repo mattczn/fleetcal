@@ -3428,8 +3428,203 @@ function IntegrationsPanel() {
             </div>
           </div>
         )}
+
+        {/* Sync schedule + Fuel matching settings — saas-customizable
+            knobs that live alongside the Motive integration since
+            they're all about how external data lands in FleetCal. */}
+        <MotiveSyncSettingsCard />
+        <FuelMatchingSettingsCard />
+
       </div>
     </div>
+  );
+}
+
+// ─── Motive sync settings card ──────────────────────────────────────────────
+//
+// Two toggles + interval inputs. Backed by org_settings.motive_settings
+// (PATCH /v1/org-settings). Defaults shown when the org hasn't
+// explicitly configured them yet — saving for the first time persists
+// the displayed values.
+
+function MotiveSyncSettingsCard() {
+  const [loading,  setLoading]  = useState(true);
+  const [saving,   setSaving]   = useState(false);
+  const [saved,    setSaved]    = useState(false);
+  const [error,    setError]    = useState('');
+
+  const [odoEnabled,  setOdoEnabled]  = useState(true);
+  const [odoHours,    setOdoHours]    = useState(1);
+  const [dpEnabled,   setDpEnabled]   = useState(true);
+  const [dpMinutes,   setDpMinutes]   = useState(5);
+
+  useEffect(() => {
+    railway.getOrgSettings()
+      .then(({ settings }) => {
+        const m = settings.motiveSettings ?? {};
+        setOdoEnabled(m.odometerSyncEnabled !== false);
+        setOdoHours(m.odometerSyncIntervalHours ?? 1);
+        setDpEnabled(m.drivingPeriodsSyncEnabled !== false);
+        setDpMinutes(m.drivingPeriodsSyncIntervalMinutes ?? 5);
+      })
+      .catch(err => setError((err as Error).message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function save() {
+    setSaving(true); setError(''); setSaved(false);
+    try {
+      await railway.updateOrgSettings({
+        motiveSettings: {
+          odometerSyncEnabled:               odoEnabled,
+          odometerSyncIntervalHours:         odoHours,
+          drivingPeriodsSyncEnabled:         dpEnabled,
+          drivingPeriodsSyncIntervalMinutes: dpMinutes,
+        },
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card title="Sync schedule" subtitle="How often FleetCal pulls fresh data from Motive. The cron ticks centrally; per-org throttles let high-volume orgs slow individual feeds without affecting other carriers on the same instance.">
+      {loading ? (
+        <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
+      ) : (
+        <>
+          <FieldRow label="Odometer snapshots" subtitle="Pulls each truck's current odometer reading. Default: hourly.">
+            <div className="flex items-center gap-2">
+              <Toggle checked={odoEnabled} disabled={saving} onChange={() => setOdoEnabled(v => !v)} />
+              <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                Every
+              </span>
+              <Input
+                value={String(odoHours)}
+                onChange={v => setOdoHours(Math.max(1, parseInt(v.replace(/[^\d]/g, '')) || 1))}
+                placeholder="1"
+              />
+              <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                hour(s)
+              </span>
+            </div>
+          </FieldRow>
+          <FieldRow label="Driving periods" subtitle="Pulls driver/truck movement history for the calendar movement rail. Default: every 5 minutes.">
+            <div className="flex items-center gap-2">
+              <Toggle checked={dpEnabled} disabled={saving} onChange={() => setDpEnabled(v => !v)} />
+              <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                Every
+              </span>
+              <Input
+                value={String(dpMinutes)}
+                onChange={v => setDpMinutes(Math.max(5, parseInt(v.replace(/[^\d]/g, '')) || 5))}
+                placeholder="5"
+              />
+              <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                minute(s) (minimum 5)
+              </span>
+            </div>
+          </FieldRow>
+          <div className="flex items-center gap-3">
+            <button onClick={() => void save()} disabled={saving}
+              className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white transition-colors disabled:opacity-60"
+              style={{ background: 'var(--gc-blue)' }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            {saved && <span className="text-xs" style={{ color: '#15803d' }}>Saved ✓</span>}
+            {error && <span className="text-xs" style={{ color: '#b71c1c' }}>{error}</span>}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// ─── Fuel transaction matching settings card ────────────────────────────────
+//
+// Currently a single field: the "buy-on-behalf" names list used by
+// the fuel-transactions auto-matcher. When a receipt's PURCHASED BY
+// matches one of these names (substring, case-insensitive), the
+// matcher drops the name signal and leans on gallons + date — useful
+// when owners/dispatchers swipe the card to fuel OTHER drivers'
+// trucks.
+
+function FuelMatchingSettingsCard() {
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+  const [saved,   setSaved]   = useState(false);
+  const [error,   setError]   = useState('');
+
+  // Stored as a textarea, one name per line. Easier UX than a list-
+  // editor for a typical 0–3 entries; we split on newlines + trim.
+  const [namesText, setNamesText] = useState('');
+
+  useEffect(() => {
+    railway.getOrgSettings()
+      .then(({ settings }) => {
+        const fs = settings.fuelSettings ?? {};
+        setNamesText((fs.buyOnBehalfNames ?? []).join('\n'));
+      })
+      .catch(err => setError((err as Error).message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function save() {
+    setSaving(true); setError(''); setSaved(false);
+    try {
+      const names = namesText
+        .split(/\r?\n/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      await railway.updateOrgSettings({
+        fuelSettings: { buyOnBehalfNames: names },
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card title="Fuel transaction matching" subtitle="Configure how FleetCal pairs card receipts (Mudflap etc.) with driver-submitted fuel reports.">
+      {loading ? (
+        <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
+      ) : (
+        <>
+          <FieldRow
+            label="Buy-on-behalf names"
+            subtitle={
+              "Names that appear as PURCHASED BY on a receipt but who are actually buying fuel for OTHER drivers " +
+              "(e.g. owner-operators, dispatch staff). The matcher drops the name signal for these receipts and " +
+              "leans harder on gallons + date. One name per line. Case-insensitive substring match."
+            }
+          >
+            <Textarea
+              value={namesText}
+              onChange={setNamesText}
+              rows={4}
+              placeholder={'Michael Curzon\nJonathan Curzon'}
+            />
+          </FieldRow>
+          <div className="flex items-center gap-3">
+            <button onClick={() => void save()} disabled={saving}
+              className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white transition-colors disabled:opacity-60"
+              style={{ background: 'var(--gc-blue)' }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            {saved && <span className="text-xs" style={{ color: '#15803d' }}>Saved ✓</span>}
+            {error && <span className="text-xs" style={{ color: '#b71c1c' }}>{error}</span>}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 

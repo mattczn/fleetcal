@@ -39,6 +39,7 @@ import stopsRoute from "./routes/stops.js";
 import driverRoute from "./routes/driver.js";
 import fuelReportsRoute from "./routes/fuel-reports.js";
 import { fuelTxApiKey, fuelTxClerk } from "./routes/fuel-transactions.js";
+import { odoApiKey, odoClerk } from "./routes/odometer-readings.js";
 import maintenanceReportsRoute from "./routes/maintenance-reports.js";
 import inspectionReportsRoute from "./routes/inspection-reports.js";
 import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
@@ -123,6 +124,7 @@ authed.route("/stops", stopsRoute);
 authed.route("/check-calls", checkCallsRoute);
 authed.route("/fuel-reports", fuelReportsRoute);
 authed.route("/fuel-transactions", fuelTxClerk);
+authed.route("/odometer-readings", odoClerk);
 authed.route("/movements", movementsRoute);
 authed.route("/cost-analysis", costAnalysisRoute);
 authed.route("/maintenance-reports", maintenanceReportsRoute);
@@ -155,6 +157,10 @@ app.route("/v1/internal", internalRoute);
 // mount before /v1 so /v1/fuel-transactions/inbound-email resolves
 // here instead of falling through to the Clerk-authed branch.
 app.route("/v1/fuel-transactions", fuelTxApiKey);
+
+// Odometer bulk import — same pattern. Lets a sync script POST
+// historical readings without juggling Clerk session JWTs.
+app.route("/v1/odometer-readings", odoApiKey);
 
 app.route("/v1", authed);
 

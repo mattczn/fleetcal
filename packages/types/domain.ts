@@ -421,6 +421,55 @@ export interface OrgSettings {
    *  notifications.ts for the shape + defaults. null/undefined ⇒
    *  server falls back to DEFAULT_NOTIFICATION_RULES at send time. */
   notificationRules?: import("./notifications").NotificationRules | null;
+  /** Motive ELD integration config. The actual API key lives in a
+   *  separate column (org_settings.motive_api_key) so it doesn't
+   *  leak through GET /v1/org-settings; the toggles + cadences here
+   *  control HOW we use the key. */
+  motiveSettings?: MotiveSettings | null;
+  /** Fuel-side carrier-specific config — currently just the
+   *  buy-on-behalf names list used by the fuel-transactions
+   *  auto-matcher. Empty / undefined ⇒ no special-case handling
+   *  (every receipt is treated as standard driver-name matching). */
+  fuelSettings?: FuelSettings | null;
+}
+
+/**
+ * Motive integration knobs. The presence of org_settings.motive_api_key
+ * (set separately) controls whether the org has Motive at all; these
+ * fields tune HOW often we sync + which feeds.
+ */
+export interface MotiveSettings {
+  /** Master switch for odometer snapshots. Defaults true when the
+   *  org has a Motive key. Setting false leaves existing readings
+   *  in place but stops new ones. */
+  odometerSyncEnabled?: boolean;
+  /** Minimum hours between odometer snapshots PER ORG. The in-process
+   *  scheduler ticks hourly globally; for an org configured at e.g.
+   *  4, the scheduler skips that org until 4 hours have passed since
+   *  its last successful snapshot. Default: 1 (every hourly tick). */
+  odometerSyncIntervalHours?: number;
+  /** Master switch for driving-periods sync (calendar movement
+   *  rail). Defaults true when the org has a Motive key. */
+  drivingPeriodsSyncEnabled?: boolean;
+  /** Minimum minutes between driving-period syncs per org. The
+   *  scheduler ticks every 5 min globally; setting this to e.g. 30
+   *  throttles a given org. Default: 5. */
+  drivingPeriodsSyncIntervalMinutes?: number;
+}
+
+/**
+ * Fuel-side carrier-specific config. Currently a single field:
+ * names that appear on receipts as the "PURCHASED BY" but who are
+ * actually buying fuel for OTHER drivers (owner-operators, dispatch
+ * staff, etc.). The fuel-transactions auto-matcher drops the name
+ * signal for these receipts and leans harder on gallons + date.
+ */
+export interface FuelSettings {
+  /** Lowercase substring matches. e.g. ["michael curzon", "jonathan
+   *  curzon"] matches "Michael Curzon" / "michael curzon" / etc on
+   *  the receipt's PURCHASED BY field. Empty/undefined ⇒ no
+   *  special handling (matcher uses name signal for every receipt). */
+  buyOnBehalfNames?: string[];
 }
 
 /** Per-role capability override map. Outer key is the role; inner
