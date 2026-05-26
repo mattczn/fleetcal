@@ -1605,24 +1605,30 @@ invoices.post("/:id/void", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// POST /v1/invoices/:id/regenerate — void + create-fresh, atomically
+// POST /v1/invoices/:id/regenerate — refresh a draft from current load data
 // ─────────────────────────────────────────────────────────────────────────
 //
 // Use case: dispatcher uploaded a missing POD, fixed an accessorial, or
 // updated a stop after the invoice was already drafted. The on-disk
-// snapshot is now stale. Regenerate voids the existing invoice and
-// builds a new one from the latest load data, mirroring everything
-// POST /v1/invoices does on first generation (snapshot freeze, packet
-// persistence, billing_status mirror back to 'invoiced').
+// snapshot is now stale. Regenerate rebuilds the snapshot from latest
+// load data and refreshes the packet PDF, keeping the same invoice id
+// + number so the row's history (created_at, audit links) stays intact.
 //
 // Constraints:
-//   - Existing invoice must be a draft. Refusing to regenerate sent or
-//     paid invoices is intentional: those have left the building and
-//     the broker has them in hand. Use void + manual create-new if you
-//     really need to replace a sent invoice.
-//   - The new invoice keeps the same invoice_number by default (so
-//     downstream reconciliation lines up). Callers can pass overrides
-//     in the same shape as POST /v1/invoices.
+//   - Only acts on draft invoices. Sent/paid invoices have left the
+//     building (broker has them) — refusing to mutate them is a
+//     deliberate safety. Use void + create-new manually for those.
+//   - Same id + same invoice_number is preserved. Numbering continuity
+//     across drafts is critical for downstream reconciliation, and
+//     drafts haven't been sent so there's no audit-trail value in
+//     preserving the previous snapshot.
+//
+// Why UPDATE-in-place rather than void + insert:
+//   The schema's `idx_invoices_number_per_org` unique index covers ALL
+//   statuses including void, so a void+insert flow with the same
+//   invoice_number trips a 23505 unique violation. Updating the
+//   existing row dodges that entirely and is functionally equivalent
+//   for drafts.
 
 invoices.post("/:id/regenerate", async (c) => {
   const orgId = c.get("orgId");
@@ -1646,7 +1652,7 @@ invoices.post("/:id/regenerate", async (c) => {
   const existing = existingRow as unknown as InvoiceRow;
   if (existing.status !== "draft") {
     return c.json(
-      { error: "invalid_state", detail: `cannot regenerate ${existing.status} invoice — void + create new instead` } satisfies ApiErrorResponse,
+      { error: "invalid_state", detail: `cannot regenerate ${existing.status} invoice — only drafts can be regenerated` } satisfies ApiErrorResponse,
       409,
     );
   }
@@ -1661,62 +1667,52 @@ invoices.post("/:id/regenerate", async (c) => {
   }
   const { snapshot, total, load, dueAt } = result;
 
-  // 3. Void the old invoice. We do this AFTER the snapshot succeeds so
-  //    a snapshot failure doesn't leave the load without an active
-  //    invoice. The unique-active-per-load index lets us insert a new
-  //    draft only once the old one is void.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error: voidErr } = await supabase
-    .from("invoices")
-    .update({ status: "void", void_reason: "regenerated" } as any)
-    .eq("id", existing.id)
-    .eq("org_id", orgId)
-    .eq("status", "draft");
-  if (voidErr) {
-    return c.json({ error: "void_failed", detail: voidErr.message } satisfies ApiErrorResponse, 500);
-  }
-
-  // 4. Insert the fresh draft. Same shape as POST /v1/invoices.
-  const insertRow = {
-    org_id:          orgId,
-    load_id:         load.id,
-    customer_id:     load.customer_id,
-    invoice_number:  carryInvoiceNumber,
-    status:          "draft" as InvoiceStatus,
+  // 3. Update the existing row in place. invoice_number stays the same;
+  //    customer_id refreshes from the load (covers the case where the
+  //    dispatcher set the broker AFTER the original draft); issued_at
+  //    refreshes so the broker sees today's date on the rebuilt packet.
+  const updateRow = {
+    customer_id: load.customer_id,
     total,
-    issued_at:       new Date().toISOString(),
-    due_at:          dueAt,
+    issued_at:   new Date().toISOString(),
+    due_at:      dueAt,
     snapshot,
+    // invoice_number could change if the caller passed an override; in
+    // the common case carryInvoiceNumber === existing.invoice_number
+    // and this is a no-op.
+    invoice_number: carryInvoiceNumber,
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: newRow, error: insertErr } = await supabase
+  const { data: updatedRow, error: updateErr } = await supabase
     .from("invoices")
-    .insert(insertRow as any)
+    .update(updateRow as any)
+    .eq("id", existing.id)
+    .eq("org_id", orgId)
+    .eq("status", "draft") // race-condition guard: refuse if status changed under us
     .select(INVOICE_COLS)
     .single();
-  if (insertErr || !newRow) {
-    // Old invoice is already voided. The load is now stuck at
-    // verified-with-no-invoice — caller's retry will recover.
-    console.error("[POST /v1/invoices/:id/regenerate] insert failed:", insertErr);
-    return c.json({ error: "insert_failed", detail: insertErr?.message ?? "unknown" } satisfies ApiErrorResponse, 500);
+  if (updateErr) {
+    if ((updateErr as { code?: string }).code === "23505") {
+      return c.json(
+        { error: "invoice_exists", detail: "the new invoice number is already taken by another invoice in this org" } satisfies ApiErrorResponse,
+        409,
+      );
+    }
+    console.error("[POST /v1/invoices/:id/regenerate] update failed:", updateErr);
+    return c.json({ error: "update_failed", detail: updateErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!updatedRow) {
+    return c.json(
+      { error: "invalid_state", detail: "invoice changed status during regenerate; refresh and try again" } satisfies ApiErrorResponse,
+      409,
+    );
   }
 
-  // 5. Re-affirm billing_status='invoiced'. The inline void in step 3
-  //    intentionally skipped the billing_status flip (unlike the
-  //    standalone POST /void route, which flips it to 'verified')
-  //    because we're about to re-insert. This update is a no-op in
-  //    the happy path and a defensive recovery if anything upstream
-  //    accidentally moved billing_status during the gap.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await supabase.from("loads").update({ billing_status: "invoiced" } as any)
-    .eq("id", load.id).eq("org_id", orgId);
+  const newInvoice = rowToInvoice(updatedRow as unknown as InvoiceRow);
 
-  const newInvoice = rowToInvoice(newRow as unknown as InvoiceRow);
-
-  // 6. Replace the archived packet doc. persistInvoicePacket clears any
-  //    prior packet rows for the new invoice id automatically; the old
-  //    invoice's archived packet (if any) stays attached to the void
-  //    record so audit trails remain intact.
+  // 4. Replace the archived packet doc. persistInvoicePacket clears any
+  //    prior packet rows for this invoice id automatically before
+  //    writing the new one.
   try {
     const { persistInvoicePacket } = await import("../lib/invoicePacket.js");
     await persistInvoicePacket({ invoice: newInvoice, orgId });
@@ -1725,7 +1721,7 @@ invoices.post("/:id/regenerate", async (c) => {
   }
 
   const res: CreateInvoiceResponse = { invoice: newInvoice };
-  return c.json(res, 201);
+  return c.json(res, 200);
 });
 
 export default invoices;
