@@ -28,7 +28,7 @@ import {
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
-import type { MaintenanceReport, FuelReport, MaintenanceReportPhoto, FuelReportPhoto } from '@fleetcal/types';
+import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto, FuelReportPhoto } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -75,15 +75,16 @@ type EquipmentSelection = { kind: 'asset' | 'trailer'; id: number } | null;
 // What a row knows for the right-side panel. Each tab maps its row
 // shape onto this so the panel can render uniformly.
 type PanelData = {
-  kind: 'maintenance' | 'inspection' | 'fuel';
+  kind: 'maintenance' | 'inspection' | 'fuel' | 'fuel_transaction';
   id: string;
   // ID used to fetch the full detail (for inspections — the list
   // doesn't carry the per-item checklist). Maintenance + Fuel already
   // ship complete rows, so this can re-use the list row directly.
 } & (
-  | { kind: 'maintenance'; report: MaintenanceReport }
-  | { kind: 'fuel';        report: FuelReport }
-  | { kind: 'inspection';  row: InspectionRow }
+  | { kind: 'maintenance';      report: MaintenanceReport }
+  | { kind: 'fuel';             report: FuelReport }
+  | { kind: 'fuel_transaction'; transaction: FuelTransaction }
+  | { kind: 'inspection';       row: InspectionRow }
 );
 
 // ─── Page ─────────────────────────────────────────────────────────────
@@ -202,14 +203,14 @@ export default function EquipmentPage() {
           />
         )}
         {tab === 'fuel' && (
-          <FuelList
+          <FuelTabContent
             driverId={driverId}
             equipment={equipment}
             sortDir={sortDir}
             driverNameById={driverNameById}
             assetLabelById={assetLabelById}
-            onOpen={(r) => setPanel({ kind: 'fuel', id: r.id, report: r })}
-            openId={panel?.kind === 'fuel' ? panel.id : null}
+            panel={panel}
+            setPanel={setPanel}
           />
         )}
       </div>
@@ -588,6 +589,202 @@ function FuelList({
   );
 }
 
+// ─── Fuel tab content (sub-tab toggle wrapping FuelList + FuelTransactionsList) ───
+//
+// The Fuel tab has two complementary data sources:
+//   • Driver reports — submitted via the driver app at the pump
+//   • Card transactions — ingested from Mudflap receipt emails
+//
+// A sub-tab toggle here lets the dispatcher flip between them without
+// leaving the Fuel surface. Both columns share the existing global
+// filters (driver + equipment + sort) so flipping tabs feels like
+// just a different lens on the same data set.
+
+type FuelSubTab = 'reports' | 'transactions';
+
+function FuelTabContent({
+  driverId, equipment, sortDir, driverNameById, assetLabelById,
+  panel, setPanel,
+}: {
+  driverId: number | null;
+  equipment: EquipmentSelection;
+  sortDir: SortDir;
+  driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
+  panel: PanelData | null;
+  setPanel: (p: PanelData | null) => void;
+}) {
+  const [subTab, setSubTab] = useState<FuelSubTab>('reports');
+  return (
+    <div className="flex flex-col" style={{ gap: 12 }}>
+      <div className="flex items-center gap-1" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        <SubTabButton active={subTab === 'reports'}      onClick={() => setSubTab('reports')}      label="Driver Reports" />
+        <SubTabButton active={subTab === 'transactions'} onClick={() => setSubTab('transactions')} label="Card Transactions" />
+      </div>
+
+      {subTab === 'reports' ? (
+        <FuelList
+          driverId={driverId}
+          equipment={equipment}
+          sortDir={sortDir}
+          driverNameById={driverNameById}
+          assetLabelById={assetLabelById}
+          onOpen={(r) => setPanel({ kind: 'fuel', id: r.id, report: r })}
+          openId={panel?.kind === 'fuel' ? panel.id : null}
+        />
+      ) : (
+        <FuelTransactionsList
+          sortDir={sortDir}
+          onOpen={(t) => setPanel({ kind: 'fuel_transaction', id: t.id, transaction: t })}
+          openId={panel?.kind === 'fuel_transaction' ? panel.id : null}
+        />
+      )}
+    </div>
+  );
+}
+
+function SubTabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className="px-3 py-2 text-[12px] font-semibold transition-colors"
+      style={{
+        color: active ? '#1a73e8' : 'var(--gc-text-3)',
+        borderBottom: active ? '2px solid #1a73e8' : '2px solid transparent',
+        marginBottom: -1,
+      }}>
+      {label}
+    </button>
+  );
+}
+
+// ─── Card transactions list ──────────────────────────────────────────
+//
+// Read-only listing of fuel_transactions ingested from Mudflap.
+// Columns mirror the receipt: date, driver name (as printed on the
+// receipt, not the driver_id lookup), location/station, diesel gal,
+// total $, and a match-status pill showing whether the row is paired
+// with a driver-submitted fuel_report.
+//
+// The global driver / equipment filters don't apply here — card
+// transactions don't carry our driver_id or asset_id fields (the
+// receipt only has free-text driver_name and no truck unit number).
+// Filtering happens via the match-status dropdown at the top of the
+// list instead.
+
+function FuelTransactionsList({
+  sortDir, onOpen, openId,
+}: {
+  sortDir: SortDir;
+  onOpen: (t: FuelTransaction) => void;
+  openId: string | null;
+}) {
+  const [rows, setRows]       = useState<FuelTransaction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage]       = useState(0);
+  const [matchFilter, setMatchFilter] =
+    useState<'all' | 'unmatched' | 'auto_matched' | 'manual_matched' | 'no_match_needed'>('all');
+
+  useEffect(() => { setPage(0); }, [matchFilter, sortDir]);
+
+  useEffect(() => {
+    setLoading(true);
+    railway.listFuelTransactions({
+      matchStatus: matchFilter === 'all' ? undefined : matchFilter,
+      limit:       500,
+    })
+      .then(r => setRows(r.fuelTransactions))
+      .catch(err => { console.error('[equipment] fuel-tx:', err); setRows([]); })
+      .finally(() => setLoading(false));
+  }, [matchFilter]);
+
+  const sorted = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => sortDir === 'desc'
+      ? b.transactionDate.localeCompare(a.transactionDate)
+      : a.transactionDate.localeCompare(b.transactionDate));
+    return copy;
+  }, [rows, sortDir]);
+  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  return (
+    <div className="flex flex-col" style={{ gap: 8 }}>
+      {/* Match-status filter — feels at home above the table.
+          Defaults to All so the dispatcher sees everything; if they
+          want a working queue, they pick Unmatched. */}
+      <div className="flex items-center gap-2 text-[12px]">
+        <span style={{ color: 'var(--gc-text-3)' }}>Match:</span>
+        {([
+          { v: 'all',             label: 'All' },
+          { v: 'unmatched',       label: 'Unmatched' },
+          { v: 'auto_matched',    label: 'Auto' },
+          { v: 'manual_matched',  label: 'Manual' },
+          { v: 'no_match_needed', label: 'No match' },
+        ] as const).map(opt => (
+          <button key={opt.v}
+            onClick={() => setMatchFilter(opt.v)}
+            className="px-2 py-1 rounded transition-colors"
+            style={{
+              border: '1px solid var(--gc-border)',
+              background: matchFilter === opt.v ? '#1a73e8' : 'var(--gc-surface)',
+              color:      matchFilter === opt.v ? '#fff'   : 'var(--gc-text-2)',
+              fontWeight: 600,
+            }}>
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      <TableShell
+        loading={loading}
+        empty={sorted.length === 0}
+        emptyLabel={
+          matchFilter === 'unmatched'
+            ? 'Everything is matched — no card transactions waiting for a driver report.'
+            : 'No card transactions in this filter.'
+        }
+        headers={['Date', 'Driver (on receipt)', 'Location', 'Diesel (gal)', 'Total', 'Match']}
+        count={sorted.length}
+        page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
+      >
+        {pageRows.map(t => (
+          <Row key={t.id} onClick={() => onOpen(t)} active={openId === t.id}>
+            <Cell><DateCell iso={t.transactionDate} /></Cell>
+            <Cell>{t.driverName ?? <Muted>—</Muted>}</Cell>
+            <Cell>{t.location ?? <Muted>—</Muted>}</Cell>
+            <Cell><span className="font-mono">{t.dieselGallons != null ? t.dieselGallons.toFixed(1) : '—'}</span></Cell>
+            <Cell><span className="font-mono">{`$${t.totalCharged.toFixed(2)}`}</span></Cell>
+            <Cell><MatchStatusPill status={t.matchStatus} confidence={t.matchConfidence} /></Cell>
+          </Row>
+        ))}
+      </TableShell>
+    </div>
+  );
+}
+
+function Muted({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: 'var(--gc-text-3)' }}>{children}</span>;
+}
+
+function MatchStatusPill({
+  status, confidence,
+}: {
+  status: FuelTransaction['matchStatus'];
+  confidence?: number;
+}) {
+  const tint =
+    status === 'auto_matched'     ? { bg: '#dcfce7', fg: '#166534', label: `Auto${confidence ? ` ${confidence}` : ''}` } :
+    status === 'manual_matched'   ? { bg: '#dbeafe', fg: '#1d4ed8', label: 'Manual' } :
+    status === 'no_match_needed'  ? { bg: '#f3f4f6', fg: '#4b5563', label: 'No match' } :
+                                    { bg: '#fef3c7', fg: '#92400e', label: 'Unmatched' };
+  return (
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-bold uppercase tracking-wider"
+      style={{ background: tint.bg, color: tint.fg }}>
+      {tint.label}
+    </span>
+  );
+}
+
 // ─── Centered detail panel ───────────────────────────────────────────
 //
 // Styled to match MovementDetailPanel from the calendar so the panels
@@ -632,6 +829,8 @@ function DetailPanel({
     ? { color: '#f59e0b', title: 'Maintenance report' }
     : panel.kind === 'inspection'
     ? { color: '#1a73e8', title: 'Inspection report' }
+    : panel.kind === 'fuel_transaction'
+    ? { color: '#0ea5e9', title: 'Card transaction (Mudflap)' }
     : { color: '#16a34a', title: 'Fuel report' };
 
   const content = (
@@ -679,9 +878,10 @@ function DetailPanel({
             so this wrapper is just a flex container that fills the
             available height between the header and the bottom edge. */}
         <div className="flex-1 flex min-h-0" style={{ background: 'var(--gc-bg)' }}>
-          {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
-          {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id}                                                                                                              onOpenMedia={onOpenMedia} />}
-          {panel.kind === 'fuel'        && <FuelDetail        report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById}                                       onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'maintenance'      && <MaintenanceDetail      report={panel.report}      driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'inspection'       && <InspectionDetail       id={panel.id}                                                                                                              onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'fuel'             && <FuelDetail             report={panel.report}      driverNameById={driverNameById} assetLabelById={assetLabelById}                                       onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'fuel_transaction' && <FuelTransactionDetail  transaction={panel.transaction}                                                                                              />}
         </div>
       </div>
 
@@ -974,13 +1174,82 @@ function FuelDetail({
   );
 }
 
+// ─── Fuel transaction detail ────────────────────────────────────────
+//
+// Simpler than the other detail panels — no map (no GPS on the
+// receipt), no photos, no defect cards. Just the fields we ingested
+// from the email + the match status. The two-column TwoColumnBody
+// would feel empty here, so we use a single-column scroll body.
+
+function FuelTransactionDetail({ transaction: t }: { transaction: FuelTransaction }) {
+  return (
+    <div className="flex-1 overflow-auto px-5 py-4" style={{ background: 'var(--gc-bg)' }}>
+      <div className="grid grid-cols-3 gap-x-5 gap-y-3 text-[12px]" style={{ maxWidth: 720 }}>
+        <Field icon={<Clock size={12} />} label="Purchase date">{new Date(t.transactionDate).toLocaleDateString()}</Field>
+        <Field icon={<User  size={12} />} label="Driver (on receipt)">{t.driverName ?? <Muted>—</Muted>}</Field>
+        <Field icon={<FuelIcon size={12} />} label="Provider">{t.provider}</Field>
+
+        <Field icon={<Package size={12} />} label="Location" className="col-span-3">{t.location ?? <Muted>—</Muted>}</Field>
+
+        <Field icon={<FuelIcon size={12} />} label="Diesel gallons">{t.dieselGallons != null ? t.dieselGallons.toFixed(3) : <Muted>—</Muted>}</Field>
+        <Field icon={<FuelIcon size={12} />} label="Diesel retail $/gal">{t.dieselRetailPrice != null ? `$${t.dieselRetailPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
+        <Field icon={<FuelIcon size={12} />} label="Diesel Mudflap $/gal">{t.dieselDiscountPrice != null ? `$${t.dieselDiscountPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
+
+        <Field icon={<FuelIcon size={12} />} label="DEF gallons">{t.defGallons != null ? t.defGallons.toFixed(3) : <Muted>—</Muted>}</Field>
+        <Field icon={<FuelIcon size={12} />} label="DEF retail $/gal">{t.defRetailPrice != null ? `$${t.defRetailPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
+        <Field icon={<FuelIcon size={12} />} label="DEF Mudflap $/gal">{t.defDiscountPrice != null ? `$${t.defDiscountPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
+
+        <Field icon={<Clock size={12} />} label="Total charged"><span className="font-mono">{`$${t.totalCharged.toFixed(2)}`}</span></Field>
+        <Field icon={<Clock size={12} />} label="Saved"><span className="font-mono">{`$${(t.totalSaved ?? 0).toFixed(2)}`}</span></Field>
+        <Field icon={<Clock size={12} />} label="Payment last 4">{t.paymentLast4 ?? <Muted>—</Muted>}</Field>
+      </div>
+
+      <FieldSection label="Match status">
+        <div className="flex items-center gap-2 text-[12px]">
+          <MatchStatusPill status={t.matchStatus} confidence={t.matchConfidence} />
+          {t.matchedAt && (
+            <span style={{ color: 'var(--gc-text-3)' }}>
+              {t.matchStatus === 'auto_matched' ? 'Auto-linked' : 'Linked'} {new Date(t.matchedAt).toLocaleString()}
+            </span>
+          )}
+        </div>
+        {t.fuelReportId && (
+          <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-2)' }}>
+            Linked driver report: <span className="font-mono">{t.fuelReportId}</span>
+          </div>
+        )}
+        {t.matchNotes && (
+          <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>{t.matchNotes}</div>
+        )}
+        {!t.fuelReportId && (
+          <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>
+            No driver report linked. The matcher couldn&apos;t pair this transaction (likely
+            because the driver didn&apos;t submit a fuel-up via the app at this stop). Manual
+            linking UI is on the roadmap; for now, the transaction stays as-is.
+          </div>
+        )}
+      </FieldSection>
+
+      <FieldSection label="Provenance">
+        <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-[11px]">
+          <Field icon={<FuelIcon size={11} />} label="Provider txn id"><span className="font-mono break-all">{t.providerTransactionId}</span></Field>
+          <Field icon={<Clock size={11} />} label="Created in FleetCal">{new Date(t.createdAt).toLocaleString()}</Field>
+          {t.legacyFormResponseId != null && (
+            <Field icon={<FuelIcon size={11} />} label="Legacy form id">{t.legacyFormResponseId}</Field>
+          )}
+        </div>
+      </FieldSection>
+    </div>
+  );
+}
+
 // ─── Panel helpers ────────────────────────────────────────────────────
 
 // Field — label + value pair, mirrors MovementDetailPanel's helper.
 // Used in the grid below the map. Uppercase 10px label, 12px value.
-function Field({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+function Field({ icon, label, children, className }: { icon: React.ReactNode; label: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className={`flex flex-col gap-0.5${className ? ` ${className}` : ''}`}>
       <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>
         {icon}{label}
       </div>

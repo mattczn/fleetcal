@@ -62,6 +62,8 @@ import type {
   ListRecentStopsResponse,
   ListFuelReportsResponse, ListFuelReportsQuery,
   UpdateFuelReportRequest, UpdateFuelReportResponse,
+  ListFuelTransactionsRequest, ListFuelTransactionsResponse,
+  MatchFuelTransactionRequest, MatchFuelTransactionResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -784,6 +786,22 @@ class RailwayClient {
   }
   deleteFuelReport(id: string) {
     return this.req<void>('DELETE', `/v1/fuel-reports/${id}`);
+  }
+
+  // ── Fuel transactions (card-side, Mudflap emails) ─────────────────────
+  listFuelTransactions(query: ListFuelTransactionsRequest = {}) {
+    const qs = new URLSearchParams();
+    if (query.matchStatus) qs.set('matchStatus', query.matchStatus);
+    if (query.from)        qs.set('from',        query.from);
+    if (query.to)          qs.set('to',          query.to);
+    if (query.q)           qs.set('q',           query.q);
+    if (query.limit  != null) qs.set('limit',  String(query.limit));
+    if (query.offset != null) qs.set('offset', String(query.offset));
+    const s = qs.toString();
+    return this.req<ListFuelTransactionsResponse>('GET', `/v1/fuel-transactions${s ? `?${s}` : ''}`);
+  }
+  matchFuelTransaction(id: string, body: MatchFuelTransactionRequest) {
+    return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match`, body);
   }
 
   // ── Inspection reports (DVIRs) ──────────────────────────────────────
