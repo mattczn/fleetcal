@@ -14,6 +14,7 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import CopyChip from '@/components/ui/CopyChip';
 import { relayLegShare } from '@/lib/legMiles';
+import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
 import LoadsReport from '@/components/dashboard/LoadsReport';
@@ -455,8 +456,23 @@ export default function DashboardView() {
       }
     }
 
+    // Only count assets that were active for AT LEAST ONE DAY during
+    // the report period. Without this filter, retired trucks (sold,
+    // scrapped, transferred) keep appearing in the per-asset list with
+    // $0 — dragging down "average revenue per asset" math and making
+    // the asset count meaningless for periods after retirement. Mirror
+    // logic: an asset added partway through the period is included
+    // from its activeFrom date forward, not as a zero-revenue
+    // placeholder for the whole period.
+    const periodStartKey = dateKeyOf(pStart);
+    const periodEndKey   = dateKeyOf(pEnd);
     return assets
-      .filter(asset => asset.id !== unassignedAssetId && asset.type !== 'Unassigned' && asset.name !== 'Unassigned')
+      .filter(asset =>
+        asset.id !== unassignedAssetId &&
+        asset.type !== 'Unassigned' &&
+        asset.name !== 'Unassigned' &&
+        isActiveInRange(asset, periodStartKey, periodEndKey),
+      )
       .map(asset => {
         const ae = filtered.filter(e => e.assetId === asset.id);
         let revenue = 0;
@@ -488,7 +504,7 @@ export default function DashboardView() {
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [assets, filtered, unassignedAssetId]);
+  }, [assets, filtered, unassignedAssetId, pStart, pEnd]);
 
 
   // ── Sortable weekly loads list ──
