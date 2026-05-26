@@ -134,10 +134,10 @@ const ACTIONS_COL_WIDTH = 240;
 const COLS_STORAGE_KEY = 'closeout-cols-v1';
 
 const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
-  { value: 'pending',  label: 'Pending',  subtitle: 'Awaiting POD',      tint: '#1a73e8' },
-  { value: 'flagged',  label: 'Flagged',  subtitle: 'Needs follow-up',   tint: '#b45309' },
-  { value: 'released', label: 'Released', subtitle: 'Done & beyond',     tint: '#15803d' },
-  { value: 'all',      label: 'All',      subtitle: 'Everything',        tint: '#5f6368' },
+  { value: 'pending',  label: 'Pending',  subtitle: 'Awaiting POD',           tint: '#1a73e8' },
+  { value: 'flagged',  label: 'Flagged',  subtitle: 'Needs follow-up',        tint: '#b45309' },
+  { value: 'all',      label: 'All',      subtitle: 'All pending and flagged', tint: '#5f6368' },
+  { value: 'released', label: 'Released', subtitle: 'Done & beyond',          tint: '#15803d' },
 ];
 
 function ageDays(deliveredEnd: string): number {
