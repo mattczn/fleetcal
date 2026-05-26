@@ -1135,19 +1135,17 @@ invoices.post("/batch-generate", async (c) => {
         .in("id", invoiceIds);
       const invs = ((rows ?? []) as unknown as InvoiceRow[]).map(rowToInvoice);
 
-      // Group by broker.
-      const byBroker = new Map<string, typeof invs>();
-      for (const inv of invs) {
-        if (!inv.customerId) continue; // brokerless invoices can't be auto-sent
-        const list = byBroker.get(inv.customerId) ?? [];
-        list.push(inv);
-        byBroker.set(inv.customerId, list);
-      }
+      // Resolve broker recipient info per invoice. We loop per invoice
+      // and send one email each — the broker grouping is gone (see
+      // batch-send route header for why).
+      const distinctCustomerIds = Array.from(new Set(
+        invs.filter(i => i.customerId).map(i => i.customerId!),
+      ));
       const { data: customerRows } = await supabase
         .from("customers")
         .select("id,name,invoice_email")
         .eq("org_id", orgId)
-        .in("id", Array.from(byBroker.keys()));
+        .in("id", distinctCustomerIds);
       const customerById = new Map<string, { name: string; invoice_email: string | null }>();
       for (const row of (customerRows ?? []) as Array<{ id: string; name: string; invoice_email: string | null }>) {
         customerById.set(row.id, { name: row.name, invoice_email: row.invoice_email });
@@ -1169,35 +1167,34 @@ invoices.post("/batch-generate", async (c) => {
       const attachLoadDocs = body.attachLoadDocs ?? true;
 
       const groups: BatchSendInvoicesResponse["groups"] = [];
-      for (const [customerId, brokerInvs] of byBroker) {
-        const customer = customerById.get(customerId);
-        const brokerName = customer?.name ?? brokerInvs[0]?.snapshot.brokerName ?? "Unknown broker";
+      for (const inv of invs) {
+        if (!inv.customerId) continue; // brokerless invoices can't be auto-sent
+        const customer = customerById.get(inv.customerId);
+        const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
         const recipient  = customer?.invoice_email?.trim() || undefined;
         if (!recipient) {
           groups.push({
-            customerId, brokerName, to: null,
-            status: "skipped_no_email", invoiceIds: brokerInvs.map(i => i.id),
+            customerId: inv.customerId, brokerName, to: null,
+            status: "skipped_no_email", invoiceIds: [inv.id],
           });
           continue;
         }
 
-        const built: Array<{ invoice: typeof brokerInvs[number]; packet: Buffer }> = [];
+        let packet: Buffer;
         try {
-          for (const inv of brokerInvs) {
-            const [extraDocPaths, rateConPath] = await Promise.all([
-              attachLoadDocs ? resolvePacketDocsForLoad(inv.loadId, orgId) : Promise.resolve<string[]>([]),
-              resolveRateConPathForLoad(inv.loadId, orgId),
-            ]);
-            const packet = await buildInvoicePacket({
-              invoice: inv, rateConPath, extraDocPaths,
-              issuedDate: fmt(inv.issuedAt), dueDate: fmt(inv.dueAt),
-            });
-            built.push({ invoice: inv, packet: packet.buffer });
-          }
+          const [extraDocPaths, rateConPath] = await Promise.all([
+            attachLoadDocs ? resolvePacketDocsForLoad(inv.loadId, orgId) : Promise.resolve<string[]>([]),
+            resolveRateConPathForLoad(inv.loadId, orgId),
+          ]);
+          const built = await buildInvoicePacket({
+            invoice: inv, rateConPath, extraDocPaths,
+            issuedDate: fmt(inv.issuedAt), dueDate: fmt(inv.dueAt),
+          });
+          packet = built.buffer;
         } catch (err) {
           groups.push({
-            customerId, brokerName, to: recipient, status: "failed",
-            invoiceIds: brokerInvs.map(i => i.id),
+            customerId: inv.customerId, brokerName, to: recipient, status: "failed",
+            invoiceIds: [inv.id],
             error: `packet build failed: ${(err as Error)?.message}`,
           });
           continue;
@@ -1206,54 +1203,51 @@ invoices.post("/batch-generate", async (c) => {
         let messageId: string | undefined;
         try {
           const sendRes = await sendInvoiceEmail({
-            invoices:        built.map(b => b.invoice),
+            invoices:        [inv],
             invoiceSettings: orgInvoiceSettings,
             to:              recipient,
             cc:              body.cc,
             bccSender,
             bodyText:        body.bodyText,
-            attachments: built.map(b => ({
-              filename: `invoice-packet-${b.invoice.invoiceNumber}.pdf`,
-              content:  b.packet,
-            })),
+            attachments: [{
+              filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
+              content:  packet,
+            }],
           });
           messageId = sendRes.messageId;
         } catch (err) {
           groups.push({
-            customerId, brokerName, to: recipient, status: "failed",
-            invoiceIds: brokerInvs.map(i => i.id),
+            customerId: inv.customerId, brokerName, to: recipient, status: "failed",
+            invoiceIds: [inv.id],
             error: (err as Error)?.message ?? "email send failed",
           });
           continue;
         }
 
-        const sentInvoiceIds: string[] = [];
-        for (const { invoice: inv, packet } of built) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data: upd } = await supabase
-            .from("invoices")
-            .update({
-              status:      "sent",
-              sent_at:     new Date().toISOString(),
-              sent_to:     recipient,
-              sent_method: "email",
-            } as any)
-            .eq("id", inv.id)
-            .eq("org_id", orgId)
-            .eq("status", "draft")
-            .select(INVOICE_COLS)
-            .single();
-          if (!upd) continue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: upd } = await supabase
+          .from("invoices")
+          .update({
+            status:      "sent",
+            sent_at:     new Date().toISOString(),
+            sent_to:     recipient,
+            sent_method: "email",
+          } as any)
+          .eq("id", inv.id)
+          .eq("org_id", orgId)
+          .eq("status", "draft")
+          .select(INVOICE_COLS)
+          .single();
+        if (upd) {
           const sentInv = rowToInvoice(upd as unknown as InvoiceRow);
-          sentInvoiceIds.push(sentInv.id);
           try {
             await persistInvoicePacket({ invoice: sentInv, orgId, prebuilt: packet });
           } catch { /* best-effort */ }
         }
 
         groups.push({
-          customerId, brokerName, to: recipient, status: "sent",
-          invoiceIds: sentInvoiceIds, messageId,
+          customerId: inv.customerId, brokerName, to: recipient, status: "sent",
+          invoiceIds: [inv.id], messageId,
         });
       }
 
@@ -1270,15 +1264,23 @@ invoices.post("/batch-generate", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// POST /v1/invoices/batch-send — send a set of draft invoices, grouped
-// by broker.
+// POST /v1/invoices/batch-send — send a set of draft invoices, one email
+// per invoice.
 // ─────────────────────────────────────────────────────────────────────────
 //
-// Operates per-broker: one email per unique customer_id, with all of
-// that broker's selected drafts attached as separate merged packets.
-// A group that fails (missing recipient, Resend error) leaves its
-// invoices in draft so the user can retry just that one. Groups that
-// succeed independently flip to sent and persist their packets.
+// "Batch" here means "send these N drafts in one API call" — NOT "stuff
+// them all into one email". Each invoice gets its own outbound email
+// addressed to its broker's AP inbox, with that invoice's merged
+// packet as the only attachment. This matches how broker AP teams
+// actually file invoices (one invoice = one filing record); an
+// earlier grouping behaviour where multiple invoices to the same
+// broker landed in a single email caused confusion because the
+// subject only referenced the first invoice.
+//
+// Each invoice's send is independent: a Resend failure or missing
+// recipient on invoice A doesn't block invoice B. The response
+// `groups[]` reports per-invoice outcomes (invoiceIds[] always has
+// length 1 — kept as an array to preserve the response shape).
 
 invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async (c) => {
   const orgId  = c.get("orgId");
@@ -1347,21 +1349,15 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no linked customer. Open the load and pick a broker from the customer picker (not just freeform text).`]);
   }
 
-  // Group by resolved customer_id. Preserves order within each group.
-  const byBroker = new Map<string, Invoice[]>();
-  for (const inv of allInvoices) {
-    const cid = resolvedCustomerByInvoiceId.get(inv.id)!;
-    const list = byBroker.get(cid) ?? [];
-    list.push(inv);
-    byBroker.set(cid, list);
-  }
-
-  // Resolve recipients for each broker in one query.
+  // Resolve broker metadata (name + AP email) for the customers
+  // referenced by the resolved-customer-by-invoice map. One DB hit
+  // covers every distinct customer in the batch.
+  const distinctCustomerIds = Array.from(new Set(resolvedCustomerByInvoiceId.values()));
   const { data: customerRows } = await supabase
     .from("customers")
     .select("id,name,invoice_email")
     .eq("org_id", orgId)
-    .in("id", Array.from(byBroker.keys()));
+    .in("id", distinctCustomerIds);
   const customerById = new Map<string, { name: string; invoice_email: string | null }>();
   for (const row of (customerRows ?? []) as Array<{ id: string; name: string; invoice_email: string | null }>) {
     customerById.set(row.id, { name: row.name, invoice_email: row.invoice_email });
@@ -1396,11 +1392,24 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
   const orgInvoiceSettings = await loadOrgInvoiceSettings(orgId);
   const mergedCc = mergeCcList(body.cc, orgInvoiceSettings?.ccEmail);
 
+  // Send ONE email PER INVOICE — not one per broker. A "batch" here
+  // means "send these N drafts each as their own email", which matches
+  // how brokers actually file invoices (each invoice = one AP envelope
+  // = its own search-by-invoice-number record). Grouping all of a
+  // broker's invoices into a single email used to be the behaviour;
+  // dispatchers found the result confusing because the subject only
+  // referenced the first invoice and the rest were silently attached.
+  //
+  // Each "group" in the response now represents a single invoice's
+  // send result. The response shape is preserved (BatchSendInvoicesResponse
+  // still keyed by customerId + invoiceIds[]) so the client doesn't
+  // need a parallel rewrite — invoiceIds[] just always has length 1.
   const groups: BatchSendInvoicesResponse["groups"] = [];
 
-  for (const [customerId, invs] of byBroker) {
-    const customer  = customerById.get(customerId);
-    const brokerName = customer?.name ?? invs[0]?.snapshot.brokerName ?? "Unknown broker";
+  for (const inv of allInvoices) {
+    const customerId = resolvedCustomerByInvoiceId.get(inv.id)!;
+    const customer   = customerById.get(customerId);
+    const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
     const recipient  = customer?.invoice_email?.trim() || undefined;
 
     if (!recipient) {
@@ -1409,112 +1418,97 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         brokerName,
         to:         null,
         status:     "skipped_no_email",
-        invoiceIds: invs.map(i => i.id),
+        invoiceIds: [inv.id],
       });
       continue;
     }
 
-    // Build a merged packet per invoice. Same logic as the single
-    // /send endpoint, just looped.
-    type PerInvoice = { invoice: Invoice; packet: Buffer };
-    const built: PerInvoice[] = [];
+    // Build the merged packet for THIS invoice only.
+    let packet: Buffer;
     try {
-      for (const inv of invs) {
-        const [extraDocPaths, rateConPath] = await Promise.all([
-          attachLoadDocs ? resolvePacketDocsForLoad(inv.loadId, orgId) : Promise.resolve<string[]>([]),
-          resolveRateConPathForLoad(inv.loadId, orgId),
-        ]);
-        const packet = await buildInvoicePacket({
-          invoice:     inv,
-          rateConPath,
-          extraDocPaths,
-          issuedDate:  fmt(inv.issuedAt),
-          dueDate:     fmt(inv.dueAt),
-        });
-        if (packet.skipped.length) {
-          console.warn("[batch-send] packet skipped:", inv.invoiceNumber, packet.skipped);
-        }
-        built.push({ invoice: inv, packet: packet.buffer });
+      const [extraDocPaths, rateConPath] = await Promise.all([
+        attachLoadDocs ? resolvePacketDocsForLoad(inv.loadId, orgId) : Promise.resolve<string[]>([]),
+        resolveRateConPathForLoad(inv.loadId, orgId),
+      ]);
+      const built = await buildInvoicePacket({
+        invoice:     inv,
+        rateConPath,
+        extraDocPaths,
+        issuedDate:  fmt(inv.issuedAt),
+        dueDate:     fmt(inv.dueAt),
+      });
+      if (built.skipped.length) {
+        console.warn("[batch-send] packet skipped sources:", inv.invoiceNumber, built.skipped);
       }
+      packet = built.buffer;
     } catch (err) {
-      console.error("[batch-send] packet build failed for broker", brokerName, err);
+      console.error("[batch-send] packet build failed for", inv.invoiceNumber, err);
       groups.push({
         customerId,
         brokerName,
         to:         recipient,
         status:     "failed",
-        invoiceIds: invs.map(i => i.id),
+        invoiceIds: [inv.id],
         error:      `packet build failed: ${(err as Error)?.message}`,
       });
       continue;
     }
 
-    // One email per broker, packets as separate attachments. Subject +
-    // body are rendered from the org template using ALL invoices in
-    // this broker group, so the email enumerates every load + number
-    // (not just the first one).
+    // Send the email — one invoice in, one attachment out.
     let messageId: string | undefined;
     try {
       const result = await sendInvoiceEmail({
-        invoices:        built.map(b => b.invoice),
+        invoices:        [inv],
         invoiceSettings: orgInvoiceSettings,
         to:              recipient,
         cc:              mergedCc.length ? mergedCc : undefined,
         bccSender,
         bodyText:        body.bodyText,
-        attachments: built.map(b => ({
-          filename: `invoice-packet-${b.invoice.invoiceNumber}.pdf`,
-          content:  b.packet,
-        })),
+        attachments: [{
+          filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
+          content:  packet,
+        }],
       });
       messageId = result.messageId;
     } catch (err) {
-      console.error("[batch-send] email send failed for broker", brokerName, err);
+      console.error("[batch-send] email send failed for", inv.invoiceNumber, err);
       groups.push({
         customerId,
         brokerName,
         to:         recipient,
         status:     "failed",
-        invoiceIds: invs.map(i => i.id),
+        invoiceIds: [inv.id],
         error:      (err as Error)?.message ?? "email send failed",
       });
       continue;
     }
 
-    // Flip all invoices in this group to sent + archive each packet.
-    const sentInvoiceIds: string[] = [];
-    for (const { invoice: inv, packet } of built) {
-      // If this invoice's customer_id was null and we resolved via the
-      // load fallback, write the resolved id back to the row so future
-      // queries / listings don't keep needing the fallback. Snapshot
-      // text (broker name in the PDF) stays as-is for audit integrity;
-      // a dispatcher who cares about that can Regenerate first.
-      const updateRow: Record<string, unknown> = {
-        status:      "sent",
-        sent_at:     new Date().toISOString(),
-        sent_to:     recipient,
-        sent_method: "email",
-      };
-      if (!inv.customerId) {
-        updateRow.customer_id = customerId;
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await supabase
-        .from("invoices")
-        .update(updateRow as any)
-        .eq("id", inv.id)
-        .eq("org_id", orgId)
-        .eq("status", "draft")
-        .select(INVOICE_COLS)
-        .single();
-      if (error || !data) {
-        console.warn("[batch-send] flip-to-sent failed for", inv.invoiceNumber, error);
-        continue;
-      }
+    // Flip to sent + archive. If invoice.customer_id was null and we
+    // resolved via the load fallback, write the resolved id back so
+    // future ops don't need the fallback. Snapshot text (broker name
+    // in the PDF) stays as-is for audit integrity.
+    const updateRow: Record<string, unknown> = {
+      status:      "sent",
+      sent_at:     new Date().toISOString(),
+      sent_to:     recipient,
+      sent_method: "email",
+    };
+    if (!inv.customerId) {
+      updateRow.customer_id = customerId;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await supabase
+      .from("invoices")
+      .update(updateRow as any)
+      .eq("id", inv.id)
+      .eq("org_id", orgId)
+      .eq("status", "draft")
+      .select(INVOICE_COLS)
+      .single();
+    if (error || !data) {
+      console.warn("[batch-send] flip-to-sent failed for", inv.invoiceNumber, error);
+    } else {
       const sentInv = rowToInvoice(data as unknown as InvoiceRow);
-      sentInvoiceIds.push(sentInv.id);
-
-      // Archive the packet — best-effort.
       try {
         await persistInvoicePacket({ invoice: sentInv, orgId, prebuilt: packet });
       } catch (persistErr) {
@@ -1527,7 +1521,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       brokerName,
       to:         recipient,
       status:     "sent",
-      invoiceIds: sentInvoiceIds,
+      invoiceIds: [inv.id],
       messageId,
     });
   }
