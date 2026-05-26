@@ -328,6 +328,33 @@ export interface InvoiceSettings {
   /** Optional prefix prepended to the invoice number (which defaults
    *  to internal_load_id). Empty string = no prefix. */
   invoiceNumberPrefix?: string;
+
+  // ── Email templating ───────────────────────────────────
+  /**
+   * Subject template for outbound invoice emails. Supports
+   * placeholders that get substituted at send time:
+   *   {{invoiceNumber}}        — one number or comma-joined for batches
+   *   {{loadNumber}}           — load.load_num (the broker's load #)
+   *   {{internalLoadNumber}}   — our internal load id
+   *   {{brokerName}}           — broker / customer name
+   *   {{companyName}}          — carrier name
+   *   {{total}}                — formatted USD amount (sum for batches)
+   *   {{count}}                — number of invoices in the email
+   * Default: `Invoice #{{invoiceNumber}}, Load {{loadNumber}}`
+   * Leave blank to use the default.
+   */
+  invoiceEmailSubjectTemplate?: string;
+  /**
+   * Plain-text body template for outbound invoice emails. Same
+   * placeholders as the subject, plus:
+   *   {{invoiceList}}          — multi-line block, one row per invoice
+   *                              with its number / load / amount
+   *   {{remitTo}}              — invoice_settings.remitToInstructions
+   *   {{email}}, {{phone}}     — carrier contact (AR email, phone)
+   * Default body matches the original fixed format so existing orgs
+   * see no behaviour change.
+   */
+  invoiceEmailBodyTemplate?: string;
 }
 
 /** One row in OrgSettings.documentTypes. `kind` is a DocumentKind from

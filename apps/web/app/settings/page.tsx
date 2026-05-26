@@ -2185,6 +2185,8 @@ function InvoicingPanel() {
     remitToInstructions: string;
     invoiceFooterNotes: string;
     invoiceNumberPrefix: string;
+    invoiceEmailSubjectTemplate: string;
+    invoiceEmailBodyTemplate: string;
   };
   const emptyForm: Form = {
     companyName:             '',
@@ -2203,6 +2205,8 @@ function InvoicingPanel() {
     remitToInstructions:     '',
     invoiceFooterNotes:      '',
     invoiceNumberPrefix:     '',
+    invoiceEmailSubjectTemplate: '',
+    invoiceEmailBodyTemplate:    '',
   };
   const [form, setForm] = useState<Form>(emptyForm);
   // Snapshot of the last-saved (or freshly-loaded) state. Compared
@@ -2275,6 +2279,8 @@ function InvoicingPanel() {
           remitToInstructions:     inv.remitToInstructions     ?? '',
           invoiceFooterNotes:      inv.invoiceFooterNotes      ?? '',
           invoiceNumberPrefix:     inv.invoiceNumberPrefix     ?? '',
+          invoiceEmailSubjectTemplate: inv.invoiceEmailSubjectTemplate ?? '',
+          invoiceEmailBodyTemplate:    inv.invoiceEmailBodyTemplate    ?? '',
         };
         setForm(next);
         // Snapshot the loaded state as the new baseline — the form
@@ -2320,6 +2326,8 @@ function InvoicingPanel() {
         remitToInstructions:     form.remitToInstructions.trim()     || undefined,
         invoiceFooterNotes:      form.invoiceFooterNotes.trim()      || undefined,
         invoiceNumberPrefix:     form.invoiceNumberPrefix.trim()     || undefined,
+        invoiceEmailSubjectTemplate: form.invoiceEmailSubjectTemplate.trim() || undefined,
+        invoiceEmailBodyTemplate:    form.invoiceEmailBodyTemplate.trim()    || undefined,
       };
       await railway.updateOrgSettings({ invoiceSettings: cleaned });
       // Snapshot moves forward to the just-saved values so the form
@@ -2449,6 +2457,29 @@ function InvoicingPanel() {
           <Textarea value={form.invoiceFooterNotes} onChange={v => updateField('invoiceFooterNotes', v)}
             placeholder="Thank you for your business. Payment due per terms above."
             rows={3} />
+        </FieldRow>
+      </Card>
+
+      {/* Email subject + body templates. Placeholders documented inline
+          so the user doesn't have to hunt for them. Empty = use defaults. */}
+      <Card title="Outbound email" subtitle="Templates for the email sent when you click Send / Submit on an invoice.">
+        <FieldRow label="Subject template" subtitle={'Available placeholders: {{invoiceNumber}}, {{loadNumber}}, {{internalLoadNumber}}, {{brokerName}}, {{companyName}}, {{total}}, {{count}}. Leave blank for the default.'}>
+          <Input value={form.invoiceEmailSubjectTemplate} onChange={v => updateField('invoiceEmailSubjectTemplate', v)}
+            placeholder="Invoice #{{invoiceNumber}}, Load {{loadNumber}}" />
+        </FieldRow>
+        <FieldRow label="Body template" subtitle={'Same placeholders as subject, plus {{invoiceList}} (one line per invoice), {{remitTo}}, {{email}}, {{phone}}. Leave blank for the default.'}>
+          <div className="flex-1 flex flex-col gap-1">
+            <Textarea value={form.invoiceEmailBodyTemplate} onChange={v => updateField('invoiceEmailBodyTemplate', v)}
+              placeholder={'Please find the attached invoice(s):\n\n{{invoiceList}}\n\nBill to: {{brokerName}}\nTotal: {{total}}\n\n{{remitTo}}\n\n{{companyName}}\n{{email}}\n{{phone}}'}
+              rows={10} />
+            <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+              Batch sends to the same broker share one email — placeholders like
+              <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceNumber}}`}</code>
+              expand to a comma-joined list (capped at 4 with &ldquo;+ N more&rdquo;).
+              <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceList}}`}</code>
+              renders one bullet per invoice for the body.
+            </div>
+          </div>
         </FieldRow>
       </Card>
 

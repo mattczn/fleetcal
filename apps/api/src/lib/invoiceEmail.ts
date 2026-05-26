@@ -6,15 +6,15 @@
  * the volumes we're at. If we ever need to swap, this module is the
  * one place to change.
  *
- * Behavior:
- *   - Renders the invoice PDF fresh from the snapshot
- *   - Optionally bundles related load_documents (POD/BOL/etc) as
- *     additional attachments
- *   - Returns the provider message id on success; throws on failure
+ * Accepts ONE OR MORE invoices in a single email (the batch-send path
+ * already groups by broker and sends one email per broker with N
+ * packets attached). The subject + body templating handles both cases
+ * via placeholder substitution — single-invoice sends just render the
+ * same template with a one-element list.
  */
 
 import { Resend } from "resend";
-import type { Invoice, DocumentKind } from "@fleetcal/types";
+import type { Invoice, DocumentKind, InvoiceSettings } from "@fleetcal/types";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
 
@@ -38,15 +38,23 @@ export class EmailNotConfiguredError extends Error {
 }
 
 export interface SendInvoiceEmailArgs {
-  invoice:    Invoice;
+  /** One or more invoices for this email. Single sends pass a
+   *  one-element array; batch sends pass the full broker group. */
+  invoices:   Invoice[];
   /** Primary recipient. Required — the route validates upstream. */
   to:         string;
   cc?:        string[];
   /** Add the sender to BCC so the user has a paper trail. */
   bccSender?: string;
-  /** Optional message body override. If omitted we generate a sane
-   *  default referencing the invoice number, load, and broker. */
+  /** Optional message body override. If omitted we render the org's
+   *  configured template, falling back to the built-in default. */
   bodyText?:  string;
+  /** Optional subject override. Same fallback chain as bodyText. */
+  subject?:   string;
+  /** Per-org template config. Pulled fresh by the caller (cheap
+   *  org_settings lookup). Optional — we fall back to defaults if
+   *  unset. */
+  invoiceSettings?: InvoiceSettings;
   /** Pre-rendered PDF attachments. The caller is responsible for
    *  packing the right set — typically the merged invoice-packet
    *  built by invoicePacket.ts. */
@@ -57,37 +65,117 @@ export interface SendInvoiceEmailResult {
   messageId: string;
 }
 
+// ── Default templates ──────────────────────────────────────────────────
+//
+// Kept as constants (not interpolated to settings) so a user who hasn't
+// touched their template still gets the canonical experience. Changing
+// these defaults flows through to every org without a custom template.
+
+const DEFAULT_SUBJECT_TEMPLATE =
+  "Invoice #{{invoiceNumber}}, Load {{loadNumber}}";
+
+const DEFAULT_BODY_TEMPLATE = [
+  "Please find the attached invoice(s):",
+  "",
+  "{{invoiceList}}",
+  "",
+  "Bill to: {{brokerName}}",
+  "Total: {{total}}",
+  "",
+  "{{remitTo}}",
+  "",
+  "{{companyName}}",
+  "{{email}}",
+  "{{phone}}",
+].join("\n");
+
+const moneyFmt = (n: number) =>
+  n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
 /**
- * Default plain-text body. The broker AP team mostly looks at the
- * PDF; we just give them the meta they need to file it.
+ * Joiner for list-style placeholders. Caps at MAX_LIST_INLINE entries
+ * with a "+ N more" suffix so a 12-invoice batch doesn't produce a
+ * 400-char subject line. Body-rendered lists use the full set.
  */
-function defaultBody(invoice: Invoice): string {
-  const lines: string[] = [];
-  lines.push(`Please find attached invoice #${invoice.invoiceNumber}.`);
-  lines.push("");
-  if (invoice.snapshot.brokerName) lines.push(`Bill to: ${invoice.snapshot.brokerName}`);
-  if (invoice.snapshot.loadNumber) lines.push(`Load #${invoice.snapshot.loadNumber}`);
-  if (invoice.snapshot.orderNo)    lines.push(`Order #${invoice.snapshot.orderNo}`);
-  const total = invoice.total.toLocaleString("en-US", { style: "currency", currency: "USD" });
-  lines.push(`Amount due: ${total}`);
-  lines.push("");
-  if (invoice.snapshot.remitToInstructions) {
-    lines.push("Remit to:");
-    lines.push(invoice.snapshot.remitToInstructions);
-    lines.push("");
-  }
-  if (invoice.snapshot.companyName) lines.push(invoice.snapshot.companyName);
-  if (invoice.snapshot.email)       lines.push(invoice.snapshot.email);
-  if (invoice.snapshot.phone)       lines.push(invoice.snapshot.phone);
-  return lines.join("\n");
+const MAX_LIST_INLINE = 4;
+function joinList(items: Array<string | undefined | null>): string {
+  const cleaned = items.map((x) => (x ?? "").toString().trim()).filter(Boolean);
+  if (cleaned.length === 0) return "";
+  if (cleaned.length <= MAX_LIST_INLINE) return cleaned.join(", ");
+  const head = cleaned.slice(0, MAX_LIST_INLINE).join(", ");
+  const more = cleaned.length - MAX_LIST_INLINE;
+  return `${head} + ${more} more`;
 }
 
-/** Build a friendly subject — the broker's filename for this email. */
-function defaultSubject(invoice: Invoice): string {
-  const parts = [`Invoice #${invoice.invoiceNumber}`];
-  if (invoice.snapshot.companyName) parts.push(`from ${invoice.snapshot.companyName}`);
-  if (invoice.snapshot.loadNumber)  parts.push(`(Load #${invoice.snapshot.loadNumber})`);
-  return parts.join(" ");
+/**
+ * Build the placeholder substitution map for a batch of invoices.
+ * All invoices in `invoices` share the same broker recipient (per the
+ * batch-send grouping), so broker-level fields are read off the first
+ * invoice's snapshot.
+ */
+function buildSubstitutions(invoices: Invoice[]): Record<string, string> {
+  const first = invoices[0];
+  const totalSum = invoices.reduce((s, i) => s + (i.total ?? 0), 0);
+
+  const invoiceNumbers      = joinList(invoices.map((i) => i.invoiceNumber));
+  // {{loadNumber}} renders the BROKER's load number (load.load_num →
+  // snapshot.orderNo at draft time). Falls back to our internal load
+  // id when the broker number wasn't set.
+  const loadNumbers         = joinList(invoices.map((i) => i.snapshot.orderNo || i.snapshot.loadNumber));
+  const internalLoadNumbers = joinList(invoices.map((i) => i.snapshot.loadNumber));
+
+  // {{invoiceList}} — one row per invoice with its number / load / amount.
+  // Used inside the body template; the subject typically uses the
+  // collapsed {{invoiceNumber}} / {{loadNumber}} placeholders instead.
+  const list = invoices.map((inv) => {
+    const load = inv.snapshot.orderNo || inv.snapshot.loadNumber || "—";
+    return `• Invoice #${inv.invoiceNumber}, Load ${load} — ${moneyFmt(inv.total ?? 0)}`;
+  }).join("\n");
+
+  return {
+    invoiceNumber:       invoiceNumbers,
+    loadNumber:          loadNumbers,
+    internalLoadNumber:  internalLoadNumbers,
+    brokerName:          first.snapshot.brokerName || "",
+    companyName:         first.snapshot.companyName || "",
+    total:               moneyFmt(totalSum),
+    count:               String(invoices.length),
+    invoiceList:         list,
+    remitTo:             first.snapshot.remitToInstructions || "",
+    email:               first.snapshot.email || "",
+    phone:               first.snapshot.phone || "",
+  };
+}
+
+/**
+ * Substitute {{key}} placeholders in `template` from `subs`. Unknown
+ * keys are left intact — a typo'd placeholder is more recognizable
+ * than a silent empty string and easier to debug. Then collapse any
+ * runs of blank lines down to a max of two so optional placeholders
+ * that came out empty don't leave huge gaps in the rendered email.
+ */
+function applyTemplate(template: string, subs: Record<string, string>): string {
+  let out = template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+    return key in subs ? subs[key] : match;
+  });
+  out = out.replace(/\n{3,}/g, "\n\n");
+  return out.trim();
+}
+
+export function renderInvoiceEmailSubject(
+  invoices: Invoice[],
+  settings?: InvoiceSettings,
+): string {
+  const template = settings?.invoiceEmailSubjectTemplate?.trim() || DEFAULT_SUBJECT_TEMPLATE;
+  return applyTemplate(template, buildSubstitutions(invoices));
+}
+
+export function renderInvoiceEmailBody(
+  invoices: Invoice[],
+  settings?: InvoiceSettings,
+): string {
+  const template = settings?.invoiceEmailBodyTemplate?.trim() || DEFAULT_BODY_TEMPLATE;
+  return applyTemplate(template, buildSubstitutions(invoices));
 }
 
 /**
@@ -101,6 +189,9 @@ function safeDisplayName(name: string): string {
 
 export async function sendInvoiceEmail(args: SendInvoiceEmailArgs): Promise<SendInvoiceEmailResult> {
   if (!env.resendApiKey) throw new EmailNotConfiguredError();
+  if (args.invoices.length === 0) throw new Error("sendInvoiceEmail: invoices array is empty");
+
+  const first = args.invoices[0];
 
   // From address pattern: the carrier's company name appears in the
   // display slot, the actual envelope address stays on our verified
@@ -108,17 +199,17 @@ export async function sendInvoiceEmail(args: SendInvoiceEmailArgs): Promise<Send
   // This is the shape brokers expect — they see who they're paying
   // without us needing every org to verify a domain in Resend.
   const displayName = safeDisplayName(
-    args.invoice.snapshot.companyName?.trim() || env.invoiceFromNameFallback,
+    first.snapshot.companyName?.trim() || env.invoiceFromNameFallback,
   );
   const fromAddr = `${displayName} <${env.invoiceFromEmail}>`;
 
   // Reply-To: the carrier's AR/accounting email if they've configured
   // one. Falls back to undefined (Resend omits the header) so replies
   // just bounce back to From — not ideal but harmless.
-  const replyTo  = args.invoice.snapshot.email?.trim() || undefined;
+  const replyTo  = first.snapshot.email?.trim() || undefined;
 
-  const subject = defaultSubject(args.invoice);
-  const text    = args.bodyText?.trim() || defaultBody(args.invoice);
+  const subject = args.subject?.trim() || renderInvoiceEmailSubject(args.invoices, args.invoiceSettings);
+  const text    = args.bodyText?.trim() || renderInvoiceEmailBody(args.invoices, args.invoiceSettings);
 
   const { data, error } = await client().emails.send({
     from:        fromAddr,
@@ -168,21 +259,31 @@ export function mergeCcList(...sources: Array<string | string[] | undefined | nu
 }
 
 /**
- * Load the org's invoice_settings.ccEmail (auto-CC string) so the
- * send routes can merge it into every outbound CC list. Returns
- * undefined when no row / no value exists.
+ * Load the org's invoice_settings so the send routes can pass it into
+ * sendInvoiceEmail for templating + read ccEmail in one query. Returns
+ * undefined when no row exists.
  */
-export async function loadOrgAutoCc(orgId: string): Promise<string | undefined> {
+export async function loadOrgInvoiceSettings(orgId: string): Promise<InvoiceSettings | undefined> {
   const { data, error } = await supabase
     .from("org_settings")
     .select("invoice_settings")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
-    console.warn("[invoiceEmail] loadOrgAutoCc failed:", error);
+    console.warn("[invoiceEmail] loadOrgInvoiceSettings failed:", error);
     return undefined;
   }
-  const settings = (data as { invoice_settings: { ccEmail?: string } | null } | null)?.invoice_settings;
+  const settings = (data as { invoice_settings: InvoiceSettings | null } | null)?.invoice_settings;
+  return settings ?? undefined;
+}
+
+/**
+ * Convenience wrapper around loadOrgInvoiceSettings that returns just
+ * the auto-CC string. Preserved for callers that only need that field
+ * to avoid widening their imports.
+ */
+export async function loadOrgAutoCc(orgId: string): Promise<string | undefined> {
+  const settings = await loadOrgInvoiceSettings(orgId);
   const cc = settings?.ccEmail?.trim();
   return cc || undefined;
 }

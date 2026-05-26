@@ -902,17 +902,15 @@ invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (
 
   if (body.method === "email") {
     try {
-      const { sendInvoiceEmail, mergeCcList, loadOrgAutoCc } =
+      const { sendInvoiceEmail, mergeCcList, loadOrgInvoiceSettings } =
         await import("../lib/invoiceEmail.js");
       const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad } =
         await import("../lib/invoicePacket.js");
 
-      // Pull the org's always-CC address from invoice settings, merge
-      // with the per-send cc[] from the request body. Dedup is
-      // case-insensitive so a user can't accidentally double-CC the
-      // AR inbox by typing it manually.
-      const autoCc = await loadOrgAutoCc(orgId);
-      const mergedCc = mergeCcList(body.cc, autoCc);
+      // Pull the org's invoice settings — both the auto-CC address AND
+      // the subject/body templates flow from this single fetch.
+      const orgInvoiceSettings = await loadOrgInvoiceSettings(orgId);
+      const mergedCc = mergeCcList(body.cc, orgInvoiceSettings?.ccEmail);
 
       const fmt = (iso?: string) => iso
         ? new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -944,11 +942,12 @@ invoices.post("/:id/send", requireCapability("accounting.send_invoice"), async (
       }
 
       await sendInvoiceEmail({
-        invoice,
-        to:         recipient!,
-        cc:         mergedCc.length ? mergedCc : undefined,
+        invoices:        [invoice],
+        invoiceSettings: orgInvoiceSettings,
+        to:              recipient!,
+        cc:              mergedCc.length ? mergedCc : undefined,
         bccSender,
-        bodyText:   body.bodyText,
+        bodyText:        body.bodyText,
         attachments: [
           // Single merged attachment — broker AP teams strongly
           // prefer one file over a stack of mismatched PDFs/images.
@@ -1120,10 +1119,13 @@ invoices.post("/batch-generate", async (c) => {
       // Build a synthetic Hono request body and re-use the batch-send
       // handler? Simpler: replicate the core grouping/sending logic
       // here. To avoid duplication we share via the email lib.
-      const { sendInvoiceEmail } =
+      const { sendInvoiceEmail, loadOrgInvoiceSettings } =
         await import("../lib/invoiceEmail.js");
       const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad, persistInvoicePacket } =
         await import("../lib/invoicePacket.js");
+      // Org's subject/body templates — pulled once for every broker
+      // group in this batch.
+      const orgInvoiceSettings = await loadOrgInvoiceSettings(orgId);
 
       // Re-read invoices to ensure we have the latest snapshot + customer.
       const { data: rows } = await supabase
@@ -1204,11 +1206,12 @@ invoices.post("/batch-generate", async (c) => {
         let messageId: string | undefined;
         try {
           const sendRes = await sendInvoiceEmail({
-            invoice:     built[0].invoice,
-            to:          recipient,
-            cc:          body.cc,
+            invoices:        built.map(b => b.invoice),
+            invoiceSettings: orgInvoiceSettings,
+            to:              recipient,
+            cc:              body.cc,
             bccSender,
-            bodyText:    body.bodyText,
+            bodyText:        body.bodyText,
             attachments: built.map(b => ({
               filename: `invoice-packet-${b.invoice.invoiceNumber}.pdf`,
               content:  b.packet,
@@ -1377,7 +1380,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     }
   }
 
-  const { sendInvoiceEmail, mergeCcList, loadOrgAutoCc } =
+  const { sendInvoiceEmail, mergeCcList, loadOrgInvoiceSettings } =
     await import("../lib/invoiceEmail.js");
   const { buildInvoicePacket, resolvePacketDocsForLoad, resolveRateConPathForLoad, persistInvoicePacket } =
     await import("../lib/invoicePacket.js");
@@ -1388,10 +1391,10 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
 
   const attachLoadDocs = body.attachLoadDocs ?? true;
 
-  // One DB hit per request — the auto-CC applies to every broker
-  // group in this batch.
-  const autoCc = await loadOrgAutoCc(orgId);
-  const mergedCc = mergeCcList(body.cc, autoCc);
+  // One DB hit per request — auto-CC + subject/body templates all
+  // come from invoice_settings, shared across every broker group.
+  const orgInvoiceSettings = await loadOrgInvoiceSettings(orgId);
+  const mergedCc = mergeCcList(body.cc, orgInvoiceSettings?.ccEmail);
 
   const groups: BatchSendInvoicesResponse["groups"] = [];
 
@@ -1446,19 +1449,19 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       continue;
     }
 
-    // One email per broker, packets as separate attachments.
+    // One email per broker, packets as separate attachments. Subject +
+    // body are rendered from the org template using ALL invoices in
+    // this broker group, so the email enumerates every load + number
+    // (not just the first one).
     let messageId: string | undefined;
     try {
-      // sendInvoiceEmail expects an Invoice for From/Reply-To
-      // computation. With a multi-invoice send we use the first
-      // invoice's snapshot — they all share the same org identity
-      // because they're from the same Clerk org.
       const result = await sendInvoiceEmail({
-        invoice:     built[0].invoice,
-        to:          recipient,
-        cc:          mergedCc.length ? mergedCc : undefined,
+        invoices:        built.map(b => b.invoice),
+        invoiceSettings: orgInvoiceSettings,
+        to:              recipient,
+        cc:              mergedCc.length ? mergedCc : undefined,
         bccSender,
-        bodyText:    body.bodyText,
+        bodyText:        body.bodyText,
         attachments: built.map(b => ({
           filename: `invoice-packet-${b.invoice.invoiceNumber}.pdf`,
           content:  b.packet,
