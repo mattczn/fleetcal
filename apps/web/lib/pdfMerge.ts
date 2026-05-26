@@ -16,13 +16,30 @@
  *   - WebP / GIF / unknown image MIME → rasterized through a canvas
  *     to JPEG so pdf-lib can embed it
  *
- * Pages are sized to the natural pixel dimensions of the embedded
- * image. PDF readers scale them appropriately on view; for very large
- * phone photos the bytes are kept compact by skipping any re-encode
- * step beyond what HEIC / canvas-rasterized formats already do.
+ * Image pages are sized to US Letter (612 × 792 pt) with the image
+ * scaled to fit within a small margin while preserving aspect ratio.
+ * Earlier versions sized the page to the image's native pixel
+ * dimensions, which produced a 3024 × 4032 pt page from a normal
+ * iPhone photo — ~4x bigger than the invoice + rate-con pages this
+ * PDF later gets stapled to in the broker invoice packet. The packet
+ * builder uses copyPages on PDF inputs, so any oversized POD-PDF
+ * leaks through to the final packet at its original outsize page
+ * size. Letter-fitting here keeps the packet visually uniform.
+ *
+ * Must stay in sync with apps/api/src/lib/invoicePacket.ts which
+ * applies the same letter-fit treatment for the raw-image branch of
+ * the packet builder. If you change the page size or margin here,
+ * change it there too.
  */
 
 import { PDFDocument } from 'pdf-lib';
+
+// US Letter at 72 DPI in PDF points.
+const LETTER_W = 612;
+const LETTER_H = 792;
+// Inner margin around image-derived pages. Matches the value in
+// apps/api/src/lib/invoicePacket.ts — keep them in sync.
+const PAGE_MARGIN = 24;
 
 export interface MergeOptions {
   /** Fires before each input file is processed. Use for UI progress. */
@@ -52,13 +69,26 @@ export async function mergeFilesToPdf(
 
     // Anything else gets treated as an image. Normalize to JPEG or
     // PNG bytes (the two formats pdf-lib can embed natively), then
-    // drop into a page sized to the source dimensions.
+    // drop into a US-Letter page with a margin, scaling to fit while
+    // preserving aspect. See file header for why this isn't sized to
+    // the image's native dimensions.
     const { bytes, mime } = await normalizeToEmbeddableImage(f);
     const img = mime === 'image/png'
       ? await merged.embedPng(bytes)
       : await merged.embedJpg(bytes);
-    const page = merged.addPage([img.width, img.height]);
-    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+    const page = merged.addPage([LETTER_W, LETTER_H]);
+    const maxW = page.getWidth()  - PAGE_MARGIN * 2;
+    const maxH = page.getHeight() - PAGE_MARGIN * 2;
+    // Cap at scale=1 so a tiny source image isn't upscaled and blurred.
+    const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+    const w = img.width  * scale;
+    const h = img.height * scale;
+    page.drawImage(img, {
+      x: (page.getWidth()  - w) / 2,
+      y: (page.getHeight() - h) / 2,
+      width:  w,
+      height: h,
+    });
   }
 
   const out = await merged.save();
