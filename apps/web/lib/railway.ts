@@ -53,6 +53,7 @@ import type {
   SendInvoiceRequest, SendInvoiceResponse,
   GenerateInvoicePacketResponse,
   BatchSendInvoicesRequest, BatchSendInvoicesResponse,
+  BatchResendInvoicesRequest, BatchResendInvoicesResponse,
   BatchGenerateInvoicesRequest, BatchGenerateInvoicesResponse,
   MarkInvoicePaidRequest, MarkInvoicePaidResponse,
   VoidInvoiceRequest, VoidInvoiceResponse,
@@ -688,6 +689,11 @@ class RailwayClient {
   }
   batchSendInvoices(body: BatchSendInvoicesRequest) {
     return this.req<BatchSendInvoicesResponse>('POST', '/v1/invoices/batch-send', body);
+  }
+  /** Resend one or more already-sent invoices. Same one-email-per-invoice
+   *  flow as batch-send; refreshes sent_at on each. */
+  batchResendInvoices(body: BatchResendInvoicesRequest) {
+    return this.req<BatchResendInvoicesResponse>('POST', '/v1/invoices/batch-resend', body);
   }
   batchGenerateInvoices(body: BatchGenerateInvoicesRequest) {
     return this.req<BatchGenerateInvoicesResponse>('POST', '/v1/invoices/batch-generate', body);

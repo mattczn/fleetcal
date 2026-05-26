@@ -1032,6 +1032,30 @@ export interface BatchSendInvoicesResponse {
   }>;
 }
 
+/**
+ * POST /v1/invoices/batch-resend — resend already-sent invoices (one
+ * email per invoice, same templated subject/body/packet).
+ *
+ *   - All invoice ids must reference SENT invoices. Drafts go through
+ *     batch-send; mixed-status sets fail 400.
+ *   - Behaviour mirrors batch-send: per-invoice email, broker recipient
+ *     pulled from the invoice's customer_id, ccEmail merged from the
+ *     org's invoice_settings.
+ *   - sent_at is refreshed on each successful resend so audit logs show
+ *     the latest send. Status stays 'sent' (it's already there).
+ */
+export interface BatchResendInvoicesRequest {
+  invoiceIds: string[];
+  cc?:        string[];
+  bccSelf?:   boolean;
+  bodyText?:  string;
+  attachLoadDocs?: boolean;
+}
+
+/** Same shape as the send response — `groups[]` keyed by invoice with
+ *  invoiceIds[].length === 1 per entry. */
+export type BatchResendInvoicesResponse = BatchSendInvoicesResponse;
+
 /** POST /v1/invoices/:id/mark-paid */
 export interface MarkInvoicePaidRequest {
   paidAt?:  string;

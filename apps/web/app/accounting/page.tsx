@@ -228,6 +228,7 @@ function AccountingPageInner() {
   const [invoiceModalId,  setInvoiceModalId]  = useState<string | null>(null);
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
+  const [batchResendOpen, setBatchResendOpen] = useState(false);
   const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
   const [markPaidBusy,    setMarkPaidBusy]    = useState(false);
 
@@ -878,12 +879,23 @@ function AccountingPageInner() {
               </>
             )}
             {bucket === 'invoiced' && someSelected && (
-              <button onClick={() => void handleMarkPaid()} disabled={markPaidBusy}
-                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
-                style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
-                {markPaidBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Check size={12} className="inline mr-1.5" />}
-                Mark {selected.size} paid
-              </button>
+              <>
+                {/* Resend kicks off the same per-invoice email flow as
+                    Submit in the Queued bucket. Useful when a broker
+                    AP rep asks for another copy or the original send
+                    bounced. Refreshes sent_at on each invoice. */}
+                <button onClick={() => setBatchResendOpen(true)}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                  style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
+                  <Send size={12} className="inline mr-1.5" /> Resend {selected.size}
+                </button>
+                <button onClick={() => void handleMarkPaid()} disabled={markPaidBusy}
+                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                  style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
+                  {markPaidBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Check size={12} className="inline mr-1.5" />}
+                  Mark {selected.size} paid
+                </button>
+              </>
             )}
             <QueueColumnsButton
               columns={tableColumns}
@@ -985,6 +997,23 @@ function AccountingPageInner() {
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchSendOpen(false)}
           onComplete={() => { setBatchSendOpen(false); setSelected(new Set()); void refresh(); }} />
+      )}
+      {batchResendOpen && (
+        // Same dialog as send, just hits the resend endpoint. Mode flag
+        // switches title + button label + the underlying API call.
+        <BatchSendDialog
+          rows={(() => {
+            const byInvId = new Map(paged.map(r => [r.invoice?.id, r.load] as const));
+            return selectedInvoices.map(inv => {
+              const load = byInvId.get(inv.id);
+              const broker = load ? findCustomerForLoad(load) ?? null : null;
+              return { invoice: inv, broker };
+            });
+          })()}
+          mode="resend"
+          onOpenBroker={(id) => setBrokerProfileId(id)}
+          onClose={() => setBatchResendOpen(false)}
+          onComplete={() => { setBatchResendOpen(false); setSelected(new Set()); void refresh(); }} />
       )}
       {notesTarget && (
         <InternalNotesModal load={notesTarget} actorName={actorName}
@@ -1368,12 +1397,16 @@ interface BatchSendDialogProps {
    *  the broker that's currently set on the load, instead of the modal
    *  saying "(no broker set)" when the table clearly shows one. */
   rows:         Array<{ invoice: Invoice; broker: Customer | null }>;
+  /** 'send' = draft → sent (default). 'resend' = re-send already-sent
+   *  invoices (refreshes sent_at, status stays sent). Drives endpoint
+   *  selection + button/title copy. */
+  mode?:        'send' | 'resend';
   onOpenBroker?: (brokerId: string) => void;
   onClose:      () => void;
   onComplete:   () => void;
 }
 
-function BatchSendDialog({ rows, onOpenBroker, onClose, onComplete }: BatchSendDialogProps) {
+function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplete }: BatchSendDialogProps) {
   const [bccSelf, setBccSelf]       = useState(true);
   const [attachLoadDocs, setAttach] = useState(true);
   const [busy, setBusy]             = useState(false);
@@ -1398,13 +1431,17 @@ function BatchSendDialog({ rows, onOpenBroker, onClose, onComplete }: BatchSendD
   async function handleSend() {
     setBusy(true);
     try {
-      const res = await railway.batchSendInvoices({
-        invoiceIds: invoices.map(i => i.id), bccSelf, attachLoadDocs,
-      });
+      // Same shape both ways — the response type is identical so we
+      // can reuse the result-rendering block. Endpoint switches on
+      // mode; resend hits batch-resend (status='sent' invoices),
+      // default hits batch-send (status='draft' invoices).
+      const res = mode === 'resend'
+        ? await railway.batchResendInvoices({ invoiceIds: invoices.map(i => i.id), bccSelf, attachLoadDocs })
+        : await railway.batchSendInvoices({ invoiceIds: invoices.map(i => i.id), bccSelf, attachLoadDocs });
       setResult(res);
     } catch (err) {
-      console.error('[batchSend] failed:', err);
-      window.alert('Batch send failed. Check console for details.');
+      console.error(`[batch${mode === 'resend' ? 'Resend' : 'Send'}] failed:`, err);
+      window.alert(`Batch ${mode === 'resend' ? 're' : ''}send failed. Check console for details.`);
     } finally {
       setBusy(false);
     }
@@ -1420,7 +1457,9 @@ function BatchSendDialog({ rows, onOpenBroker, onClose, onComplete }: BatchSendD
         <div className="px-5 py-4 flex items-center gap-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <Send size={16} style={{ color: '#1a73e8' }} />
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
-            {result ? 'Batch send results' : `Send ${invoices.length} invoice${invoices.length === 1 ? '' : 's'} — ${groups.length} broker${groups.length === 1 ? '' : 's'}`}
+            {result
+              ? (mode === 'resend' ? 'Batch resend results' : 'Batch send results')
+              : `${mode === 'resend' ? 'Resend' : 'Send'} ${invoices.length} invoice${invoices.length === 1 ? '' : 's'} — ${groups.length} broker${groups.length === 1 ? '' : 's'}`}
           </div>
           <button onClick={onClose} disabled={busy} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)] disabled:opacity-50">
             <X size={14} />
@@ -1530,7 +1569,7 @@ function BatchSendDialog({ rows, onOpenBroker, onClose, onComplete }: BatchSendD
                 className="text-[12px] font-semibold px-4 py-1.5 rounded-lg transition-colors disabled:opacity-60"
                 style={{ background: '#1a73e8', color: '#fff' }}>
                 {busy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Send size={12} className="inline mr-1.5" />}
-                Send
+                {mode === 'resend' ? 'Resend' : 'Send'}
               </button>
             </>
           ) : (
