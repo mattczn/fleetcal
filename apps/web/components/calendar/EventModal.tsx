@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { StyledSelect } from '@/components/ui/StyledSelect';
 import { useUser } from '@clerk/nextjs';
 import { usePermissions } from '@/lib/usePermissions';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -1468,28 +1469,8 @@ function TrailerLocationCard({
   );
 }
 
-function StyledSelect({ value, onChange, onFocus, onBlur, style, children }: {
-  value: string | number;
-  onChange: React.ChangeEventHandler<HTMLSelectElement>;
-  onFocus?: React.FocusEventHandler<HTMLSelectElement>;
-  onBlur?: React.FocusEventHandler<HTMLSelectElement>;
-  style?: React.CSSProperties;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ position: 'relative' }}>
-      <select value={value} onChange={onChange} onFocus={onFocus} onBlur={onBlur}
-        style={{ ...style, appearance: 'none', WebkitAppearance: 'none', paddingRight: 36 } as React.CSSProperties}>
-        {children}
-      </select>
-      <div style={{ position: 'absolute', right: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--gc-text-3)', display: 'flex' }}>
-        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-          <path d="M1.5 3.5l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      </div>
-    </div>
-  );
-}
+// StyledSelect moved to apps/web/components/ui/StyledSelect.tsx so
+// the maintenance work-order modal can share it. Imported above.
 
 function focusColor(color: string) {
   return (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
