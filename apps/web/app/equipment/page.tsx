@@ -1095,11 +1095,13 @@ function WorkOrderCard({
 }) {
   const cs = getCardStatus(item);
   const sp = STATUS_PALETTE[cs];
-  // Overdue = scheduled date is in the past and not yet done. We
-  // still surface "OVERDUE" as a secondary pill so it pops even on
-  // a blue (scheduled) card. Done items are never marked overdue.
+  // Overdue only applies to UNTOUCHED work — open status (i.e. not
+  // started, not done) with a scheduledDate in the past. Once a
+  // dispatcher flips it to in_progress, the amber stripe already
+  // signals "in motion / behind schedule"; piling an OVERDUE pill
+  // on top is just noise. Done items are obviously never overdue.
   const today = dateKeyOf(new Date());
-  const overdue = !!(item.scheduledDate && item.scheduledDate < today && item.status !== 'done');
+  const overdue = !!(item.status === 'open' && item.scheduledDate && item.scheduledDate < today);
   // Priority dot — 6px dot in the title row, colored by priority,
   // so urgency stays visible without owning the whole card color.
   const pri = PRIORITY_STYLES[item.priority];
@@ -1156,7 +1158,7 @@ function WorkOrderCard({
       {/* Footer row — status pill (left) + category + maybe overdue */}
       <div className="flex items-center justify-between gap-1.5 mt-0.5">
         <span
-          className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded"
+          className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded whitespace-nowrap"
           style={{
             background: sp.pillBg,
             color:      sp.pillFg,
@@ -1167,7 +1169,7 @@ function WorkOrderCard({
         <div className="flex items-center gap-1.5">
           {overdue && (
             <span
-              className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded"
+              className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded whitespace-nowrap"
               style={{
                 background: '#ea4335',
                 color:      '#ffffff',
@@ -1239,10 +1241,13 @@ const STATUS_STYLES: Record<MaintenanceActionStatus, { bg: string; border: strin
 //   open         gray  #5f6368   open + no scheduledDate (backlog)
 type CardStatus = 'scheduled' | 'in_progress' | 'done' | 'open';
 const STATUS_PALETTE: Record<CardStatus, { stripe: string; pillBg: string; pillFg: string; label: string }> = {
-  scheduled:   { stripe: '#1a73e8', pillBg: '#1a73e8', pillFg: '#ffffff', label: 'Scheduled'   },
-  in_progress: { stripe: '#f9ab00', pillBg: '#f9ab00', pillFg: '#ffffff', label: 'In progress' },
-  done:        { stripe: '#0f9d58', pillBg: '#0f9d58', pillFg: '#ffffff', label: 'Done'        },
-  open:        { stripe: '#5f6368', pillBg: '#5f6368', pillFg: '#ffffff', label: 'Open'        },
+  // Labels intentionally one-word so the pill never wraps in the
+  // narrow week-view columns. "Active" reads the same as "In
+  // progress" — kanban convention — without burning two lines.
+  scheduled:   { stripe: '#1a73e8', pillBg: '#1a73e8', pillFg: '#ffffff', label: 'Scheduled' },
+  in_progress: { stripe: '#f9ab00', pillBg: '#f9ab00', pillFg: '#ffffff', label: 'Active'    },
+  done:        { stripe: '#0f9d58', pillBg: '#0f9d58', pillFg: '#ffffff', label: 'Done'      },
+  open:        { stripe: '#5f6368', pillBg: '#5f6368', pillFg: '#ffffff', label: 'Open'      },
 };
 function getCardStatus(item: MaintenanceActionItem): CardStatus {
   if (item.status === 'done')         return 'done';
