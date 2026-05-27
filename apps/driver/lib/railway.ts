@@ -354,29 +354,34 @@ export const railway = {
    *  signal — rubber-stamping a 59-item list takes about 8 s).
    *  locationLat/Lon = GPS at submit (proves the driver was with the
    *  truck and gives DOT a coord for any roadside follow-up). */
-  submitInspection(body: {
-    assetId?:         number | null;
-    trailerId?:       number | null;
-    items:            InspectionItemPayload[];
-    trailerItems?:    InspectionItemPayload[];
-    notes?:           string;
-    signedBy?:        string;
-    durationSeconds?: number | null;
-    locationLat?:     number | null;
-    locationLon?:     number | null;
-    /** Driver-local YYYY-MM-DD — omitted only if caller wants the
-     *  server's UTC fallback. New submissions should always pass
-     *  `localYmdToday()` so the inspection lands on the driver's
-     *  actual day rather than UTC's. */
-    inspectionDate?:  string;
-  }) {
-    // Auto-fill the driver's local date when the caller didn't
-    // pass one. Safer-by-default than letting the server fall back
-    // to UTC — a 9pm-Tuesday submission from Atlanta would land
-    // on Wednesday otherwise.
+  submitInspection(
+    body: {
+      assetId?:         number | null;
+      trailerId?:       number | null;
+      items:            InspectionItemPayload[];
+      trailerItems?:    InspectionItemPayload[];
+      notes?:           string;
+      signedBy?:        string;
+      durationSeconds?: number | null;
+      locationLat?:     number | null;
+      locationLon?:     number | null;
+      /** YYYY-MM-DD. If not provided, derived from `opts.timezone`
+       *  (preferred — that's the org dispatch TZ) or from device-
+       *  local as a last resort. */
+      inspectionDate?:  string;
+    },
+    /** Pass the org's IANA timezone (orgSettings.timezone) so the
+     *  inspection lands on the same day the dispatcher sees on the
+     *  web calendar — not the driver's phone TZ, which may differ
+     *  when the driver is on a cross-country run. */
+    opts?: { timezone?: string | null },
+  ) {
+    const tz = opts?.timezone ?? null;
     const payload = {
       ...body,
-      inspectionDate: body.inspectionDate ?? localYmdToday(),
+      inspectionDate:
+        body.inspectionDate
+        ?? (tz ? ymdInTz(new Date(), tz) : localYmdToday()),
     };
     return req<{ inspection: { id: string; submitted_at: string; has_defects: boolean } }>(
       "POST", "/v1/driver/inspections", payload,
@@ -394,23 +399,42 @@ export const railway = {
     );
   },
   /** Inspections this driver has submitted today, scoped to the
-   *  driver's local date. The server accepts `?date=YYYY-MM-DD` so
-   *  we don't end up asking "did I do a DVIR today" using UTC when
-   *  the driver's wall clock disagrees. */
-  todaysInspections() {
+   *  ORG'S calendar timezone (passed via opts.timezone). Falls back
+   *  to device-local then UTC if no tz available. The "today" the
+   *  dispatcher sees in the web calendar = the "today" the driver
+   *  is being asked about — single source of truth. */
+  todaysInspections(opts?: { timezone?: string | null }) {
+    const tz = opts?.timezone ?? null;
+    const date = tz ? ymdInTz(new Date(), tz) : localYmdToday();
     return req<{ inspections: TodayInspectionSummary[] }>(
-      "GET", `/v1/driver/inspections/today?date=${encodeURIComponent(localYmdToday())}`,
+      "GET", `/v1/driver/inspections/today?date=${encodeURIComponent(date)}`,
     );
   },
 };
 
-/** Driver-local YYYY-MM-DD. Avoids toISOString() (which is always UTC)
- *  so the "what day is it for this driver right now" answer is
- *  correct after 7pm Eastern, etc. */
+/** Driver phone's local YYYY-MM-DD. Used only as a last-resort
+ *  fallback — the org TZ is the right answer when available. */
 function localYmdToday(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Format a JS Date as YYYY-MM-DD in a specific IANA timezone via
+ *  Intl.DateTimeFormat. en-CA's locale already outputs YYYY-MM-DD so
+ *  there's no parsing to do. Falls back to device-local if the tz
+ *  string is invalid (e.g. ICU data missing on an older Android). */
+function ymdInTz(d: Date, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year:  "numeric",
+      month: "2-digit",
+      day:   "2-digit",
+    }).format(d);
+  } catch {
+    return localYmdToday();
+  }
 }
 
 export interface InspectionItemPayload {
