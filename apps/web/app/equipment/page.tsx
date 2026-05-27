@@ -23,12 +23,12 @@ import { useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
-  Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Activity, Check,
+  Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
-import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto, FuelReportPhoto } from '@fleetcal/types';
+import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import {
   OpsTable, OpsDate, OpsPill, OpsMuted,
@@ -72,17 +72,23 @@ type MediaList = {
 
 // What a row knows for the right-side panel. Each tab maps its row
 // shape onto this so the panel can render uniformly.
+//
+// 'fuel' carries BOTH sides of a fuel-up (card transaction + driver
+// report) — they're two facets of the same event so the panel
+// renders them as one record. Either side may be null:
+//   • card-only:   transaction set, report null
+//   • driver-only: transaction null, report set
+//   • matched:     both set
 type PanelData = {
-  kind: 'maintenance' | 'inspection' | 'fuel' | 'fuel_transaction';
+  kind: 'maintenance' | 'inspection' | 'fuel';
   id: string;
   // ID used to fetch the full detail (for inspections — the list
   // doesn't carry the per-item checklist). Maintenance + Fuel already
   // ship complete rows, so this can re-use the list row directly.
 } & (
-  | { kind: 'maintenance';      report: MaintenanceReport }
-  | { kind: 'fuel';             report: FuelReport }
-  | { kind: 'fuel_transaction'; transaction: FuelTransaction }
-  | { kind: 'inspection';       row: InspectionRow }
+  | { kind: 'maintenance'; report: MaintenanceReport }
+  | { kind: 'fuel';        transaction: FuelTransaction | null; report: FuelReport | null }
+  | { kind: 'inspection';  row: InspectionRow }
 );
 
 // ─── Page ─────────────────────────────────────────────────────────────
@@ -665,10 +671,7 @@ function FuelTabContent({
     driver_only: rows.filter(r => r.kind === 'driver_only').length,
   }), [rows]);
 
-  const openId =
-    panel?.kind === 'fuel_transaction' ? panel.id :
-    panel?.kind === 'fuel'              ? panel.id :
-    null;
+  const openId = panel?.kind === 'fuel' ? panel.id : null;
 
   const columns: OpsColumn<UnifiedFuelRow>[] = [
     { key: 'date',         header: 'Date',       width: 110, sortable: true,
@@ -732,10 +735,15 @@ function FuelTabContent({
       loading={loading}
       rowKey={r => r.id}
       onRowClick={r => {
-        // Open the richer side: transaction when present (carries $,
-        // location, retail/discount). Report otherwise.
-        if (r.transaction) setPanel({ kind: 'fuel_transaction', id: r.transaction.id, transaction: r.transaction });
-        else if (r.report) setPanel({ kind: 'fuel',             id: r.report.id,      report:      r.report });
+        // One panel for both sides. Whatever the row has (transaction,
+        // report, or both) gets passed through; the panel renders the
+        // single unified view of the fuel-up.
+        setPanel({
+          kind:        'fuel',
+          id:          r.transaction?.id ?? r.report?.id ?? r.id,
+          transaction: r.transaction,
+          report:      r.report,
+        });
       }}
       activeRowId={openId}
       emptyLabel="No fuel activity matches the current filters."
@@ -889,16 +897,20 @@ function DetailPanel({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, onCloseSideMedia, sideMedia]);
 
-  // Each report type gets its own header dot + title — gives the
-  // dispatcher a one-glance signal of what kind of report they
-  // opened. Colors match the tab icons.
+  // Each report type gets its own header dot + title. For fuel,
+  // the title reflects what data we actually have for this fuel-up:
+  // matched (both sides), card-only, or driver-only.
   const meta = panel.kind === 'maintenance'
     ? { color: '#f59e0b', title: 'Maintenance report' }
     : panel.kind === 'inspection'
     ? { color: '#1a73e8', title: 'Inspection report' }
-    : panel.kind === 'fuel_transaction'
-    ? { color: '#0ea5e9', title: 'Card transaction (Mudflap)' }
-    : { color: '#16a34a', title: 'Fuel report' };
+    : (() => {
+        const hasTx     = !!panel.transaction;
+        const hasReport = !!panel.report;
+        if (hasTx && hasReport) return { color: '#16a34a', title: 'Fuel-up · matched' };
+        if (hasTx)              return { color: '#0ea5e9', title: 'Fuel-up · card only' };
+        return                       { color: '#8b5cf6', title: 'Fuel-up · driver only' };
+      })();
 
   const content = (
     <div
@@ -921,7 +933,7 @@ function DetailPanel({
     >
       <div
         className="relative flex flex-col rounded-2xl overflow-hidden shrink-0"
-        style={{ width: 920, height: 720, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        style={{ width: 920, height: 'min(92vh, 920px)', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
       >
         {/* Header — mirrors MovementDetailPanel: color dot + title + X */}
         <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -945,10 +957,17 @@ function DetailPanel({
             so this wrapper is just a flex container that fills the
             available height between the header and the bottom edge. */}
         <div className="flex-1 flex min-h-0" style={{ background: 'var(--gc-bg)' }}>
-          {panel.kind === 'maintenance'      && <MaintenanceDetail      report={panel.report}      driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
-          {panel.kind === 'inspection'       && <InspectionDetail       id={panel.id}                                                                                                              onOpenMedia={onOpenMedia} />}
-          {panel.kind === 'fuel'             && <FuelDetail             report={panel.report}      driverNameById={driverNameById} assetLabelById={assetLabelById}                                       onOpenMedia={onOpenMedia} />}
-          {panel.kind === 'fuel_transaction' && <FuelTransactionDetail  transaction={panel.transaction} drivers={drivers} assets={assets}                                                                  />}
+          {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id} onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'fuel'        && <FuelDetail
+            transaction={panel.transaction}
+            report={panel.report}
+            drivers={drivers}
+            assets={assets}
+            driverNameById={driverNameById}
+            assetLabelById={assetLabelById}
+            onOpenMedia={onOpenMedia}
+          />}
         </div>
       </div>
 
@@ -1187,88 +1206,58 @@ function EquipmentDefectsSection({
   );
 }
 
+// ─── Unified fuel detail ────────────────────────────────────────────
+//
+// One panel for every fuel-up regardless of source. Accepts:
+//   • transaction — card receipt (Mudflap). Authoritative for date /
+//     $ / gallons / location text.
+//   • report — driver-app submission. Authoritative for driver_id /
+//     asset_id / lat-lon (for matched rows).
+// At least one is set; both is the matched case.
+//
+// Source-of-truth priority for each field:
+//   date          → transaction.transactionDate ?? report.reportedAt
+//   gallons (D)   → transaction.dieselGallons ?? report.dieselGallons
+//   gallons (DEF) → transaction.defGallons    ?? report.defGallons
+//   $ / total     → transaction only (driver report carries no money)
+//   driver        → transaction.driverId (resolved) ?? report.driverId
+//   truck         → transaction.assetId (resolved)  ?? report.assetId
+//   location text → transaction.location only
+//   photos        → report.photos only
+//
+// Editable fields:
+//   • Driver + Truck dropdowns ALWAYS render, but only persist to a
+//     transaction (via /assign). When there's no transaction (driver-
+//     only row), the dropdowns show the report's driver/asset and are
+//     read-only — the driver chose them in the app.
+
 function FuelDetail({
-  report, driverNameById, assetLabelById, onOpenMedia,
+  transaction: initialTx, report, drivers, assets,
+  driverNameById, assetLabelById, onOpenMedia,
 }: {
-  report: FuelReport;
+  transaction: FuelTransaction | null;
+  report:      FuelReport | null;
+  drivers:     Driver[];
+  assets:      Asset[];
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   onOpenMedia: (list: MediaList) => void;
 }) {
-  const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
-  if (report.photos && report.photos.length > 0) {
-    mediaSections.push({
-      label: 'Receipts',
-      photos: report.photos.map((p: FuelReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null })),
-    });
-  }
-  return (
-    <TwoColumnBody
-      mapLat={report.latitude}
-      mapLon={report.longitude}
-      mapState={report.state}
-      media={mediaSections}
-      onOpenMedia={onOpenMedia}
-      // Narrower media column for fuel — receipts are typically
-      // one or two photos. Gives the meta grid the wider right
-      // column it needs to keep numbers (diesel, odometer) on one
-      // line and the asset name un-truncated.
-      leftWidth={320}
-    >
-      {/* 3-col grid uses the wider right column. Fuel has no defect
-          cards / notes so the meta is everything the dispatcher sees;
-          giving each field more horizontal room keeps numbers
-          (diesel, odometer) on one line. */}
-      <div className="grid grid-cols-3 gap-x-5 gap-y-3 text-[12px]">
-        <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
-        <Field icon={<User  size={12} />} label="Driver">{
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (report as any).driverName as string
-          ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById)
-        }</Field>
-        <Field icon={<Truck size={12} />} label="Asset">{
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (report as any).assetName as string
-          ?? assetLabelById.get(report.assetId)
-          ?? `Asset #${report.assetId}`
-        }</Field>
-        <Field icon={<MapPin size={12} />} label="State">{report.state}</Field>
-        <Field icon={<FuelIcon size={12} />} label="Diesel">{report.dieselGallons.toFixed(2)} gal</Field>
-        <Field icon={<FuelIcon size={12} />} label="DEF">{report.defGallons != null ? `${report.defGallons.toFixed(2)} gal` : '—'}</Field>
-        <Field icon={<Activity size={12} />} label="Odometer">{report.odometer != null ? `${report.odometer.toLocaleString()} mi` : '—'}</Field>
-      </div>
-    </TwoColumnBody>
-  );
-}
+  // Local mutable transaction so /assign + /auto-match actions can
+  // refresh the panel without re-fetching the list.
+  const [t, setT] = useState<FuelTransaction | null>(initialTx);
+  useEffect(() => { setT(initialTx); }, [initialTx]);
 
-// ─── Fuel transaction detail ────────────────────────────────────────
-//
-// Simpler than the other detail panels — no map (no GPS on the
-// receipt), no photos, no defect cards. Just the fields we ingested
-// from the email + the match status. The two-column TwoColumnBody
-// would feel empty here, so we use a single-column scroll body.
-
-function FuelTransactionDetail({
-  transaction: initial, drivers, assets,
-}: {
-  transaction: FuelTransaction;
-  drivers: Driver[];
-  assets: Asset[];
-}) {
-  // Local mutable copy of the transaction so assign / auto-match
-  // actions can refresh the displayed status without re-fetching the
-  // whole list. Falls back to the prop when the user opens a
-  // different transaction.
-  const [t, setT] = useState<FuelTransaction>(initial);
-  useEffect(() => { setT(initial); }, [initial]);
-
-  // Receipt is the source of truth — the receipt was generated by the
-  // pump, the driver app is data the driver entered after the fact.
-  // So gallons/total/date all come from `t` (the transaction). The
-  // matched fuel_report only contributes driver attribution + the
-  // map pin (lat/lon) when present.
-  const dieselPpg = (t.dieselGallons && t.dieselGallons > 0)
-    ? t.totalCharged / t.dieselGallons
+  // Pull values from whichever side has them. Transaction first
+  // because it's the receipt (machine-generated, no driver typo).
+  const dateIso       = t?.transactionDate ?? report?.reportedAt ?? null;
+  const dieselGallons = t?.dieselGallons   ?? report?.dieselGallons ?? null;
+  const defGallons    = t?.defGallons      ?? report?.defGallons    ?? null;
+  const totalCharged  = t?.totalCharged    ?? null;
+  const totalSaved    = t?.totalSaved      ?? 0;
+  const locationText  = t?.location        ?? null;
+  const dieselPpg     = (totalCharged != null && dieselGallons && dieselGallons > 0)
+    ? totalCharged / dieselGallons
     : null;
 
   return (
@@ -1281,12 +1270,12 @@ function FuelTransactionDetail({
             Purchase
           </div>
           <div className="text-[20px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-            {new Date(t.transactionDate).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}
+            {dateIso ? new Date(dateIso).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' }) : '—'}
           </div>
-          {t.location && (
+          {locationText && (
             <div className="text-[13px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
               <MapPin size={11} style={{ display: 'inline', marginRight: 4, color: 'var(--gc-text-3)' }} />
-              {t.location}
+              {locationText}
             </div>
           )}
         </div>
@@ -1295,128 +1284,263 @@ function FuelTransactionDetail({
             Total charged
           </div>
           <div className="text-[24px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-            ${t.totalCharged.toFixed(2)}
+            {totalCharged != null ? `$${totalCharged.toFixed(2)}` : <Muted />}
           </div>
-          {t.totalSaved > 0 && (
+          {totalSaved > 0 && (
             <div className="text-[12px] font-medium tabular-nums" style={{ color: '#166534' }}>
-              Saved ${t.totalSaved.toFixed(2)}
+              Saved ${totalSaved.toFixed(2)}
             </div>
           )}
         </div>
       </div>
 
       {/* KPI tiles — diesel gal, diesel $/gal, DEF gal, total.
-          Pulled out as a row of equal-weight cards because these are
-          the four numbers the dispatcher needs to recall ("how much
-          diesel? at what price? did they fill DEF? what was the
-          total?") without scanning a 12-field grid. */}
+          The four numbers the dispatcher needs to recall ("how much
+          diesel? at what price? DEF? total?") without scanning a
+          12-field grid. Missing fields render as '—' so the grid
+          stays aligned across every row. */}
       <div className="grid grid-cols-4 gap-3 px-5 pb-4">
         <KpiTile
           label="Diesel"
-          value={t.dieselGallons != null ? t.dieselGallons.toFixed(1) : '—'}
-          unit="gal"
+          value={dieselGallons != null ? dieselGallons.toFixed(1) : '—'}
+          unit={dieselGallons != null ? 'gal' : undefined}
         />
         <KpiTile
           label="$/gallon"
           value={dieselPpg != null ? `$${dieselPpg.toFixed(2)}` : '—'}
-          unit={t.dieselRetailPrice != null ? `retail $${t.dieselRetailPrice.toFixed(2)}` : undefined}
+          unit={t?.dieselRetailPrice != null ? `retail $${t.dieselRetailPrice.toFixed(2)}` : undefined}
         />
         <KpiTile
           label="DEF"
-          value={t.defGallons != null && t.defGallons > 0 ? t.defGallons.toFixed(1) : '—'}
-          unit={t.defGallons != null && t.defGallons > 0 ? 'gal' : undefined}
+          value={defGallons != null && defGallons > 0 ? defGallons.toFixed(1) : '—'}
+          unit={defGallons != null && defGallons > 0 ? 'gal' : undefined}
         />
         <KpiTile
           label="Total"
-          value={`$${t.totalCharged.toFixed(2)}`}
-          unit={t.paymentLast4 ? `card ${t.paymentLast4}` : undefined}
+          value={totalCharged != null ? `$${totalCharged.toFixed(2)}` : '—'}
+          unit={t?.paymentLast4 ? `card ${t.paymentLast4}` : undefined}
         />
       </div>
 
       <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
 
-      {/* Assignment + status — both the actionable surface. Assignment
-          first (most edits happen here for unmatched rows); match
-          status is a quick chip + auto-match button when unmatched. */}
+      {/* Assignment + status — both the actionable surface. */}
       <div className="px-5 py-4 grid grid-cols-2 gap-5">
         <div>
           <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
             Assigned to
           </div>
-          <AssignmentControls
-            transaction={t}
-            drivers={drivers}
-            assets={assets}
-            onChange={setT}
-          />
+          {t ? (
+            <AssignmentControls
+              transaction={t}
+              drivers={drivers}
+              assets={assets}
+              onChange={setT}
+            />
+          ) : (
+            // No card transaction → no editable assignment. The driver
+            // chose driver + truck in the app at filing time; that's
+            // authoritative and not something dispatch should override
+            // here. Show as read-only so the dispatcher sees what was
+            // recorded.
+            <ReadOnlyAssignment
+              report={report!}
+              driverNameById={driverNameById}
+              assetLabelById={assetLabelById}
+            />
+          )}
         </div>
         <div>
           <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
             Match
           </div>
-          <MatchPanel transaction={t} onChange={setT} />
+          {t ? (
+            <MatchPanel transaction={t} onChange={setT} />
+          ) : (
+            // Driver-only row — there's no card transaction to match
+            // FROM. Surface that explicitly so the dispatcher knows
+            // they're waiting on a receipt (or it'll never come).
+            <DriverOnlyMatchInfo report={report!} />
+          )}
         </div>
       </div>
 
-      {/* Map embed — only when we have a location string. Google
-          Maps' /maps?q=… embed works with free-text searches with
-          no API key, which is exactly what Mudflap gives us
-          ("Maverik #695 - American Fork, UT"). Iframe is light
-          enough that no lazy-load is needed for a single instance. */}
-      {t.location && (
+      {/* Map — uses transaction.location (Mudflap free text) when
+          we have it; otherwise driver report lat/lon if present.
+          Google Maps' /maps?q embed is keyless and tolerates both
+          text and "lat,lon" queries. */}
+      {(() => {
+        const mapQuery = locationText
+          ?? (report?.latitude != null && report?.longitude != null
+              ? `${report.latitude},${report.longitude}`
+              : null);
+        if (!mapQuery) return null;
+        return (
+          <>
+            <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
+            <div className="px-5 py-4">
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                Location
+              </div>
+              <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', height: 220 }}>
+                <iframe
+                  title="Fuel location"
+                  src={`https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`}
+                  style={{ width: '100%', height: '100%', border: 0 }}
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* Receipt photos — driver-side only. Render as a horizontal
+          thumbnail strip; click opens the existing media side-panel. */}
+      {report?.photos && report.photos.length > 0 && (
         <>
           <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
           <div className="px-5 py-4">
             <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
-              Location
+              Driver receipts ({report.photos.length})
             </div>
-            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', height: 220 }}>
-              <iframe
-                title="Fuel location"
-                src={`https://www.google.com/maps?q=${encodeURIComponent(t.location)}&output=embed`}
-                style={{ width: '100%', height: '100%', border: 0 }}
-                loading="lazy"
-                referrerPolicy="no-referrer-when-downgrade"
-              />
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {report.photos.map((p, idx) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => onOpenMedia({
+                    initialIndex: idx,
+                    items: report.photos!.map(ph => ({
+                      id: ph.id,
+                      signedUrl: ph.signedUrl ?? null,
+                      caption: null,
+                    })),
+                  })}
+                  className="shrink-0 rounded overflow-hidden transition-transform hover:scale-[1.02]"
+                  style={{ width: 96, height: 96, border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+                  {p.signedUrl
+                    // eslint-disable-next-line @next/next/no-img-element
+                    ? <img src={p.signedUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <div className="flex items-center justify-center w-full h-full text-[10px]" style={{ color: 'var(--gc-text-3)' }}>No preview</div>}
+                </button>
+              ))}
             </div>
           </div>
         </>
       )}
 
-      {/* Details footer — all the secondary fields collapsed into a
-          compact 2-column key/value list. Provider txn id, retail vs
-          discount prices, etc. Hidden from primary scan but
-          accessible when the dispatcher needs to dig in. */}
+      {/* Details footer — secondary fields from both sides. */}
       <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
       <div className="px-5 py-4">
         <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
           Details
         </div>
         <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-[12px]">
-          <DetailRow label="Provider">{t.provider}</DetailRow>
-          <DetailRow label="Driver on receipt">{t.driverName ?? <Muted />}</DetailRow>
-          {t.dieselRetailPrice != null && (
+          {t && <DetailRow label="Provider">{t.provider}</DetailRow>}
+          {t?.driverName && <DetailRow label="Driver on receipt">{t.driverName}</DetailRow>}
+          {t?.dieselRetailPrice != null && (
             <DetailRow label="Diesel retail $/gal">${t.dieselRetailPrice.toFixed(4)}</DetailRow>
           )}
-          {t.dieselDiscountPrice != null && (
+          {t?.dieselDiscountPrice != null && (
             <DetailRow label="Diesel Mudflap $/gal">${t.dieselDiscountPrice.toFixed(4)}</DetailRow>
           )}
-          {t.defRetailPrice != null && (
+          {t?.defRetailPrice != null && (
             <DetailRow label="DEF retail $/gal">${t.defRetailPrice.toFixed(4)}</DetailRow>
           )}
-          {t.defDiscountPrice != null && (
+          {t?.defDiscountPrice != null && (
             <DetailRow label="DEF Mudflap $/gal">${t.defDiscountPrice.toFixed(4)}</DetailRow>
           )}
-          <DetailRow label="Provider txn id">
-            <span className="font-mono break-all text-[11px]">{t.providerTransactionId}</span>
+          {t && (
+            <DetailRow label="Provider txn id">
+              <span className="font-mono break-all text-[11px]">{t.providerTransactionId}</span>
+            </DetailRow>
+          )}
+          {report?.state && <DetailRow label="State (driver)">{report.state}</DetailRow>}
+          {report?.odometer != null && (
+            <DetailRow label="Odometer">{report.odometer.toLocaleString()} mi</DetailRow>
+          )}
+          {report?.notes && <DetailRow label="Driver notes">{report.notes}</DetailRow>}
+          <DetailRow label="Recorded">
+            {dateIso ? new Date(dateIso).toLocaleString() : <Muted />}
           </DetailRow>
-          <DetailRow label="Created in FleetCal">
-            {new Date(t.createdAt).toLocaleString()}
-          </DetailRow>
-          {t.legacyFormResponseId != null && (
+          {t && (
+            <DetailRow label="Created in FleetCal">
+              {new Date(t.createdAt).toLocaleString()}
+            </DetailRow>
+          )}
+          {t?.legacyFormResponseId != null && (
             <DetailRow label="Legacy form id">{t.legacyFormResponseId}</DetailRow>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Read-only driver+truck for driver-only rows. The driver chose these
+// in the app at filing time, so they're authoritative — dispatch
+// doesn't override here.
+function ReadOnlyAssignment({
+  report, driverNameById, assetLabelById,
+}: {
+  report: FuelReport;
+  driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
+}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const embedded = report as any;
+  const driverLabel = (embedded.driverName as string | undefined)
+    ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById);
+  const assetLabel = (embedded.assetName as string | undefined)
+    ?? assetLabelById.get(report.assetId)
+    ?? `Asset #${report.assetId}`;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+            Driver
+          </div>
+          <div className="text-[13px]" style={{ color: 'var(--gc-text-1)' }}>{driverLabel}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+            Truck
+          </div>
+          <div className="text-[13px]" style={{ color: 'var(--gc-text-1)' }}>{assetLabel}</div>
+        </div>
+      </div>
+      <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+        Recorded by the driver in the app.
+      </div>
+    </div>
+  );
+}
+
+// Match panel for driver-only rows — no card transaction exists yet.
+// Surfaces what state the report is in so the dispatcher knows
+// whether they're waiting on a receipt.
+function DriverOnlyMatchInfo({ report }: { report: FuelReport }) {
+  const tint = report.matchStatus === 'matched'
+    ? { bg: '#dcfce7', fg: '#166534', label: 'Matched' }
+    : report.matchStatus === 'no_transaction'
+      ? { bg: '#f3f4f6', fg: '#4b5563', label: 'No receipt expected' }
+      : { bg: '#fef3c7', fg: '#92400e', label: 'Awaiting receipt' };
+  return (
+    <div className="flex flex-col gap-2">
+      <span
+        className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-bold uppercase tracking-wider self-start"
+        style={{ background: tint.bg, color: tint.fg }}>
+        {tint.label}
+      </span>
+      <div className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+        {report.matchStatus === 'pending'
+          ? 'Mudflap receipt usually arrives within 30 min of the pump swipe. The next sweep will pair them automatically.'
+          : report.matchStatus === 'no_transaction'
+            ? 'Marked as a driver-only fuel-up (e.g. paid out of pocket).'
+            : 'Linked to its card transaction. Open that side to see receipt details.'}
       </div>
     </div>
   );
