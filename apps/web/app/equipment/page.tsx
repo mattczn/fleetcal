@@ -22,7 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
-  Package, Wrench, ClipboardCheck, Fuel as FuelIcon, AlertTriangle,
+  Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Activity, Check,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
@@ -30,6 +30,10 @@ import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
 import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto, FuelReportPhoto } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
+import {
+  OpsTable, OpsDate, OpsPill, OpsMuted,
+  type OpsColumn, type OpsFilter,
+} from '@/components/ui/OpsTable';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -51,7 +55,6 @@ type InspectionRow = {
 };
 
 type Tab = 'maintenance' | 'inspections' | 'fuel';
-type SortDir = 'desc' | 'asc';
 
 // MediaList — every photo for the currently-open report, grouped by
 // source (defect item, general, etc.) so the side-panel can show
@@ -66,11 +69,6 @@ type MediaList = {
     section?: string; // e.g. "Truck Big Red · Tires"
   }>;
 };
-
-// Combined equipment picker — same list covers trucks + trailers. The
-// caller resolves the type+id from the selected value so the server
-// query filters by asset_id or trailer_id correctly.
-type EquipmentSelection = { kind: 'asset' | 'trailer'; id: number } | null;
 
 // What a row knows for the right-side panel. Each tab maps its row
 // shape onto this so the panel can render uniformly.
@@ -97,11 +95,12 @@ export default function EquipmentPage() {
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
 
-  // Filter state, shared across tabs so toggling tabs doesn't reset
-  // the dispatcher's working set.
-  const [driverId, setDriverId]     = useState<number | null>(null);
-  const [equipment, setEquipment]   = useState<EquipmentSelection>(null);
-  const [sortDir, setSortDir]       = useState<SortDir>('desc');
+  // Page-level filters retired — OpsTable owns its own filter chips
+  // now (search + select dropdowns scoped to each tab's data). The
+  // driver/equipment server-side filter was forcing a full refetch
+  // every time the dispatcher narrowed the working set, which felt
+  // sluggish; client-side filtering on the already-loaded 200 rows is
+  // instant and matches Motive's UX.
 
   // Filter dropdown data — fetched once. Used by both the Driver
   // dropdown and the Equipment dropdown (trucks + trailers merged).
@@ -158,33 +157,26 @@ export default function EquipmentPage() {
     // overflow:hidden then clips the bottom unreachable). Pages that
     // need to scroll inside a flex-1 child MUST use h-screen here,
     // not min-h-screen.
-    <div className="h-screen flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+    //
+    // White surface (not the page gray) because the inner tables now
+    // float on the surface rather than sitting in cards on a tinted
+    // background — feels closer to a real ops dashboard than a
+    // glorified settings panel.
+    <div className="h-screen flex flex-col" style={{ background: 'var(--gc-surface)' }}>
       <ManagementHeader title="Equipment" icon={Package} />
 
-      {/* Tab bar */}
-      <div className="px-6 pt-5 border-b" style={{ borderColor: 'var(--gc-border-light)' }}>
-        <div className="flex gap-1">
-          <TabButton active={tab === 'maintenance'} onClick={() => setTab('maintenance')} icon={<Wrench size={15} />}         label="Maintenance" />
-          <TabButton active={tab === 'inspections'} onClick={() => setTab('inspections')} icon={<ClipboardCheck size={15} />} label="Inspections" />
-          <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
+      {/* Tab bar. Inner content capped at 1400px (matches my-calendar
+          fuel.html and the rest of the management surfaces) and
+          centered — full-width tables on a 27" monitor read as a
+          spreadsheet, not a curated view. */}
+      <div className="border-b" style={{ borderColor: 'var(--gc-border-light)' }}>
+        <div className="mx-auto w-full px-6 pt-5" style={{ maxWidth: 1400 }}>
+          <div className="flex gap-1">
+            <TabButton active={tab === 'maintenance'} onClick={() => setTab('maintenance')} icon={<Wrench size={15} />}         label="Maintenance" />
+            <TabButton active={tab === 'inspections'} onClick={() => setTab('inspections')} icon={<ClipboardCheck size={15} />} label="Inspections" />
+            <TabButton active={tab === 'fuel'}        onClick={() => setTab('fuel')}        icon={<FuelIcon size={15} />}       label="Fuel" />
+          </div>
         </div>
-      </div>
-
-      {/* Filters — common to all tabs */}
-      <div className="px-6 pt-4 pb-3 flex items-center gap-3 flex-wrap border-b" style={{ borderColor: 'var(--gc-border-light)' }}>
-        <DriverFilter drivers={drivers} value={driverId} onChange={setDriverId} />
-        <EquipmentFilter assets={assets} trailers={trailers} value={equipment} onChange={setEquipment} />
-        <SortToggle dir={sortDir} onChange={setSortDir} />
-        <div className="flex-1" />
-        {(driverId != null || equipment != null) && (
-          <button
-            onClick={() => { setDriverId(null); setEquipment(null); }}
-            className="text-xs font-semibold transition-colors"
-            style={{ color: '#1a73e8' }}
-          >
-            Clear filters
-          </button>
-        )}
       </div>
 
       {/* Tab content. min-h-0 lets the flex child shrink below its
@@ -192,12 +184,13 @@ export default function EquipmentPage() {
           + scroll. Without min-h-0 the column blows past the viewport
           and gets cut off by body's global overflow:hidden, with no
           way to reach the bottom rows. */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="mx-auto w-full px-6 py-5" style={{ maxWidth: 1400 }}>
         {tab === 'maintenance' && (
           <MaintenanceList
-            driverId={driverId}
-            equipment={equipment}
-            sortDir={sortDir}
+            drivers={drivers}
+            assets={assets}
+            trailers={trailers}
             driverNameById={driverNameById}
             assetLabelById={assetLabelById}
             trailerLabelById={trailerLabelById}
@@ -207,24 +200,24 @@ export default function EquipmentPage() {
         )}
         {tab === 'inspections' && (
           <InspectionsList
-            driverId={driverId}
-            equipment={equipment}
-            sortDir={sortDir}
+            drivers={drivers}
+            assets={assets}
+            trailers={trailers}
             onOpen={(r) => setPanel({ kind: 'inspection', id: r.id, row: r })}
             openId={panel?.kind === 'inspection' ? panel.id : null}
           />
         )}
         {tab === 'fuel' && (
           <FuelTabContent
-            driverId={driverId}
-            equipment={equipment}
-            sortDir={sortDir}
+            drivers={drivers}
+            assets={assets}
             driverNameById={driverNameById}
             assetLabelById={assetLabelById}
             panel={panel}
             setPanel={setPanel}
           />
         )}
+        </div>
       </div>
 
       {panel && (
@@ -262,111 +255,50 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
-// ─── Filters ──────────────────────────────────────────────────────────
+// ─── Shared helpers ─────────────────────────────────────────────────
 
-function DriverFilter({ drivers, value, onChange }: { drivers: Driver[]; value: number | null; onChange: (v: number | null) => void }) {
-  return (
-    <FilterDropdown label="Driver">
-      <select
-        value={value ?? ''}
-        onChange={e => onChange(e.target.value ? Number(e.target.value) : null)}
-        className="text-sm rounded px-2 py-1.5 outline-none"
-        style={{ background: 'var(--gc-panel-bg)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)', minWidth: 160 }}
-      >
-        <option value="">All drivers</option>
-        {drivers
-          .filter(d => !d.activeTo) // hide retired
-          .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
-          .map(d => (
-            <option key={d.id} value={d.id}>{d.name}</option>
-          ))}
-      </select>
-    </FilterDropdown>
-  );
+// Build asset/trailer dropdown options for OpsTable's select filter.
+// "asset:123" / "trailer:456" encoding lets one chip drive both
+// dimensions; the predicate splits the key back out at filter time.
+function buildEquipmentOptions(
+  assets: Asset[],
+  trailers: Array<{ id: number; name: string; trailerNumber?: string }>,
+): Array<{ value: string; label: string }> {
+  const out: Array<{ value: string; label: string }> = [];
+  for (const a of [...assets].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))) {
+    out.push({ value: `asset:${a.id}`, label: `Truck ${a.name}${a.unit ? ` #${a.unit}` : ''}` });
+  }
+  for (const t of [...trailers].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))) {
+    out.push({ value: `trailer:${t.id}`, label: `Trailer ${t.trailerNumber ? `#${t.trailerNumber}` : t.name}` });
+  }
+  return out;
 }
 
-function EquipmentFilter({
-  assets, trailers, value, onChange,
-}: {
-  assets: Asset[];
-  trailers: Array<{ id: number; name: string; trailerNumber?: string }>;
-  value: EquipmentSelection;
-  onChange: (v: EquipmentSelection) => void;
-}) {
-  // Encode selection as "asset:123" / "trailer:456" so a single
-  // <select> drives both filter dimensions.
-  const selectedValue = value ? `${value.kind}:${value.id}` : '';
-  return (
-    <FilterDropdown label="Equipment">
-      <select
-        value={selectedValue}
-        onChange={e => {
-          const raw = e.target.value;
-          if (!raw) return onChange(null);
-          const [kind, idStr] = raw.split(':');
-          if (kind !== 'asset' && kind !== 'trailer') return onChange(null);
-          onChange({ kind: kind as 'asset' | 'trailer', id: Number(idStr) });
-        }}
-        className="text-sm rounded px-2 py-1.5 outline-none"
-        style={{ background: 'var(--gc-panel-bg)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)', minWidth: 200 }}
-      >
-        <option value="">All equipment</option>
-        <optgroup label="Trucks">
-          {assets
-            .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
-            .map(a => (
-              <option key={`asset:${a.id}`} value={`asset:${a.id}`}>
-                Truck {a.name}{a.unit ? ` #${a.unit}` : ''}
-              </option>
-            ))}
-        </optgroup>
-        <optgroup label="Trailers">
-          {trailers
-            .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
-            .map(t => (
-              <option key={`trailer:${t.id}`} value={`trailer:${t.id}`}>
-                Trailer {t.trailerNumber ? `#${t.trailerNumber}` : t.name}
-              </option>
-            ))}
-        </optgroup>
-      </select>
-    </FilterDropdown>
-  );
+function buildDriverOptions(drivers: Driver[]): Array<{ value: string; label: string }> {
+  return drivers
+    .filter(d => !d.activeTo)
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+    .map(d => ({ value: String(d.id), label: d.name }));
 }
 
-function SortToggle({ dir, onChange }: { dir: SortDir; onChange: (d: SortDir) => void }) {
-  return (
-    <FilterDropdown label="Sort">
-      <button
-        onClick={() => onChange(dir === 'desc' ? 'asc' : 'desc')}
-        className="text-sm rounded px-2 py-1.5 outline-none"
-        style={{ background: 'var(--gc-panel-bg)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
-      >
-        Date {dir === 'desc' ? '↓ newest' : '↑ oldest'}
-      </button>
-    </FilterDropdown>
-  );
-}
-
-function FilterDropdown({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>{label}</span>
-      {children}
-    </div>
-  );
+// Decode the "asset:123" / "trailer:456" encoding back into a row-
+// match check.
+function matchesEquipment(filterValue: string, assetId?: number, trailerId?: number): boolean {
+  const [kind, idStr] = filterValue.split(':');
+  const id = Number(idStr);
+  if (kind === 'asset')   return assetId === id;
+  if (kind === 'trailer') return trailerId === id;
+  return true;
 }
 
 // ─── Maintenance ──────────────────────────────────────────────────────
 
-const PAGE_SIZE = 25;
-
 function MaintenanceList({
-  driverId, equipment, sortDir, driverNameById, assetLabelById, trailerLabelById, onOpen, openId,
+  drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById, onOpen, openId,
 }: {
-  driverId: number | null;
-  equipment: EquipmentSelection;
-  sortDir: SortDir;
+  drivers: Driver[];
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
@@ -375,409 +307,425 @@ function MaintenanceList({
 }) {
   const [rows, setRows] = useState<MaintenanceReport[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(0);
-
-  // Reset to first page whenever filters change so the dispatcher
-  // doesn't end up looking at an empty page 4.
-  useEffect(() => { setPage(0); }, [driverId, equipment, sortDir]);
 
   useEffect(() => {
     setLoading(true);
-    railway.listMaintenanceReports({
-      limit: 200,
-      driverId: driverId ?? undefined,
-      assetId:   equipment?.kind === 'asset'   ? equipment.id : undefined,
-      trailerId: equipment?.kind === 'trailer' ? equipment.id : undefined,
-    })
+    railway.listMaintenanceReports({ limit: 200 })
       .then(r => setRows(r.reports))
       .catch(err => { console.error('[equipment] maintenance:', err); setRows([]); })
       .finally(() => setLoading(false));
-  }, [driverId, equipment]);
+  }, []);
 
-  const sorted = useMemo(() => {
-    const copy = [...rows];
-    copy.sort((a, b) => sortDir === 'desc'
-      ? b.reportedAt.localeCompare(a.reportedAt)
-      : a.reportedAt.localeCompare(b.reportedAt));
-    return copy;
-  }, [rows, sortDir]);
-  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Resolved name maps for use in cell renderers — computed once per
+  // (rows, namesById) change rather than per cell render.
+  const resolvedRows = useMemo(() => rows.map(r => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const embedded = r as any;
+    const driverLabel = embedded.driverName as string | undefined
+      ?? resolveDriverName(r.driverId, r.submittedBy, driverNameById);
+    const equipmentLabel = (embedded.assetName as string | undefined)
+      ?? (embedded.trailerName ? `Trailer ${embedded.trailerName}` : undefined)
+      ?? resolveEquipmentLabel(r.assetId, r.trailerId, assetLabelById, trailerLabelById);
+    return { ...r, _driverLabel: driverLabel, _equipmentLabel: equipmentLabel };
+  }), [rows, driverNameById, assetLabelById, trailerLabelById]);
+
+  type R = typeof resolvedRows[number];
+
+  const columns: OpsColumn<R>[] = [
+    { key: 'reportedAt', header: 'Date', width: 120, sortable: true,
+      render: r => <OpsDate iso={r.reportedAt} /> },
+    { key: '_driverLabel', header: 'Driver', sortable: true,
+      render: r => r._driverLabel },
+    { key: '_equipmentLabel', header: 'Equipment', sortable: true,
+      render: r => r._equipmentLabel },
+    { key: 'description', header: 'Description', width: '2fr',
+      render: r => <span>{r.description.length > 90 ? r.description.slice(0, 90) + '…' : r.description}</span> },
+    { key: 'status', header: 'Status', width: 110, sortable: true,
+      sortValue: r => r.status,
+      render: r => {
+        const color: 'amber' | 'blue' | 'gray' | 'green' =
+          r.status === 'open'      ? 'amber' :
+          r.status === 'reviewed'  ? 'blue'  :
+          r.status === 'converted' ? 'green' :
+                                     'gray';   // dismissed
+        return <OpsPill color={color}>{r.status}</OpsPill>;
+      } },
+  ];
+
+  const filters: OpsFilter<R>[] = [
+    { kind: 'search', placeholder: 'Search driver, equipment, description…',
+      match: (r, q) => r._driverLabel.toLowerCase().includes(q)
+                    || r._equipmentLabel.toLowerCase().includes(q)
+                    || r.description.toLowerCase().includes(q) },
+    { kind: 'select', key: 'driver',    label: 'Driver',
+      options: buildDriverOptions(drivers),
+      predicate: (r, v) => String(r.driverId) === v },
+    { kind: 'select', key: 'equipment', label: 'Equipment',
+      options: buildEquipmentOptions(assets, trailers),
+      predicate: (r, v) => matchesEquipment(v, r.assetId, r.trailerId) },
+    { kind: 'select', key: 'status',    label: 'Status',
+      options: [
+        { value: 'open',      label: 'Open' },
+        { value: 'reviewed',  label: 'Reviewed' },
+        { value: 'converted', label: 'Converted' },
+        { value: 'dismissed', label: 'Dismissed' },
+      ],
+      predicate: (r, v) => r.status === v },
+  ];
 
   return (
-    <TableShell
+    <OpsTable
+      columns={columns}
+      data={resolvedRows}
+      filters={filters}
       loading={loading}
-      empty={sorted.length === 0}
+      rowKey={r => r.id}
+      onRowClick={r => onOpen(r)}
+      activeRowId={openId}
       emptyLabel="No maintenance reports match the current filters."
-      headers={['Date', 'Driver', 'Equipment', 'Description', 'Status']}
-      count={sorted.length}
-      page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
-    >
-      {pageRows.map(r => {
-        // Prefer API-embedded names (see comment in FuelList).
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const embedded = r as any;
-        const driverLabel = embedded.driverName as string | undefined
-          ?? resolveDriverName(r.driverId, r.submittedBy, driverNameById);
-        const equipmentLabel = (embedded.assetName as string | undefined)
-          ?? (embedded.trailerName ? `Trailer ${embedded.trailerName}` : undefined)
-          ?? resolveEquipmentLabel(r.assetId, r.trailerId, assetLabelById, trailerLabelById);
-        return (
-          <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
-            <Cell><DateCell iso={r.reportedAt} /></Cell>
-            <Cell>{driverLabel}</Cell>
-            <Cell>{equipmentLabel}</Cell>
-            <Cell>
-              <span style={{ color: 'var(--gc-text-1)' }}>
-                {r.description.length > 70 ? r.description.slice(0, 70) + '…' : r.description}
-              </span>
-            </Cell>
-            <Cell><StatusPill status={r.status} /></Cell>
-          </Row>
-        );
-      })}
-    </TableShell>
+      defaultSort={{ key: 'reportedAt', dir: 'desc' }}
+      density="comfortable"
+      countLabel="report"
+    />
   );
 }
 
 // ─── Inspections ──────────────────────────────────────────────────────
 
 function InspectionsList({
-  driverId, equipment, sortDir, onOpen, openId,
+  drivers, assets, trailers, onOpen, openId,
 }: {
-  driverId: number | null;
-  equipment: EquipmentSelection;
-  sortDir: SortDir;
+  drivers: Driver[];
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   onOpen: (r: InspectionRow) => void;
   openId: string | null;
 }) {
   const [rows, setRows] = useState<InspectionRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [defectsOnly, setDefectsOnly] = useState(false);
-  const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [driverId, equipment, sortDir, defectsOnly]);
 
   useEffect(() => {
     setLoading(true);
-    railway.listInspectionReports({
-      limit: 200,
-      defectsOnly,
-      driverId: driverId ?? undefined,
-      assetId:   equipment?.kind === 'asset'   ? equipment.id : undefined,
-      trailerId: equipment?.kind === 'trailer' ? equipment.id : undefined,
-    })
+    railway.listInspectionReports({ limit: 200 })
       .then(r => setRows(r.inspections))
       .catch(err => { console.error('[equipment] inspections:', err); setRows([]); })
       .finally(() => setLoading(false));
-  }, [driverId, equipment, defectsOnly]);
+  }, []);
 
-  const sorted = useMemo(() => {
-    const copy = [...rows];
-    copy.sort((a, b) => sortDir === 'desc'
-      ? b.submittedAt.localeCompare(a.submittedAt)
-      : a.submittedAt.localeCompare(b.submittedAt));
-    return copy;
-  }, [rows, sortDir]);
-  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const columns: OpsColumn<InspectionRow>[] = [
+    { key: 'submittedAt', header: 'Date', width: 120, sortable: true,
+      render: r => <OpsDate iso={r.submittedAt} /> },
+    { key: 'driverName', header: 'Driver', sortable: true,
+      render: r => r.driverName },
+    { key: 'equipment', header: 'Equipment',
+      sortValue: r => equipmentLabel(r.assetName, r.trailerName),
+      render: r => equipmentLabel(r.assetName, r.trailerName) },
+    { key: 'items', header: 'Items', width: 160,
+      render: r => r.hasDefects
+        ? <OpsPill color="red">{r.defectCount} defect{r.defectCount === 1 ? '' : 's'}</OpsPill>
+        : <span className="text-[12px]" style={{ color: '#16a34a' }}>✓ All clear ({r.itemCount})</span>,
+    },
+    { key: 'photos', header: 'Photos', width: 90,
+      sortValue: r => r.photoCount,
+      render: r => r.photoCount > 0
+        ? <OpsPill color="blue">{r.photoCount}</OpsPill>
+        : <OpsMuted />,
+    },
+  ];
 
-  return (
-    <div>
-      <div className="mb-3 flex items-center gap-3">
-        <label className="flex items-center gap-1.5 text-sm cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
-          <input type="checkbox" checked={defectsOnly} onChange={e => setDefectsOnly(e.target.checked)} />
-          Defects only
-        </label>
-      </div>
-      <TableShell
-        loading={loading}
-        empty={sorted.length === 0}
-        emptyLabel={defectsOnly ? 'No inspections with defects match the current filters.' : 'No inspections match the current filters.'}
-        headers={['Date', 'Driver', 'Equipment', 'Items', 'Photos']}
-        count={sorted.length}
-        page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
-      >
-        {pageRows.map(r => (
-          <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
-            <Cell><DateCell iso={r.submittedAt} /></Cell>
-            <Cell>{r.driverName}</Cell>
-            <Cell>{equipmentLabel(r.assetName, r.trailerName)}</Cell>
-            <Cell>
-              {r.hasDefects ? (
-                <Badge color="red" icon={<AlertTriangle size={11} />}>
-                  {r.defectCount} defect{r.defectCount === 1 ? '' : 's'}
-                </Badge>
-              ) : (
-                <span className="text-xs" style={{ color: '#16a34a' }}>✓ All clear ({r.itemCount})</span>
-              )}
-            </Cell>
-            <Cell>
-              {r.photoCount > 0 ? (
-                <Badge color="blue" icon={<Camera size={11} />}>{r.photoCount}</Badge>
-              ) : (
-                <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>—</span>
-              )}
-            </Cell>
-          </Row>
-        ))}
-      </TableShell>
-    </div>
-  );
-}
-
-// ─── Fuel ─────────────────────────────────────────────────────────────
-
-function FuelList({
-  driverId, equipment, sortDir, driverNameById, assetLabelById, onOpen, openId,
-}: {
-  driverId: number | null;
-  equipment: EquipmentSelection;
-  sortDir: SortDir;
-  driverNameById: Map<number, string>;
-  assetLabelById: Map<number, string>;
-  onOpen: (r: FuelReport) => void;
-  openId: string | null;
-}) {
-  const [rows, setRows] = useState<FuelReport[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [driverId, equipment, sortDir]);
-
-  useEffect(() => {
-    setLoading(true);
-    railway.listFuelReports({
-      limit: 200,
-      driverId: driverId ?? undefined,
-      assetId:   equipment?.kind === 'asset' ? equipment.id : undefined,
-      // fuel-reports endpoint doesn't filter by trailerId — fuel ups
-      // are always on a truck. When a trailer filter is active, just
-      // show empty (no fuel rows belong to trailers).
-    })
-      .then(r => setRows(equipment?.kind === 'trailer' ? [] : r.fuelReports))
-      .catch(err => { console.error('[equipment] fuel:', err); setRows([]); })
-      .finally(() => setLoading(false));
-  }, [driverId, equipment]);
-
-  const sorted = useMemo(() => {
-    const copy = [...rows];
-    copy.sort((a, b) => sortDir === 'desc'
-      ? b.reportedAt.localeCompare(a.reportedAt)
-      : a.reportedAt.localeCompare(b.reportedAt));
-    return copy;
-  }, [rows, sortDir]);
-  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const filters: OpsFilter<InspectionRow>[] = [
+    { kind: 'search', placeholder: 'Search driver or equipment…',
+      match: (r, q) => r.driverName.toLowerCase().includes(q)
+                    || (r.assetName ?? '').toLowerCase().includes(q)
+                    || (r.trailerName ?? '').toLowerCase().includes(q) },
+    { kind: 'select', key: 'driver',    label: 'Driver',
+      options: buildDriverOptions(drivers),
+      predicate: (r, v) => String(r.driverId) === v },
+    { kind: 'select', key: 'equipment', label: 'Equipment',
+      options: buildEquipmentOptions(assets, trailers),
+      predicate: (r, v) => matchesEquipment(v, r.assetId ?? undefined, r.trailerId ?? undefined) },
+    { kind: 'select', key: 'defects',   label: 'Show',
+      options: [
+        { value: 'with_defects', label: 'With defects' },
+        { value: 'all_clear',    label: 'All clear' },
+      ],
+      predicate: (r, v) => v === 'with_defects' ? r.hasDefects : !r.hasDefects },
+  ];
 
   return (
-    <TableShell
+    <OpsTable
+      columns={columns}
+      data={rows}
+      filters={filters}
       loading={loading}
-      empty={sorted.length === 0}
-      emptyLabel={equipment?.kind === 'trailer' ? 'Fuel reports are always on trucks — switch the equipment filter.' : 'No fuel reports match the current filters.'}
-      headers={['Date', 'Driver', 'Equipment', 'State', 'Diesel (gal)']}
-      count={sorted.length}
-      page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
-    >
-      {pageRows.map(r => {
-        // Prefer the names the API joined into the response —
-        // they're authoritative and don't depend on a separate
-        // /v1/drivers + /v1/assets fetch having completed yet.
-        // Fall back to the page-level maps (for cached responses)
-        // then to the bare ID as final resort.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const embedded = r as any;
-        const driverLabel = embedded.driverName as string | undefined
-          ?? resolveDriverName(r.driverId, r.submittedBy, driverNameById);
-        const assetLabel  = embedded.assetName as string | undefined
-          ?? assetLabelById.get(r.assetId)
-          ?? `Asset #${r.assetId}`;
-        return (
-          <Row key={r.id} onClick={() => onOpen(r)} active={openId === r.id}>
-            <Cell><DateCell iso={r.reportedAt} /></Cell>
-            <Cell>{driverLabel}</Cell>
-            <Cell>{assetLabel}</Cell>
-            <Cell>{r.state}</Cell>
-            <Cell><span className="font-mono">{r.dieselGallons.toFixed(1)}</span></Cell>
-          </Row>
-        );
-      })}
-    </TableShell>
+      rowKey={r => r.id}
+      onRowClick={r => onOpen(r)}
+      activeRowId={openId}
+      emptyLabel="No inspections match the current filters."
+      defaultSort={{ key: 'submittedAt', dir: 'desc' }}
+      density="comfortable"
+      countLabel="inspection"
+    />
   );
 }
 
-// ─── Fuel tab content (sub-tab toggle wrapping FuelList + FuelTransactionsList) ───
+// ─── Fuel tab content — unified table ────────────────────────────────
 //
-// The Fuel tab has two complementary data sources:
-//   • Driver reports — submitted via the driver app at the pump
-//   • Card transactions — ingested from Mudflap receipt emails
+// Modeled on Matt's my-calendar/fuel.html: one table that lists every
+// fuel-up, where a matched card-transaction + driver-report pair
+// collapses to a single row and stand-alone rows carry a source/
+// status badge.
 //
-// A sub-tab toggle here lets the dispatcher flip between them without
-// leaving the Fuel surface. Both columns share the existing global
-// filters (driver + equipment + sort) so flipping tabs feels like
-// just a different lens on the same data set.
+// Data shape:
+//   • Fetch fuel_reports (driver-submitted) and fuel_transactions
+//     (card receipts) in parallel.
+//   • For each transaction → one row. If transaction.fuelReportId is
+//     set, splice the matching report's data (driver_id → name, asset
+//     → unit) into the row so the dispatcher sees the authoritative
+//     truck/driver, not the free-text receipt printing.
+//   • For each report NOT referenced by any transaction → one row.
+//     That's the "Driver only" case (driver filed at the pump but no
+//     receipt has arrived yet, or never will because the driver paid
+//     out of pocket).
+//
+// Row click opens the panel for whichever side carries the richer
+// info: transaction if present, else the driver report.
 
-type FuelSubTab = 'reports' | 'transactions';
+type FuelRowKind =
+  | 'matched'       // tx + report linked
+  | 'card_only'     // tx with no report
+  | 'driver_only';  // report with no tx
+
+type UnifiedFuelRow = {
+  id:             string;              // tx.id if present, else report.id
+  kind:           FuelRowKind;
+  date:           string;              // ISO — sort key + display
+  driverLabel:    string;
+  assetLabel:     string;
+  location:       string | null;
+  dieselGallons:  number | null;
+  defGallons:     number | null;
+  totalCharged:   number | null;
+  totalSaved:     number | null;
+  // Underlying records — used when the row is clicked open.
+  transaction:    FuelTransaction | null;
+  report:         FuelReport | null;
+};
 
 function FuelTabContent({
-  driverId, equipment, sortDir, driverNameById, assetLabelById,
+  drivers, assets, driverNameById, assetLabelById,
   panel, setPanel,
 }: {
-  driverId: number | null;
-  equipment: EquipmentSelection;
-  sortDir: SortDir;
+  drivers: Driver[];
+  assets: Asset[];
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   panel: PanelData | null;
   setPanel: (p: PanelData | null) => void;
 }) {
-  const [subTab, setSubTab] = useState<FuelSubTab>('reports');
-  return (
-    <div className="flex flex-col" style={{ gap: 12 }}>
-      <div className="flex items-center gap-1" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-        <SubTabButton active={subTab === 'reports'}      onClick={() => setSubTab('reports')}      label="Driver Reports" />
-        <SubTabButton active={subTab === 'transactions'} onClick={() => setSubTab('transactions')} label="Card Transactions" />
-      </div>
-
-      {subTab === 'reports' ? (
-        <FuelList
-          driverId={driverId}
-          equipment={equipment}
-          sortDir={sortDir}
-          driverNameById={driverNameById}
-          assetLabelById={assetLabelById}
-          onOpen={(r) => setPanel({ kind: 'fuel', id: r.id, report: r })}
-          openId={panel?.kind === 'fuel' ? panel.id : null}
-        />
-      ) : (
-        <FuelTransactionsList
-          sortDir={sortDir}
-          onOpen={(t) => setPanel({ kind: 'fuel_transaction', id: t.id, transaction: t })}
-          openId={panel?.kind === 'fuel_transaction' ? panel.id : null}
-        />
-      )}
-    </div>
-  );
-}
-
-function SubTabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className="px-3 py-2 text-[12px] font-semibold transition-colors"
-      style={{
-        color: active ? '#1a73e8' : 'var(--gc-text-3)',
-        borderBottom: active ? '2px solid #1a73e8' : '2px solid transparent',
-        marginBottom: -1,
-      }}>
-      {label}
-    </button>
-  );
-}
-
-// ─── Card transactions list ──────────────────────────────────────────
-//
-// Read-only listing of fuel_transactions ingested from Mudflap.
-// Columns mirror the receipt: date, driver name (as printed on the
-// receipt, not the driver_id lookup), location/station, diesel gal,
-// total $, and a match-status pill showing whether the row is paired
-// with a driver-submitted fuel_report.
-//
-// The global driver / equipment filters don't apply here — card
-// transactions don't carry our driver_id or asset_id fields (the
-// receipt only has free-text driver_name and no truck unit number).
-// Filtering happens via the match-status dropdown at the top of the
-// list instead.
-
-function FuelTransactionsList({
-  sortDir, onOpen, openId,
-}: {
-  sortDir: SortDir;
-  onOpen: (t: FuelTransaction) => void;
-  openId: string | null;
-}) {
-  const [rows, setRows]       = useState<FuelTransaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage]       = useState(0);
-  const [matchFilter, setMatchFilter] =
-    useState<'all' | 'unmatched' | 'auto_matched' | 'manual_matched' | 'no_match_needed'>('all');
-
-  useEffect(() => { setPage(0); }, [matchFilter, sortDir]);
+  const [transactions, setTransactions] = useState<FuelTransaction[]>([]);
+  const [reports, setReports]           = useState<FuelReport[]>([]);
+  const [loading, setLoading]           = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    railway.listFuelTransactions({
-      matchStatus: matchFilter === 'all' ? undefined : matchFilter,
-      limit:       500,
-    })
-      .then(r => setRows(r.fuelTransactions))
-      .catch(err => { console.error('[equipment] fuel-tx:', err); setRows([]); })
-      .finally(() => setLoading(false));
-  }, [matchFilter]);
+    // Both calls in parallel. No server-side filtering — the full
+    // working set comes down and OpsTable handles the filtering and
+    // pagination client-side, which feels instant vs the refetch
+    // round-trip.
+    Promise.all([
+      railway.listFuelTransactions({ limit: 500 }),
+      railway.listFuelReports({ limit: 500 }),
+    ])
+      .then(([tx, fr]) => {
+        if (cancelled) return;
+        setTransactions(tx.fuelTransactions);
+        setReports(fr.fuelReports);
+      })
+      .catch(err => { console.error('[equipment] fuel unified:', err); if (!cancelled) { setTransactions([]); setReports([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
-  const sorted = useMemo(() => {
-    const copy = [...rows];
-    copy.sort((a, b) => sortDir === 'desc'
-      ? b.transactionDate.localeCompare(a.transactionDate)
-      : a.transactionDate.localeCompare(b.transactionDate));
-    return copy;
-  }, [rows, sortDir]);
-  const pageRows = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Build unified rows. Matched transactions splice their paired
+  // report so authoritative driver/asset names win over the receipt's
+  // free-text values. Reports that aren't referenced by any
+  // transaction emit a stand-alone "driver_only" row.
+  const rows: UnifiedFuelRow[] = useMemo(() => {
+    const reportById = new Map<string, FuelReport>();
+    for (const r of reports) reportById.set(r.id, r);
+
+    const out: UnifiedFuelRow[] = [];
+    const consumedReportIds = new Set<string>();
+
+    for (const t of transactions) {
+      const report = t.fuelReportId ? reportById.get(t.fuelReportId) ?? null : null;
+      if (report) consumedReportIds.add(report.id);
+      const kind: FuelRowKind = report ? 'matched' : 'card_only';
+
+      // Driver: prefer the matched report's driver_id → name lookup;
+      // fall back to the receipt's printed driverName.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const reportEmbedded = report as any;
+      const driverLabel = report
+        ? (reportEmbedded?.driverName as string | undefined
+            ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById))
+        : (t.driverName ?? '—');
+      const assetLabel = report
+        ? (reportEmbedded?.assetName as string | undefined
+            ?? assetLabelById.get(report.assetId)
+            ?? `Asset #${report.assetId}`)
+        : (t.matchedTruck ? `#${t.matchedTruck}` : '—');
+
+      out.push({
+        id:            t.id,
+        kind,
+        date:          report?.reportedAt ?? `${t.transactionDate}T12:00:00Z`,
+        driverLabel,
+        assetLabel,
+        location:      t.location ?? null,
+        dieselGallons: t.dieselGallons ?? report?.dieselGallons ?? null,
+        defGallons:    t.defGallons ?? report?.defGallons ?? null,
+        totalCharged:  t.totalCharged ?? null,
+        totalSaved:    t.totalSaved ?? null,
+        transaction:   t,
+        report,
+      });
+    }
+
+    for (const r of reports) {
+      if (consumedReportIds.has(r.id)) continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const embedded = r as any;
+      const driverLabel = embedded.driverName as string | undefined
+        ?? resolveDriverName(r.driverId, r.submittedBy, driverNameById);
+      const assetLabel = embedded.assetName as string | undefined
+        ?? assetLabelById.get(r.assetId)
+        ?? `Asset #${r.assetId}`;
+      out.push({
+        id:            r.id,
+        kind:          'driver_only',
+        date:          r.reportedAt,
+        driverLabel,
+        assetLabel,
+        location:      null,
+        dieselGallons: r.dieselGallons,
+        defGallons:    r.defGallons ?? null,
+        totalCharged:  null,
+        totalSaved:    null,
+        transaction:   null,
+        report:        r,
+      });
+    }
+    return out;
+  }, [transactions, reports, driverNameById, assetLabelById]);
+
+  const counts = useMemo(() => ({
+    matched:     rows.filter(r => r.kind === 'matched').length,
+    card_only:   rows.filter(r => r.kind === 'card_only').length,
+    driver_only: rows.filter(r => r.kind === 'driver_only').length,
+  }), [rows]);
+
+  const openId =
+    panel?.kind === 'fuel_transaction' ? panel.id :
+    panel?.kind === 'fuel'              ? panel.id :
+    null;
+
+  const columns: OpsColumn<UnifiedFuelRow>[] = [
+    { key: 'date',         header: 'Date',       width: 110, sortable: true,
+      render: r => <OpsDate iso={r.date} /> },
+    { key: 'driverLabel',  header: 'Driver',     sortable: true,
+      render: r => r.driverLabel || <OpsMuted /> },
+    { key: 'assetLabel',   header: 'Truck',      width: 140, sortable: true,
+      render: r => r.assetLabel || <OpsMuted /> },
+    { key: 'location',     header: 'Location',   width: '1.4fr',
+      render: r => r.location
+        ? <span title={r.location}>{r.location}</span>
+        : <OpsMuted /> },
+    { key: 'dieselGallons', header: 'Diesel gal', width: 110, align: 'right', sortable: true,
+      sortValue: r => r.dieselGallons ?? -1,
+      render: r => <span className="font-mono">{r.dieselGallons != null ? r.dieselGallons.toFixed(1) : '—'}</span> },
+    { key: 'defGallons',   header: 'DEF gal',    width: 90,  align: 'right', sortable: true,
+      sortValue: r => r.defGallons ?? -1,
+      render: r => <span className="font-mono">{r.defGallons != null && r.defGallons > 0 ? r.defGallons.toFixed(1) : '—'}</span> },
+    { key: 'totalCharged', header: 'Total',      width: 100, align: 'right', sortable: true,
+      sortValue: r => r.totalCharged ?? -1,
+      render: r => <span className="font-mono">{r.totalCharged != null ? `$${r.totalCharged.toFixed(2)}` : '—'}</span> },
+    { key: 'source',       header: 'Source',     width: 130,
+      sortValue: r => r.kind,
+      render: r => <SourceBadge kind={r.kind} transaction={r.transaction} /> },
+  ];
+
+  const filters: OpsFilter<UnifiedFuelRow>[] = [
+    { kind: 'search', placeholder: 'Search driver, truck, location…',
+      match: (r, q) => r.driverLabel.toLowerCase().includes(q)
+                    || r.assetLabel.toLowerCase().includes(q)
+                    || (r.location ?? '').toLowerCase().includes(q) },
+    { kind: 'select', key: 'source', label: 'Source',
+      options: [
+        { value: 'matched',     label: 'Matched',     count: counts.matched },
+        { value: 'card_only',   label: 'Card only',   count: counts.card_only },
+        { value: 'driver_only', label: 'Driver only', count: counts.driver_only },
+      ],
+      predicate: (r, v) => r.kind === v },
+    { kind: 'select', key: 'driver', label: 'Driver',
+      options: buildDriverOptions(drivers),
+      predicate: (r, v) => r.report?.driverId === Number(v) },
+    { kind: 'select', key: 'asset',  label: 'Truck',
+      options: assets
+        .filter(a => !a.activeTo)
+        .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+        .map(a => ({ value: String(a.id), label: `Truck ${a.name}${a.unit ? ` #${a.unit}` : ''}` })),
+      predicate: (r, v) => r.report?.assetId === Number(v) },
+  ];
 
   return (
-    <div className="flex flex-col" style={{ gap: 8 }}>
-      {/* Match-status filter — feels at home above the table.
-          Defaults to All so the dispatcher sees everything; if they
-          want a working queue, they pick Unmatched. */}
-      <div className="flex items-center gap-2 text-[12px]">
-        <span style={{ color: 'var(--gc-text-3)' }}>Match:</span>
-        {([
-          { v: 'all',             label: 'All' },
-          { v: 'unmatched',       label: 'Unmatched' },
-          { v: 'auto_matched',    label: 'Auto' },
-          { v: 'manual_matched',  label: 'Manual' },
-          { v: 'no_match_needed', label: 'No match' },
-        ] as const).map(opt => (
-          <button key={opt.v}
-            onClick={() => setMatchFilter(opt.v)}
-            className="px-2 py-1 rounded transition-colors"
-            style={{
-              border: '1px solid var(--gc-border)',
-              background: matchFilter === opt.v ? '#1a73e8' : 'var(--gc-surface)',
-              color:      matchFilter === opt.v ? '#fff'   : 'var(--gc-text-2)',
-              fontWeight: 600,
-            }}>
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      <TableShell
-        loading={loading}
-        empty={sorted.length === 0}
-        emptyLabel={
-          matchFilter === 'unmatched'
-            ? 'Everything is matched — no card transactions waiting for a driver report.'
-            : 'No card transactions in this filter.'
-        }
-        headers={['Date', 'Driver (on receipt)', 'Location', 'Diesel (gal)', 'Total', 'Match']}
-        count={sorted.length}
-        page={page} pageSize={PAGE_SIZE} onPageChange={setPage}
-      >
-        {pageRows.map(t => (
-          <Row key={t.id} onClick={() => onOpen(t)} active={openId === t.id}>
-            <Cell><DateCell iso={t.transactionDate} /></Cell>
-            <Cell>{t.driverName ?? <Muted>—</Muted>}</Cell>
-            <Cell>{t.location ?? <Muted>—</Muted>}</Cell>
-            <Cell><span className="font-mono">{t.dieselGallons != null ? t.dieselGallons.toFixed(1) : '—'}</span></Cell>
-            <Cell><span className="font-mono">{`$${t.totalCharged.toFixed(2)}`}</span></Cell>
-            <Cell><MatchStatusPill status={t.matchStatus} confidence={t.matchConfidence} /></Cell>
-          </Row>
-        ))}
-      </TableShell>
-    </div>
+    <OpsTable
+      columns={columns}
+      data={rows}
+      filters={filters}
+      loading={loading}
+      rowKey={r => r.id}
+      onRowClick={r => {
+        // Open the richer side: transaction when present (carries $,
+        // location, retail/discount). Report otherwise.
+        if (r.transaction) setPanel({ kind: 'fuel_transaction', id: r.transaction.id, transaction: r.transaction });
+        else if (r.report) setPanel({ kind: 'fuel',             id: r.report.id,      report:      r.report });
+      }}
+      activeRowId={openId}
+      emptyLabel="No fuel activity matches the current filters."
+      defaultSort={{ key: 'date', dir: 'desc' }}
+      density="compact"
+      countLabel="fuel-up"
+    />
   );
 }
 
-function Muted({ children }: { children: React.ReactNode }) {
-  return <span style={{ color: 'var(--gc-text-3)' }}>{children}</span>;
+// One source-of-truth badge per row. Matched rows surface the
+// underlying match type (auto / manual) so the dispatcher knows
+// whether to trust it; card-only and driver-only rows are work to do.
+function SourceBadge({
+  kind, transaction,
+}: {
+  kind: FuelRowKind;
+  transaction: FuelTransaction | null;
+}) {
+  if (kind === 'matched') {
+    const ms = transaction?.matchStatus;
+    return ms === 'manual_matched'
+      ? <OpsPill color="blue">Manual match</OpsPill>
+      : <OpsPill color="green">{ms === 'auto_matched' ? 'Auto-matched' : 'Matched'}</OpsPill>;
+  }
+  if (kind === 'card_only')   return <OpsPill color="amber">Card only</OpsPill>;
+  return <OpsPill color="purple">Driver only</OpsPill>;
 }
 
+// Granular transaction match-status pill — used inside the open
+// transaction detail panel (where the unified table's SourceBadge
+// would be too coarse: the panel cares about auto vs manual vs no-
+// match-needed, and the confidence score). The unified table
+// itself uses SourceBadge instead.
 function MatchStatusPill({
   status, confidence,
 }: {
@@ -793,6 +741,33 @@ function MatchStatusPill({
     <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-bold uppercase tracking-wider"
       style={{ background: tint.bg, color: tint.fg }}>
       {tint.label}
+    </span>
+  );
+}
+
+// ─── Detail-panel helpers ─────────────────────────────────────────────
+// These are used inside the still-bespoke DetailPanel JSX (not the
+// list — the list uses OpsMuted/OpsPill from the OpsTable primitive).
+// Kept local because the detail panel will eventually want its own
+// design pass too; folding these into OpsTable now would couple
+// concerns prematurely.
+
+function Muted({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: 'var(--gc-text-3)' }}>{children}</span>;
+}
+
+function StatusPill({ status }: { status: string }) {
+  const map: Record<string, { bg: string; fg: string }> = {
+    open:      { bg: '#fef3c7', fg: '#92400e' },
+    reviewed:  { bg: '#dbeafe', fg: '#1e40af' },
+    dismissed: { bg: '#f3f4f6', fg: '#374151' },
+    converted: { bg: '#d1fae5', fg: '#065f46' },
+  };
+  const p = map[status] ?? { bg: '#f3f4f6', fg: '#374151' };
+  return (
+    <span className="inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded"
+      style={{ background: p.bg, color: p.fg }}>
+      {status.replace('_', ' ')}
     </span>
   );
 }
@@ -1789,127 +1764,6 @@ function MediaSidePanel({ media, onClose }: { media: MediaList; onClose: () => v
 // rendering inside TwoColumnBody (left column) plus the
 // MediaSidePanel that opens to the right of the main panel for
 // full-size browsing.
-
-// ─── Table primitives ────────────────────────────────────────────────
-
-function TableShell({
-  loading, empty, emptyLabel, headers, count, children,
-  page, pageSize, onPageChange,
-}: {
-  loading: boolean; empty: boolean; emptyLabel: string; headers: string[]; count: number; children: React.ReactNode;
-  page: number; pageSize: number; onPageChange: (p: number) => void;
-}) {
-  const totalPages = Math.max(1, Math.ceil(count / pageSize));
-  const from = count === 0 ? 0 : page * pageSize + 1;
-  const to   = Math.min(count, (page + 1) * pageSize);
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2 text-xs" style={{ color: 'var(--gc-text-3)' }}>
-        <span>{loading ? 'Loading…' : `${count} ${count === 1 ? 'report' : 'reports'}`}</span>
-        {!loading && !empty && totalPages > 1 && (
-          <span>Showing {from}–{to}</span>
-        )}
-      </div>
-      <div className="rounded-lg overflow-hidden border" style={{ background: 'var(--gc-panel-bg)', borderColor: 'var(--gc-border)' }}>
-        <div className="grid items-center text-[10px] font-bold uppercase tracking-wider px-4 py-2 border-b"
-          style={{ gridTemplateColumns: `repeat(${headers.length}, minmax(0, 1fr))`, borderColor: 'var(--gc-border)', color: 'var(--gc-text-3)' }}>
-          {headers.map((h, i) => <span key={i}>{h}</span>)}
-        </div>
-        {loading ? (
-          <div className="py-16 flex items-center justify-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
-            <Loader2 size={16} className="animate-spin" />
-          </div>
-        ) : empty ? (
-          <div className="py-16 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>{emptyLabel}</div>
-        ) : children}
-      </div>
-      {!loading && !empty && totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2 mt-3">
-          <button
-            onClick={() => onPageChange(Math.max(0, page - 1))}
-            disabled={page === 0}
-            className="text-sm font-semibold px-3 py-1.5 rounded transition-colors"
-            style={{
-              background: page === 0 ? 'transparent' : 'var(--gc-panel-bg)',
-              color: page === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
-              border: '1px solid var(--gc-border)',
-              cursor: page === 0 ? 'default' : 'pointer',
-              opacity: page === 0 ? 0.5 : 1,
-            }}
-          >‹ Previous</button>
-          <span className="text-xs px-2" style={{ color: 'var(--gc-text-3)' }}>
-            Page {page + 1} of {totalPages}
-          </span>
-          <button
-            onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))}
-            disabled={page >= totalPages - 1}
-            className="text-sm font-semibold px-3 py-1.5 rounded transition-colors"
-            style={{
-              background: page >= totalPages - 1 ? 'transparent' : 'var(--gc-panel-bg)',
-              color: page >= totalPages - 1 ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
-              border: '1px solid var(--gc-border)',
-              cursor: page >= totalPages - 1 ? 'default' : 'pointer',
-              opacity: page >= totalPages - 1 ? 0.5 : 1,
-            }}
-          >Next ›</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Row({ onClick, active, cols = 5, children }: { onClick: () => void; active: boolean; cols?: number; children: React.ReactNode }) {
-  return (
-    <div
-      onClick={onClick}
-      className="grid items-center px-4 py-2.5 border-b cursor-pointer transition-colors"
-      style={{
-        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-        borderColor: 'var(--gc-border-light)',
-        background: active ? 'var(--gc-blue-light)' : 'transparent',
-      }}
-      onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-      onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function Cell({ children }: { children: React.ReactNode }) {
-  return <div className="text-sm truncate pr-2" style={{ color: 'var(--gc-text-1)' }}>{children}</div>;
-}
-
-function DateCell({ iso }: { iso: string }) {
-  const d = new Date(iso);
-  return (
-    <div>
-      <div>{d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</div>
-      <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
-    </div>
-  );
-}
-
-function Badge({ color, icon, children }: { color: 'red' | 'blue' | 'green'; icon?: React.ReactNode; children: React.ReactNode }) {
-  const palette = color === 'red'   ? { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }
-              : color === 'green' ? { bg: '#f0fdf4', fg: '#166534', border: '#bbf7d0' }
-              :                     { bg: '#eff6ff', fg: '#1e40af', border: '#bfdbfe' };
-  return (
-    <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: palette.bg, color: palette.fg, border: `1px solid ${palette.border}` }}>
-      {icon}{children}
-    </span>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const map: Record<string, { bg: string; fg: string }> = {
-    open:        { bg: '#fef3c7', fg: '#92400e' },
-    in_progress: { bg: '#dbeafe', fg: '#1e40af' },
-    done:        { bg: '#d1fae5', fg: '#065f46' },
-  };
-  const p = map[status] ?? { bg: '#f3f4f6', fg: '#374151' };
-  return <span className="inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded" style={{ background: p.bg, color: p.fg }}>{status.replace('_', ' ')}</span>;
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
