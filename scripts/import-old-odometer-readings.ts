@@ -1,51 +1,47 @@
 /**
  * One-time import: copy historical odometer readings from a CSV
- * (exported from the my-calendar database) into the FleetCal
- * fleet. Maps the old uuid asset ids to the new bigint asset ids
- * by matching the asset's `unit` number — works for any carrier
- * whose old + new systems keep unit numbers consistent.
+ * (exported from the my-calendar database) into FleetCal.
  *
- * Auth strategy:
- *   • Old Supabase reads        — publishable anon key (RLS off on
- *                                  old project, fine for read-only).
- *   • FleetCal asset lookup     — Clerk bearer (one-shot, ~1 sec call).
- *   • FleetCal import endpoint  — long-lived org API key with the
- *                                  'odometer.import' scope. Use this
- *                                  for the bulk write so token TTL
- *                                  isn't a concern.
+ * Maps old-system uuid asset ids to FleetCal assets by going through
+ * unit numbers (which both systems share). The flow:
+ *
+ *   1. Read CSV → collect distinct old asset uuids.
+ *   2. Query old Supabase to resolve each uuid → unit number.
+ *   3. POST to /v1/odometer-readings/import sending `{ unit, miles,
+ *      capturedAt }`. The API resolves unit → FleetCal asset_id
+ *      server-side (no Clerk needed).
+ *
+ * Auth:
+ *   • Old Supabase reads — publishable anon key (RLS off, read-only).
+ *   • FleetCal import     — long-lived org API key with scope
+ *                            'odometer.import'. No Clerk bearer
+ *                            required.
  *
  * Usage:
- *   ODOMETER_CSV=/Users/thema/Downloads/odometer_readings_rows.csv \
- *   OLD_SUPA_URL="https://vgglyebsbbgooqmguzmi.supabase.co" \
- *   OLD_SUPA_KEY="<old publishable key>" \
- *   FLEETCAL_API_URL="https://fleetcalapi-production.up.railway.app" \
- *   FLEETCAL_API_KEY="fck_..." \
- *   FLEETCAL_CLERK_BEARER="eyJ..." \
+ *   ODOMETER_CSV=/path/to/csv \
+ *   OLD_SUPA_URL=... OLD_SUPA_KEY=... \
+ *   FLEETCAL_API_URL=https://fleetcalapi-production.up.railway.app \
+ *   FLEETCAL_API_KEY=fck_... \
  *   npx tsx scripts/import-old-odometer-readings.ts
- *
- * Idempotency: the endpoint dedups on (asset_id, calendar_day_utc).
- * Re-running after a partial failure picks up where it left off.
  */
 
 import { readFileSync } from "node:fs";
 
-const ODOMETER_CSV         = process.env.ODOMETER_CSV;
-const OLD_SUPA_URL         = process.env.OLD_SUPA_URL || "https://vgglyebsbbgooqmguzmi.supabase.co";
-const OLD_SUPA_KEY         = process.env.OLD_SUPA_KEY;
-const FLEETCAL_API_URL     = process.env.FLEETCAL_API_URL;
-const FLEETCAL_API_KEY     = process.env.FLEETCAL_API_KEY;
-const FLEETCAL_CLERK_BEARER = process.env.FLEETCAL_CLERK_BEARER;
+const ODOMETER_CSV     = process.env.ODOMETER_CSV;
+const OLD_SUPA_URL     = process.env.OLD_SUPA_URL || "https://vgglyebsbbgooqmguzmi.supabase.co";
+const OLD_SUPA_KEY     = process.env.OLD_SUPA_KEY;
+const FLEETCAL_API_URL = process.env.FLEETCAL_API_URL;
+const FLEETCAL_API_KEY = process.env.FLEETCAL_API_KEY;
 
 function fail(msg: string): never {
   console.error(msg);
   process.exit(1);
 }
 
-if (!ODOMETER_CSV)          fail("ODOMETER_CSV (path to CSV file) required");
-if (!OLD_SUPA_KEY)          fail("OLD_SUPA_KEY required");
-if (!FLEETCAL_API_URL)      fail("FLEETCAL_API_URL required");
-if (!FLEETCAL_API_KEY)      fail("FLEETCAL_API_KEY required (must carry scope 'odometer.import')");
-if (!FLEETCAL_CLERK_BEARER) fail("FLEETCAL_CLERK_BEARER required (for one-time asset lookup — see header)");
+if (!ODOMETER_CSV)     fail("ODOMETER_CSV (path to CSV file) required");
+if (!OLD_SUPA_KEY)     fail("OLD_SUPA_KEY required");
+if (!FLEETCAL_API_URL) fail("FLEETCAL_API_URL required");
+if (!FLEETCAL_API_KEY) fail("FLEETCAL_API_KEY required (scope: odometer.import)");
 
 // ── CSV parsing ───────────────────────────────────────────────────────
 
@@ -60,12 +56,8 @@ function parseCsv(path: string): CsvRow[] {
   const raw = readFileSync(path, "utf8");
   const lines = raw.split(/\r?\n/).filter(Boolean);
   // Header: id, asset_id, miles, recorded_at, notes, created_at
-  // We only need asset_id (uuid), miles, recorded_at, notes.
   const rows: CsvRow[] = [];
   for (let i = 1; i < lines.length; i++) {
-    // Naive CSV split — notes column doesn't contain commas in the
-    // sample. If a future CSV has quoted commas, swap this for a
-    // real CSV parser.
     const parts = lines[i].split(",");
     if (parts.length < 6) continue;
     rows.push({
@@ -78,7 +70,7 @@ function parseCsv(path: string): CsvRow[] {
   return rows;
 }
 
-// ── Mapping helpers ───────────────────────────────────────────────────
+// ── Old-system asset lookup ───────────────────────────────────────────
 
 async function fetchOldAssetUnits(uuids: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -98,29 +90,12 @@ async function fetchOldAssetUnits(uuids: string[]): Promise<Map<string, string>>
   return out;
 }
 
-async function fetchFleetcalAssetsByUnit(): Promise<Map<string, number>> {
-  const res = await fetch(`${FLEETCAL_API_URL}/v1/assets`, {
-    headers: {
-      Authorization: `Bearer ${FLEETCAL_CLERK_BEARER}`,
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`fleetcal assets fetch ${res.status}: ${await res.text()} — your bearer is probably expired; grab a fresh one (await window.Clerk.session.getToken() in the browser console) and retry`);
-  }
-  const body = (await res.json()) as { assets: Array<{ id: number; unit: string | null; name: string }> };
-  const m = new Map<string, number>();
-  for (const a of body.assets) {
-    if (a.unit) m.set(a.unit, a.id);
-  }
-  return m;
-}
-
 // ── Import ────────────────────────────────────────────────────────────
 
 interface ImportReading {
-  assetId:      number;
+  unit:          string;
   odometerMiles: number;
-  capturedAt:   string;     // ISO timestamp
+  capturedAt:    string;
 }
 
 interface ImportResponse {
@@ -155,48 +130,26 @@ async function main() {
   const uuidToUnit = await fetchOldAssetUnits(distinctUuids);
   console.log(`  resolved ${uuidToUnit.size} units`);
 
-  console.log("Looking up FleetCal assets by unit…");
-  const unitToAssetId = await fetchFleetcalAssetsByUnit();
-  console.log(`  ${unitToAssetId.size} assets in FleetCal`);
-
-  // Build the final uuid → FleetCal asset_id map. Print unmatched
-  // units so the user knows what to fix on the FleetCal side.
-  const uuidToAssetId = new Map<string, number>();
-  const unmatched: Array<{ uuid: string; unit: string }> = [];
-  for (const [uuid, unit] of uuidToUnit) {
-    const id = unitToAssetId.get(unit);
-    if (id != null) uuidToAssetId.set(uuid, id);
-    else unmatched.push({ uuid, unit });
-  }
-
-  if (unmatched.length > 0) {
-    console.log("\nWARNING — these old assets don't have a FleetCal counterpart with the same unit number:");
-    for (const u of unmatched) {
-      console.log(`  uuid=${u.uuid}  unit=${u.unit}`);
-    }
-    console.log("Their readings will be skipped. Add the assets in FleetCal with matching unit numbers if you want them imported.\n");
-  }
-
-  // Translate rows to import payloads.
+  // Build payload — send by unit, server resolves to asset_id.
   const payload: ImportReading[] = [];
   const skipped: Array<{ row: CsvRow; reason: string }> = [];
   for (const r of rows) {
-    const assetId = uuidToAssetId.get(r.asset_uuid);
-    if (assetId == null) { skipped.push({ row: r, reason: "no asset match" }); continue; }
+    const unit = uuidToUnit.get(r.asset_uuid);
+    if (!unit) { skipped.push({ row: r, reason: "no unit for old uuid" }); continue; }
     if (!Number.isFinite(r.miles) || r.miles <= 0) { skipped.push({ row: r, reason: "bad miles" }); continue; }
     if (!r.recorded_at) { skipped.push({ row: r, reason: "no date" }); continue; }
     payload.push({
-      assetId,
+      unit,
       odometerMiles: r.miles,
       capturedAt:    new Date(`${r.recorded_at}T00:00:00.000Z`).toISOString(),
     });
   }
 
-  console.log(`\nPayload ready: ${payload.length} readings to import (${skipped.length} skipped)`);
+  console.log(`\nPayload: ${payload.length} readings (${skipped.length} skipped pre-flight)`);
 
   const BATCH_SIZE = 200;
-  let inserted = 0;
-  let duplicates = 0;
+  let inserted    = 0;
+  let duplicates  = 0;
   let outOfWindow = 0;
   const failed: Array<{ identifier: string; error: string }> = [];
 
@@ -211,9 +164,9 @@ async function main() {
     failed.push(...r.failed);
   }
 
-  console.log(`\nDone.\n  inserted:     ${inserted}\n  duplicates:   ${duplicates}\n  out-of-window: ${outOfWindow}\n  failed:       ${failed.length}\n  skipped:      ${skipped.length}`);
+  console.log(`\nDone.\n  inserted:      ${inserted}\n  duplicates:    ${duplicates}\n  out-of-window: ${outOfWindow}\n  failed:        ${failed.length}\n  skipped:       ${skipped.length}`);
   if (failed.length > 0) {
-    console.log("\nFailed:");
+    console.log("\nFailed sample:");
     for (const f of failed.slice(0, 20)) console.log(`  ${f.identifier}: ${f.error}`);
     if (failed.length > 20) console.log(`  …and ${failed.length - 20} more`);
   }

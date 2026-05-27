@@ -79,9 +79,12 @@ async function bulkImportHandler(c: any): Promise<Response> {
   // doesn't fire 2000 queries.
   const wantedAssetIds  = new Set<number>();
   const wantedMotiveIds = new Set<string>();
+  const wantedUnits     = new Set<string>();
   for (const r of body.readings) {
     if (r.assetId)              wantedAssetIds.add(r.assetId);
     else if (r.motiveVehicleId) wantedMotiveIds.add(String(r.motiveVehicleId));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    else if ((r as any).unit)   wantedUnits.add(String((r as any).unit));
   }
 
   type AssetInfo = {
@@ -93,6 +96,20 @@ async function bulkImportHandler(c: any): Promise<Response> {
   };
   const assetById       = new Map<number, AssetInfo>();
   const assetByMotiveId = new Map<string, AssetInfo>();
+  const assetByUnit     = new Map<string, AssetInfo>();
+
+  function indexAsset(a: { id: number; motive_vehicle_id: string | null; unit: string | null; active_from: string | null; active_to: string | null }) {
+    const info: AssetInfo = {
+      id:          a.id,
+      motive_id:   a.motive_vehicle_id,
+      unit:        a.unit,
+      active_from: a.active_from,
+      active_to:   a.active_to,
+    };
+    assetById.set(a.id, info);
+    if (a.motive_vehicle_id) assetByMotiveId.set(a.motive_vehicle_id, info);
+    if (a.unit)              assetByUnit.set(a.unit, info);
+  }
 
   if (wantedAssetIds.size > 0) {
     const { data, error } = await supabase
@@ -102,15 +119,7 @@ async function bulkImportHandler(c: any): Promise<Response> {
       .in("id", Array.from(wantedAssetIds));
     if (error) return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
     for (const a of (data ?? []) as Array<{ id: number; motive_vehicle_id: string | null; unit: string | null; active_from: string | null; active_to: string | null }>) {
-      const info: AssetInfo = {
-        id:          a.id,
-        motive_id:   a.motive_vehicle_id,
-        unit:        a.unit,
-        active_from: a.active_from,
-        active_to:   a.active_to,
-      };
-      assetById.set(a.id, info);
-      if (a.motive_vehicle_id) assetByMotiveId.set(a.motive_vehicle_id, info);
+      indexAsset(a);
     }
   }
   if (wantedMotiveIds.size > 0) {
@@ -121,15 +130,18 @@ async function bulkImportHandler(c: any): Promise<Response> {
       .in("motive_vehicle_id", Array.from(wantedMotiveIds));
     if (error) return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
     for (const a of (data ?? []) as Array<{ id: number; motive_vehicle_id: string | null; unit: string | null; active_from: string | null; active_to: string | null }>) {
-      const info: AssetInfo = {
-        id:          a.id,
-        motive_id:   a.motive_vehicle_id,
-        unit:        a.unit,
-        active_from: a.active_from,
-        active_to:   a.active_to,
-      };
-      assetById.set(a.id, info);
-      if (a.motive_vehicle_id) assetByMotiveId.set(a.motive_vehicle_id, info);
+      indexAsset(a);
+    }
+  }
+  if (wantedUnits.size > 0) {
+    const { data, error } = await supabase
+      .from("assets")
+      .select("id, motive_vehicle_id, unit, active_from, active_to")
+      .eq("org_id", orgId)
+      .in("unit", Array.from(wantedUnits));
+    if (error) return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    for (const a of (data ?? []) as Array<{ id: number; motive_vehicle_id: string | null; unit: string | null; active_from: string | null; active_to: string | null }>) {
+      indexAsset(a);
     }
   }
 
@@ -139,16 +151,21 @@ async function bulkImportHandler(c: any): Promise<Response> {
   const failed: BulkImportOdometerReadingsResponse["failed"] = [];
 
   for (const r of body.readings) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const unitVal = (r as any).unit ? String((r as any).unit) : null;
     const identifier = r.assetId
       ? `asset:${r.assetId}@${r.capturedAt}`
       : r.motiveVehicleId
         ? `motive:${r.motiveVehicleId}@${r.capturedAt}`
-        : `(no id)@${r.capturedAt}`;
+        : unitVal
+          ? `unit:${unitVal}@${r.capturedAt}`
+          : `(no id)@${r.capturedAt}`;
 
     // Resolve asset.
     let asset: AssetInfo | undefined;
-    if (r.assetId)            asset = assetById.get(r.assetId);
+    if (r.assetId)              asset = assetById.get(r.assetId);
     else if (r.motiveVehicleId) asset = assetByMotiveId.get(String(r.motiveVehicleId));
+    else if (unitVal)           asset = assetByUnit.get(unitVal);
 
     if (!asset) {
       failed.push({ identifier, error: "asset not found in this org" });

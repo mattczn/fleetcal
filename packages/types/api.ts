@@ -1239,10 +1239,14 @@ export type { FuelTransactionMatchStatus, FuelTransactionProvider };
  */
 export interface BulkImportOdometerReadingsRequest {
   readings: Array<{
-    /** At least ONE of assetId / motiveVehicleId must be set. If both
-     *  are present, we trust assetId. */
+    /** At least ONE of assetId / motiveVehicleId / unit must be set.
+     *  Priority: assetId > motiveVehicleId > unit. `unit` matches
+     *  against assets.unit (the truck door number), which is the
+     *  easiest identifier when importing from an external system
+     *  that doesn't know our FleetCal asset ids. */
     assetId?:         number;
     motiveVehicleId?: number;
+    unit?:            string;
     /** Number on the vehicle's door / unit. Stored as label fallback
      *  if we don't have it via the asset lookup. */
     vehicleNumber?:   string;
