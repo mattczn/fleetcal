@@ -426,6 +426,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   async function handleRelease() {
     if (!current || busy) return;
+    // Idempotency guard — once a load is released, clicking again
+    // (or hitting the R hotkey) should be a no-op rather than
+    // re-stamping verified_at and bumping the audit trail. The
+    // accounting workflow takes over from here.
+    if (current.billingStatus === 'verified'
+      || current.billingStatus === 'invoiced'
+      || current.billingStatus === 'paid') {
+      return;
+    }
     // Required-doc gate runs inside the click handler — putting it in
     // the button's `disabled` prop fires the confirm() on every render.
     if (!requiredPass) {
@@ -1719,15 +1728,46 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               )}
             </div>
 
-            {/* Action buttons */}
+            {/* Action buttons. The release CTA flips to a passive
+                "Released" stamp once the load's billing_status leaves
+                the 'pending' state — re-clicking would re-stamp the
+                verified_at timestamp and add noise to the audit trail. */}
             <div className="shrink-0 px-4 py-4 space-y-2" style={{ background: 'var(--gc-bg)' }}>
-              <button onClick={() => void handleRelease()} disabled={busy}
-                className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
-                style={{ background: '#15803d', color: '#fff', padding: '10px 14px' }}
-                title={requiredPass ? 'Release for invoicing' : 'Required docs missing — confirm before releasing'}>
-                <CheckCircle2 size={15} /> Release for invoicing
-                <span className="text-[10px] font-mono opacity-70 ml-1">R</span>
-              </button>
+              {(current.billingStatus === 'verified'
+                || current.billingStatus === 'invoiced'
+                || current.billingStatus === 'paid') ? (
+                <div
+                  className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold"
+                  style={{
+                    background: '#dcfce7',
+                    color:      '#166534',
+                    border:     '1px solid #bbf7d0',
+                    padding:    '10px 14px',
+                  }}
+                  title={
+                    current.billingStatus === 'paid'      ? 'Already paid'
+                    : current.billingStatus === 'invoiced' ? 'Invoice sent — see accounting'
+                    : 'Released to accounting'
+                  }>
+                  <CheckCircle2 size={15} />
+                  {current.billingStatus === 'paid'      ? 'Paid'
+                  : current.billingStatus === 'invoiced' ? 'Invoiced'
+                  : 'Released'}
+                  {current.verifiedAt && (
+                    <span className="text-[11px] font-normal opacity-75">
+                      · {new Date(current.verifiedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <button onClick={() => void handleRelease()} disabled={busy}
+                  className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
+                  style={{ background: '#15803d', color: '#fff', padding: '10px 14px' }}
+                  title={requiredPass ? 'Release for invoicing' : 'Required docs missing — confirm before releasing'}>
+                  <CheckCircle2 size={15} /> Release for invoicing
+                  <span className="text-[10px] font-mono opacity-70 ml-1">R</span>
+                </button>
+              )}
               <button onClick={() => setShowFlag(true)} disabled={busy}
                 className="w-full flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
                 style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '10px 14px' }}>

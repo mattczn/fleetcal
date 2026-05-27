@@ -665,10 +665,14 @@ function InspectionsCalendar({
     return m;
   }, [rows]);
 
-  // Active (non-retired) trucks in dispatcher's preferred order.
+  // Active (non-retired, non-hidden) trucks in dispatcher's preferred
+  // order. The "Unassigned" placeholder bucket (used elsewhere in the
+  // app as a column for unbooked loads) isn't a real truck — exclude
+  // it explicitly the same way AssetsModal does.
   const visibleAssets = useMemo(() => {
     return [...assets]
       .filter(a => !a.activeTo && !a.hidden)
+      .filter(a => a.name !== 'Unassigned' && a.type !== 'Unassigned')
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   }, [assets]);
 
@@ -773,15 +777,15 @@ function InspectionsCalendar({
                   const isToday = ymdKey(d) === todayKey;
                   return (
                     <th key={ymdKey(d)}
-                      className="text-center text-[11px] font-extrabold uppercase tracking-wider px-2 py-2"
+                      className="text-center text-[12px] font-extrabold uppercase tracking-wider px-2 py-3"
                       style={{
                         color:      isToday ? 'var(--gc-blue)' : 'var(--gc-text-3)',
                         background: isToday ? 'rgba(26,115,232,0.06)' : undefined,
                         borderBottom: '1px solid var(--gc-border-light)',
-                        minWidth: 76,
+                        minWidth: 88,
                       }}>
                       <div>{DAY_LABELS[d.getDay() === 6 ? 0 : d.getDay() + 1]}</div>
-                      <div className="text-[14px] font-bold mt-0.5" style={{ color: isToday ? 'var(--gc-blue)' : 'var(--gc-text-1)' }}>
+                      <div className="text-[20px] font-extrabold mt-1" style={{ color: isToday ? 'var(--gc-blue)' : 'var(--gc-text-1)' }}>
                         {d.getDate()}
                       </div>
                     </th>
@@ -792,19 +796,26 @@ function InspectionsCalendar({
             <tbody>
               {visibleAssets.map(a => (
                 <tr key={a.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                  <td className="sticky left-0 z-10 px-3 py-2.5"
+                  <td className="sticky left-0 z-10 px-3 py-3"
                     style={{ background: 'var(--gc-surface)', borderRight: '1px solid var(--gc-border-light)' }}>
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Truck size={14} style={{ color: a.color || 'var(--gc-text-3)', flexShrink: 0 }} />
-                      <div className="min-w-0">
-                        <div className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                          {a.name}
-                        </div>
-                        {a.unit && (
-                          <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-                            #{a.unit}
-                          </div>
-                        )}
+                    <div className="flex items-center gap-3 min-w-0">
+                      {/* Colored chip — asset.color as background, white
+                          truck inside. Mirrors the calendar's asset
+                          color pills so trucks read consistently across
+                          the app. */}
+                      <div
+                        className="flex items-center justify-center flex-shrink-0"
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 10,
+                          background: a.color || 'var(--gc-text-3)',
+                          boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+                        }}>
+                        <Truck size={20} color="#fff" strokeWidth={2.5} />
+                      </div>
+                      <div className="text-[15px] font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                        {a.name}
                       </div>
                     </div>
                   </td>
@@ -852,8 +863,15 @@ function InspectionsCalendar({
   );
 }
 
-/** One cell in the inspections grid. Pure-presentational — all state
- *  + click routing lives in the parent so this can stay dumb. */
+/** One cell in the inspections grid. Status drives a filled chip:
+ *  - clear  → light-green chip with bold green check (Google-y),
+ *             tinted #34a853-family
+ *  - defect → light-red chip with bold red alert, tinted #ea4335-family
+ *  - none   → quiet em-dash so empty days fade into the background
+ *
+ *  Counts > 1 render as a small circular badge in the top-right corner
+ *  of the chip — same visual idiom as iOS app-icon badges. Pure-
+ *  presentational; click routing lives in the parent. */
 function CalendarCell({
   status, count, selected, onClick,
 }: {
@@ -862,23 +880,30 @@ function CalendarCell({
   selected: boolean;
   onClick: () => void;
 }) {
-  const dotColor =
-    status === 'clear'  ? '#16a34a' :
-    status === 'defect' ? '#dc2626' : null;
   const interactive = status !== 'none';
+
+  // Google palette — chip background is the light tint, icon + badge
+  // are the saturated production color. Saturation reads loud at a
+  // distance which is the whole point of the coverage grid.
+  const palette = status === 'clear'
+    ? { chipBg: '#e6f4ea', icon: '#1e8e3e', badgeBg: '#1e8e3e' }
+    : status === 'defect'
+    ? { chipBg: '#fce8e6', icon: '#d93025', badgeBg: '#d93025' }
+    : null;
+
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!interactive}
-      className="flex items-center justify-center gap-1 w-full h-full transition-colors"
+      className="flex items-center justify-center w-full h-full transition-colors"
       style={{
-        minHeight:   44,
-        padding:     '8px 4px',
-        cursor:      interactive ? 'pointer' : 'default',
-        background:  selected ? 'var(--gc-blue-light)' : 'transparent',
-        border:      'none',
-        outline:     selected ? '2px solid var(--gc-blue)' : undefined,
+        minHeight: 60,
+        padding:   '8px 6px',
+        cursor:    interactive ? 'pointer' : 'default',
+        background: selected ? 'var(--gc-blue-light)' : 'transparent',
+        border: 'none',
+        outline: selected ? '2px solid var(--gc-blue)' : undefined,
         outlineOffset: selected ? '-2px' : undefined,
       }}
       onMouseEnter={e => { if (interactive && !selected) e.currentTarget.style.background = 'var(--gc-hover)'; }}
@@ -889,16 +914,39 @@ function CalendarCell({
       :                       (count > 1 ? `${count} inspections — defects logged` : 'Defects logged')
       }>
       {status === 'none' ? (
-        <span className="text-[14px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
-      ) : status === 'clear' ? (
-        <CheckCircle2 size={16} style={{ color: dotColor! }} />
+        <span className="text-[18px]" style={{ color: 'var(--gc-text-3)', opacity: 0.5 }}>—</span>
       ) : (
-        <AlertCircle size={16} style={{ color: dotColor! }} />
-      )}
-      {count > 1 && (
-        <span className="text-[10px] font-bold" style={{ color: 'var(--gc-text-2)' }}>
-          ×{count}
-        </span>
+        <div
+          className="relative flex items-center justify-center"
+          style={{
+            width:        40,
+            height:       40,
+            borderRadius: 12,
+            background:   palette!.chipBg,
+            boxShadow:    '0 1px 2px rgba(0,0,0,0.06)',
+          }}>
+          {status === 'clear'
+            ? <CheckCircle2 size={22} color={palette!.icon} strokeWidth={2.5} />
+            : <AlertCircle  size={22} color={palette!.icon} strokeWidth={2.5} />}
+          {count > 1 && (
+            <span
+              className="absolute flex items-center justify-center text-[10px] font-extrabold"
+              style={{
+                top:        -4,
+                right:      -6,
+                minWidth:   18,
+                height:     18,
+                padding:    '0 4px',
+                borderRadius: 9,
+                background: palette!.badgeBg,
+                color:      '#fff',
+                border:     '2px solid var(--gc-surface)',
+                boxShadow:  '0 1px 2px rgba(0,0,0,0.18)',
+              }}>
+              {count}
+            </span>
+          )}
+        </div>
       )}
     </button>
   );
@@ -955,24 +1003,31 @@ function InspectionPickerPopover({
         </div>
         {list.map(r => {
           const time = new Date(r.submittedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+          // Subtitle reads as "Pablo Bernal — 1 defect" or "Julio
+          // Bello — All Clear". Item count was technically true info
+          // but noisy: dispatchers care about pass/fail, not the
+          // raw checklist length.
+          const statusText = r.hasDefects
+            ? `${r.defectCount} defect${r.defectCount === 1 ? '' : 's'}`
+            : 'All Clear';
           return (
             <button
               key={r.id}
               type="button"
               onClick={() => onPick(r)}
-              className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded transition-colors"
+              className="w-full flex items-center gap-2 text-left px-2 py-2 rounded transition-colors"
               style={{ background: 'transparent' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
               {r.hasDefects
-                ? <AlertCircle size={13} style={{ color: '#dc2626', flexShrink: 0 }} />
-                : <CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} />}
+                ? <AlertCircle size={14} style={{ color: '#d93025', flexShrink: 0 }} />
+                : <CheckCircle2 size={14} style={{ color: '#1e8e3e', flexShrink: 0 }} />}
               <div className="flex-1 min-w-0">
-                <div className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                  {time}
+                <div className="text-[13px] font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                  {r.driverName} — {statusText}
                 </div>
                 <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-                  {r.driverName} · {r.hasDefects ? `${r.defectCount} defect${r.defectCount === 1 ? '' : 's'}` : `${r.itemCount} items`}
+                  {time}
                 </div>
               </div>
             </button>
