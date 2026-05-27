@@ -19,8 +19,8 @@
  * calendar's loaded window.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, forwardRef } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, FileText, ChevronLeft, ChevronRight, Star, ArrowUp, ArrowDown, X, MessageSquare, Columns3, Search } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, ChevronLeft, ChevronRight, Star, X, MessageSquare, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -33,7 +33,7 @@ import { FlagModal, type FlagReason } from './FlagModal';
 import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
-import { QueueTable, QueueColumnsButton, usePersistedColumnPrefs, type QueueColumn } from '@/components/queue/QueueTable';
+import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 
 type Tab = 'pending' | 'flagged' | 'all' | 'released';
 
@@ -57,81 +57,29 @@ interface CacheEntry {
   fetchedAt: number;
 }
 
-// Column keys used by the sort + filter system. Must match the
-// Th `sortKey` values in the table head and the row-projection
-// function below (`projectRowForCol`).
-type ColKey =
-  | 'age'
-  | 'delivered'
-  | 'internalId'
-  | 'loadNum'
-  | 'title'
-  | 'customer'
-  | 'driver'
-  | 'rate'
-  | 'accessorials'
-  | 'total'
-  | 'billingStatus';
+// (Per-column sort + filter state lives inside OpsTable now — see the
+// columns + filters arrays passed to <OpsTable> below.)
 
-interface SortState { key: ColKey | null; dir: 'asc' | 'desc' }
-
-// Each filterable column carries a list of selected values. An empty
-// or absent array means "no filter on this column"; otherwise a row
-// passes only if its formatted value matches one of the selections.
-// Per-column filter value: string[] for multi-select, string for text
-// search, or { from?, to? } for the date-range picker (delivered date).
-type FilterValue = string | string[] | { from?: string; to?: string };
-type FilterState = Partial<Record<ColKey, FilterValue>>;
-
-// Toggleable columns. "actions" + "docs" are always rendered (they're
-// where the user mutates state). The notes button lives inside actions
-// so it follows the same rule.
-type ToggleableCol =
-  | 'age'
-  | 'delivered'
-  | 'internalId'
-  | 'loadNum'
-  | 'title'
-  | 'customer'
-  | 'driver'
-  | 'rate'
-  | 'accessorials'
-  | 'total'
-  | 'docs';
-
-const TOGGLEABLE_COLS: { key: ToggleableCol; label: string }[] = [
-  { key: 'age',          label: 'Age'          },
-  { key: 'delivered',    label: 'Delivered'    },
-  { key: 'internalId',   label: 'Load ID / Invoice #' },
-  { key: 'loadNum',      label: 'Load #'       },
-  { key: 'title',        label: 'Title'        },
-  { key: 'customer',     label: 'Customer'     },
-  { key: 'driver',       label: 'Driver(s)'    },
-  { key: 'rate',         label: 'Rate'         },
-  { key: 'accessorials', label: 'Accessorials' },
-  { key: 'total',        label: 'Total'        },
-  { key: 'docs',         label: 'Docs'         },
-];
-
-// Default column widths in px. Used as the initial / fallback width
-// when the user hasn't resized a column yet. table-layout: fixed makes
-// these strict, so the user can resize freely in either direction.
-const DEFAULT_COL_WIDTHS: Record<ToggleableCol, number> = {
+// Default column widths in px — passed to OpsTable so the dispatcher
+// gets a sensible starting layout. OpsTable persists user hide/show
+// choices per persistKey; widths aren't user-resizable yet (deferred
+// from v1 of the port).
+const DEFAULT_COL_WIDTHS = {
   age:          80,
   delivered:    100,
-  internalId:   100,
-  loadNum:      110,
-  title:        260,
-  customer:     150,
-  driver:       130,
-  rate:         100,
-  accessorials: 120,
-  total:        110,
-  docs:         220,
+  internalId:   110,
+  loadNum:      120,
+  title:        280,
+  customer:     170,
+  driver:       140,
+  rate:         110,
+  accessorials: 130,
+  total:        120,
+  billingStatus: 110,
+  docs:         260,
+  flags:        80,
+  actions:      170,
 };
-const ACTIONS_COL_WIDTH = 240;
-
-const COLS_STORAGE_KEY = 'closeout-cols-v1';
 
 const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
   { value: 'pending',  label: 'Pending',  subtitle: 'Awaiting POD',           tint: '#1a73e8' },
@@ -221,16 +169,23 @@ export default function CloseoutView() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewStartIndex, setReviewStartIndex] = useState(0);
   const [flagTarget, setFlagTarget] = useState<Load | null>(null);
-  // Bulk-action selection — keyed by event id (matches rowKey). The
-  // set is cleared when the active tab changes so a Release queued
-  // up on Pending can't accidentally fire on a Flagged row the user
-  // switched to.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  // Selection state mirrored from OpsTable via onSelectionChange.
+  // We keep it locally so the bulk-flag modal (which is a separate
+  // sibling component) knows what to apply against. Reset on tab /
+  // search change so a Release queued on Pending can't accidentally
+  // fire on a Flagged row the user switched to.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Bulk-flag modal target — when truthy, applies the chosen reason
   // to every selected row.
   const [bulkFlagOpen, setBulkFlagOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState<null | 'release' | 'flag'>(null);
-  useEffect(() => { setSelectedIds(new Set()); }, [tab, searchQuery]);
+  // Versioned key forces OpsTable to clear its internal selection set
+  // on tab/search change (remounting flushes its useState).
+  const [selectionResetKey, setSelectionResetKey] = useState(0);
+  useEffect(() => {
+    setSelectedIds([]);
+    setSelectionResetKey(k => k + 1);
+  }, [tab, searchQuery]);
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const openEditModal = useCalendarStore(s => s.openEditModal);
 
@@ -375,159 +330,21 @@ export default function CloseoutView() {
     return load.end;
   };
 
-  // Per-column sort + filter state. Resets when changing tabs since
-  // tabs have different shapes/actions. Filters apply to the current
-  // page only — a known limitation now that the queue is paginated.
-  const [sort, setSort] = useState<SortState>({ key: null, dir: 'asc' });
-  const [filters, setFilters] = useState<FilterState>({});
-  // Reset sort/filter when tab changes — different tabs surface
-  // different relevant signals.
-  useEffect(() => { setSort({ key: null, dir: 'asc' }); setFilters({}); }, [tab]);
-
-  // Project a row to its sortable value for a given column. Numbers
-  // for numeric columns so the comparator orders them naturally.
-  const projectRowForCol = (row: QueueRow, col: ColKey): string | number => {
-    switch (col) {
-      case 'age':        return ageDays(effectiveDeliveryEnd(row));
-      case 'delivered':  return effectiveDeliveryEnd(row);
-      case 'internalId': return row.internalLoadId ?? 0;
-      case 'loadNum':    return row.loadNum ?? '';
-      case 'title':      return row.title ?? '';
-      case 'customer':   return displayBrokerName(row.broker, customers) ?? '';
-      case 'driver':     return row.driverName ?? '';
-      case 'rate':       return row.loadPrice ?? 0;
-      case 'accessorials':
-        return (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-      case 'total':
-        return (row.loadPrice ?? 0) + (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-      case 'billingStatus': return row.billingStatus ?? '';
-    }
-  };
-
-  // The filter dropdowns work on the same human-readable string the
-  // cell renders — that way the option list mirrors what the user is
-  // actually looking at. Match is exact since the user picks from a
-  // closed set of values.
-  const formatRowForCol = (row: QueueRow, col: ColKey): string => {
-    switch (col) {
-      case 'age': {
-        const d = ageDays(effectiveDeliveryEnd(row));
-        return d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`;
-      }
-      case 'delivered':  return fmtDate(effectiveDeliveryEnd(row)) || '—';
-      case 'internalId': return row.internalLoadId != null ? String(row.internalLoadId) : '';
-      case 'loadNum':    return row.loadNum ?? '';
-      case 'title':      return row.title ?? '';
-      case 'customer':   return displayBrokerName(row.broker, customers) ?? '';
-      case 'driver':     return row.driverName ?? '';
-      // Rate + accessorials don't get filter dropdowns — these branches
-      // are unused but kept exhaustive for future-proofing.
-      case 'rate':         return row.loadPrice != null ? moneyFmt.format(row.loadPrice) : '';
-      case 'accessorials': return moneyFmt.format((row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0));
-      case 'total': {
-        const accSum = (row.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-        return moneyFmt.format((row.loadPrice ?? 0) + accSum);
-      }
-      case 'billingStatus': return row.billingStatus ?? '';
-    }
-  };
-
-  // Per-column option lists for the filter dropdowns. Built from the
-  // current page's data so the user only ever picks values that exist.
-  // Age, Title, and Load# intentionally skipped — Age is better expressed
-  // by the Delivered date filter, and Title/Load# values are essentially
-  // unique per load so a dropdown doesn't help.
-  // Customer filter lives in the toolbar (CustomerFilterDropdown) — sourcing
-  // the option list from the full customers state, not just rows on screen.
-  // Keeping it out of the column header lets users follow one broker across
-  // pages / buckets without re-picking. Driver + delivered remain in-header.
-  const filterableCols: ColKey[] = ['delivered', 'driver'];
-  const isFilterable = (c: ColKey) => filterableCols.includes(c);
-  const filterOptions = useMemo(() => {
-    const opts: Partial<Record<ColKey, string[]>> = {};
-    for (const col of filterableCols) {
-      const set = new Set<string>();
-      for (const row of dedup) {
-        const v = formatRowForCol(row, col);
-        if (v) set.add(v);
-      }
-      opts[col] = Array.from(set).sort((a, b) => a.localeCompare(b));
-    }
-    return opts;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dedup, customers]);
-
-  // Apply filters → then sort, but always pin priority rows to the
-  // top so dispatchers' high-priority work stays visible regardless
-  // of the user's chosen sort.
-  const visible = useMemo(() => {
-    let out = dedup;
-    // Filters can be string[] (multi), string (text), or
-    // { from?, to? } (date-range). Apply each per-row.
-    const activeEntries = Object.entries(filters).filter(([, v]) => {
-      if (v == null) return false;
-      if (Array.isArray(v)) return v.length > 0;
-      if (typeof v === 'string') return v.trim() !== '';
-      const r = v as { from?: string; to?: string };
-      return !!r.from || !!r.to;
-    });
-    if (activeEntries.length > 0) {
-      out = out.filter(row => {
-        for (const [col, val] of activeEntries) {
-          const colKey = col as ColKey;
-          if (Array.isArray(val)) {
-            if (!val.includes(formatRowForCol(row, colKey))) return false;
-          } else if (typeof val === 'string') {
-            if (!formatRowForCol(row, colKey).toLowerCase().includes(val.toLowerCase())) return false;
-          } else {
-            // date range
-            const range = val as { from?: string; to?: string };
-            const iso = String(projectRowForCol(row, colKey) ?? '');
-            if (!iso) return false;
-            const day = iso.slice(0, 10);
-            if (range.from && day < range.from) return false;
-            if (range.to && day > range.to) return false;
-          }
-        }
-        return true;
-      });
-    }
-    if (sort.key) {
-      const k = sort.key;
-      const mul = sort.dir === 'asc' ? 1 : -1;
-      out = [...out].sort((a, b) => {
-        const av = projectRowForCol(a, k);
-        const bv = projectRowForCol(b, k);
-        if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mul;
-        return String(av).localeCompare(String(bv)) * mul;
-      });
-    }
-    // Priority pin is non-negotiable — always first.
-    return [...out].sort((a, b) => Number(!!b.priority) - Number(!!a.priority));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dedup, sort, filters, customers]);
-
-  const onSortClick = (key: ColKey) => {
-    setSort(prev => {
-      if (prev.key !== key) return { key, dir: 'asc' };
-      if (prev.dir === 'asc') return { key, dir: 'desc' };
-      return { key: null, dir: 'asc' }; // third click clears
-    });
-  };
-  // (toggleFilterValue / clearColFilter / setColFilterAll removed —
-  // QueueTable's header filter inputs own per-column filter state now.)
-  const clearAllFilters = () => setFilters({});
-  const activeFilterCount = Object.values(filters).filter(v => {
-    if (v == null) return false;
-    if (Array.isArray(v)) return v.length > 0;
-    if (typeof v === 'string') return v.trim() !== '';
-    const r = v as { from?: string; to?: string };
-    return !!r.from || !!r.to;
-  }).length;
-
-  // tabCount removed — the bucket tiles use the pre-fetched
-  // bucketTotals instead, so the inactive tile shows a real number
-  // even before the user clicks into it.
+  // Sort + per-column filter state now lives inside OpsTable (it owns
+  // the sort header clicks + filter chips). The `visible` array here
+  // is just the deduped server page, and OpsTable applies the user's
+  // chosen sort/filter on top.
+  //
+  // Two row-shape adjustments we still want to do BEFORE handing the
+  // data to OpsTable, because they affect identity rather than
+  // display:
+  //   1. Priority row pinning (matched rows float to top) — handled
+  //      via OpsTable's `priorityKey` prop further down.
+  //   2. Relay dedup — already done above in `dedup`.
+  // So `visible` is just an alias for `dedup` now; we keep it for
+  // backwards compatibility with the ReviewQueue overlay (which
+  // walks the rendered ordered list).
+  const visible = dedup;
 
   async function handleVerify(load: Load) {
     const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
@@ -558,10 +375,10 @@ export default function CloseoutView() {
   // the rows list before sending. Dedup so a relay's pickup +
   // delivery legs don't double-fire the action against the same
   // load row in the DB.
-  function selectedTargetLoadIds(): string[] {
+  function selectedTargetLoadIds(ids: string[] = selectedIds): string[] {
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const id of selectedIds) {
+    for (const id of ids) {
       const row = rows.find(r => r.id === id);
       if (!row) continue;
       const target = row.loadId ?? row.id;
@@ -572,8 +389,8 @@ export default function CloseoutView() {
     return out;
   }
 
-  async function handleBulkRelease() {
-    const targets = selectedTargetLoadIds();
+  async function handleBulkRelease(ids: string[] = selectedIds) {
+    const targets = selectedTargetLoadIds(ids);
     if (targets.length === 0) return;
     const ok = window.confirm(`Release ${targets.length} load${targets.length === 1 ? '' : 's'} for billing?`);
     if (!ok) return;
@@ -585,7 +402,8 @@ export default function CloseoutView() {
       for (const id of targets) {
         await railway.updateLoadCloseout(id, { action: 'verify', actorName });
       }
-      setSelectedIds(new Set());
+      setSelectedIds([]);
+      setSelectionResetKey(k => k + 1);
       await refresh();
     } finally {
       setBulkBusy(null);
@@ -601,7 +419,8 @@ export default function CloseoutView() {
       for (const id of targets) {
         await railway.updateLoadCloseout(id, { action: 'flag', flagReason: reason, flagNote: note, actorName });
       }
-      setSelectedIds(new Set());
+      setSelectedIds([]);
+      setSelectionResetKey(k => k + 1);
       setBulkFlagOpen(false);
       await refresh();
     } finally {
@@ -668,97 +487,46 @@ export default function CloseoutView() {
   // the Flagged bucket.
   const [followUpTarget, setFollowUpTarget] = useState<Load | null>(null);
 
-  // Column show/hide menu — persisted to localStorage so the user's
-  // layout sticks across sessions. Initial state MUST match what the
-  // server renders (all columns visible) so React can hydrate without
-  // a mismatch warning. The real saved-prefs are read on mount via the
-  // hydrate effect below, and the column count momentarily flips to
-  // the persisted value once that effect commits — a one-frame shift
-  // the user won't see, vs the noisy hydration warning we'd get if we
-  // read localStorage during the initial useState call.
-  const [visibleCols, setVisibleCols] = useState<Record<ToggleableCol, boolean>>(
-    () => Object.fromEntries(TOGGLEABLE_COLS.map(c => [c.key, true])) as Record<ToggleableCol, boolean>,
-  );
-  // Track whether the initial localStorage read has happened. Without
-  // this, the persist effect below would run during the first commit
-  // with the "all visible" default and clobber the user's stored
-  // preferences before the hydrate effect has a chance to read them.
-  const [colsHydrated, setColsHydrated] = useState(false);
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(COLS_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as Record<string, boolean>;
-        const out: Record<ToggleableCol, boolean> = {} as Record<ToggleableCol, boolean>;
-        for (const c of TOGGLEABLE_COLS) out[c.key] = parsed[c.key] ?? true;
-        setVisibleCols(out);
-      }
-    } catch { /* ignore */ }
-    setColsHydrated(true);
-  }, []);
-  useEffect(() => {
-    if (!colsHydrated) return;
-    try { window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols)); }
-    catch { /* ignore */ }
-  }, [visibleCols, colsHydrated]);
-  const toggleCol = (key: ToggleableCol) => setVisibleCols(v => ({ ...v, [key]: !v[key] }));
+  // Column visibility persistence is OpsTable's responsibility now
+  // (via the persistKey prop further down). Sort persistence too.
 
-  // Persisted column prefs — hidden / order / widths / pinned.
-  const {
-    hidden: hiddenCols, setHidden: setHiddenCols,
-    order: colOrder, setOrder: setColOrder,
-    widths: colWidths, setWidths: setColWidths,
-    pinned: pinnedCols, setPinned: setPinnedCols,
-  } = usePersistedColumnPrefs('closeout-cols-v3',
-    new Set(Object.entries(visibleCols).filter(([, v]) => !v).map(([k]) => k)),
-  );
-  const [tablePageSize, setTablePageSize] = useState(PAGE_SIZE);
+  // ── OpsTable column config ──────────────────────────────────────────
+  // Cells capture state setters via closures so each row's buttons can
+  // fire actions (open modal, flag, follow up, etc.) without prop-
+  // drilling. The columns array is rebuilt when `tab` changes so the
+  // Released bucket can swap the Total column for Billing — those two
+  // are mutually exclusive per-tab and we keep them out of each
+  // other's column picker by simply not including the wrong one.
+  const tableColumns = useMemo<OpsColumn<QueueRow>[]>(() => {
+    const cols: OpsColumn<QueueRow>[] = [];
 
-  // ── QueueTable column config ────────────────────────────────────────
-  // Closures capture state setters above so cell renderers can fire
-  // their own actions (open modal, flag, follow up, etc.) without
-  // prop-drilling through QueueTable.
-  const tableColumns = useMemo<QueueColumn<QueueRow>[]>(() => {
-    // Pinned-left columns — stay anchored during horizontal scroll.
-    const PIN_LEFT: Set<string> = new Set(['internalId', 'loadNum', 'customer', 'rate', 'docs']);
-    const PRIORITY = (load: QueueRow) => !!load.priority;
-
-    const sortVal = (key: ColKey, r: QueueRow): string | number | null => {
-      switch (key) {
-        case 'age':          return ageDays(effectiveDeliveryEnd(r));
-        case 'delivered':    return effectiveDeliveryEnd(r);
-        case 'internalId':   return r.internalLoadId ?? '';
-        case 'loadNum':      return r.loadNum ?? '';
-        case 'title':        return r.title ?? '';
-        case 'customer':     return displayBrokerName(r.broker, customers);
-        case 'driver':       return r.driverName ?? '';
-        case 'rate':         return r.loadPrice ?? 0;
-        case 'accessorials': return (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-        case 'total':        return (r.loadPrice ?? 0) + (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-        case 'billingStatus': return r.billingStatus ?? '';
-      }
-    };
-
-    const filterCustomerOpts = Array.from(new Set(
-      rows.map(r => displayBrokerName(r.broker, customers)).filter(Boolean),
-    )).sort();
-
-    const cols: QueueColumn<QueueRow>[] = [];
-
-    // Actions FIRST — hardcoded sticky-left utility column so Star /
-    // Notes / Review / Release / Flag stay anchored as the rest of
-    // the table scrolls horizontally. (Render function is defined
-    // below alongside the other columns; we push the row order
-    // explicitly here.)
-    // (The actual push call lives further down; see the actions
-    //  branch at the end. We mark a placeholder here so the column
-    //  ends up first in the pin-left partition.)
-
-    // age
+    // Star + Notes pinned LEFT — utility column. alwaysVisible so it
+    // can't be hidden in the picker (dispatchers always need the
+    // priority/notes affordances).
     cols.push({
-      key: 'age', label: 'Age', width: DEFAULT_COL_WIDTHS.age,
-      sortable: true, pinLeft: PIN_LEFT.has('age'),
-      sortValue: r => sortVal('age', r),
+      key: 'flags', header: '', width: DEFAULT_COL_WIDTHS.flags,
+      pinned: 'left', alwaysVisible: true, pickerLabel: 'Star / notes',
+      render: r => (
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => void handleTogglePriority(r)}
+            className="rounded-full p-1 transition-colors"
+            title={r.priority ? 'Unmark priority' : 'Mark as priority'}
+            style={{
+              background: r.priority ? '#fef9c3' : 'transparent',
+              border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
+              color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
+            }}>
+            <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
+          </button>
+          <NotesButton load={r} onOpen={() => setNotesTarget(r)} />
+        </div>
+      ),
+    });
+
+    cols.push({
+      key: 'age', header: 'Age', width: DEFAULT_COL_WIDTHS.age,
+      sortable: true,
+      sortValue: r => ageDays(effectiveDeliveryEnd(r)),
       render: r => {
         const days = ageDays(effectiveDeliveryEnd(r));
         const c = ageColor(days);
@@ -770,47 +538,35 @@ export default function CloseoutView() {
       },
     });
 
-    // delivered
     cols.push({
-      key: 'delivered', label: 'Delivered', width: DEFAULT_COL_WIDTHS.delivered,
-      sortable: true, pinLeft: PIN_LEFT.has('delivered'),
-      filter: { kind: 'date-range' },
-      sortValue: r => sortVal('delivered', r),
-      filterValue: r => effectiveDeliveryEnd(r),
+      key: 'delivered', header: 'Delivered', width: DEFAULT_COL_WIDTHS.delivered,
+      sortable: true,
+      sortValue: r => effectiveDeliveryEnd(r),
       render: r => fmtDate(effectiveDeliveryEnd(r)) || '—',
     });
 
-    // internalId
     cols.push({
-      key: 'internalId', label: 'ID / Inv #', width: DEFAULT_COL_WIDTHS.internalId,
-      sortable: true, pinLeft: PIN_LEFT.has('internalId'),
-      filter: { kind: 'text' },
-      sortValue: r => sortVal('internalId', r),
-      filterValue: r => String(r.internalLoadId ?? ''),
+      key: 'internalId', header: 'ID / Inv #', width: DEFAULT_COL_WIDTHS.internalId,
+      sortable: true,
+      sortValue: r => r.internalLoadId ?? 0,
       render: r => r.internalLoadId != null
         ? <CopyableCell value={String(r.internalLoadId)} displayValue={String(r.internalLoadId)} title="Copy ID / invoice #" />
         : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
     });
 
-    // loadNum
     cols.push({
-      key: 'loadNum', label: 'Load #', width: DEFAULT_COL_WIDTHS.loadNum,
-      sortable: true, pinLeft: PIN_LEFT.has('loadNum'),
-      filter: { kind: 'text' },
-      sortValue: r => sortVal('loadNum', r),
-      filterValue: r => r.loadNum ?? '',
+      key: 'loadNum', header: 'Load #', width: DEFAULT_COL_WIDTHS.loadNum,
+      sortable: true,
+      sortValue: r => r.loadNum ?? '',
       render: r => r.loadNum
         ? <CopyableLoadNum value={r.loadNum} />
         : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
     });
 
-    // title
     cols.push({
-      key: 'title', label: 'Title', width: DEFAULT_COL_WIDTHS.title,
-      sortable: true, pinLeft: PIN_LEFT.has('title'),
-      filter: { kind: 'text' },
-      sortValue: r => sortVal('title', r),
-      filterValue: r => r.title ?? '',
+      key: 'title', header: 'Title', width: DEFAULT_COL_WIDTHS.title,
+      sortable: true,
+      sortValue: r => r.title ?? '',
       render: r => (
         <button type="button"
           onClick={(e) => { e.stopPropagation(); void openLoadInModal(r); }}
@@ -820,13 +576,10 @@ export default function CloseoutView() {
       ),
     });
 
-    // customer
     cols.push({
-      key: 'customer', label: 'Customer', width: DEFAULT_COL_WIDTHS.customer,
-      sortable: true, pinLeft: PIN_LEFT.has('customer'),
-      filter: { kind: 'multi', options: filterCustomerOpts },
-      sortValue: r => sortVal('customer', r),
-      filterValue: r => displayBrokerName(r.broker, customers),
+      key: 'customer', header: 'Customer', width: DEFAULT_COL_WIDTHS.customer,
+      sortable: true,
+      sortValue: r => displayBrokerName(r.broker, customers) ?? '',
       render: r => {
         const cust = displayBrokerName(r.broker, customers);
         const matched = customers.find(c =>
@@ -848,13 +601,10 @@ export default function CloseoutView() {
       },
     });
 
-    // driver
     cols.push({
-      key: 'driver', label: 'Driver(s)', width: DEFAULT_COL_WIDTHS.driver,
-      sortable: true, pinLeft: PIN_LEFT.has('driver'),
-      filter: { kind: 'text' },
-      sortValue: r => sortVal('driver', r),
-      filterValue: r => r.driverName ?? '',
+      key: 'driver', header: 'Driver(s)', width: DEFAULT_COL_WIDTHS.driver,
+      sortable: true,
+      sortValue: r => r.driverName ?? '',
       render: r => {
         const partner = r.relayGroupId
           ? rows.find(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
@@ -873,11 +623,10 @@ export default function CloseoutView() {
       },
     });
 
-    // rate
     cols.push({
-      key: 'rate', label: 'Rate', width: DEFAULT_COL_WIDTHS.rate,
-      align: 'right', sortable: true, pinLeft: PIN_LEFT.has('rate'),
-      sortValue: r => sortVal('rate', r),
+      key: 'rate', header: 'Rate', width: DEFAULT_COL_WIDTHS.rate,
+      align: 'right', sortable: true,
+      sortValue: r => r.loadPrice ?? 0,
       render: r => (
         <span className="font-semibold tabular-nums">
           {r.loadPrice != null ? moneyFmt.format(r.loadPrice) : '—'}
@@ -885,11 +634,10 @@ export default function CloseoutView() {
       ),
     });
 
-    // accessorials
     cols.push({
-      key: 'accessorials', label: 'Accessorials', width: DEFAULT_COL_WIDTHS.accessorials,
-      align: 'right', sortable: true, pinLeft: PIN_LEFT.has('accessorials'),
-      sortValue: r => sortVal('accessorials', r),
+      key: 'accessorials', header: 'Accessorials', width: DEFAULT_COL_WIDTHS.accessorials,
+      align: 'right', sortable: true,
+      sortValue: r => (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
       render: r => {
         const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
         const accCount = (r.accessorials ?? []).length;
@@ -904,28 +652,51 @@ export default function CloseoutView() {
       },
     });
 
-    // total — rate + accessorials, matches the column shown on
-    // /accounting so dispatchers see the same number in both queues.
-    cols.push({
-      key: 'total', label: 'Total', width: DEFAULT_COL_WIDTHS.total,
-      align: 'right', sortable: true, pinLeft: PIN_LEFT.has('total'),
-      sortValue: r => sortVal('total', r),
-      render: r => {
-        const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-        const tot = (r.loadPrice ?? 0) + accSum;
-        if (r.loadPrice == null && accSum === 0) {
-          return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
-        }
-        return (
-          <span className="font-bold tabular-nums">{moneyFmt.format(tot)}</span>
-        );
-      },
-    });
+    // Total / Billing are mutually exclusive per tab — Released loads
+    // hide Total to keep billing-revenue numbers off the page for
+    // non-accounting roles; non-Released loads have nothing meaningful
+    // to show in Billing yet.
+    if (tab === 'released') {
+      cols.push({
+        key: 'billingStatus', header: 'Billing', width: DEFAULT_COL_WIDTHS.billingStatus,
+        align: 'left', sortable: true,
+        sortValue: r => r.billingStatus ?? '',
+        render: r => {
+          const bs = r.billingStatus;
+          const tint =
+            bs === 'verified' ? { bg: '#dcfce7', fg: '#166534', label: 'Released'  } :
+            bs === 'invoiced' ? { bg: '#dbeafe', fg: '#1d4ed8', label: 'Invoiced'  } :
+            bs === 'paid'     ? { bg: '#dcfce7', fg: '#15803d', label: 'Paid'      } :
+                                null;
+          if (!tint) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+          return (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-bold uppercase tracking-wider"
+              style={{ background: tint.bg, color: tint.fg }}>
+              {tint.label}
+            </span>
+          );
+        },
+      });
+    } else {
+      cols.push({
+        key: 'total', header: 'Total', width: DEFAULT_COL_WIDTHS.total,
+        align: 'right', sortable: true,
+        sortValue: r => (r.loadPrice ?? 0) + (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
+        render: r => {
+          const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+          const tot = (r.loadPrice ?? 0) + accSum;
+          if (r.loadPrice == null && accSum === 0) {
+            return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+          }
+          return (
+            <span className="font-bold tabular-nums">{moneyFmt.format(tot)}</span>
+          );
+        },
+      });
+    }
 
-    // docs (+ flag chips)
     cols.push({
-      key: 'docs', label: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
-      pinLeft: PIN_LEFT.has('docs'),
+      key: 'docs', header: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
         const hasRC = !!r.rateConPdf || (counts.rate_con ?? 0) > 0;
@@ -975,81 +746,22 @@ export default function CloseoutView() {
       },
     });
 
-    // Billing-pipeline status pill. Visible only on the Released
-    // bucket (effectiveHidden suppresses it elsewhere). Lets a
-    // dispatcher without accounting access see at a glance where a
-    // released load is in the billing pipeline. We don't differentiate
-    // Queued vs Invoiced (both are billing_status='invoiced'); pulling
-    // the active invoice row to make that distinction would mean a
-    // separate API call. If the user asks for finer detail later, this
-    // is the column to expand.
+    // Primary actions pinned RIGHT — Review / Release / Flag stay at
+    // the right edge during horizontal scroll. alwaysVisible since
+    // these are the page's whole point.
     cols.push({
-      key: 'billingStatus', label: 'Billing', width: 110,
-      align: 'left', sortable: true,
-      sortValue: r => r.billingStatus ?? '',
-      render: r => {
-        const bs = r.billingStatus;
-        const tint =
-          bs === 'verified' ? { bg: '#dcfce7', fg: '#166534', label: 'Released'  } :
-          bs === 'invoiced' ? { bg: '#dbeafe', fg: '#1d4ed8', label: 'Invoiced'  } :
-          bs === 'paid'     ? { bg: '#dcfce7', fg: '#15803d', label: 'Paid'      } :
-                              null;
-        if (!tint) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
-        return (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-bold uppercase tracking-wider"
-            style={{ background: tint.bg, color: tint.fg }}>
-            {tint.label}
-          </span>
-        );
-      },
-    });
-
-    // Row utilities — Star + Notes pinned to the LEFT, immediately
-    // to the right of the select checkbox. unshift so it lands as
-    // the first user-defined column in the pinned-left partition
-    // (the select checkbox column is automatic and renders first).
-    cols.unshift({
-      key: 'flags', label: '', width: 70, align: 'left',
-      pinLeft: true,
-      pinned: true,
-      render: r => (
-        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => void handleTogglePriority(r)}
-            className="rounded-full p-1 transition-colors"
-            title={r.priority ? 'Unmark priority' : 'Mark as priority'}
-            style={{
-              background: r.priority ? '#fef9c3' : 'transparent',
-              border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
-              color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
-            }}>
-            <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
-          </button>
-          <NotesButton load={r} onOpen={() => setNotesTarget(r)} />
-        </div>
-      ),
-    });
-
-    // Primary actions — Review / Release / Flag pinned to the RIGHT
-    // so they stay accessible at the right edge during horizontal
-    // scroll. Star + Notes live in the left-pinned `flags` column
-    // above. Push so this column lands last in the visible order;
-    // pin-right preserves input order from the right edge.
-    //
-    // Review keeps its full label because it's the primary action.
-    // Release and Flag / Follow-up are icon-only square buttons with
-    // tooltips — keeps the column narrow enough that Review never
-    // gets clipped on smaller viewports.
-    cols.push({
-      key: 'actions', label: '', width: 170, align: 'right',
-      pinRight: true,
-      pinned: true,
+      key: 'actions', header: '', width: DEFAULT_COL_WIDTHS.actions,
+      align: 'right', pinned: 'right', alwaysVisible: true, pickerLabel: 'Actions',
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
         const rowFlagged = tab === 'flagged' || (tab === 'all' && computeFlagReasons(r, counts).length > 0);
-        const rowIdx = rows.findIndex(x => x.id === r.id);
+        // Index against `visible` (the deduped list ReviewQueue
+        // iterates), NOT `rows` (the raw server page). They diverge
+        // once dedup drops delivery legs.
+        const rowIdx = visible.findIndex(x => x.id === r.id);
         return (
           <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => { setReviewStartIndex(rowIdx); setReviewOpen(true); }}
+            <button onClick={() => { setReviewStartIndex(Math.max(0, rowIdx)); setReviewOpen(true); }}
               className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
               style={{ background: '#15803d', color: '#fff' }}
               title="Open in review queue">
@@ -1093,11 +805,38 @@ export default function CloseoutView() {
       },
     });
 
-    // Priority highlight applied per row, not per cell. Mark in helper later.
-    void PRIORITY;
     return cols;
+    // Cell renderers capture handler closures via this scope —
+    // exhaustive deps would be noisy because every state setter is
+    // captured. The actual values that influence DISPLAY are listed
+    // explicitly below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customers, rows, docCounts, tab]);
+
+  // ── OpsTable filters — Customer + Driver multi-select chips + a
+  // Delivered date-range chip. Options come from the current page's
+  // rows so the user only ever picks values that actually exist.
+  const tableFilters = useMemo<OpsFilter<QueueRow>[]>(() => {
+    const customerOpts = Array.from(new Set(
+      dedup.map(r => displayBrokerName(r.broker, customers)).filter(Boolean) as string[],
+    )).sort().map(v => ({ value: v, label: v }));
+    const driverOpts = Array.from(new Set(
+      dedup.map(r => r.driverName ?? '').filter(Boolean),
+    )).sort().map(v => ({ value: v, label: v }));
+    return [
+      { kind: 'select', key: 'customer', label: 'Customer',
+        options: customerOpts,
+        predicate: (r, v) => displayBrokerName(r.broker, customers) === v },
+      { kind: 'select', key: 'driver',   label: 'Driver',
+        options: driverOpts,
+        predicate: (r, v) => (r.driverName ?? '') === v },
+      { kind: 'date-range', key: 'delivered', label: 'Delivered',
+        getDate: r => effectiveDeliveryEnd(r) },
+    ];
+    // effectiveDeliveryEnd is a closure over deliveryEndByLoadId
+    // (already in deps) — the lint rule can't see through that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dedup, customers, deliveryEndByLoadId]);
 
   const rowKey = useCallback((r: QueueRow) => r.id, []);
 
@@ -1164,11 +903,13 @@ export default function CloseoutView() {
             })}
           </div>
 
-          {/* Toolbar — search on the left, actions on the right.
-              Mirrors /accounting's layout so the two pages feel
-              consistent. Search hits /v1/closeout/queue?q=… after a
-              250ms debounce; when query is set the pending tab lifts
-              its end<=now filter so upcoming loads are reachable. */}
+          {/* Toolbar — search lives outside the table (it drives the
+              server-paged query, not the in-memory filter). The
+              client-side filter chips (Customer / Driver / Delivered),
+              the column picker, and the bulk-action slot all live
+              inside OpsTable below. The Review queue + Refresh
+              buttons sit here so they're always reachable regardless
+              of selection state. */}
           <div className="flex items-center gap-3 flex-wrap">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -1192,50 +933,6 @@ export default function CloseoutView() {
               )}
             </div>
             <div className="flex-1" />
-            {selectedIds.size > 0 && (
-              <div className="flex items-center gap-2 pr-1 mr-1"
-                style={{ borderRight: '1px solid var(--gc-border)' }}>
-                <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                  {selectedIds.size} selected
-                </span>
-                <button type="button"
-                  onClick={() => setSelectedIds(new Set())}
-                  className="text-[11px] px-2 py-1 rounded hover:bg-[var(--gc-hover)]"
-                  style={{ color: 'var(--gc-text-2)' }}>
-                  Clear
-                </button>
-                <button type="button"
-                  onClick={() => void handleBulkRelease()}
-                  disabled={bulkBusy !== null}
-                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
-                  style={{
-                    background: '#dcfce7', color: '#15803d',
-                    border: '1px solid #86efac',
-                    opacity: bulkBusy !== null ? 0.6 : 1,
-                    cursor: bulkBusy !== null ? 'default' : 'pointer',
-                  }}>
-                  {bulkBusy === 'release'
-                    ? <Loader2 size={11} className="animate-spin" />
-                    : <CheckCircle2 size={11} />}
-                  Release selected
-                </button>
-                <button type="button"
-                  onClick={() => setBulkFlagOpen(true)}
-                  disabled={bulkBusy !== null}
-                  className="text-[11px] font-semibold px-2.5 py-1 rounded-lg inline-flex items-center gap-1"
-                  style={{
-                    background: '#fef3c7', color: '#92400e',
-                    border: '1px solid #fde68a',
-                    opacity: bulkBusy !== null ? 0.6 : 1,
-                    cursor: bulkBusy !== null ? 'default' : 'pointer',
-                  }}>
-                  {bulkBusy === 'flag'
-                    ? <Loader2 size={11} className="animate-spin" />
-                    : <Flag size={11} />}
-                  Flag selected
-                </button>
-              </div>
-            )}
             {visible.length > 0 && (
               <button onClick={() => { setReviewStartIndex(0); setReviewOpen(true); }}
                 className="flex items-center gap-1.5 text-[13px] font-bold px-4 py-1.5 rounded-lg text-white transition-colors"
@@ -1245,22 +942,6 @@ export default function CloseoutView() {
                 <Play size={13} fill="currentColor" /> Review queue ({visible.length})
               </button>
             )}
-            <QueueColumnsButton
-              // Filter the column picker to only what's relevant for
-              // the current tab: hide `total` from the picker on
-              // Released, hide `billingStatus` everywhere else.
-              columns={tableColumns.filter(c =>
-                tab === 'released'
-                  ? c.key !== 'total'
-                  : c.key !== 'billingStatus'
-              )}
-              hiddenColumns={hiddenCols}
-              onHiddenColumnsChange={setHiddenCols}
-              columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
-              onColumnOrderChange={setColOrder}
-              pinnedColumns={pinnedCols}
-              onPinnedColumnsChange={setPinnedCols}
-            />
             <button onClick={() => void refresh()}
               className="text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -1281,56 +962,116 @@ export default function CloseoutView() {
             </div>
           )}
 
-          {/* Body — fills remaining vertical space, scrolls internally. */}
+          {/* Body — OpsTable owns filter chips, column picker, sort,
+              selection, and pagination. We turn its built-in pager
+              off because the server paginates upstream — the visible
+              data is one page of 50 rows; OpsTable's filters / sort
+              operate on that page only.
+              key={tab}-bound resetKey flushes OpsTable's selection
+              state across tab/search changes. */}
           {error ? (
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
               {error}
             </div>
           ) : (
-            <div className="flex-1 min-h-0 min-w-0 flex">
-              <QueueTable<QueueRow>
-                rows={visible}
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-3">
+              <OpsTable<QueueRow>
+                key={`closeout-${tab}-${selectionResetKey}`}
+                data={visible}
                 columns={tableColumns}
+                filters={tableFilters}
                 rowKey={rowKey}
-                sort={sort as { key: string | null; dir: 'asc' | 'desc' }}
-                onSortChange={(next) => setSort(next as { key: ColKey | null; dir: 'asc' | 'desc' })}
-                filters={filters as Record<string, FilterValue>}
-                onFiltersChange={(next) => setFilters(next as FilterState)}
-                page={page}
-                pageSize={tablePageSize}
-                total={total}
-                onPageChange={setPage}
-                onPageSizeChange={(n) => { setTablePageSize(n); setPage(0); }}
-                // Tab-aware visibility:
-                //   • Released bucket hides the per-row "Total" column
-                //     (per spec — no billing $ aggregates leak to
-                //     non-accounting users).
-                //   • Non-released buckets hide the billingStatus pill
-                //     (everything in pending/flagged shares the same
-                //     pre-released state; the column would be useless).
-                hiddenColumns={(() => {
-                  const h = new Set(hiddenCols);
-                  if (tab === 'released') {
-                    h.add('total');
-                  } else {
-                    h.add('billingStatus');
-                  }
-                  return h;
-                })()}
-                onHiddenColumnsChange={setHiddenCols}
-                columnOrder={colOrder}
-                onColumnOrderChange={setColOrder}
-                columnWidths={colWidths}
-                onColumnWidthsChange={setColWidths}
-                pinnedColumns={pinnedCols}
-                onPinnedColumnsChange={setPinnedCols}
+                loading={loading}
+                defaultSort={{ key: 'age', dir: 'desc' }}
+                priorityKey={r => !!r.priority}
+                columnPicker
+                persistKey={`closeout-${tab}`}
                 selectable
-                selected={selectedIds}
                 onSelectionChange={setSelectedIds}
-                rowClassName={(r) => r.priority ? 'bg-[#fefce8]' : ''}
-                isLoading={loading}
-                emptyMessage={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
+                paginated={false}
+                emptyLabel={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
+                bulkActions={({ selectedIds: ids, clearSelection }) => (
+                  <div className="flex items-center gap-2">
+                    <button type="button"
+                      onClick={() => void handleBulkRelease(ids)}
+                      disabled={bulkBusy !== null}
+                      className="text-[12px] font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
+                      style={{
+                        background: '#dcfce7', color: '#15803d',
+                        border: '1px solid #86efac',
+                        opacity: bulkBusy !== null ? 0.6 : 1,
+                        cursor: bulkBusy !== null ? 'default' : 'pointer',
+                      }}>
+                      {bulkBusy === 'release'
+                        ? <Loader2 size={12} className="animate-spin" />
+                        : <CheckCircle2 size={12} />}
+                      Release selected
+                    </button>
+                    <button type="button"
+                      onClick={() => setBulkFlagOpen(true)}
+                      disabled={bulkBusy !== null}
+                      className="text-[12px] font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
+                      style={{
+                        background: '#fef3c7', color: '#92400e',
+                        border: '1px solid #fde68a',
+                        opacity: bulkBusy !== null ? 0.6 : 1,
+                        cursor: bulkBusy !== null ? 'default' : 'pointer',
+                      }}>
+                      {bulkBusy === 'flag'
+                        ? <Loader2 size={12} className="animate-spin" />
+                        : <Flag size={12} />}
+                      Flag selected
+                    </button>
+                    {/* clearSelection — wired up implicitly via the
+                        Clear button OpsTable renders on the right of
+                        the bulk-actions row, so we don't add another. */}
+                    <span className="hidden">{ids.length}</span>
+                    {void clearSelection}
+                  </div>
+                )}
               />
+              {/* Server-pagination footer. OpsTable's internal pager
+                  is disabled (paginated=false) because the server is
+                  the source of truth — we render our own bar that
+                  matches the bucket-page mental model dispatchers
+                  already have. */}
+              {total > PAGE_SIZE && (
+                <div className="flex items-center justify-between px-1">
+                  <div className="text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                    Page <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{page + 1}</span>
+                    {' '}of <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{Math.max(1, Math.ceil(total / PAGE_SIZE))}</span>
+                    {' '}· <span>{total.toLocaleString()} total</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button type="button"
+                      onClick={() => setPage(Math.max(0, page - 1))}
+                      disabled={page === 0}
+                      className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg"
+                      style={{
+                        border:     '1px solid var(--gc-border)',
+                        background: 'var(--gc-surface)',
+                        color:      page === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+                        opacity:    page === 0 ? 0.5 : 1,
+                        cursor:     page === 0 ? 'not-allowed' : 'pointer',
+                      }}>
+                      <ChevronLeft size={13} /> Prev
+                    </button>
+                    <button type="button"
+                      onClick={() => setPage(page + 1)}
+                      disabled={(page + 1) * PAGE_SIZE >= total}
+                      className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg"
+                      style={{
+                        border:     '1px solid var(--gc-border)',
+                        background: 'var(--gc-surface)',
+                        color:      (page + 1) * PAGE_SIZE >= total ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+                        opacity:    (page + 1) * PAGE_SIZE >= total ? 0.5 : 1,
+                        cursor:     (page + 1) * PAGE_SIZE >= total ? 'not-allowed' : 'pointer',
+                      }}>
+                      Next <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1371,7 +1112,7 @@ export default function CloseoutView() {
           selected row in one pass. */}
       {bulkFlagOpen && (
         <FlagModal
-          loadLabel={`${selectedIds.size} selected load${selectedIds.size === 1 ? '' : 's'}`}
+          loadLabel={`${selectedIds.length} selected load${selectedIds.length === 1 ? '' : 's'}`}
           onCancel={() => setBulkFlagOpen(false)}
           onConfirm={confirmBulkFlag}
         />
@@ -1403,33 +1144,6 @@ export default function CloseoutView() {
         />
       )}
     </div>
-  );
-}
-
-function Th({ children, align = 'left' }: { children?: React.ReactNode; align?: 'left' | 'right' }) {
-  return (
-    <th className="px-2.5 py-2 font-extrabold text-[10.5px] uppercase tracking-wider whitespace-nowrap"
-      style={{ color: 'var(--gc-text-2)', textAlign: align }}>
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, align = 'left', className, onClick }: { children: React.ReactNode; align?: 'left' | 'right'; className?: string; onClick?: (e: React.MouseEvent) => void }) {
-  return (
-    <td className={`px-2.5 py-2 font-medium ${className ?? ''}`}
-      style={{
-        textAlign: align,
-        color: 'var(--gc-text-1)',
-        // With table-layout: fixed, cells overflow visibly when the
-        // column is narrower than the content. Clip cleanly so a
-        // resized-narrow column shows a truncation rather than
-        // bleeding into the next cell.
-        overflow: 'hidden',
-      }}
-      onClick={onClick}>
-      {children}
-    </td>
   );
 }
 
@@ -1529,60 +1243,6 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
   );
 }
 
-function PaginationFooter({
-  page, pageSize, total, onPrev, onNext,
-}: {
-  page: number;
-  pageSize: number;
-  total: number;
-  onPrev: () => void;
-  onNext: () => void;
-}) {
-  const start = total === 0 ? 0 : page * pageSize + 1;
-  const end   = Math.min((page + 1) * pageSize, total);
-  const atStart = page === 0;
-  const atEnd   = end >= total;
-  return (
-    <div className="flex items-center justify-between px-4 py-3"
-      style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-      <div className="text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-        Showing <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{start.toLocaleString()}–{end.toLocaleString()}</span>
-        {' '}of <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{total.toLocaleString()}</span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={onPrev}
-          disabled={atStart}
-          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
-          style={{
-            border:     '1px solid var(--gc-border)',
-            background: 'var(--gc-surface)',
-            color:      atStart ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
-            opacity:    atStart ? 0.5 : 1,
-            cursor:     atStart ? 'not-allowed' : 'pointer',
-          }}>
-          <ChevronLeft size={13} /> Prev
-        </button>
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={atEnd}
-          className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
-          style={{
-            border:     '1px solid var(--gc-border)',
-            background: 'var(--gc-surface)',
-            color:      atEnd ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
-            opacity:    atEnd ? 0.5 : 1,
-            cursor:     atEnd ? 'not-allowed' : 'pointer',
-          }}>
-          Next <ChevronRight size={13} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ImpedimentReason — one chip on a flagged row. Several can show on
 // the same row when multiple things are blocking closeout. Named
 // distinctly from the manual-flag `FlagReason` enum (which is the
@@ -1671,88 +1331,5 @@ function FlagChip({ reason }: { reason: ImpedimentReason }) {
   );
 }
 
-function EmptyState({ tab, hasFilters, onClearFilters }: { tab: Tab; hasFilters?: boolean; onClearFilters?: () => void }) {
-  // Filter-cleared case takes precedence — the "all caught up" message
-  // is misleading when the user has just filtered everything out.
-  if (hasFilters) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24 text-center" style={{ color: 'var(--gc-text-3)' }}>
-        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>No matches</div>
-        <div className="text-sm mb-3">Filters hide every load on this page.</div>
-        <button onClick={onClearFilters}
-          className="text-xs font-semibold px-3 py-1.5 rounded-lg"
-          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
-          Clear filters
-        </button>
-      </div>
-    );
-  }
-  const messages: Record<Tab, { icon: React.ReactNode; title: string; sub: string }> = {
-    pending:  { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'All caught up',         sub: 'Every overdue load has been released or flagged.' },
-    flagged:  { icon: <Flag         size={28} style={{ color: '#92400e' }} />, title: 'No flagged loads',      sub: 'Anything that needs follow-up will show here.' },
-    all:      { icon: <FileCheck2   size={28} style={{ color: '#5f6368' }} />, title: 'Nothing to close out',  sub: 'No loads are awaiting release or follow-up.' },
-    released: { icon: <CheckCircle2 size={28} style={{ color: '#15803d' }} />, title: 'No released loads yet', sub: 'Loads you release for billing will appear here.' },
-  };
-  const m = messages[tab];
-  return (
-    <div className="flex flex-col items-center justify-center py-24 text-center" style={{ color: 'var(--gc-text-3)' }}>
-      <div className="mb-3">{m.icon}</div>
-      <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>{m.title}</div>
-      <div className="text-sm">{m.sub}</div>
-    </div>
-  );
-}
-
-/** Column header. Inner button is the sort/filter trigger so it doesn't
- *  fight with the resize handle on the right edge. */
-
-function MenuRow({
-  icon, label, onClick, active, muted, truncate,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  muted?: boolean;
-  truncate?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left transition-colors hover:bg-[var(--gc-hover)]"
-      style={{
-        background: active ? 'rgba(26,115,232,0.10)' : 'transparent',
-        color:      muted
-                      ? 'var(--gc-text-3)'
-                      : active ? 'var(--gc-blue)' : 'var(--gc-text-1)',
-        fontWeight: active ? 600 : 400,
-      }}>
-      {icon && <span className="flex-none">{icon}</span>}
-      <span className={truncate ? 'truncate flex-1' : 'flex-1'}>{label}</span>
-      {active && <Check size={12} className="flex-none" />}
-    </button>
-  );
-}
-
-function CheckboxMenuRow({
-  checked, label, onToggle,
-}: {
-  checked: boolean;
-  label: string;
-  onToggle: () => void;
-}) {
-  return (
-    <label
-      className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-left cursor-pointer transition-colors hover:bg-[var(--gc-hover)]"
-      style={{ color: 'var(--gc-text-1)' }}>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onToggle}
-        className="flex-none"
-        style={{ accentColor: '#1a73e8' }}
-      />
-      <span className="truncate flex-1">{label}</span>
-    </label>
-  );
-}
+// (Empty-state / column-menu helpers removed — OpsTable owns its own
+// empty messaging and column picker now.)
