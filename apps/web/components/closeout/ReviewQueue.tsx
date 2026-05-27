@@ -1159,7 +1159,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             footgun) so their content has no choice but to scroll
             inside its track rather than push the sidebar offscreen. */}
         <div className="flex-1 min-h-0"
-          style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) 320px' }}>
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) 320px',
+            // Explicit single row at the container's height. Without
+            // this, grid implicit-row sizing defaults to `auto`, so
+            // when the middle column's PdfCanvas wants to render a
+            // tall doc at fit-to-width, the grid row grows to that
+            // doc's height and the right column inherits the same
+            // height — pushing the Release/Flag/Skip buttons way
+            // below the viewport. minmax(0, 1fr) here is the row
+            // analog of the minmax(0, 1fr) we already use on the
+            // columns: real zero minimum so children must scroll
+            // inside their track instead of dictating its height.
+            gridTemplateRows: 'minmax(0, 1fr)',
+          }}>
           {/* display:contents wrapper kept so the inner column DOM
               below doesn't need a 200-line renumber. The wrapper
               vanishes from the layout tree — rate-con and docs
