@@ -156,6 +156,14 @@ export default function EquipmentPage() {
   // know about it.
   const [sideMedia, setSideMedia] = useState<MediaList | null>(null);
 
+  // Bump-a-counter to force FuelTabContent's data fetch to re-run.
+  // Every mutation inside the open panel (assign / auto-match / link
+  // / unlink) calls bumpFuelData() so the table behind the modal
+  // reflects the change without needing a full page reload. Cheap —
+  // the refetch is two parallel API calls of <=500 rows each.
+  const [fuelDataVersion, setFuelDataVersion] = useState(0);
+  const bumpFuelData = useCallback(() => setFuelDataVersion(v => v + 1), []);
+
   return (
     // h-screen (not min-h-screen) so the outer column has a FIXED
     // height equal to the viewport. Without that bound, the flex-1
@@ -222,6 +230,7 @@ export default function EquipmentPage() {
             assetLabelById={assetLabelById}
             panel={panel}
             setPanel={setPanel}
+            reloadVersion={fuelDataVersion}
           />
         )}
         </div>
@@ -236,6 +245,7 @@ export default function EquipmentPage() {
           assetLabelById={assetLabelById}
           trailerLabelById={trailerLabelById}
           sideMedia={sideMedia}
+          onFuelMutation={bumpFuelData}
           onClose={() => { setPanel(null); setSideMedia(null); }}
           onOpenMedia={(list) => setSideMedia(list)}
           onCloseSideMedia={() => setSideMedia(null)}
@@ -527,7 +537,7 @@ type UnifiedFuelRow = {
 
 function FuelTabContent({
   drivers, assets, driverNameById, assetLabelById,
-  panel, setPanel,
+  panel, setPanel, reloadVersion,
 }: {
   drivers: Driver[];
   assets: Asset[];
@@ -535,6 +545,11 @@ function FuelTabContent({
   assetLabelById: Map<number, string>;
   panel: PanelData | null;
   setPanel: (p: PanelData | null) => void;
+  /** Incrementing counter from the page — when it changes, this
+   *  component refetches its data. Used so panel mutations
+   *  (assign/auto-match/link/unlink) update the table immediately
+   *  without the user having to close + reopen the page. */
+  reloadVersion: number;
 }) {
   const [transactions, setTransactions] = useState<FuelTransaction[]>([]);
   const [reports, setReports]           = useState<FuelReport[]>([]);
@@ -566,7 +581,7 @@ function FuelTabContent({
       setLoading(false);
     }
   }, []);
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { void reload(); }, [reload, reloadVersion]);
 
   // Fire the on-demand sweep, then reload the table so new matches
   // surface. Result toast auto-dismisses; the server runs the same
@@ -886,7 +901,7 @@ function StatusPill({ status }: { status: string }) {
 
 function DetailPanel({
   panel, drivers, assets, driverNameById, assetLabelById, trailerLabelById,
-  sideMedia, onClose, onOpenMedia, onCloseSideMedia,
+  sideMedia, onFuelMutation, onClose, onOpenMedia, onCloseSideMedia,
 }: {
   panel: PanelData;
   drivers: Driver[];
@@ -895,6 +910,10 @@ function DetailPanel({
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
   sideMedia: MediaList | null;
+  /** Called whenever a panel action mutates fuel data — triggers
+   *  the FuelTabContent to refetch so the table behind the modal
+   *  reflects the new state without a page reload. */
+  onFuelMutation: () => void;
   onClose: () => void;
   onOpenMedia: (list: MediaList) => void;
   onCloseSideMedia: () => void;
@@ -984,6 +1003,7 @@ function DetailPanel({
             driverNameById={driverNameById}
             assetLabelById={assetLabelById}
             onOpenMedia={onOpenMedia}
+            onFuelMutation={onFuelMutation}
           />}
         </div>
       </div>
@@ -1250,7 +1270,7 @@ function EquipmentDefectsSection({
 
 function FuelDetail({
   transaction: initialTx, report, drivers, assets,
-  driverNameById, assetLabelById, onOpenMedia,
+  driverNameById, assetLabelById, onOpenMedia, onFuelMutation,
 }: {
   transaction: FuelTransaction | null;
   report:      FuelReport | null;
@@ -1259,6 +1279,7 @@ function FuelDetail({
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   onOpenMedia: (list: MediaList) => void;
+  onFuelMutation: () => void;
 }) {
   // Local mutable transaction so /assign + /auto-match actions can
   // refresh the panel without re-fetching the list.
@@ -1354,6 +1375,7 @@ function FuelDetail({
               drivers={drivers}
               assets={assets}
               onChange={setT}
+              onFuelMutation={onFuelMutation}
             />
           ) : (
             // No card transaction → no editable assignment. The driver
@@ -1378,6 +1400,7 @@ function FuelDetail({
               driverNameById={driverNameById}
               assetLabelById={assetLabelById}
               onChange={setT}
+              onFuelMutation={onFuelMutation}
             />
           ) : (
             // Driver-only row — there's no card transaction to match
@@ -1619,12 +1642,15 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 // transaction itself, manual linking is rarely needed.
 
 function MatchPanel({
-  transaction: t, driverNameById, assetLabelById, onChange,
+  transaction: t, driverNameById, assetLabelById, onChange, onFuelMutation,
 }: {
   transaction: FuelTransaction;
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   onChange: (next: FuelTransaction) => void;
+  /** Fires after any successful mutation so the table behind the
+   *  modal refetches. */
+  onFuelMutation: () => void;
 }) {
   const [busy, setBusy]       = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -1640,6 +1666,7 @@ function MatchPanel({
       onChange(r.fuelTransaction);
       if (r.result === 'auto_matched') {
         setFeedback(`Matched · ${r.confidence ?? '?'}% confidence`);
+        onFuelMutation();
       } else if (r.result === 'already_matched') {
         setFeedback('Already matched');
       } else {
@@ -1662,6 +1689,7 @@ function MatchPanel({
       onChange(r.fuelTransaction);
       setPickerOpen(false);
       setFeedback('Linked to driver report');
+      onFuelMutation();
       setTimeout(() => setFeedback(null), 4000);
     } catch (err) {
       setFeedback((err as Error).message ?? 'Link failed');
@@ -1678,6 +1706,7 @@ function MatchPanel({
       const r = await railway.matchFuelTransaction(t.id, { fuelReportId: null });
       onChange(r.fuelTransaction);
       setFeedback('Unlinked from driver report');
+      onFuelMutation();
       setTimeout(() => setFeedback(null), 4000);
     } catch (err) {
       setFeedback((err as Error).message ?? 'Unlink failed');
@@ -1918,7 +1947,7 @@ function DriverReportPicker({
 // intentional overrides aren't blown away).
 
 function AssignmentControls({
-  transaction: t, linkedReport, drivers, assets, onChange,
+  transaction: t, linkedReport, drivers, assets, onChange, onFuelMutation,
 }: {
   transaction: FuelTransaction;
   /** Linked driver fuel_report when present. Used as a fallback
@@ -1930,6 +1959,9 @@ function AssignmentControls({
   drivers: Driver[];
   assets: Asset[];
   onChange: (next: FuelTransaction) => void;
+  /** Fires after a successful save so the table behind the modal
+   *  refetches and shows the new attribution. */
+  onFuelMutation: () => void;
 }) {
   // Initial values fall back through:
   //   1. transaction.driverId (explicit set via /assign)
@@ -1996,6 +2028,7 @@ function AssignmentControls({
         : '';
       setSavedMessage(`Saved${extra}`);
       setApplyToSimilar(false);
+      onFuelMutation();
       setTimeout(() => setSavedMessage(null), 4000);
     } catch (err) {
       setError((err as Error).message ?? 'failed');
