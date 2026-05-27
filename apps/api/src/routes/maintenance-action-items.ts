@@ -103,12 +103,20 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
 
   let { data, error } = await tryInsert(insertRow, ACTION_ITEM_COLS);
   if (error && isMissingColumnError(error)) {
+    console.warn("[POST /v1/maintenance-action-items] new schema missing — retrying with legacy cols. Error:", { code: error.code, message: error.message });
     const { created_by_name: _drop, ...legacyRow } = insertRow;
     void _drop;
     ({ data, error } = await tryInsert(legacyRow, ACTION_ITEM_COLS_LEGACY));
   }
   if (error || !data) {
-    console.error("[POST /v1/maintenance-action-items] failed:", error);
+    // Log the full error shape so schema-cache / RLS / constraint
+    // issues are obvious from the Railway logs without needing repro.
+    console.error("[POST /v1/maintenance-action-items] insert failed:", {
+      code:    error?.code,
+      message: error?.message,
+      details: (error as { details?: string } | null | undefined)?.details,
+      hint:    (error as { hint?: string }    | null | undefined)?.hint,
+    });
     return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
   const res: CreateMaintenanceActionItemResponse = {
@@ -283,12 +291,20 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
 
   let { data, error } = await tryUpdate(update, ACTION_ITEM_COLS);
   if (error && isMissingColumnError(error)) {
-    const { completed_by_name: _cn, ...legacyUpdate } = update;
-    void _cn;
+    console.warn("[PATCH /v1/maintenance-action-items] new schema missing — retrying with legacy cols. Error:", { code: error.code, message: error.message });
+    // Drop both *_by_name columns from the update payload too, since
+    // the schema cache complaint can be triggered by either.
+    const { completed_by_name: _cn, created_by_name: _cbn, ...legacyUpdate } = update;
+    void _cn; void _cbn;
     ({ data, error } = await tryUpdate(legacyUpdate, ACTION_ITEM_COLS_LEGACY));
   }
   if (error) {
-    console.error("[PATCH /v1/maintenance-action-items/:id] failed:", error);
+    console.error("[PATCH /v1/maintenance-action-items/:id] update failed:", {
+      code:    error.code,
+      message: error.message,
+      details: (error as { details?: string } | null | undefined)?.details,
+      hint:    (error as { hint?: string }    | null | undefined)?.hint,
+    });
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);

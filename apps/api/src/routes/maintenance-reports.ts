@@ -173,14 +173,26 @@ export const ACTION_ITEM_COLS_LEGACY =
   "vendor,estimated_cost,actual_cost," +
   "created_by,created_at,updated_at";
 
-/** True when a Supabase error reads like "column X does not exist". */
-export function isMissingColumnError(err: { message?: string; code?: string } | null | undefined): boolean {
+/** True when a Supabase error reads like a missing column.
+ *
+ *  We accept three signals because PostgREST + supabase-js don't all
+ *  surface the same shape across versions:
+ *    1. Postgres SQLSTATE 42703 (undefined_column) in `code`.
+ *    2. PostgREST's "PGRST204" code for unknown schema cache columns.
+ *    3. A message string that mentions either of the new columns by
+ *       name, or the canonical "does not exist" / "could not find"
+ *       wording for column references.
+ *  Belt-and-suspenders so the legacy-schema fallback always fires
+ *  during the deploy window where the migration hasn't run yet. */
+export function isMissingColumnError(err: { message?: string; code?: string; details?: string; hint?: string } | null | undefined): boolean {
   if (!err) return false;
-  // PostgREST surfaces undefined columns with code 42703 (Postgres'
-  // own undefined_column SQLSTATE) or a "column … does not exist"
-  // message. Check both since older Supabase versions varied.
-  if (err.code === '42703') return true;
-  return /column .* does not exist/i.test(err.message ?? '');
+  if (err.code === '42703' || err.code === 'PGRST204') return true;
+  const blob = `${err.message ?? ''} ${err.details ?? ''} ${err.hint ?? ''}`.toLowerCase();
+  if (blob.includes('created_by_name'))   return true;
+  if (blob.includes('completed_by_name')) return true;
+  if (/column .* does not exist/.test(blob)) return true;
+  if (/could not find .* column/.test(blob)) return true;
+  return false;
 }
 
 const PHOTO_COLS =
