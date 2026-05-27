@@ -1294,6 +1294,15 @@ function WorkOrderModal({
 }) {
   const initial = useMemo(() => {
     if (mode === 'edit' && item) {
+      // Strip raw Clerk user_ids from completedBy display — legacy
+      // rows stored the userId directly; the new server writes the
+      // resolved name. Prefer completedByName when present, else
+      // the existing completedBy text if it doesn't look like a
+      // Clerk id, else empty so the dispatcher fills it themselves.
+      const looksLikeClerkId = /^user_[A-Za-z0-9]{8,}$/;
+      const completedByDisplay =
+        item.completedByName
+        ?? (item.completedBy && !looksLikeClerkId.test(item.completedBy) ? item.completedBy : '');
       return {
         title:         item.title,
         description:   item.description ?? '',
@@ -1306,7 +1315,7 @@ function WorkOrderModal({
         vendor:        item.vendor ?? '',
         estimatedCost: item.estimatedCost?.toString() ?? '',
         actualCost:    item.actualCost?.toString() ?? '',
-        completedBy:   item.completedBy ?? '',
+        completedBy:   completedByDisplay,
       };
     }
     if (mode === 'convert' && fromReport) {
@@ -1470,9 +1479,22 @@ function WorkOrderModal({
     }
   }
 
+  // Inline two-stage delete confirm. Click 1 arms the button (turns
+  // solid red, label changes to "Confirm delete"). Click 2 within
+  // the timeout fires the actual request. Replaces window.confirm —
+  // keeps the gesture inside the modal, fewer modal-on-modal stacks.
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  // Auto-disarm after 4s of inactivity so a stray first click doesn't
+  // leave a loaded gun on the screen for the rest of the session.
+  useEffect(() => {
+    if (!deleteArmed) return;
+    const t = setTimeout(() => setDeleteArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [deleteArmed]);
+
   async function deleteItem() {
     if (mode !== 'edit' || !item) return;
-    if (!window.confirm('Delete this work order? This cannot be undone.')) return;
+    if (!deleteArmed) { setDeleteArmed(true); return; }
     setBusy(true); setError(null);
     try {
       await railway.deleteMaintenanceActionItem(item.id);
@@ -1480,6 +1502,7 @@ function WorkOrderModal({
     } catch (err) {
       setError((err as Error).message ?? 'Delete failed');
       setBusy(false);
+      setDeleteArmed(false);
     }
   }
 
@@ -1505,7 +1528,20 @@ function WorkOrderModal({
           // 3px accent bar — color reflects current priority.
           borderTop:   `3px solid ${priorityStyle.fg}`,
         }}
-        onClick={(e) => e.stopPropagation()}>
+        onClick={(e) => {
+          e.stopPropagation();
+          // Any click inside the modal that isn't on the delete
+          // button itself should disarm the two-stage delete. The
+          // button's own onClick handler runs before this (event
+          // bubbles up), so a click on it flips armed → confirmed
+          // before we'd disarm it.
+          if (deleteArmed) {
+            const target = e.target as HTMLElement;
+            if (!target.closest('button[data-delete-btn="1"]')) {
+              setDeleteArmed(false);
+            }
+          }
+        }}>
         {/* Header */}
         <div
           className="flex items-center justify-between gap-3 px-5 py-3 shrink-0"
@@ -1869,19 +1905,28 @@ function WorkOrderModal({
           {mode === 'edit' ? (
             <button
               type="button"
+              data-delete-btn="1"
               onClick={deleteItem}
               disabled={busy}
               className="flex items-center gap-1.5 rounded-md text-[13px] font-semibold transition-colors"
               style={{
-                background: 'transparent',
-                color:      '#dc2626',
-                border:     '1px solid transparent',
-                padding:    '7px 12px',
+                background: deleteArmed ? '#ea4335'   : 'transparent',
+                color:      deleteArmed ? '#ffffff'   : '#ea4335',
+                border:     `1px solid ${deleteArmed ? '#c5221f' : 'transparent'}`,
+                padding:    '7px 14px',
                 cursor:     busy ? 'default' : 'pointer',
+                textShadow: deleteArmed ? '0 1px 1px rgba(0,0,0,0.18)' : 'none',
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#fee2e2')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <Trash2 size={14} /> Delete
+              onMouseEnter={e => {
+                if (deleteArmed) return;
+                e.currentTarget.style.background = '#fce8e6';
+              }}
+              onMouseLeave={e => {
+                if (deleteArmed) return;
+                e.currentTarget.style.background = 'transparent';
+              }}>
+              <Trash2 size={14} />
+              {deleteArmed ? 'Click again to confirm' : 'Delete'}
             </button>
           ) : <div />}
           <div className="flex items-center gap-2">

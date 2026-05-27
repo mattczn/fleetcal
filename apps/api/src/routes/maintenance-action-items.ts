@@ -210,14 +210,18 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
     update.status = body.status;
     // Auto-stamp completion when transitioning to 'done'. Caller can
     // override completedBy via the same payload (typed as a mechanic
-    // / vendor name in the UI). When omitted, fill both id + name
-    // from the acting dispatcher's Clerk identity so Activity reads
-    // "Completed … by <name>" rather than a raw user_id.
+    // / vendor name in the UI). When omitted, fill from the acting
+    // dispatcher's Clerk identity — IMPORTANT: write the resolved
+    // *display name* into completed_by, not the raw user_id, since
+    // the "Completed by" field is shown verbatim in the modal text
+    // input and we don't want user_3Cgz… leaking there. Falls back
+    // to the user_id only if Clerk lookup fails (better than null).
     if (body.status === 'done') {
       update.completed_at = new Date().toISOString();
       if (body.completedBy === undefined) {
-        update.completed_by      = userId;
-        update.completed_by_name = await getUserDisplayName(userId);
+        const name = await getUserDisplayName(userId);
+        update.completed_by      = name ?? userId;
+        update.completed_by_name = name;
       } else {
         // Dispatcher typed a free-text name (vendor / shop). Mirror
         // it into both columns so the display path is uniform.
