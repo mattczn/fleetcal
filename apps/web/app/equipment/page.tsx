@@ -422,7 +422,7 @@ function MaintenanceTabContent({
   //   - 'edit'    : prefilled from existing item, PATCH on save
   //   - 'convert' : prefilled from a driver report, POST /convert on save
   const [woModal, setWoModal] = useState<
-    | { open: true; mode: 'create' }
+    | { open: true; mode: 'create'; defaultScheduledDate?: string }
     | { open: true; mode: 'edit'; item: MaintenanceActionItem }
     | { open: true; mode: 'convert'; report: MaintenanceReport }
     | { open: false }
@@ -500,7 +500,7 @@ function MaintenanceTabContent({
           trailerLabelById={trailerLabelById}
           reloadKey={woReloadKey}
           pendingReportCount={pendingReportCount}
-          onNewClick={() => setWoModal({ open: true, mode: 'create' })}
+          onNewClick={(defaultScheduledDate) => setWoModal({ open: true, mode: 'create', defaultScheduledDate })}
           onRowClick={(item) => setWoModal({ open: true, mode: 'edit', item })}
           onSwitchToReports={() => setSubTab('driver_reports')}
         />
@@ -528,6 +528,7 @@ function MaintenanceTabContent({
           mode={woModal.mode}
           item={woModal.mode === 'edit'    ? woModal.item   : undefined}
           fromReport={woModal.mode === 'convert' ? woModal.report : undefined}
+          defaultScheduledDate={woModal.mode === 'create' ? woModal.defaultScheduledDate : undefined}
           assets={assets}
           trailers={trailers}
           assetLabelById={assetLabelById}
@@ -579,13 +580,24 @@ function WorkOrdersList({
   trailerLabelById: Map<number, string>;
   reloadKey: number;
   pendingReportCount: number | null;
-  onNewClick: () => void;
+  /** Optional defaultDate pre-fills the modal's scheduled-for field —
+   *  the per-day "+" button passes its column's date so the new
+   *  work order lands on that day without the user re-picking. */
+  onNewClick: (defaultDate?: string) => void;
   onRowClick: (item: MaintenanceActionItem) => void;
   onSwitchToReports: () => void;
 }) {
   const [items, setItems] = useState<MaintenanceActionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // weekOffset = N weeks from the current calendar week (0 = this
+  // week, -1 = last, +1 = next). Drives prev/next navigation; the
+  // "Today" button just resets it to 0.
+  const [weekOffset, setWeekOffset] = useState(0);
+  // dragOverKey — which day cell is currently being hovered during
+  // a drag. Renders a dashed highlight so the drop target is
+  // obvious. Cleared on dragleave/drop.
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   // Unused at the moment — kept for prop-shape symmetry.
   void drivers;
   void trailers;
@@ -607,9 +619,10 @@ function WorkOrdersList({
   }, [assets]);
 
   // Resolve each item to a display-ready shape (equipment label +
-  // search-blob + day-key for bucketing).
+  // search-blob + day-key for bucketing). NOTE: we no longer filter
+  // out 'done' here — done items stay visible in the week view per
+  // Matt's request. Backlog still hides them (see bucketing below).
   const resolved = useMemo(() => items
-    .filter(i => i.status !== 'done')
     .map(i => {
       const equipLabel = i.assetId
         ? (assetLabelById.get(i.assetId) ?? `Asset #${i.assetId}`)
@@ -626,13 +639,17 @@ function WorkOrdersList({
     }),
   [items, search, assetLabelById, trailerLabelById, assetColorById]);
 
-  // Current week — Sat → Fri (matches the dashboard's getPeriodRange).
+  // Visible week — Sat → Fri, shifted by weekOffset.
   const week = useMemo(() => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const dow = today.getDay(); // 0=Sun..6=Sat
-    const sat = new Date(today);
-    sat.setDate(today.getDate() - ((dow + 1) % 7));
+    const realToday = new Date();
+    const todayKey = dateKeyOf(realToday);
+    // Anchor is "today + N weeks". Stripping to midnight first so
+    // the +N*7 day math doesn't get pulled around by DST seams.
+    const anchor = new Date(realToday.getFullYear(), realToday.getMonth(), realToday.getDate());
+    anchor.setDate(anchor.getDate() + weekOffset * 7);
+    const dow = anchor.getDay(); // 0=Sun..6=Sat
+    const sat = new Date(anchor);
+    sat.setDate(anchor.getDate() - ((dow + 1) % 7));
     const days: Array<{ key: string; date: Date; isToday: boolean }> = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(sat);
@@ -640,13 +657,16 @@ function WorkOrdersList({
       days.push({
         key:     dateKeyOf(d),
         date:    d,
-        isToday: dateKeyOf(d) === dateKeyOf(today),
+        isToday: dateKeyOf(d) === todayKey,
       });
     }
     return days;
-  }, []);
+  }, [weekOffset]);
 
-  // Bucketing — items into week days + priority columns.
+  // Bucketing — items into week days + priority columns. Done items
+  // appear in the week if their scheduledDate falls inside it; they
+  // do NOT appear in the backlog (they're settled — backlog is for
+  // "what should I worry about?").
   const { weekItems, backlogByPriority } = useMemo(() => {
     const weekKeys = new Set(week.map(d => d.key));
     const weekMap: Record<string, typeof resolved> = {};
@@ -657,19 +677,49 @@ function WorkOrdersList({
     for (const r of resolved) {
       if (r.scheduledDate && weekKeys.has(r.scheduledDate)) {
         weekMap[r.scheduledDate].push(r);
-      } else {
+      } else if (r.status !== 'done') {
         backlog[r.priority].push(r);
       }
     }
-    // Sort backlog columns by priority order is implicit (we render
-    // in fixed order below). Within a column, urgent → high → normal
-    // → low ordering doesn't apply; instead sort by createdAt desc
-    // (most recent at top) so newly logged items don't get buried.
+    // Within a day column: not-done first, then done (so the
+    // dispatcher's eyes land on actionable items first). Tiebreak
+    // by createdAt desc.
+    for (const k of Object.keys(weekMap)) {
+      weekMap[k].sort((a, b) => {
+        const ad = a.status === 'done' ? 1 : 0;
+        const bd = b.status === 'done' ? 1 : 0;
+        if (ad !== bd) return ad - bd;
+        return b.createdAt.localeCompare(a.createdAt);
+      });
+    }
+    // Within a backlog column: newest at top.
     for (const p of Object.keys(backlog) as MaintenancePriority[]) {
       backlog[p].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     }
     return { weekItems: weekMap, backlogByPriority: backlog };
   }, [resolved, week]);
+
+  // Drop a card onto a day column → PATCH scheduledDate. Optimistic:
+  // we update local state immediately so the card slides to the new
+  // column without a round-trip flicker, then reconcile from the
+  // server response. On failure, roll back.
+  const handleDrop = useCallback(async (targetKey: string, e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverKey(null);
+    const id = e.dataTransfer.getData('text/plain');
+    if (!id) return;
+    const before = items.find(x => x.id === id);
+    if (!before) return;
+    if (before.scheduledDate === targetKey) return; // no-op
+    setItems(prev => prev.map(x => x.id === id ? { ...x, scheduledDate: targetKey } : x));
+    try {
+      const res = await railway.updateMaintenanceActionItem(id, { scheduledDate: targetKey });
+      setItems(prev => prev.map(x => x.id === id ? res.actionItem : x));
+    } catch (err) {
+      console.error('[equipment] drag-reschedule failed:', err);
+      setItems(prev => prev.map(x => x.id === id ? before : x));
+    }
+  }, [items]);
 
   // Empty state — no items at all in the org.
   if (!loading && items.length === 0) {
@@ -696,7 +746,7 @@ function WorkOrdersList({
         <div className="flex items-center gap-2 mt-5">
           <button
             type="button"
-            onClick={onNewClick}
+            onClick={() => onNewClick()}
             className="rounded-md transition-colors"
             style={{
               background: 'var(--gc-blue)',
@@ -759,7 +809,7 @@ function WorkOrdersList({
         <div className="flex-1" />
         <button
           type="button"
-          onClick={onNewClick}
+          onClick={() => onNewClick()}
           className="rounded-md transition-colors"
           style={{
             background: 'var(--gc-blue)',
@@ -774,15 +824,76 @@ function WorkOrdersList({
         </button>
       </div>
 
-      {/* This week — 7-day grid */}
+      {/* This week — 7-day grid with prev/next/today nav.
+          Cards in here are draggable: drop on a different day column
+          and the work order's scheduledDate updates immediately. */}
       <section>
-        <div className="flex items-baseline justify-between mb-2">
-          <h3 className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-            This week
-          </h3>
-          <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
-            {weekLabel} · {scheduledCount} scheduled
-          </span>
+        <div className="flex items-center justify-between mb-2 gap-3">
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+              {weekOffset === 0 ? 'This week'
+                : weekOffset === -1 ? 'Last week'
+                : weekOffset === 1  ? 'Next week'
+                : weekOffset  <  0  ? `${Math.abs(weekOffset)} weeks ago`
+                                    : `In ${weekOffset} weeks`}
+            </h3>
+            <span className="text-[12px] font-medium" style={{ color: 'var(--gc-text-2)' }}>
+              {weekLabel}
+            </span>
+            <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+              · {scheduledCount} scheduled
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setWeekOffset(o => o - 1)}
+              aria-label="Previous week"
+              className="rounded-md flex items-center justify-center transition-colors"
+              style={{
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-text-2)',
+                border:     '1px solid var(--gc-border-light)',
+                width:      28,
+                height:     28,
+                cursor:     'pointer',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              <ChevronLeft size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeekOffset(0)}
+              disabled={weekOffset === 0}
+              className="rounded-md text-[12px] font-semibold transition-colors"
+              style={{
+                background: weekOffset === 0 ? 'var(--gc-bg)' : 'var(--gc-surface)',
+                color:      weekOffset === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
+                border:     '1px solid var(--gc-border-light)',
+                padding:    '4px 10px',
+                cursor:     weekOffset === 0 ? 'default' : 'pointer',
+              }}>
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeekOffset(o => o + 1)}
+              aria-label="Next week"
+              className="rounded-md flex items-center justify-center transition-colors"
+              style={{
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-text-2)',
+                border:     '1px solid var(--gc-border-light)',
+                width:      28,
+                height:     28,
+                cursor:     'pointer',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              <ChevronRight size={14} />
+            </button>
+          </div>
         </div>
         <div
           className="grid gap-2 rounded-lg overflow-hidden"
@@ -794,23 +905,74 @@ function WorkOrdersList({
           }}>
           {week.map(d => {
             const dayItems = weekItems[d.key] ?? [];
+            const isDragOver = dragOverKey === d.key;
             return (
               <div key={d.key}
-                className="flex flex-col gap-1.5 rounded-md"
+                className="flex flex-col gap-1.5 rounded-md transition-colors"
+                onDragOver={e => {
+                  // preventDefault enables drop. Without it the
+                  // browser refuses the drop and fires no onDrop.
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (dragOverKey !== d.key) setDragOverKey(d.key);
+                }}
+                onDragLeave={e => {
+                  // Only clear when we've actually left the column
+                  // (not when crossing a child element). Comparing
+                  // relatedTarget against currentTarget covers it.
+                  const next = e.relatedTarget as Node | null;
+                  if (!next || !(e.currentTarget as HTMLElement).contains(next)) {
+                    setDragOverKey(prev => prev === d.key ? null : prev);
+                  }
+                }}
+                onDrop={e => handleDrop(d.key, e)}
                 style={{
-                  background: d.isToday ? '#eff6ff' : 'var(--gc-surface)',
-                  border:     `1px solid ${d.isToday ? '#bfdbfe' : 'var(--gc-border-light)'}`,
-                  padding:    8,
-                  minHeight:  120,
+                  background: isDragOver ? '#e8f0fe'
+                            : d.isToday  ? '#f0f7ff'
+                                         : 'var(--gc-surface)',
+                  border:     `${isDragOver ? '2px dashed #1a73e8'
+                              : d.isToday  ? '1px solid #aecbfa'
+                                           : '1px solid var(--gc-border-light)'}`,
+                  padding:    isDragOver ? 7 : 8,
+                  minHeight:  140,
                 }}>
-                {/* Day header */}
-                <div className="flex items-baseline justify-between">
-                  <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: d.isToday ? '#1e40af' : 'var(--gc-text-3)' }}>
-                    {d.date.toLocaleDateString('en-US', { weekday: 'short' })}
+                {/* Day header — weekday + date + new-on-this-day "+" */}
+                <div className="flex items-center justify-between mb-0.5">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-[10.5px] font-bold uppercase tracking-wider"
+                      style={{ color: d.isToday ? '#1967d2' : 'var(--gc-text-3)' }}>
+                      {d.date.toLocaleDateString('en-US', { weekday: 'short' })}
+                    </span>
+                    <span className="text-[13px] font-bold tabular-nums"
+                      style={{ color: d.isToday ? '#1967d2' : 'var(--gc-text-1)' }}>
+                      {d.date.getDate()}
+                    </span>
                   </div>
-                  <div className="text-[12px] font-semibold tabular-nums" style={{ color: d.isToday ? '#1e40af' : 'var(--gc-text-2)' }}>
-                    {d.date.getDate()}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onNewClick(d.key)}
+                    aria-label={`New work order for ${d.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`}
+                    className="rounded flex items-center justify-center transition-colors"
+                    style={{
+                      width:      18,
+                      height:     18,
+                      background: 'transparent',
+                      color:      'var(--gc-text-3)',
+                      cursor:     'pointer',
+                      fontSize:   15,
+                      lineHeight: 1,
+                      fontWeight: 600,
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = '#e8f0fe';
+                      e.currentTarget.style.color = '#1967d2';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = 'var(--gc-text-3)';
+                    }}>
+                    +
+                  </button>
                 </div>
                 {/* Cards */}
                 <div className="flex flex-col gap-1.5">
@@ -821,9 +983,25 @@ function WorkOrdersList({
                       equipLabel={item._equipLabel}
                       equipColor={item._equipColor}
                       compact
+                      draggable
+                      onDragStart={e => {
+                        e.dataTransfer.setData('text/plain', item.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
+                      onDragEnd={() => setDragOverKey(null)}
                       onClick={() => onRowClick(item)}
                     />
                   ))}
+                  {dayItems.length === 0 && (
+                    <div
+                      className="text-[11px] text-center py-2 rounded"
+                      style={{
+                        color:  'var(--gc-text-3)',
+                        border: '1px dashed transparent',
+                      }}>
+                      {isDragOver ? 'Drop here' : ''}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -899,81 +1077,101 @@ function WorkOrdersList({
 // header (i.e. inside a day column in the week grid).
 
 function WorkOrderCard({
-  item, equipLabel, equipColor, compact, onClick,
+  item, equipLabel, equipColor, compact, onClick, onDragStart, onDragEnd, draggable,
 }: {
   item: MaintenanceActionItem;
   equipLabel: string;
   equipColor: string;
   compact?: boolean;
   onClick: () => void;
+  /** Drag handlers — only wired in the week view where reschedule
+   *  via drop is the supported gesture. Backlog cards aren't
+   *  draggable (their day is null; nowhere to drop them from). */
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragEnd?:   (e: React.DragEvent) => void;
+  draggable?:   boolean;
 }) {
-  const ps = PRIORITY_STYLES[item.priority];
-  // Overdue = scheduled date is in the past and not yet done. Tint
-  // the card with a subtle red border to surface things that need
-  // re-scheduling.
+  const cs = getCardStatus(item);
+  const sp = STATUS_PALETTE[cs];
+  // Overdue = scheduled date is in the past and not yet done. We
+  // still surface "OVERDUE" as a secondary pill so it pops even on
+  // a blue (scheduled) card. Done items are never marked overdue.
   const today = dateKeyOf(new Date());
-  const overdue = item.scheduledDate && item.scheduledDate < today && item.status !== 'done';
+  const overdue = !!(item.scheduledDate && item.scheduledDate < today && item.status !== 'done');
+  // Priority dot — 6px dot in the title row, colored by priority,
+  // so urgency stays visible without owning the whole card color.
+  const pri = PRIORITY_STYLES[item.priority];
   return (
     <button
       type="button"
       onClick={onClick}
-      className="text-left rounded-md transition-colors flex flex-col gap-1"
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className="text-left rounded-md transition-colors flex flex-col gap-1.5"
       style={{
         background: 'var(--gc-surface)',
-        border:     `1px solid ${overdue ? '#fecaca' : 'var(--gc-border-light)'}`,
-        borderLeft: `3px solid ${ps.fg}`,
-        padding:    compact ? '6px 8px' : '8px 10px',
-        cursor:     'pointer',
+        border:     `1px solid ${overdue ? '#f6c2bd' : 'var(--gc-border-light)'}`,
+        borderLeft: `4px solid ${sp.stripe}`,
+        padding:    compact ? '8px 10px' : '10px 12px',
+        cursor:     draggable ? 'grab' : 'pointer',
+        opacity:    item.status === 'done' ? 0.78 : 1,
       }}
       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-surface)'; }}>
-      {/* Title */}
-      <div
-        className={`font-semibold ${compact ? 'text-[12px]' : 'text-[13px]'}`}
-        style={{
-          color:       'var(--gc-text-1)',
-          lineHeight:  1.25,
-          display:     '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow:    'hidden',
-        }}>
-        {item.title}
+      {/* Title — bolder, darker, bigger than before */}
+      <div className="flex items-start gap-1.5">
+        <span
+          className="inline-block rounded-full shrink-0 mt-1"
+          title={`${item.priority} priority`}
+          style={{ width: 7, height: 7, background: pri.fg }}
+        />
+        <div
+          className={`font-semibold ${compact ? 'text-[13.5px]' : 'text-[14px]'}`}
+          style={{
+            color:       'var(--gc-text-1)',
+            lineHeight:  1.3,
+            display:     '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow:    'hidden',
+            textDecoration: item.status === 'done' ? 'line-through' : 'none',
+          }}>
+          {item.title}
+        </div>
       </div>
-      {/* Vehicle row */}
+      {/* Vehicle row — darker text, font-medium, bigger */}
       <div className="flex items-center gap-1.5">
         <span
           className="inline-block rounded shrink-0"
-          style={{ width: 8, height: 8, background: equipColor }}
+          style={{ width: 9, height: 9, background: equipColor }}
         />
         <span
-          className={`${compact ? 'text-[10.5px]' : 'text-[11.5px]'} truncate`}
+          className={`${compact ? 'text-[12px]' : 'text-[12.5px]'} font-medium truncate`}
           style={{ color: 'var(--gc-text-2)' }}>
           {equipLabel}
         </span>
       </div>
-      {/* Footer row — category + status + maybe overdue */}
-      <div className="flex items-center justify-between gap-1.5 mt-0.5">
+      {/* Footer row — status pill (left) + category + maybe overdue */}
+      <div className="flex items-center justify-between gap-1.5">
         <span
-          className={`capitalize ${compact ? 'text-[10px]' : 'text-[10.5px]'}`}
-          style={{ color: 'var(--gc-text-3)' }}>
-          {item.category === 'pm' ? 'PM' : item.category}
+          className="text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+          style={{ background: sp.pillBg, color: sp.pillFg }}>
+          {sp.label}
         </span>
         <div className="flex items-center gap-1">
-          {item.status === 'in_progress' && (
-            <span
-              className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wider px-1.5 py-0.5 rounded`}
-              style={{ background: '#dbeafe', color: '#1e40af' }}>
-              in progress
-            </span>
-          )}
           {overdue && (
             <span
-              className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wider px-1.5 py-0.5 rounded`}
-              style={{ background: '#fee2e2', color: '#991b1b' }}>
+              className="text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+              style={{ background: '#fce8e6', color: '#c5221f' }}>
               overdue
             </span>
           )}
+          <span
+            className="text-[11px] font-semibold capitalize"
+            style={{ color: 'var(--gc-text-2)' }}>
+            {item.category === 'pm' ? 'PM' : item.category}
+          </span>
         </div>
       </div>
     </button>
@@ -1003,17 +1201,47 @@ function WorkOrderCard({
 //   edit     → PATCH /v1/maintenance-action-items/:id
 //   convert  → POST /v1/maintenance-reports/:id/convert
 
+// PRIORITY_STYLES — used for the priority chip in the modal header
+// and the priority bucket headers on the backlog board. These are
+// soft pill tints because they're sitting INSIDE a chip; the card
+// stripe itself is no longer priority-driven.
 const PRIORITY_STYLES: Record<MaintenancePriority, { bg: string; border: string; fg: string }> = {
-  urgent: { bg: '#fee2e2', border: '#fecaca', fg: '#991b1b' },
-  high:   { bg: '#fef3c7', border: '#fde68a', fg: '#92400e' },
-  normal: { bg: '#dbeafe', border: '#bfdbfe', fg: '#1e40af' },
-  low:    { bg: '#f3f4f6', border: '#e5e7eb', fg: '#4b5563' },
+  urgent: { bg: '#fce8e6', border: '#f6c2bd', fg: '#c5221f' },  // gc-red family
+  high:   { bg: '#fef7e0', border: '#fde293', fg: '#b06000' },  // gc-yellow family
+  normal: { bg: '#e8f0fe', border: '#aecbfa', fg: '#1967d2' },  // gc-blue family
+  low:    { bg: '#f1f3f4', border: '#dadce0', fg: '#5f6368' },  // gc-gray family
 };
+// STATUS_STYLES — used for the status chip in the modal header.
+// Soft tints for the same chip-inside-a-button reason.
 const STATUS_STYLES: Record<MaintenanceActionStatus, { bg: string; border: string; fg: string }> = {
-  open:        { bg: '#fef3c7', border: '#fde68a', fg: '#92400e' },
-  in_progress: { bg: '#dbeafe', border: '#bfdbfe', fg: '#1e40af' },
-  done:        { bg: '#dcfce7', border: '#bbf7d0', fg: '#166534' },
+  open:        { bg: '#fef7e0', border: '#fde293', fg: '#b06000' },
+  in_progress: { bg: '#e8f0fe', border: '#aecbfa', fg: '#1967d2' },
+  done:        { bg: '#e6f4ea', border: '#a8dab5', fg: '#137333' },
 };
+
+// STATUS_PALETTE — bold Google-Calendar colors for the card-level
+// status indicator (4px left stripe + footer pill). Per Matt's
+// feedback: card color should reflect status, NOT priority, and
+// should use the bold GC palette already used across the site,
+// not washed pastels. These match dispatch's event-status colors.
+//
+//   scheduled    blue  #1a73e8   open + scheduledDate set
+//   in_progress  amber #f9ab00   status='in_progress'
+//   done         green #0f9d58   status='done'  (stays visible!)
+//   open         gray  #5f6368   open + no scheduledDate (backlog)
+type CardStatus = 'scheduled' | 'in_progress' | 'done' | 'open';
+const STATUS_PALETTE: Record<CardStatus, { stripe: string; pillBg: string; pillFg: string; label: string }> = {
+  scheduled:   { stripe: '#1a73e8', pillBg: '#e8f0fe', pillFg: '#1967d2', label: 'Scheduled'   },
+  in_progress: { stripe: '#f9ab00', pillBg: '#fef7e0', pillFg: '#b06000', label: 'In progress' },
+  done:        { stripe: '#0f9d58', pillBg: '#e6f4ea', pillFg: '#137333', label: 'Done'        },
+  open:        { stripe: '#5f6368', pillBg: '#f1f3f4', pillFg: '#3c4043', label: 'Open'        },
+};
+function getCardStatus(item: MaintenanceActionItem): CardStatus {
+  if (item.status === 'done')         return 'done';
+  if (item.status === 'in_progress')  return 'in_progress';
+  if (item.scheduledDate)             return 'scheduled';
+  return 'open';
+}
 
 // EventModal's inputStyle() — kept verbatim so any visual change here
 // stays in lockstep with the load modal. If EventModal's iStyle ever
@@ -1033,12 +1261,17 @@ function workOrderInputStyle(): React.CSSProperties {
 }
 
 function WorkOrderModal({
-  mode, item, fromReport, assets, trailers, assetLabelById, trailerLabelById,
+  mode, item, fromReport, defaultScheduledDate, assets, trailers, assetLabelById, trailerLabelById,
   onClose, onSaved,
 }: {
   mode: 'create' | 'edit' | 'convert';
   item?: MaintenanceActionItem;
   fromReport?: MaintenanceReport;
+  /** Only used in 'create' mode — pre-fills the Scheduled-for field
+   *  when the user clicked a per-day "+" button on the week board.
+   *  Showing the DatePicker becomes conditional on this being set so
+   *  the toolbar's "+ New work order" stays minimal. */
+  defaultScheduledDate?: string;
   assets: Asset[];
   trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   assetLabelById: Map<number, string>;
@@ -1090,13 +1323,13 @@ function WorkOrderModal({
       status:        'open' as MaintenanceActionStatus,
       assetId:       null as number | null,
       trailerId:     null as number | null,
-      scheduledDate: '',
+      scheduledDate: defaultScheduledDate ?? '',
       vendor:        '',
       estimatedCost: '',
       actualCost:    '',
       completedBy:   '',
     };
-  }, [mode, item, fromReport]);
+  }, [mode, item, fromReport, defaultScheduledDate]);
 
   const [form, setForm] = useState(initial);
   useEffect(() => { setForm(initial); }, [initial]);
@@ -1358,7 +1591,7 @@ function WorkOrderModal({
                 <option value="other">Other</option>
               </StyledSelect>
             </div>
-            {mode === 'edit' && (
+            {(mode === 'edit' || (mode === 'create' && defaultScheduledDate)) && (
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
                   style={{ color: 'var(--gc-text-3)' }}>
@@ -1497,6 +1730,55 @@ function WorkOrderModal({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Activity — created/completed timeline. Edit mode only,
+              since brand-new items have nothing to show yet. Uses
+              the existing maintenance_action_items columns
+              (created_by, created_at, completed_by, completed_at)
+              so no schema change required. */}
+          {mode === 'edit' && item && (
+            <div
+              className="flex flex-col gap-1.5 pt-3 mt-1"
+              style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+              <div className="text-[11px] font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Activity
+              </div>
+              <div className="flex flex-col gap-1">
+                <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
+                  <span style={{ color: 'var(--gc-text-3)' }}>Created</span>{' '}
+                  <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+                    {new Date(item.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </span>
+                  {item.createdBy && (
+                    <>
+                      {' by '}
+                      <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{item.createdBy}</span>
+                    </>
+                  )}
+                </div>
+                {item.completedAt && (
+                  <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
+                    <span style={{ color: 'var(--gc-text-3)' }}>Completed</span>{' '}
+                    <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+                      {new Date(item.completedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                    </span>
+                    {item.completedBy && (
+                      <>
+                        {' by '}
+                        <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{item.completedBy}</span>
+                      </>
+                    )}
+                  </div>
+                )}
+                {item.reportId && (
+                  <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                    Converted from a driver report.
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
