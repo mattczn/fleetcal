@@ -24,6 +24,7 @@ import { createPortal } from 'react-dom';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check,
+  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -277,7 +278,7 @@ export default function EquipmentPage() {
           />
         )}
         {tab === 'inspections' && (
-          <InspectionsList
+          <InspectionsTabContent
             drivers={drivers}
             assets={assets}
             trailers={trailers}
@@ -477,6 +478,510 @@ function MaintenanceList({
 }
 
 // ─── Inspections ──────────────────────────────────────────────────────
+
+/**
+ * InspectionsTabContent — view switcher between the per-truck weekly
+ * Calendar and the flat List. Both share the same parent props (driver
+ * + asset + trailer fixtures, plus an onOpen callback to surface a row
+ * in the right-side detail panel) so the user can flip between them
+ * without losing the open record. Calendar is the default because the
+ * dispatcher's most common question is "did each truck get inspected
+ * today?" which is naturally a coverage grid.
+ */
+function InspectionsTabContent({
+  drivers, assets, trailers, onOpen, openId,
+}: {
+  drivers: Driver[];
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  onOpen: (r: InspectionRow) => void;
+  openId: string | null;
+}) {
+  const [view, setView] = useState<'calendar' | 'list'>('calendar');
+
+  const toggleBtn = (key: 'calendar' | 'list', icon: React.ReactNode, label: string) => {
+    const active = view === key;
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={() => setView(key)}
+        className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-[12px] font-extrabold uppercase tracking-wider transition-colors"
+        style={{
+          background: active ? 'var(--gc-blue)' : 'transparent',
+          color:      active ? '#fff' : 'var(--gc-text-2)',
+          textShadow: active ? '0 1px 1px rgba(0,0,0,0.25)' : undefined,
+        }}>
+        {icon}{label}
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex flex-col min-h-0 flex-1">
+      <div className="shrink-0 flex items-center gap-2 px-4 py-2.5"
+        style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div className="flex items-center gap-0.5 p-0.5 rounded-full"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+          {toggleBtn('calendar', <CalendarDays size={12} />, 'Week')}
+          {toggleBtn('list',     <ListIcon     size={12} />, 'List')}
+        </div>
+      </div>
+      <div className="flex-1 min-h-0">
+        {view === 'calendar' && (
+          <InspectionsCalendar
+            assets={assets}
+            onOpen={onOpen}
+            openId={openId}
+          />
+        )}
+        {view === 'list' && (
+          <InspectionsList
+            drivers={drivers}
+            assets={assets}
+            trailers={trailers}
+            onOpen={onOpen}
+            openId={openId}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Date helpers — local-time, day-precision string keys (YYYY-MM-DD).
+ *  We compare these against InspectionRow.inspectionDate which is also
+ *  stored as a YYYY-MM-DD date (driver app submits in their local TZ).
+ *  Avoids the cross-timezone "is this inspection on Tuesday or
+ *  Wednesday" footgun that would happen with toISOString().slice(0,10). */
+function ymdKey(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function addDays(d: Date, n: number): Date {
+  const out = new Date(d);
+  out.setDate(out.getDate() + n);
+  return out;
+}
+/** Saturday of the work week containing `d`. JS uses Sun=0..Sat=6;
+ *  the offset back to Saturday is (dow + 1) % 7. */
+function weekStartSat(d: Date): Date {
+  const dow  = d.getDay();
+  const diff = (dow + 1) % 7;
+  const out  = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  out.setDate(out.getDate() - diff);
+  return out;
+}
+const DAY_LABELS = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const;
+
+/**
+ * InspectionsCalendar — Saturday-through-Friday work-week grid of
+ * inspection coverage per truck.
+ *
+ * Each row is one active truck (assets, sorted by sortOrder, retired
+ * trucks excluded — they're history). Each column is one weekday.
+ *
+ * A cell shows the aggregate status of every inspection submitted for
+ * that truck on that day:
+ *   - empty / em-dash → no inspection submitted
+ *   - green           → 1+ inspections, all clear
+ *   - red             → 1+ inspections, at least one had defects
+ * Multi-inspection days get a small "×N" badge so the count is
+ * obvious without hover.
+ *
+ * Click behavior:
+ *   - 1 inspection on the day → opens that report in the right-side
+ *     detail panel (same onOpen the list view uses)
+ *   - 2+ inspections           → opens an inline popover listing each
+ *     submission with its time + defect count; clicking a row in the
+ *     popover opens that specific report
+ *
+ * Fetches `/v1/inspection-reports?from&to` scoped to the visible week
+ * (limit 500, way more than any single fleet would hit in a week). Re-
+ * fetches when the visible week changes.
+ */
+function InspectionsCalendar({
+  assets, onOpen, openId,
+}: {
+  assets: Asset[];
+  onOpen: (r: InspectionRow) => void;
+  openId: string | null;
+}) {
+  const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
+  const [rows, setRows]             = useState<InspectionRow[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState<string | null>(null);
+  // Which (assetId|date) cell currently has its multi-pick popover
+  // open. Stored as a composite string so only one popover is open at
+  // a time (clicking another cell replaces it).
+  const [openCellKey, setOpenCellKey] = useState<string | null>(null);
+
+  // Compute the 7 days of the visible week from `anchorDate`. Pure
+  // function of state so it doesn't need its own effect.
+  const days = useMemo(() => {
+    const sat = weekStartSat(anchorDate);
+    return Array.from({ length: 7 }, (_, i) => addDays(sat, i));
+  }, [anchorDate]);
+  const fromKey = ymdKey(days[0]);
+  const toKey   = ymdKey(days[6]);
+
+  // Today's key for the "highlight today's column" affordance.
+  const todayKey = useMemo(() => ymdKey(new Date()), []);
+
+  // Fetch inspections for the visible window. Limit 500 is comfortably
+  // above the realistic ceiling for a single Sat-Fri week (a 50-truck
+  // fleet doing 2 DVIRs per truck per day = 700/week — at that scale
+  // we'd add server-side pagination, but until then this is fine).
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    railway.listInspectionReports({ from: fromKey, to: toKey, limit: 500 })
+      .then(r => { if (!cancelled) setRows(r.inspections); })
+      .catch(err => {
+        console.error('[equipment] inspections-calendar:', err);
+        if (!cancelled) {
+          setRows([]);
+          setError(err instanceof Error ? err.message : 'Failed to load inspections');
+        }
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [fromKey, toKey]);
+
+  // Index inspections by `${assetId}|${date}` for O(1) cell lookup.
+  const byAssetDay = useMemo(() => {
+    const m = new Map<string, InspectionRow[]>();
+    for (const r of rows) {
+      if (r.assetId == null) continue;
+      const k = `${r.assetId}|${r.inspectionDate}`;
+      const arr = m.get(k);
+      if (arr) arr.push(r); else m.set(k, [r]);
+    }
+    // Sort each bucket newest-first so the popover lists the most
+    // recent submission at the top.
+    for (const arr of m.values()) arr.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+    return m;
+  }, [rows]);
+
+  // Active (non-retired) trucks in dispatcher's preferred order.
+  const visibleAssets = useMemo(() => {
+    return [...assets]
+      .filter(a => !a.activeTo && !a.hidden)
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  }, [assets]);
+
+  // Header label like "Sat May 23 — Fri May 29, 2026". Year only at
+  // the end so the label stays narrow.
+  const weekLabel = useMemo(() => {
+    const fmt = (d: Date, withYear = false) => {
+      const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+      if (withYear) opts.year = 'numeric';
+      return d.toLocaleDateString('en-US', opts);
+    };
+    return `${fmt(days[0])} — ${fmt(days[6], true)}`;
+  }, [days]);
+
+  // Aggregate status for one bucket of inspections on a given day.
+  function aggregateStatus(list: InspectionRow[] | undefined): 'none' | 'clear' | 'defect' {
+    if (!list || list.length === 0) return 'none';
+    return list.some(r => r.hasDefects) ? 'defect' : 'clear';
+  }
+
+  function handleCellClick(assetId: number, dayKey: string, list: InspectionRow[]) {
+    if (list.length === 0) return;
+    if (list.length === 1) {
+      onOpen(list[0]);
+      setOpenCellKey(null);
+      return;
+    }
+    const k = `${assetId}|${dayKey}`;
+    setOpenCellKey(prev => prev === k ? null : k);
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {/* Toolbar — week label + prev/next/today. */}
+      <div className="shrink-0 flex items-center gap-2 px-4 py-3"
+        style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        <button type="button"
+          onClick={() => setAnchorDate(d => addDays(d, -7))}
+          className="p-1 rounded-lg transition-colors"
+          style={{ color: 'var(--gc-text-2)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          title="Previous week">
+          <ChevronLeft size={16} />
+        </button>
+        <button type="button"
+          onClick={() => setAnchorDate(d => addDays(d, 7))}
+          className="p-1 rounded-lg transition-colors"
+          style={{ color: 'var(--gc-text-2)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          title="Next week">
+          <ChevronRight size={16} />
+        </button>
+        <button type="button"
+          onClick={() => setAnchorDate(new Date())}
+          className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors"
+          style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          title="Jump to this week">
+          Today
+        </button>
+        <div className="text-[13px] font-semibold ml-1" style={{ color: 'var(--gc-text-1)' }}>
+          {weekLabel}
+        </div>
+        <div className="ml-auto flex items-center gap-3 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full" style={{ background: '#16a34a' }} />
+            All clear
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full" style={{ background: '#dc2626' }} />
+            Defect
+          </div>
+          {loading && <Loader2 size={11} className="animate-spin" />}
+        </div>
+      </div>
+
+      {/* Body — sticky header row + one row per truck. Whole grid
+          horizontally + vertically scrolls inside its track so the
+          toolbar above stays put. */}
+      <div className="flex-1 min-h-0 overflow-auto">
+        {error ? (
+          <div className="px-4 py-6 text-[13px]" style={{ color: '#dc2626' }}>
+            <AlertCircle size={13} className="inline mr-1" /> {error}
+          </div>
+        ) : visibleAssets.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+            No active trucks to show.
+          </div>
+        ) : (
+          <table className="w-full border-collapse" style={{ minWidth: 720 }}>
+            <thead>
+              <tr style={{ background: 'var(--gc-bg)' }}>
+                <th
+                  className="sticky left-0 z-10 text-left text-[11px] font-extrabold uppercase tracking-wider px-3 py-2"
+                  style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-3)', borderBottom: '1px solid var(--gc-border-light)', minWidth: 160 }}>
+                  Truck
+                </th>
+                {days.map(d => {
+                  const isToday = ymdKey(d) === todayKey;
+                  return (
+                    <th key={ymdKey(d)}
+                      className="text-center text-[11px] font-extrabold uppercase tracking-wider px-2 py-2"
+                      style={{
+                        color:      isToday ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                        background: isToday ? 'rgba(26,115,232,0.06)' : undefined,
+                        borderBottom: '1px solid var(--gc-border-light)',
+                        minWidth: 76,
+                      }}>
+                      <div>{DAY_LABELS[d.getDay() === 6 ? 0 : d.getDay() + 1]}</div>
+                      <div className="text-[14px] font-bold mt-0.5" style={{ color: isToday ? 'var(--gc-blue)' : 'var(--gc-text-1)' }}>
+                        {d.getDate()}
+                      </div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleAssets.map(a => (
+                <tr key={a.id} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                  <td className="sticky left-0 z-10 px-3 py-2.5"
+                    style={{ background: 'var(--gc-surface)', borderRight: '1px solid var(--gc-border-light)' }}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Truck size={14} style={{ color: a.color || 'var(--gc-text-3)', flexShrink: 0 }} />
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          {a.name}
+                        </div>
+                        {a.unit && (
+                          <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                            #{a.unit}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  {days.map(d => {
+                    const dayKey = ymdKey(d);
+                    const list   = byAssetDay.get(`${a.id}|${dayKey}`) ?? [];
+                    const status = aggregateStatus(list);
+                    const isOpenHere = openCellKey === `${a.id}|${dayKey}`;
+                    const isToday    = dayKey === todayKey;
+                    const isSelected = list.some(r => r.id === openId);
+                    return (
+                      <td key={dayKey}
+                        className="text-center align-middle"
+                        style={{
+                          padding: 0,
+                          background: isToday ? 'rgba(26,115,232,0.04)' : undefined,
+                          position: 'relative',
+                        }}>
+                        <CalendarCell
+                          status={status}
+                          count={list.length}
+                          selected={isSelected}
+                          onClick={() => handleCellClick(a.id, dayKey, list)}
+                        />
+                        {/* Multi-inspection picker popover. Anchored
+                            to the cell via absolute positioning so it
+                            doesn't reflow the grid. */}
+                        {isOpenHere && list.length > 1 && (
+                          <InspectionPickerPopover
+                            list={list}
+                            onPick={r => { onOpen(r); setOpenCellKey(null); }}
+                            onClose={() => setOpenCellKey(null)}
+                          />
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** One cell in the inspections grid. Pure-presentational — all state
+ *  + click routing lives in the parent so this can stay dumb. */
+function CalendarCell({
+  status, count, selected, onClick,
+}: {
+  status: 'none' | 'clear' | 'defect';
+  count: number;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const dotColor =
+    status === 'clear'  ? '#16a34a' :
+    status === 'defect' ? '#dc2626' : null;
+  const interactive = status !== 'none';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!interactive}
+      className="flex items-center justify-center gap-1 w-full h-full transition-colors"
+      style={{
+        minHeight:   44,
+        padding:     '8px 4px',
+        cursor:      interactive ? 'pointer' : 'default',
+        background:  selected ? 'var(--gc-blue-light)' : 'transparent',
+        border:      'none',
+        outline:     selected ? '2px solid var(--gc-blue)' : undefined,
+        outlineOffset: selected ? '-2px' : undefined,
+      }}
+      onMouseEnter={e => { if (interactive && !selected) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!selected) e.currentTarget.style.background = 'transparent'; }}
+      title={
+        status === 'none'   ? 'No inspection'
+      : status === 'clear'  ? (count > 1 ? `${count} inspections — all clear` : 'All clear')
+      :                       (count > 1 ? `${count} inspections — defects logged` : 'Defects logged')
+      }>
+      {status === 'none' ? (
+        <span className="text-[14px]" style={{ color: 'var(--gc-text-3)' }}>—</span>
+      ) : status === 'clear' ? (
+        <CheckCircle2 size={16} style={{ color: dotColor! }} />
+      ) : (
+        <AlertCircle size={16} style={{ color: dotColor! }} />
+      )}
+      {count > 1 && (
+        <span className="text-[10px] font-bold" style={{ color: 'var(--gc-text-2)' }}>
+          ×{count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** Popover for days that have 2+ inspections — lets the dispatcher
+ *  pick which submission to open. Closes on outside click via the
+ *  parent's openCellKey state; we just render and emit events. */
+function InspectionPickerPopover({
+  list, onPick, onClose,
+}: {
+  list: InspectionRow[];
+  onPick: (r: InspectionRow) => void;
+  onClose: () => void;
+}) {
+  // Close on Escape and on click outside (the latter via a
+  // backdrop layer so we don't fight the cell's own click handler).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <>
+      {/* Transparent backdrop captures outside-clicks; sits below the
+          popover but above everything else so wider page UI doesn't
+          eat the click. */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 50, background: 'transparent',
+        }}
+      />
+      <div
+        onClick={e => e.stopPropagation()}
+        className="rounded-lg shadow-lg"
+        style={{
+          position: 'absolute',
+          top: '100%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 51,
+          background: 'var(--gc-surface)',
+          border: '1px solid var(--gc-border)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          minWidth: 240,
+          marginTop: 4,
+          padding: 4,
+        }}>
+        <div className="text-[10px] font-bold uppercase tracking-wider px-2 py-1.5"
+          style={{ color: 'var(--gc-text-3)' }}>
+          {list.length} inspections
+        </div>
+        {list.map(r => {
+          const time = new Date(r.submittedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+          return (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onPick(r)}
+              className="w-full flex items-center gap-2 text-left px-2 py-1.5 rounded transition-colors"
+              style={{ background: 'transparent' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              {r.hasDefects
+                ? <AlertCircle size={13} style={{ color: '#dc2626', flexShrink: 0 }} />
+                : <CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} />}
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                  {time}
+                </div>
+                <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                  {r.driverName} · {r.hasDefects ? `${r.defectCount} defect${r.defectCount === 1 ? '' : 's'}` : `${r.itemCount} items`}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
 
 function InspectionsList({
   drivers, assets, trailers, onOpen, openId,
