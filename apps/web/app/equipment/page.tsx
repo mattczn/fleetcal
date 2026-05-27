@@ -608,9 +608,12 @@ function WorkOrdersList({
   // self-heal when the browser comes back from background or the
   // network blip ends.
   const [refetchKey, setRefetchKey] = useState(0);
-  // Unused at the moment — kept for prop-shape symmetry.
+  // Unused at the moment — kept for prop-shape symmetry. The board
+  // builds its own assetNameById below (truck name only, no unit
+  // number) instead of using the page-level assetLabelById.
   void drivers;
   void trailers;
+  void assetLabelById;
 
   // Effect: load work orders, retried on transient failures (5x
   // exponential backoff via fetchWithRetry — same pattern the page-
@@ -661,11 +664,19 @@ function WorkOrdersList({
     };
   }, []);
 
-  // Asset color lookup — for the colored stripe + dot on each card.
-  // Falls back to a neutral gray when no asset or no color set.
+  // Asset color + name-only lookups. Cards on the board show just
+  // the truck name (e.g. "CT-2023") — the page-level assetLabelById
+  // appends the unit number ("CT-2023 #2023") which is redundant
+  // when name + unit are basically the same string. The detail
+  // panel still uses the full label.
   const assetColorById = useMemo(() => {
     const m = new Map<number, string>();
     for (const a of assets) if (a.color) m.set(a.id, a.color);
+    return m;
+  }, [assets]);
+  const assetNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const a of assets) m.set(a.id, a.name);
     return m;
   }, [assets]);
 
@@ -676,7 +687,7 @@ function WorkOrdersList({
   const resolved = useMemo(() => items
     .map(i => {
       const equipLabel = i.assetId
-        ? (assetLabelById.get(i.assetId) ?? `Asset #${i.assetId}`)
+        ? (assetNameById.get(i.assetId) ?? `Asset #${i.assetId}`)
         : i.trailerId
           ? (trailerLabelById.get(i.trailerId) ?? `Trailer #${i.trailerId}`)
           : '—';
@@ -688,7 +699,7 @@ function WorkOrdersList({
       if (!search.trim()) return true;
       return i._searchBlob.includes(search.trim().toLowerCase());
     }),
-  [items, search, assetLabelById, trailerLabelById, assetColorById]);
+  [items, search, assetNameById, trailerLabelById, assetColorById]);
 
   // Visible week — Sat → Fri, shifted by weekOffset.
   const week = useMemo(() => {
