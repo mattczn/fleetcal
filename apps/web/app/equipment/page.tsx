@@ -828,23 +828,23 @@ function WorkOrdersList({
           Cards in here are draggable: drop on a different day column
           and the work order's scheduledDate updates immediately. */}
       <section>
-        <div className="flex items-center justify-between mb-2 gap-3">
-          <div className="flex items-baseline gap-2">
-            <h3 className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+        <div className="flex items-center justify-between mb-2.5 gap-3">
+          <div className="flex items-baseline gap-2.5">
+            <h3 className="text-[17px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
               {weekOffset === 0 ? 'This week'
                 : weekOffset === -1 ? 'Last week'
                 : weekOffset === 1  ? 'Next week'
                 : weekOffset  <  0  ? `${Math.abs(weekOffset)} weeks ago`
                                     : `In ${weekOffset} weeks`}
             </h3>
-            <span className="text-[12px] font-medium" style={{ color: 'var(--gc-text-2)' }}>
+            <span className="text-[13.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
               {weekLabel}
             </span>
-            <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+            <span className="text-[13px] font-medium" style={{ color: 'var(--gc-text-2)' }}>
               · {scheduledCount} scheduled
             </span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setWeekOffset(o => o - 1)}
@@ -852,26 +852,26 @@ function WorkOrdersList({
               className="rounded-md flex items-center justify-center transition-colors"
               style={{
                 background: 'var(--gc-surface)',
-                color:      'var(--gc-text-2)',
-                border:     '1px solid var(--gc-border-light)',
-                width:      28,
-                height:     28,
+                color:      'var(--gc-text-1)',
+                border:     '1px solid var(--gc-border)',
+                width:      32,
+                height:     32,
                 cursor:     'pointer',
               }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <ChevronLeft size={14} />
+              <ChevronLeft size={16} />
             </button>
             <button
               type="button"
               onClick={() => setWeekOffset(0)}
               disabled={weekOffset === 0}
-              className="rounded-md text-[12px] font-semibold transition-colors"
+              className="rounded-md text-[13px] font-semibold transition-colors"
               style={{
                 background: weekOffset === 0 ? 'var(--gc-bg)' : 'var(--gc-surface)',
-                color:      weekOffset === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
-                border:     '1px solid var(--gc-border-light)',
-                padding:    '4px 10px',
+                color:      weekOffset === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+                border:     '1px solid var(--gc-border)',
+                padding:    '6px 14px',
                 cursor:     weekOffset === 0 ? 'default' : 'pointer',
               }}>
               Today
@@ -883,15 +883,15 @@ function WorkOrdersList({
               className="rounded-md flex items-center justify-center transition-colors"
               style={{
                 background: 'var(--gc-surface)',
-                color:      'var(--gc-text-2)',
-                border:     '1px solid var(--gc-border-light)',
-                width:      28,
-                height:     28,
+                color:      'var(--gc-text-1)',
+                border:     '1px solid var(--gc-border)',
+                width:      32,
+                height:     32,
                 cursor:     'pointer',
               }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <ChevronRight size={14} />
+              <ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -937,14 +937,14 @@ function WorkOrdersList({
                   minHeight:  140,
                 }}>
                 {/* Day header — weekday + date + new-on-this-day "+" */}
-                <div className="flex items-center justify-between mb-0.5">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-[10.5px] font-bold uppercase tracking-wider"
-                      style={{ color: d.isToday ? '#1967d2' : 'var(--gc-text-3)' }}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-[12px] font-extrabold uppercase tracking-wider"
+                      style={{ color: d.isToday ? '#1a73e8' : 'var(--gc-text-2)' }}>
                       {d.date.toLocaleDateString('en-US', { weekday: 'short' })}
                     </span>
-                    <span className="text-[13px] font-bold tabular-nums"
-                      style={{ color: d.isToday ? '#1967d2' : 'var(--gc-text-1)' }}>
+                    <span className="text-[16px] font-extrabold tabular-nums"
+                      style={{ color: d.isToday ? '#1a73e8' : 'var(--gc-text-1)' }}>
                       {d.date.getDate()}
                     </span>
                   </div>
@@ -952,24 +952,24 @@ function WorkOrdersList({
                     type="button"
                     onClick={() => onNewClick(d.key)}
                     aria-label={`New work order for ${d.date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`}
-                    className="rounded flex items-center justify-center transition-colors"
+                    className="rounded-md flex items-center justify-center transition-colors"
                     style={{
-                      width:      18,
-                      height:     18,
+                      width:      22,
+                      height:     22,
                       background: 'transparent',
-                      color:      'var(--gc-text-3)',
+                      color:      'var(--gc-text-2)',
                       cursor:     'pointer',
-                      fontSize:   15,
+                      fontSize:   18,
                       lineHeight: 1,
-                      fontWeight: 600,
+                      fontWeight: 700,
                     }}
                     onMouseEnter={e => {
-                      e.currentTarget.style.background = '#e8f0fe';
-                      e.currentTarget.style.color = '#1967d2';
+                      e.currentTarget.style.background = '#1a73e8';
+                      e.currentTarget.style.color = '#ffffff';
                     }}
                     onMouseLeave={e => {
                       e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = 'var(--gc-text-3)';
+                      e.currentTarget.style.color = 'var(--gc-text-2)';
                     }}>
                     +
                   </button>
@@ -1011,11 +1011,11 @@ function WorkOrdersList({
 
       {/* Backlog — 4 priority columns */}
       <section>
-        <div className="flex items-baseline justify-between mb-2">
-          <h3 className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+        <div className="flex items-baseline justify-between mb-2.5">
+          <h3 className="text-[17px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
             Backlog
           </h3>
-          <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+          <span className="text-[13px] font-medium" style={{ color: 'var(--gc-text-2)' }}>
             {backlogCount} item{backlogCount === 1 ? '' : 's'} not scheduled this week
           </span>
         </div>
@@ -1032,22 +1032,24 @@ function WorkOrdersList({
                   minHeight:  180,
                 }}>
                 <div
-                  className="flex items-center justify-between px-3 py-2 rounded-t-lg"
+                  className="flex items-center justify-between px-3 py-2.5 rounded-t-lg"
                   style={{
                     background: style.bg,
                     color:      style.fg,
                     borderBottom: `1px solid ${style.border}`,
                   }}>
-                  <div className="text-[11px] font-bold uppercase tracking-wider">
+                  <div className="text-[12.5px] font-extrabold uppercase tracking-wider"
+                    style={{ textShadow: '0 1px 1px rgba(0,0,0,0.18)' }}>
                     {p}
                   </div>
-                  <div className="text-[11px] font-bold tabular-nums">
+                  <div className="text-[14px] font-extrabold tabular-nums"
+                    style={{ textShadow: '0 1px 1px rgba(0,0,0,0.18)' }}>
                     {colItems.length}
                   </div>
                 </div>
                 <div className="flex flex-col gap-1.5 p-2">
                   {colItems.length === 0 ? (
-                    <div className="text-[11.5px] text-center py-3" style={{ color: 'var(--gc-text-3)' }}>
+                    <div className="text-[13px] font-medium text-center py-4" style={{ color: 'var(--gc-text-3)' }}>
                       Nothing here.
                     </div>
                   ) : colItems.map(item => (
@@ -1111,23 +1113,23 @@ function WorkOrderCard({
       className="text-left rounded-md transition-colors flex flex-col gap-1.5"
       style={{
         background: 'var(--gc-surface)',
-        border:     `1px solid ${overdue ? '#f6c2bd' : 'var(--gc-border-light)'}`,
-        borderLeft: `4px solid ${sp.stripe}`,
-        padding:    compact ? '8px 10px' : '10px 12px',
+        border:     `1px solid ${overdue ? '#c5221f' : 'var(--gc-border)'}`,
+        borderLeft: `5px solid ${sp.stripe}`,
+        padding:    compact ? '9px 11px' : '11px 13px',
         cursor:     draggable ? 'grab' : 'pointer',
-        opacity:    item.status === 'done' ? 0.78 : 1,
+        boxShadow:  '0 1px 2px rgba(0,0,0,0.04)',
       }}
       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-surface)'; }}>
-      {/* Title — bolder, darker, bigger than before */}
-      <div className="flex items-start gap-1.5">
+      {/* Title — bold, dark, big */}
+      <div className="flex items-start gap-2">
         <span
-          className="inline-block rounded-full shrink-0 mt-1"
+          className="inline-block rounded-full shrink-0"
           title={`${item.priority} priority`}
-          style={{ width: 7, height: 7, background: pri.fg }}
+          style={{ width: 9, height: 9, background: pri.bg, marginTop: 5 }}
         />
         <div
-          className={`font-semibold ${compact ? 'text-[13.5px]' : 'text-[14px]'}`}
+          className={`font-bold ${compact ? 'text-[14.5px]' : 'text-[15px]'}`}
           style={{
             color:       'var(--gc-text-1)',
             lineHeight:  1.3,
@@ -1135,41 +1137,48 @@ function WorkOrderCard({
             WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical',
             overflow:    'hidden',
-            textDecoration: item.status === 'done' ? 'line-through' : 'none',
           }}>
           {item.title}
         </div>
       </div>
-      {/* Vehicle row — darker text, font-medium, bigger */}
+      {/* Vehicle row — dark, semibold, easy to read */}
       <div className="flex items-center gap-1.5">
         <span
           className="inline-block rounded shrink-0"
-          style={{ width: 9, height: 9, background: equipColor }}
+          style={{ width: 10, height: 10, background: equipColor }}
         />
         <span
-          className={`${compact ? 'text-[12px]' : 'text-[12.5px]'} font-medium truncate`}
-          style={{ color: 'var(--gc-text-2)' }}>
+          className={`${compact ? 'text-[13px]' : 'text-[13.5px]'} font-semibold truncate`}
+          style={{ color: 'var(--gc-text-1)' }}>
           {equipLabel}
         </span>
       </div>
       {/* Footer row — status pill (left) + category + maybe overdue */}
-      <div className="flex items-center justify-between gap-1.5">
+      <div className="flex items-center justify-between gap-1.5 mt-0.5">
         <span
-          className="text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-          style={{ background: sp.pillBg, color: sp.pillFg }}>
+          className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded"
+          style={{
+            background: sp.pillBg,
+            color:      sp.pillFg,
+            textShadow: '0 1px 1px rgba(0,0,0,0.18)',
+          }}>
           {sp.label}
         </span>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           {overdue && (
             <span
-              className="text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-              style={{ background: '#fce8e6', color: '#c5221f' }}>
+              className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded"
+              style={{
+                background: '#ea4335',
+                color:      '#ffffff',
+                textShadow: '0 1px 1px rgba(0,0,0,0.18)',
+              }}>
               overdue
             </span>
           )}
           <span
-            className="text-[11px] font-semibold capitalize"
-            style={{ color: 'var(--gc-text-2)' }}>
+            className="text-[12.5px] font-bold capitalize"
+            style={{ color: 'var(--gc-text-1)' }}>
             {item.category === 'pm' ? 'PM' : item.category}
           </span>
         </div>
@@ -1202,28 +1211,27 @@ function WorkOrderCard({
 //   convert  → POST /v1/maintenance-reports/:id/convert
 
 // PRIORITY_STYLES — used for the priority chip in the modal header
-// and the priority bucket headers on the backlog board. These are
-// soft pill tints because they're sitting INSIDE a chip; the card
-// stripe itself is no longer priority-driven.
+// and the priority bucket headers on the backlog board. SOLID bold
+// Google-Calendar fills with white text — matches the rest of the
+// site (no washed pastels).
 const PRIORITY_STYLES: Record<MaintenancePriority, { bg: string; border: string; fg: string }> = {
-  urgent: { bg: '#fce8e6', border: '#f6c2bd', fg: '#c5221f' },  // gc-red family
-  high:   { bg: '#fef7e0', border: '#fde293', fg: '#b06000' },  // gc-yellow family
-  normal: { bg: '#e8f0fe', border: '#aecbfa', fg: '#1967d2' },  // gc-blue family
-  low:    { bg: '#f1f3f4', border: '#dadce0', fg: '#5f6368' },  // gc-gray family
+  urgent: { bg: '#ea4335', border: '#c5221f', fg: '#ffffff' },  // gc-red
+  high:   { bg: '#f9ab00', border: '#e37400', fg: '#ffffff' },  // gc-amber
+  normal: { bg: '#1a73e8', border: '#1967d2', fg: '#ffffff' },  // gc-blue
+  low:    { bg: '#5f6368', border: '#3c4043', fg: '#ffffff' },  // gc-gray
 };
 // STATUS_STYLES — used for the status chip in the modal header.
-// Soft tints for the same chip-inside-a-button reason.
+// Same solid-bold treatment so chips read consistently across the
+// app (header, card pills, and modal chip all look alike).
 const STATUS_STYLES: Record<MaintenanceActionStatus, { bg: string; border: string; fg: string }> = {
-  open:        { bg: '#fef7e0', border: '#fde293', fg: '#b06000' },
-  in_progress: { bg: '#e8f0fe', border: '#aecbfa', fg: '#1967d2' },
-  done:        { bg: '#e6f4ea', border: '#a8dab5', fg: '#137333' },
+  open:        { bg: '#f9ab00', border: '#e37400', fg: '#ffffff' },
+  in_progress: { bg: '#1a73e8', border: '#1967d2', fg: '#ffffff' },
+  done:        { bg: '#0f9d58', border: '#0b8043', fg: '#ffffff' },
 };
 
 // STATUS_PALETTE — bold Google-Calendar colors for the card-level
 // status indicator (4px left stripe + footer pill). Per Matt's
-// feedback: card color should reflect status, NOT priority, and
-// should use the bold GC palette already used across the site,
-// not washed pastels. These match dispatch's event-status colors.
+// feedback: solid fills with white text, not washed tints.
 //
 //   scheduled    blue  #1a73e8   open + scheduledDate set
 //   in_progress  amber #f9ab00   status='in_progress'
@@ -1231,10 +1239,10 @@ const STATUS_STYLES: Record<MaintenanceActionStatus, { bg: string; border: strin
 //   open         gray  #5f6368   open + no scheduledDate (backlog)
 type CardStatus = 'scheduled' | 'in_progress' | 'done' | 'open';
 const STATUS_PALETTE: Record<CardStatus, { stripe: string; pillBg: string; pillFg: string; label: string }> = {
-  scheduled:   { stripe: '#1a73e8', pillBg: '#e8f0fe', pillFg: '#1967d2', label: 'Scheduled'   },
-  in_progress: { stripe: '#f9ab00', pillBg: '#fef7e0', pillFg: '#b06000', label: 'In progress' },
-  done:        { stripe: '#0f9d58', pillBg: '#e6f4ea', pillFg: '#137333', label: 'Done'        },
-  open:        { stripe: '#5f6368', pillBg: '#f1f3f4', pillFg: '#3c4043', label: 'Open'        },
+  scheduled:   { stripe: '#1a73e8', pillBg: '#1a73e8', pillFg: '#ffffff', label: 'Scheduled'   },
+  in_progress: { stripe: '#f9ab00', pillBg: '#f9ab00', pillFg: '#ffffff', label: 'In progress' },
+  done:        { stripe: '#0f9d58', pillBg: '#0f9d58', pillFg: '#ffffff', label: 'Done'        },
+  open:        { stripe: '#5f6368', pillBg: '#5f6368', pillFg: '#ffffff', label: 'Open'        },
 };
 function getCardStatus(item: MaintenanceActionItem): CardStatus {
   if (item.status === 'done')         return 'done';
@@ -1473,11 +1481,12 @@ function WorkOrderModal({
                 color:          priorityStyle.fg,
                 border:         `1px solid ${priorityStyle.border}`,
                 borderRadius:   999,
-                padding:        '4px 10px',
-                fontSize:       11,
-                fontWeight:     700,
-                letterSpacing:  '0.05em',
+                padding:        '5px 12px',
+                fontSize:       12,
+                fontWeight:     800,
+                letterSpacing:  '0.06em',
                 textTransform:  'uppercase',
+                textShadow:     '0 1px 1px rgba(0,0,0,0.18)',
               }}>
               <option value="urgent">Urgent</option>
               <option value="high">High</option>
@@ -1493,11 +1502,12 @@ function WorkOrderModal({
                   color:          statusStyle.fg,
                   border:         `1px solid ${statusStyle.border}`,
                   borderRadius:   999,
-                  padding:        '4px 10px',
-                  fontSize:       11,
-                  fontWeight:     700,
-                  letterSpacing:  '0.05em',
+                  padding:        '5px 12px',
+                  fontSize:       12,
+                  fontWeight:     800,
+                  letterSpacing:  '0.06em',
                   textTransform:  'uppercase',
+                  textShadow:     '0 1px 1px rgba(0,0,0,0.18)',
                 }}>
                 <option value="open">Open</option>
                 <option value="in_progress">In progress</option>
