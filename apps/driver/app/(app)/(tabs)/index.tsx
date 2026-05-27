@@ -25,7 +25,6 @@ import { useLoadsRealtime } from "@/lib/useLoadsRealtime";
 import { usePushRegistration } from "@/lib/usePushRegistration";
 import { useReportDevicePermissions } from "@/lib/useReportDevicePermissions";
 import { railway } from "@/lib/railway";
-import { fetchOrgSettings } from "@/lib/api/orgSettings";
 import type { Load } from "@/lib/types";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -76,31 +75,17 @@ export default function LoadsScreen() {
     enabled:  !!driver,
   });
 
-  // Org settings — primarily for `timezone`, which we hand off to
-  // every "what day is it" computation so the driver's prompts agree
-  // with the dispatcher's calendar even when the driver's phone is
-  // in a different TZ from the org's dispatch zone.
-  const { data: orgSettings } = useQuery({
-    queryKey: ["orgSettings", driver?.orgId],
-    queryFn:  () => fetchOrgSettings(driver?.orgId ?? ""),
-    enabled:  !!driver?.orgId,
-    staleTime: 5 * 60_000,
-  });
-  const orgTimezone = orgSettings?.timezone ?? null;
-
   // Today's inspections drive the prompt card at the top of the
   // Active tab. Light query — driver-scoped + day-filtered server-side,
   // returns 0–3 rows in practice. Refetched after submit so the card
-  // flips state immediately. "Today" is the ORG'S today, not the
-  // driver's phone today — that way a driver on a cross-country run
-  // doesn't get a stale prompt when their phone is in a different TZ.
+  // flips state immediately.
   const {
     data: inspectionData,
     isLoading: inspectionLoading,
     refetch: refetchInspections,
   } = useQuery({
-    queryKey: ["inspections", "today", driver?.driverId, orgTimezone],
-    queryFn:  () => railway.todaysInspections({ timezone: orgTimezone }),
+    queryKey: ["inspections", "today", driver?.driverId],
+    queryFn:  () => railway.todaysInspections(),
     enabled:  !!driver,
     staleTime: 60_000,
   });

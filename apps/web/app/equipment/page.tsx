@@ -1472,6 +1472,30 @@ function WorkOrderModal({
   const [busy, setBusy]     = useState(false);
   const [error, setError]   = useState<string | null>(null);
 
+  // Reference photos from the source driver report — fetched when:
+  //   • create-from-convert: fromReport already has photos in-hand,
+  //     we just use them directly.
+  //   • edit mode with a reportId: separate fetch to populate the
+  //     read-only photo strip (the work order itself has no photos,
+  //     but the original report does — the dispatcher wants to see
+  //     the evidence while closing things out).
+  const [reportPhotos, setReportPhotos] = useState<MaintenanceReportPhoto[]>(
+    mode === 'convert' && fromReport?.photos ? fromReport.photos : []
+  );
+  useEffect(() => {
+    if (mode !== 'edit' || !item?.reportId) return;
+    let cancelled = false;
+    railway.getMaintenanceReport(item.reportId)
+      .then(r => {
+        if (cancelled) return;
+        setReportPhotos(r.report.photos ?? []);
+      })
+      .catch(err => {
+        console.warn('[work-order modal] failed to load linked report photos:', err);
+      });
+    return () => { cancelled = true; };
+  }, [mode, item?.reportId]);
+
   // Dirty-state tracking — shallow-compare form against the snapshot
   // we initialized with. Used by the close-guard below to prompt
   // before discarding edits. Object.keys check is fine here: form
@@ -1620,7 +1644,7 @@ function WorkOrderModal({
 
   const titleText =
     mode === 'create'  ? 'New work order'
-    : mode === 'convert' ? 'Convert driver report'
+    : mode === 'convert' ? 'Add driver report to work orders'
     : 'Edit work order';
 
   const iStyle = workOrderInputStyle();
@@ -1855,6 +1879,53 @@ function WorkOrderModal({
             </div>
           )}
 
+          {/* Reference photos — pulled from the linked driver report.
+              Read-only here; the work order doesn't own these, they're
+              just evidence carried over from the driver's submission so
+              the dispatcher can see what they're looking at while
+              closing out. Click a tile to open the full image in a new
+              tab. Empty in create mode (no report linked yet); in
+              convert + edit modes it's auto-populated from the report. */}
+          {reportPhotos.length > 0 && (
+            <div>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Reference photos
+                <span className="ml-1.5 font-medium normal-case tracking-normal" style={{ color: 'var(--gc-text-3)' }}>
+                  from driver report
+                </span>
+              </label>
+              <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))' }}>
+                {reportPhotos.map(p => p.signedUrl ? (
+                  <a
+                    key={p.id}
+                    href={p.signedUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    title="Open full image"
+                    className="block overflow-hidden rounded-lg transition-transform"
+                    style={{
+                      border:      '1px solid var(--gc-border-light)',
+                      background:  'var(--gc-surface)',
+                      aspectRatio: '1 / 1',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.03)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={p.signedUrl} alt="report evidence"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                  </a>
+                ) : (
+                  <div key={p.id}
+                    className="flex items-center justify-center rounded-lg text-[11px]"
+                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)', aspectRatio: '1 / 1' }}>
+                    no preview
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Vendor + total — edit mode only. Pared back from the
               earlier vendor/estimated/actual/completed-by quartet
               because most of those overlapped: vendor records who did
@@ -1947,7 +2018,7 @@ function WorkOrderModal({
                   )}
                   {item.reportId && (
                     <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
-                      Converted from a driver report.
+                      Added from a driver report.
                     </div>
                   )}
                 </div>
@@ -2018,7 +2089,7 @@ function WorkOrderModal({
                 padding:    '7px 16px',
                 cursor:     (busy || !form.title.trim()) ? 'default' : 'pointer',
               }}>
-              {busy ? 'Saving…' : mode === 'create' ? 'Create' : mode === 'convert' ? 'Convert' : 'Save changes'}
+              {busy ? 'Saving…' : mode === 'create' ? 'Create' : mode === 'convert' ? 'Add to work orders' : 'Save changes'}
             </button>
           </div>
         </div>
@@ -2112,7 +2183,7 @@ function MaintenanceList({
               padding:    '3px 8px',
               cursor:     'pointer',
             }}>
-            Convert →
+            Add →
           </button>
         ),
     }] : []),
@@ -2133,7 +2204,7 @@ function MaintenanceList({
       options: [
         { value: 'open',      label: 'Open' },
         { value: 'reviewed',  label: 'Reviewed' },
-        { value: 'converted', label: 'Converted' },
+        { value: 'converted', label: 'Added' },
         { value: 'dismissed', label: 'Dismissed' },
       ],
       predicate: (r, v) => r.status === v },
@@ -3543,17 +3614,21 @@ function Muted({ children = '—' }: { children?: React.ReactNode }) {
 }
 
 function StatusPill({ status }: { status: string }) {
-  const map: Record<string, { bg: string; fg: string }> = {
-    open:      { bg: '#fef3c7', fg: '#92400e' },
-    reviewed:  { bg: '#dbeafe', fg: '#1e40af' },
-    dismissed: { bg: '#f3f4f6', fg: '#374151' },
-    converted: { bg: '#d1fae5', fg: '#065f46' },
+  // "converted" is the DB value but reads as jargon in the UI —
+  // dispatchers want to know whether a report has been *added* to
+  // their work-order list. Map the wire value to a friendlier label
+  // here; the DB stays as-is so we don't churn the schema.
+  const map: Record<string, { bg: string; fg: string; label: string }> = {
+    open:      { bg: '#fef3c7', fg: '#92400e', label: 'open'     },
+    reviewed:  { bg: '#dbeafe', fg: '#1e40af', label: 'reviewed' },
+    dismissed: { bg: '#f3f4f6', fg: '#374151', label: 'dismissed'},
+    converted: { bg: '#d1fae5', fg: '#065f46', label: 'added'    },
   };
-  const p = map[status] ?? { bg: '#f3f4f6', fg: '#374151' };
+  const p = map[status] ?? { bg: '#f3f4f6', fg: '#374151', label: status };
   return (
     <span className="inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded"
       style={{ background: p.bg, color: p.fg }}>
-      {status.replace('_', ' ')}
+      {p.label}
     </span>
   );
 }
@@ -3824,7 +3899,7 @@ function MaintenanceDetail({
             <div className="flex items-center gap-1.5 text-[12px] font-semibold shrink-0"
               style={{ color: '#137333' }}>
               <Check size={14} />
-              Converted
+              Added to work orders
             </div>
           )}
         </div>
@@ -3949,7 +4024,7 @@ function MaintenanceStatusBadge({ status }: { status: string }) {
   const palette: Record<string, { bg: string; fg: string; dotBg: string; icon: React.ReactNode; label: string }> = {
     open:      { bg: '#fef7e0', fg: '#b06000', dotBg: '#f9ab00', icon: <AlertCircle size={14} color="#fff" strokeWidth={2.5} />, label: 'Open' },
     reviewed:  { bg: '#e8f0fe', fg: '#1967d2', dotBg: '#1a73e8', icon: <Check       size={14} color="#fff" strokeWidth={3}   />, label: 'Reviewed' },
-    converted: { bg: '#e6f4ea', fg: '#137333', dotBg: '#0f9d58', icon: <Wrench      size={12} color="#fff" strokeWidth={2.5} />, label: 'Converted' },
+    converted: { bg: '#e6f4ea', fg: '#137333', dotBg: '#0f9d58', icon: <Wrench      size={12} color="#fff" strokeWidth={2.5} />, label: 'Added' },
     dismissed: { bg: '#f1f3f4', fg: '#3c4043', dotBg: '#5f6368', icon: <X           size={14} color="#fff" strokeWidth={3}   />, label: 'Dismissed' },
   };
   const p = palette[status] ?? palette.open;

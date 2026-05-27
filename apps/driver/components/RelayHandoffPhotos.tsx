@@ -13,7 +13,6 @@ import {
 import { Camera, Plus, X, Trash2 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
-import { normalizeImageForUpload } from "@/lib/imageNormalize";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -56,12 +55,9 @@ export async function uploadRelayHandoffPhoto(loadId: string, source: "camera" |
   if (res.canceled) return;
   const a = res.assets[0];
   if (!a) return;
-  // Force-transcode to real JPEG — iPhone HEIC photos otherwise lie
-  // about their mime/extension and aren't renderable downstream.
-  const norm = await normalizeImageForUpload(a.uri, a.fileName ?? `relay-${Date.now()}.jpg`);
   const form = new FormData();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  form.append("file", { uri: norm.uri, name: norm.fileName, type: norm.mimeType } as any);
+  form.append("file", { uri: a.uri, name: a.fileName ?? `relay-${Date.now()}.jpg`, type: a.mimeType ?? "image/jpeg" } as any);
   form.append("kind", "relay_handoff");
   await railway.uploadDocument(loadId, form);
 }

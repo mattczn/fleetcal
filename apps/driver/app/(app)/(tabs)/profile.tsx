@@ -22,7 +22,6 @@ import {
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
-import { normalizeImageForUpload } from "@/lib/imageNormalize";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { supabase } from "@/lib/supabase";
 import { railway, type DriverProfileUpdate, type DriverMeResponse } from "@/lib/railway";
@@ -274,18 +273,6 @@ export default function ProfileScreen() {
       }
 
       if (!uri) return;
-
-      // For images, force-transcode to real JPEG before upload. iPhone
-      // HEIC otherwise sneaks through with a fake .jpg name + mime and
-      // can't be rendered by the dispatch web viewer. PDFs / unknown
-      // file types from the Files picker pass through unchanged.
-      const isImage = (mimeType ?? "").startsWith("image/") || source !== "file";
-      if (isImage) {
-        const norm = await normalizeImageForUpload(uri, fileName);
-        uri      = norm.uri;
-        mimeType = norm.mimeType;
-        fileName = norm.fileName;
-      }
 
       const form = new FormData();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

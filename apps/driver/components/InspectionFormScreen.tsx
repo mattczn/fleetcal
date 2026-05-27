@@ -30,11 +30,7 @@ import {
 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import { useQuery } from "@tanstack/react-query";
 import { railway, type InspectionItemPayload } from "@/lib/railway";
-import { normalizeImageForUpload } from "@/lib/imageNormalize";
-import { fetchOrgSettings } from "@/lib/api/orgSettings";
-import { useDriverSession } from "@/lib/useDriverSession";
 
 const txt = (weight: 500 | 600 | 700 | 800) => ({
   fontFamily:
@@ -181,21 +177,6 @@ interface Props {
 }
 
 export default function InspectionFormScreen({ initialAssetId, driverName, onClose, onSubmitted }: Props) {
-  // Org timezone — the dispatcher's "today". Used when stamping
-  // inspection_date so the calendar sees the inspection on the
-  // correct day even if the driver's phone is in a different TZ
-  // (e.g. cross-country runs). Falls back to device-local inside
-  // railway.submitInspection if the org never set one.
-  const session     = useDriverSession();
-  const orgId       = session.status === "matched" ? session.driver.orgId : null;
-  const { data: orgSettings } = useQuery({
-    queryKey: ["orgSettings", orgId],
-    queryFn:  () => fetchOrgSettings(orgId ?? ""),
-    enabled:  !!orgId,
-    staleTime: 5 * 60_000,
-  });
-  const orgTimezone = orgSettings?.timezone ?? null;
-
   // ── Equipment selection ───────────────────────────────────────────
   const [assets,        setAssets]        = useState<AssetOption[]>([]);
   const [trailers,      setTrailers]      = useState<TrailerOption[]>([]);
@@ -420,23 +401,17 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
 
     setSubmitting(true);
     try {
-      const { inspection } = await railway.submitInspection(
-        {
-          assetId,
-          trailerId:       includeTrailer ? trailerId : null,
-          items:           truckItems,
-          trailerItems:    trailerItems.length > 0 ? trailerItems : undefined,
-          notes:           notes.trim() || undefined,
-          signedBy:        driverName,
-          durationSeconds,
-          locationLat:     lat,
-          locationLon:     lon,
-        },
-        // Tag the inspection with the org's calendar date — same TZ
-        // the dispatcher sees on /equipment, so a late-Tuesday-Eastern
-        // submission still slots into Tuesday on their calendar.
-        { timezone: orgTimezone },
-      );
+      const { inspection } = await railway.submitInspection({
+        assetId,
+        trailerId:       includeTrailer ? trailerId : null,
+        items:           truckItems,
+        trailerItems:    trailerItems.length > 0 ? trailerItems : undefined,
+        notes:           notes.trim() || undefined,
+        signedBy:        driverName,
+        durationSeconds,
+        locationLat:     lat,
+        locationLon:     lon,
+      });
 
       // Upload photos sequentially against the new inspection. A
       // failure surfaces a notice but doesn't roll back the report —
@@ -445,12 +420,9 @@ export default function InspectionFormScreen({ initialAssetId, driverName, onClo
       const photoFailures: string[] = [];
       for (const ph of photos) {
         try {
-          // Force-transcode to real JPEG — iPhone HEIC photos slip
-          // through with a fake .jpg name + mime otherwise.
-          const norm = await normalizeImageForUpload(ph.uri, ph.fileName);
           const form = new FormData();
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          form.append("file", { uri: norm.uri, name: norm.fileName, type: norm.mimeType } as any);
+          form.append("file", { uri: ph.uri, name: ph.fileName, type: ph.mimeType } as any);
           if (ph.itemId) form.append("itemId", ph.itemId);
           form.append("target", ph.target);
           await railway.uploadInspectionPhoto(inspection.id, form);

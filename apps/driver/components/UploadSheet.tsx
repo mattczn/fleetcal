@@ -47,18 +47,7 @@ async function fileSize(uri: string): Promise<number> {
 /**
  * Compress an image to fit under `targetBytes`.
  * Resizes to `maxWidth` first, then steps quality down until small enough.
- * Always re-encodes to JPEG — smaller than HEIC/PNG for photos, and (critical)
- * guarantees the resulting bytes are actually JPEG.
- *
- * History: previously, if the source was already under `targetBytes` we
- * short-circuited and returned the original URI tagged as image/jpeg.
- * That was wrong — an iPhone HEIC under 3 MB would slip through with
- * HEIC bytes but a JPEG mimetype and .jpg filename, and the dispatch
- * web modal couldn't render it (HEIC isn't a browser-supported format).
- * We now ALWAYS run one normalization pass through ImageManipulator so
- * the output is provably JPEG, regardless of source format. The cost
- * is a single decode+encode (~100-300ms for a typical photo) which is
- * trivial compared to the upload itself.
+ * Always re-encodes to JPEG — smaller than HEIC/PNG for photos.
  */
 async function compressImage(
   uri: string,
@@ -66,9 +55,13 @@ async function compressImage(
     targetBytes: MAX_TOTAL_BYTES, maxWidth: 2000,
   },
 ): Promise<{ uri: string; mimeType: string }> {
-  // Walk down a quality ladder, starting high so small inputs come out
-  // near-lossless. Stop as soon as we're under the target.
-  const qualities = [0.95, 0.85, 0.7, 0.55, 0.4, 0.3, 0.2];
+  if (!opts.force) {
+    const initial = await fileSize(uri);
+    if (initial > 0 && initial <= opts.targetBytes) {
+      return { uri, mimeType: "image/jpeg" };
+    }
+  }
+  const qualities = [0.7, 0.55, 0.4, 0.3, 0.2];
   let result = uri;
   for (const q of qualities) {
     const out = await ImageManipulator.manipulateAsync(

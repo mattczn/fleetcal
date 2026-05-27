@@ -16,7 +16,6 @@ import { Truck, Container, Camera, ChevronDown, Check, X } from "lucide-react-na
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import { railway } from "@/lib/railway";
-import { normalizeImageForUpload } from "@/lib/imageNormalize";
 import type { MaintenanceReport } from "@fleetcal/types";
 import { MaintenanceReportDetailSheet } from "@/components/MaintenanceReportDetailSheet";
 
@@ -269,13 +268,10 @@ export default function MaintenanceScreen() {
       const uploadFailures: string[] = [];
       for (const p of photos) {
         try {
-          // Force-transcode to real JPEG — iPhone HEIC photos lie about
-          // their mime/extension and can't be rendered downstream.
-          const norm = await normalizeImageForUpload(p.uri, p.fileName);
           const form = new FormData();
           // RN FormData accepts { uri, type, name } objects.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          form.append("file", { uri: norm.uri, name: norm.fileName, type: norm.mimeType } as any);
+          form.append("file", { uri: p.uri, name: p.fileName ?? "photo.jpg", type: p.mimeType ?? "image/jpeg" } as any);
           await railway.uploadMaintenancePhoto(submitted.report.id, form);
         } catch (err) {
           console.warn("[maint] photo upload failed:", err);
