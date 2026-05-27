@@ -1516,36 +1516,20 @@ function WorkOrderModal({
               {titleText}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Priority chip */}
-            <StyledSelect
-              value={form.priority}
-              onChange={e => setForm(f => ({ ...f, priority: e.target.value as MaintenancePriority }))}
-              style={{
-                background:     priorityStyle.bg,
-                color:          priorityStyle.fg,
-                border:         `1px solid ${priorityStyle.border}`,
-                borderRadius:   999,
-                padding:        '5px 12px',
-                fontSize:       12,
-                fontWeight:     800,
-                letterSpacing:  '0.06em',
-                textTransform:  'uppercase',
-                textShadow:     '0 1px 1px rgba(0,0,0,0.18)',
-              }}>
-              <option value="urgent">Urgent</option>
-              <option value="high">High</option>
-              <option value="normal">Normal</option>
-              <option value="low">Low</option>
-            </StyledSelect>
-            {mode === 'edit' && (
+          <div className="flex items-center gap-3 shrink-0">
+            {/* Priority — label + chip together so it's obvious
+                what the colored pill is controlling. */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                Priority:
+              </span>
               <StyledSelect
-                value={form.status}
-                onChange={e => setForm(f => ({ ...f, status: e.target.value as MaintenanceActionStatus }))}
+                value={form.priority}
+                onChange={e => setForm(f => ({ ...f, priority: e.target.value as MaintenancePriority }))}
                 style={{
-                  background:     statusStyle.bg,
-                  color:          statusStyle.fg,
-                  border:         `1px solid ${statusStyle.border}`,
+                  background:     priorityStyle.bg,
+                  color:          priorityStyle.fg,
+                  border:         `1px solid ${priorityStyle.border}`,
                   borderRadius:   999,
                   padding:        '5px 12px',
                   fontSize:       12,
@@ -1554,10 +1538,37 @@ function WorkOrderModal({
                   textTransform:  'uppercase',
                   textShadow:     '0 1px 1px rgba(0,0,0,0.18)',
                 }}>
-                <option value="open">Open</option>
-                <option value="in_progress">In progress</option>
-                <option value="done">Done</option>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="normal">Normal</option>
+                <option value="low">Low</option>
               </StyledSelect>
+            </div>
+            {mode === 'edit' && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                  Status:
+                </span>
+                <StyledSelect
+                  value={form.status}
+                  onChange={e => setForm(f => ({ ...f, status: e.target.value as MaintenanceActionStatus }))}
+                  style={{
+                    background:     statusStyle.bg,
+                    color:          statusStyle.fg,
+                    border:         `1px solid ${statusStyle.border}`,
+                    borderRadius:   999,
+                    padding:        '5px 12px',
+                    fontSize:       12,
+                    fontWeight:     800,
+                    letterSpacing:  '0.06em',
+                    textTransform:  'uppercase',
+                    textShadow:     '0 1px 1px rgba(0,0,0,0.18)',
+                  }}>
+                  <option value="open">Open</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="done">Done</option>
+                </StyledSelect>
+              </div>
             )}
             <button
               onClick={tryClose}
@@ -1646,7 +1657,7 @@ function WorkOrderModal({
                 <option value="other">Other</option>
               </StyledSelect>
             </div>
-            {(mode === 'edit' || (mode === 'create' && defaultScheduledDate)) && (
+            {mode !== 'convert' && (
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
                   style={{ color: 'var(--gc-text-3)' }}>
