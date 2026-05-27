@@ -550,6 +550,24 @@ function MaintenanceTabContent({
 
 // ─── Work orders list ──────────────────────────────────────────────────
 
+// ─── Work orders board ─────────────────────────────────────────────────
+//
+// Replaces the OpsTable layout for this sub-tab with a CRM-style
+// two-section board:
+//
+//   1. THIS WEEK — Sat-Fri grid showing items scheduled within the
+//      current week as cards. Today's column gets a subtle highlight.
+//   2. BACKLOG BY PRIORITY — Urgent / High / Normal / Low columns,
+//      one per priority. Holds open + in_progress items whose
+//      scheduledDate is NOT in this week (or is null). This is the
+//      "what should I worry about?" view.
+//
+// Done items don't appear in either view by default. (Future toggle
+// could show recently-completed for an audit trail.)
+//
+// Each card is clickable — opens the edit modal, same as a row
+// click did in the OpsTable.
+
 function WorkOrdersList({
   drivers, assets, trailers, assetLabelById, trailerLabelById,
   reloadKey, pendingReportCount, onNewClick, onRowClick, onSwitchToReports,
@@ -563,15 +581,14 @@ function WorkOrdersList({
   pendingReportCount: number | null;
   onNewClick: () => void;
   onRowClick: (item: MaintenanceActionItem) => void;
-  /** Switches the sub-tab to Driver reports. Used by the empty-state
-   *  CTA when there are pending reports the dispatcher could convert. */
   onSwitchToReports: () => void;
 }) {
   const [items, setItems] = useState<MaintenanceActionItem[]>([]);
   const [loading, setLoading] = useState(true);
-  // `drivers` not used here — kept on the prop list for symmetry with
-  // MaintenanceList in case future filters need it (e.g. created_by).
+  const [search, setSearch] = useState('');
+  // Unused at the moment — kept for prop-shape symmetry.
   void drivers;
+  void trailers;
 
   useEffect(() => {
     setLoading(true);
@@ -581,105 +598,80 @@ function WorkOrdersList({
       .finally(() => setLoading(false));
   }, [reloadKey]);
 
-  const resolvedRows = useMemo(() => items.map(i => {
-    const equipLabel = i.assetId
-      ? (assetLabelById.get(i.assetId) ?? `Asset #${i.assetId}`)
-      : i.trailerId
-        ? (trailerLabelById.get(i.trailerId) ?? `Trailer #${i.trailerId}`)
-        : '—';
-    return { ...i, _equipLabel: equipLabel };
-  }), [items, assetLabelById, trailerLabelById]);
+  // Asset color lookup — for the colored stripe + dot on each card.
+  // Falls back to a neutral gray when no asset or no color set.
+  const assetColorById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const a of assets) if (a.color) m.set(a.id, a.color);
+    return m;
+  }, [assets]);
 
-  type R = typeof resolvedRows[number];
+  // Resolve each item to a display-ready shape (equipment label +
+  // search-blob + day-key for bucketing).
+  const resolved = useMemo(() => items
+    .filter(i => i.status !== 'done')
+    .map(i => {
+      const equipLabel = i.assetId
+        ? (assetLabelById.get(i.assetId) ?? `Asset #${i.assetId}`)
+        : i.trailerId
+          ? (trailerLabelById.get(i.trailerId) ?? `Trailer #${i.trailerId}`)
+          : '—';
+      const equipColor = i.assetId ? (assetColorById.get(i.assetId) ?? '#9aa0a6') : '#9aa0a6';
+      const searchBlob = `${i.title} ${i.description ?? ''} ${i.vendor ?? ''} ${equipLabel}`.toLowerCase();
+      return { ...i, _equipLabel: equipLabel, _equipColor: equipColor, _searchBlob: searchBlob };
+    })
+    .filter(i => {
+      if (!search.trim()) return true;
+      return i._searchBlob.includes(search.trim().toLowerCase());
+    }),
+  [items, search, assetLabelById, trailerLabelById, assetColorById]);
 
-  const columns: OpsColumn<R>[] = [
-    { key: 'scheduledDate', header: 'Date', width: 110, sortable: true,
-      sortValue: r => r.scheduledDate ?? r.createdAt,
-      render: r => r.scheduledDate
-        ? <OpsDate iso={`${r.scheduledDate}T12:00:00`} />
-        : <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>unscheduled</span> },
-    { key: 'title', header: 'Title', sortable: true,
-      render: r => (
-        <span>
-          {r.outOfService && <OpsPill color="red">OOS</OpsPill>}{r.outOfService && ' '}
-          {r.title.length > 70 ? r.title.slice(0, 70) + '…' : r.title}
-        </span>
-      ) },
-    { key: '_equipLabel', header: 'Equipment', sortable: true,
-      render: r => r._equipLabel },
-    { key: 'category', header: 'Category', width: 110, sortable: true,
-      sortValue: r => r.category,
-      render: r => <span className="text-[12px] capitalize" style={{ color: 'var(--gc-text-2)' }}>{r.category}</span> },
-    { key: 'priority', header: 'Priority', width: 100, sortable: true,
-      sortValue: r => ['urgent', 'high', 'normal', 'low'].indexOf(r.priority),
-      render: r => {
-        const color: 'red' | 'amber' | 'blue' | 'gray' =
-          r.priority === 'urgent' ? 'red'   :
-          r.priority === 'high'   ? 'amber' :
-          r.priority === 'normal' ? 'blue'  :
-                                    'gray';
-        return <OpsPill color={color}>{r.priority}</OpsPill>;
-      } },
-    { key: 'status', header: 'Status', width: 110, sortable: true,
-      sortValue: r => r.status,
-      render: r => {
-        const color: 'amber' | 'blue' | 'green' =
-          r.status === 'open'        ? 'amber' :
-          r.status === 'in_progress' ? 'blue'  :
-                                       'green';   // done
-        return <OpsPill color={color}>{r.status.replace('_', ' ')}</OpsPill>;
-      } },
-    { key: 'cost', header: 'Cost', width: 100, align: 'right',
-      sortValue: r => r.actualCost ?? r.estimatedCost ?? -1,
-      render: r => {
-        const v = r.actualCost ?? r.estimatedCost;
-        return v != null
-          ? <span className="font-mono">${v.toFixed(2)}</span>
-          : <OpsMuted />;
-      } },
-    { key: 'vendor', header: 'Vendor',
-      render: r => r.vendor ?? <OpsMuted /> },
-  ];
+  // Current week — Sat → Fri (matches the dashboard's getPeriodRange).
+  const week = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dow = today.getDay(); // 0=Sun..6=Sat
+    const sat = new Date(today);
+    sat.setDate(today.getDate() - ((dow + 1) % 7));
+    const days: Array<{ key: string; date: Date; isToday: boolean }> = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(sat);
+      d.setDate(sat.getDate() + i);
+      days.push({
+        key:     dateKeyOf(d),
+        date:    d,
+        isToday: dateKeyOf(d) === dateKeyOf(today),
+      });
+    }
+    return days;
+  }, []);
 
-  const filters: OpsFilter<R>[] = [
-    { kind: 'search', placeholder: 'Search title, description, vendor…',
-      match: (r, q) => r.title.toLowerCase().includes(q)
-                    || (r.description ?? '').toLowerCase().includes(q)
-                    || (r.vendor ?? '').toLowerCase().includes(q) },
-    { kind: 'select', key: 'status', label: 'Status',
-      options: [
-        { value: 'open',         label: 'Open' },
-        { value: 'in_progress',  label: 'In progress' },
-        { value: 'done',         label: 'Done' },
-      ],
-      predicate: (r, v) => r.status === v },
-    { kind: 'select', key: 'priority', label: 'Priority',
-      options: [
-        { value: 'urgent', label: 'Urgent' },
-        { value: 'high',   label: 'High' },
-        { value: 'normal', label: 'Normal' },
-        { value: 'low',    label: 'Low' },
-      ],
-      predicate: (r, v) => r.priority === v },
-    { kind: 'select', key: 'category', label: 'Category',
-      options: [
-        { value: 'repair',     label: 'Repair' },
-        { value: 'pm',         label: 'PM' },
-        { value: 'inspection', label: 'Inspection' },
-        { value: 'other',      label: 'Other' },
-      ],
-      predicate: (r, v) => r.category === v },
-    { kind: 'select', key: 'equipment', label: 'Equipment',
-      options: buildEquipmentOptions(assets, trailers),
-      predicate: (r, v) => matchesEquipment(v, r.assetId, r.trailerId) },
-  ];
+  // Bucketing — items into week days + priority columns.
+  const { weekItems, backlogByPriority } = useMemo(() => {
+    const weekKeys = new Set(week.map(d => d.key));
+    const weekMap: Record<string, typeof resolved> = {};
+    for (const d of week) weekMap[d.key] = [];
+    const backlog: Record<MaintenancePriority, typeof resolved> = {
+      urgent: [], high: [], normal: [], low: [],
+    };
+    for (const r of resolved) {
+      if (r.scheduledDate && weekKeys.has(r.scheduledDate)) {
+        weekMap[r.scheduledDate].push(r);
+      } else {
+        backlog[r.priority].push(r);
+      }
+    }
+    // Sort backlog columns by priority order is implicit (we render
+    // in fixed order below). Within a column, urgent → high → normal
+    // → low ordering doesn't apply; instead sort by createdAt desc
+    // (most recent at top) so newly logged items don't get buried.
+    for (const p of Object.keys(backlog) as MaintenancePriority[]) {
+      backlog[p].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    }
+    return { weekItems: weekMap, backlogByPriority: backlog };
+  }, [resolved, week]);
 
-  // First-time / true-empty state: render a friendly CTA instead of
-  // the table's "no rows match" message. We can't tell from inside
-  // OpsTable whether `0 visible` is "filters narrowed to nothing" vs
-  // "carrier has never created one", so we short-circuit here when
-  // the raw count is zero. Once they have any item at all, the
-  // standard filter-no-match message inside OpsTable takes over.
+  // Empty state — no items at all in the org.
   if (!loading && items.length === 0) {
     return (
       <div
@@ -739,19 +731,32 @@ function WorkOrdersList({
     );
   }
 
+  const weekLabel = `${week[0].date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} — ${week[6].date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const scheduledCount = Object.values(weekItems).reduce((s, arr) => s + arr.length, 0);
+  const backlogCount = (Object.values(backlogByPriority) as Array<typeof resolved>).reduce((s, arr) => s + arr.length, 0);
+
   return (
-    <OpsTable
-      columns={columns}
-      data={resolvedRows}
-      filters={filters}
-      loading={loading}
-      rowKey={r => r.id}
-      onRowClick={r => onRowClick(r)}
-      emptyLabel="No work orders match the current filters."
-      defaultSort={{ key: 'scheduledDate', dir: 'desc' }}
-      density="comfortable"
-      countLabel="work order"
-      toolbarRight={
+    <div className="flex flex-col gap-5">
+      {/* Toolbar — search + new */}
+      <div className="flex items-center gap-2">
+        <div
+          className="flex items-center gap-2 rounded-md flex-1"
+          style={{
+            border:     '1px solid var(--gc-border-light)',
+            background: 'var(--gc-surface)',
+            padding:    '6px 10px',
+            maxWidth:   360,
+          }}>
+          <Wrench size={13} style={{ color: 'var(--gc-text-3)' }} />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search title, vehicle, vendor…"
+            className="flex-1 outline-none bg-transparent text-[13px]"
+            style={{ color: 'var(--gc-text-1)' }}
+          />
+        </div>
+        <div className="flex-1" />
         <button
           type="button"
           onClick={onNewClick}
@@ -760,15 +765,218 @@ function WorkOrdersList({
             background: 'var(--gc-blue)',
             color:      '#fff',
             border:     '1px solid var(--gc-blue)',
-            padding:    '7px 12px',
+            padding:    '7px 14px',
             fontSize:   13,
             fontWeight: 600,
             cursor:     'pointer',
           }}>
           + New work order
         </button>
-      }
-    />
+      </div>
+
+      {/* This week — 7-day grid */}
+      <section>
+        <div className="flex items-baseline justify-between mb-2">
+          <h3 className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            This week
+          </h3>
+          <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+            {weekLabel} · {scheduledCount} scheduled
+          </span>
+        </div>
+        <div
+          className="grid gap-2 rounded-lg overflow-hidden"
+          style={{
+            gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+            background:          'var(--gc-bg)',
+            border:              '1px solid var(--gc-border-light)',
+            padding:             8,
+          }}>
+          {week.map(d => {
+            const dayItems = weekItems[d.key] ?? [];
+            return (
+              <div key={d.key}
+                className="flex flex-col gap-1.5 rounded-md"
+                style={{
+                  background: d.isToday ? '#eff6ff' : 'var(--gc-surface)',
+                  border:     `1px solid ${d.isToday ? '#bfdbfe' : 'var(--gc-border-light)'}`,
+                  padding:    8,
+                  minHeight:  120,
+                }}>
+                {/* Day header */}
+                <div className="flex items-baseline justify-between">
+                  <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: d.isToday ? '#1e40af' : 'var(--gc-text-3)' }}>
+                    {d.date.toLocaleDateString('en-US', { weekday: 'short' })}
+                  </div>
+                  <div className="text-[12px] font-semibold tabular-nums" style={{ color: d.isToday ? '#1e40af' : 'var(--gc-text-2)' }}>
+                    {d.date.getDate()}
+                  </div>
+                </div>
+                {/* Cards */}
+                <div className="flex flex-col gap-1.5">
+                  {dayItems.map(item => (
+                    <WorkOrderCard
+                      key={item.id}
+                      item={item}
+                      equipLabel={item._equipLabel}
+                      equipColor={item._equipColor}
+                      compact
+                      onClick={() => onRowClick(item)}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Backlog — 4 priority columns */}
+      <section>
+        <div className="flex items-baseline justify-between mb-2">
+          <h3 className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            Backlog
+          </h3>
+          <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+            {backlogCount} item{backlogCount === 1 ? '' : 's'} not scheduled this week
+          </span>
+        </div>
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+          {(['urgent', 'high', 'normal', 'low'] as const).map(p => {
+            const colItems = backlogByPriority[p];
+            const style = PRIORITY_STYLES[p];
+            return (
+              <div key={p}
+                className="rounded-lg flex flex-col"
+                style={{
+                  background: 'var(--gc-surface)',
+                  border:     '1px solid var(--gc-border-light)',
+                  minHeight:  180,
+                }}>
+                <div
+                  className="flex items-center justify-between px-3 py-2 rounded-t-lg"
+                  style={{
+                    background: style.bg,
+                    color:      style.fg,
+                    borderBottom: `1px solid ${style.border}`,
+                  }}>
+                  <div className="text-[11px] font-bold uppercase tracking-wider">
+                    {p}
+                  </div>
+                  <div className="text-[11px] font-bold tabular-nums">
+                    {colItems.length}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1.5 p-2">
+                  {colItems.length === 0 ? (
+                    <div className="text-[11.5px] text-center py-3" style={{ color: 'var(--gc-text-3)' }}>
+                      Nothing here.
+                    </div>
+                  ) : colItems.map(item => (
+                    <WorkOrderCard
+                      key={item.id}
+                      item={item}
+                      equipLabel={item._equipLabel}
+                      equipColor={item._equipColor}
+                      onClick={() => onRowClick(item)}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ─── Work order card ───────────────────────────────────────────────────
+//
+// Used in both the week grid (compact) and the priority buckets
+// (default). Left edge accent stripe colored by priority so the
+// card's urgency reads even when grouped under a non-priority
+// header (i.e. inside a day column in the week grid).
+
+function WorkOrderCard({
+  item, equipLabel, equipColor, compact, onClick,
+}: {
+  item: MaintenanceActionItem;
+  equipLabel: string;
+  equipColor: string;
+  compact?: boolean;
+  onClick: () => void;
+}) {
+  const ps = PRIORITY_STYLES[item.priority];
+  // Overdue = scheduled date is in the past and not yet done. Tint
+  // the card with a subtle red border to surface things that need
+  // re-scheduling.
+  const today = dateKeyOf(new Date());
+  const overdue = item.scheduledDate && item.scheduledDate < today && item.status !== 'done';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left rounded-md transition-colors flex flex-col gap-1"
+      style={{
+        background: 'var(--gc-surface)',
+        border:     `1px solid ${overdue ? '#fecaca' : 'var(--gc-border-light)'}`,
+        borderLeft: `3px solid ${ps.fg}`,
+        padding:    compact ? '6px 8px' : '8px 10px',
+        cursor:     'pointer',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-surface)'; }}>
+      {/* Title */}
+      <div
+        className={`font-semibold ${compact ? 'text-[12px]' : 'text-[13px]'}`}
+        style={{
+          color:       'var(--gc-text-1)',
+          lineHeight:  1.25,
+          display:     '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow:    'hidden',
+        }}>
+        {item.title}
+      </div>
+      {/* Vehicle row */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className="inline-block rounded shrink-0"
+          style={{ width: 8, height: 8, background: equipColor }}
+        />
+        <span
+          className={`${compact ? 'text-[10.5px]' : 'text-[11.5px]'} truncate`}
+          style={{ color: 'var(--gc-text-2)' }}>
+          {equipLabel}
+        </span>
+      </div>
+      {/* Footer row — category + status + maybe overdue */}
+      <div className="flex items-center justify-between gap-1.5 mt-0.5">
+        <span
+          className={`capitalize ${compact ? 'text-[10px]' : 'text-[10.5px]'}`}
+          style={{ color: 'var(--gc-text-3)' }}>
+          {item.category === 'pm' ? 'PM' : item.category}
+        </span>
+        <div className="flex items-center gap-1">
+          {item.status === 'in_progress' && (
+            <span
+              className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wider px-1.5 py-0.5 rounded`}
+              style={{ background: '#dbeafe', color: '#1e40af' }}>
+              in progress
+            </span>
+          )}
+          {overdue && (
+            <span
+              className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wider px-1.5 py-0.5 rounded`}
+              style={{ background: '#fee2e2', color: '#991b1b' }}>
+              overdue
+            </span>
+          )}
+        </div>
+      </div>
+    </button>
   );
 }
 
