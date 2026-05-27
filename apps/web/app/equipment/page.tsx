@@ -1907,7 +1907,16 @@ function DetailPanel({
     >
       <div
         className="relative flex flex-col rounded-2xl overflow-hidden shrink-0"
-        style={{ width: 920, height: 'min(92vh, 920px)', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        style={{
+          // Inspection panel needs a wider canvas to fit the 5-card
+          // KPI strip without crowding. Maintenance/fuel keep using
+          // the same outer container so they get the extra room
+          // too — none of them suffered at narrower widths anyway.
+          width: 'min(96vw, 1000px)',
+          height: 'min(92vh, 960px)',
+          background: 'var(--gc-surface)',
+          boxShadow: 'var(--shadow-3)',
+        }}
       >
         {/* Header — mirrors MovementDetailPanel: color dot + title + X */}
         <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -2045,29 +2054,27 @@ function InspectionDetail({
       .catch(err => { console.error('[equipment] inspection detail:', err); setData(null); })
       .finally(() => setLoading(false));
   }, [id]);
-  if (loading) return <div className="flex items-center justify-center py-10"><Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} /></div>;
-  if (!data)   return <div className="text-sm px-4 py-6" style={{ color: '#dc2626' }}>Could not load report.</div>;
+  if (loading) return <div className="flex-1 flex items-center justify-center"><Loader2 size={22} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} /></div>;
+  if (!data)   return <div className="text-sm px-6 py-8" style={{ color: '#dc2626' }}>Could not load report.</div>;
 
-  // Split defects + general photos by the equipment they belong to.
-  // Inspections cover one truck and possibly one trailer at the same
-  // time; the dispatcher needs to see at a glance which physical
-  // piece each defect is on. Keeps the audit/maintenance triage
-  // workflow clean — "fix everything on Trailer #5567" vs. "fix
-  // everything on Truck Big Red" without re-reading each item.
+  // Defect bookkeeping. Inspections cover one truck and optionally
+  // one trailer; we group per-equipment so the dispatcher can audit
+  // "fix everything on Big Red" vs "fix everything on Trailer 5567"
+  // without re-reading the item list.
   const truckDefects   = data.items.filter(i => i.status === 'fail');
   const trailerDefects = data.trailerItems.filter(i => i.status === 'fail');
   const totalDefects   = truckDefects.length + trailerDefects.length;
-  const passCount      = data.items.length + data.trailerItems.length - totalDefects;
+  const totalItems     = data.items.length + data.trailerItems.length;
+  const passCount      = totalItems - totalDefects;
 
   const truckLabel   = data.asset   ? `Truck ${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : 'Truck';
   const trailerLabel = data.trailer ? `Trailer ${data.trailer.trailer_number ? `#${data.trailer.trailer_number}` : data.trailer.name}` : 'Trailer';
 
-  // Build the media sections for the left-column gallery. Order
-  // matches the right-column reading order so a dispatcher scanning
-  // the right can scan the left in lockstep:
-  //   per-defect photos (in defect-row order), then general photos.
+  // Media sections: per-defect photos (in defect order) first, then
+  // general photos grouped by which side of the rig they were
+  // attached to. Each section has a label so the dispatcher knows
+  // which item a given evidence shot belongs to.
   const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
-  // Truck per-defect photos
   for (const def of truckDefects) {
     const itemPhotos = data.photos.filter(p => p.itemId === def.id);
     if (itemPhotos.length > 0) {
@@ -2077,7 +2084,6 @@ function InspectionDetail({
       });
     }
   }
-  // Trailer per-defect photos
   for (const def of trailerDefects) {
     const itemPhotos = data.photos.filter(p => p.itemId === def.id);
     if (itemPhotos.length > 0) {
@@ -2087,63 +2093,268 @@ function InspectionDetail({
       });
     }
   }
-  // General (non-item) photos grouped by target.
   const truckGeneral   = data.photos.filter(p => p.itemId == null && p.target === 'truck');
   const trailerGeneral = data.photos.filter(p => p.itemId == null && p.target === 'trailer');
   const orphanGeneral  = data.photos.filter(p => p.itemId == null && p.target == null);
-  if (truckGeneral.length > 0) {
-    mediaSections.push({
-      label: `${truckLabel} · General`,
-      photos: truckGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
-    });
+  if (truckGeneral.length > 0)   mediaSections.push({ label: `${truckLabel} · General`,   photos: truckGeneral  .map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })) });
+  if (trailerGeneral.length > 0) mediaSections.push({ label: `${trailerLabel} · General`, photos: trailerGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })) });
+  if (orphanGeneral.length > 0)  mediaSections.push({ label: 'General',                    photos: orphanGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })) });
+
+  const totalPhotos = mediaSections.reduce((n, s) => n + s.photos.length, 0);
+
+  // Flat list of every photo with its section label — used by the
+  // lightbox so clicking any tile opens MediaSidePanel pre-scrolled
+  // to that exact image.
+  const flatItems: MediaList['items'] = [];
+  for (const sec of mediaSections) {
+    for (const p of sec.photos) flatItems.push({ id: p.id, signedUrl: p.signedUrl, caption: p.caption, section: sec.label });
   }
-  if (trailerGeneral.length > 0) {
-    mediaSections.push({
-      label: `${trailerLabel} · General`,
-      photos: trailerGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
-    });
-  }
-  if (orphanGeneral.length > 0) {
-    mediaSections.push({
-      label: 'General',
-      photos: orphanGeneral.map(p => ({ id: p.id, signedUrl: p.signedUrl, caption: p.caption })),
-    });
-  }
+
+  const submittedDate = new Date(data.submittedAt);
+  // Both asset.name and trailer fields can technically be null on the
+  // response — coerce to em-dash so the KPI card never renders an
+  // empty cell.
+  const truckDisplayName   = data.asset?.name   ?? '—';
+  const trailerDisplayName = data.trailer
+    ? (data.trailer.trailer_number
+        ? `#${data.trailer.trailer_number}`
+        : (data.trailer.name ?? '—'))
+    : '—';
 
   return (
-    <TwoColumnBody
-      mapLat={data.locationLat}
-      mapLon={data.locationLon}
-      media={mediaSections}
-      onOpenMedia={onOpenMedia}
-    >
-      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
-        <Field icon={<Clock size={12} />} label="Submitted">{new Date(data.submittedAt).toLocaleString()}</Field>
-        <Field icon={<User  size={12} />} label="Signed by">{data.signedBy}</Field>
-        <Field icon={<Clock size={12} />} label="Duration">{data.durationSeconds != null ? fmtDuration(data.durationSeconds) : '—'}</Field>
-        <Field icon={<Truck size={12} />} label="Items">{passCount} passed · {totalDefects} failed</Field>
-        <Field icon={<Truck size={12} />} label="Truck">
-          {data.asset ? `${data.asset.name}${data.asset.unit ? ` #${data.asset.unit}` : ''}` : '—'}
-        </Field>
-        <Field icon={<Truck size={12} />} label="Trailer">
-          {data.trailer ? `${data.trailer.name}${data.trailer.trailer_number ? ` #${data.trailer.trailer_number}` : ''}` : '—'}
-        </Field>
+    <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+      {/* Hero band — status pill (red or green chip), driver + date
+          + time. Sets the tone at a glance: dispatcher knows what
+          they're looking at before reading anything else. */}
+      <div className="px-6 pt-5 pb-5" style={{ background: 'var(--gc-surface)', borderBottom: '1px solid var(--gc-border-light)' }}>
+        <InspectionStatusBadge defects={totalDefects} passCount={passCount} />
+        <div className="mt-3 flex items-center gap-2 text-[14px]" style={{ color: 'var(--gc-text-2)' }}>
+          <User size={14} style={{ color: 'var(--gc-text-3)' }} />
+          <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{data.signedBy}</span>
+          <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+          <span>{submittedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
+          <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+          <span className="tabular-nums">{submittedDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+        </div>
       </div>
 
-      {data.asset && truckDefects.length > 0 && (
-        <EquipmentDefectsSection equipmentLabel={truckLabel} defects={truckDefects} />
-      )}
-      {data.trailer && trailerDefects.length > 0 && (
-        <EquipmentDefectsSection equipmentLabel={trailerLabel} defects={trailerDefects} />
-      )}
-      {totalDefects === 0 && <AllPassedBadge passCount={passCount} />}
+      {/* KPI strip — 5 cards. The dispatcher's first read for "what
+          rig, who, how long, how complete" all answered in one row. */}
+      <div className="px-6 pt-5 pb-4 grid gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
+        <KpiCard
+          icon={<Truck size={14} />}
+          label="Truck"
+          value={truckDisplayName}
+          accent={data.asset ? '#1a73e8' : undefined}
+        />
+        <KpiCard
+          icon={<Package size={14} />}
+          label="Trailer"
+          value={trailerDisplayName}
+          accent={data.trailer ? '#0ea5e9' : undefined}
+          muted={!data.trailer}
+        />
+        <KpiCard
+          icon={<Clock size={14} />}
+          label="Duration"
+          value={data.durationSeconds != null ? fmtDuration(data.durationSeconds) : '—'}
+          muted={data.durationSeconds == null}
+        />
+        <KpiCard
+          icon={<ClipboardCheck size={14} />}
+          label="Items"
+          value={`${passCount}`}
+          suffix={
+            totalDefects > 0
+              ? <span style={{ color: '#d93025', fontWeight: 800 }}> · {totalDefects} failed</span>
+              : <span style={{ color: 'var(--gc-text-3)', fontWeight: 500 }}> passed</span>
+          }
+        />
+        <KpiCard
+          icon={<User size={14} />}
+          label="Signed by"
+          value={data.signedBy}
+        />
+      </div>
 
-      {data.notes && (
-        <FieldSection label="Driver notes">
-          <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{data.notes}</p>
-        </FieldSection>
+      {/* Defects (or all-passed badge) */}
+      <div className="px-6 pb-4">
+        {data.asset && truckDefects.length > 0 && (
+          <EquipmentDefectsSection equipmentLabel={truckLabel} defects={truckDefects} />
+        )}
+        {data.trailer && trailerDefects.length > 0 && (
+          <EquipmentDefectsSection equipmentLabel={trailerLabel} defects={trailerDefects} />
+        )}
+        {totalDefects === 0 && <AllPassedBadge passCount={passCount} />}
+      </div>
+
+      {/* Media gallery — larger tiles than the old left-rail layout
+          (~200x200 vs old 96x96), grouped by section so each photo
+          stays attributable to the defect / general slot it came
+          from. Click a tile to open MediaSidePanel pre-scrolled. */}
+      {totalPhotos > 0 && (
+        <div className="px-6 pb-4">
+          <SectionHeader>Media ({totalPhotos})</SectionHeader>
+          {(() => {
+            let cursor = 0;
+            return (
+              <div className="flex flex-col gap-4">
+                {mediaSections.map((sec, i) => (
+                  <div key={i}>
+                    {sec.label && (
+                      <div className="text-[11px] font-bold mb-2" style={{ color: 'var(--gc-text-2)' }}>
+                        {sec.label}
+                      </div>
+                    )}
+                    <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
+                      {sec.photos.map(p => {
+                        const myIdx = cursor++;
+                        return p.signedUrl ? (
+                          <button
+                            key={p.id}
+                            onClick={() => onOpenMedia({ initialIndex: myIdx, items: flatItems })}
+                            title={p.caption ?? sec.label ?? 'View photo'}
+                            className="overflow-hidden rounded-xl transition-transform"
+                            style={{
+                              padding: 0,
+                              border: '1px solid var(--gc-border)',
+                              background: 'var(--gc-surface)',
+                              cursor: 'pointer',
+                              aspectRatio: '1 / 1',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={p.signedUrl} alt={p.caption ?? ''}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                          </button>
+                        ) : (
+                          <div key={p.id}
+                            className="flex items-center justify-center rounded-xl text-[12px]"
+                            style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-3)', aspectRatio: '1 / 1' }}>
+                            no preview
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
       )}
-    </TwoColumnBody>
+
+      {/* Driver notes — optional free-text field */}
+      {data.notes && (
+        <div className="px-6 pb-4">
+          <SectionHeader>Driver notes</SectionHeader>
+          <div className="rounded-xl p-4 text-[13px] whitespace-pre-wrap"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}>
+            {data.notes}
+          </div>
+        </div>
+      )}
+
+      {/* Location footer — demoted from "primary block at the top of
+          the panel" to a compact summary at the bottom. The map is
+          context, not content; the dispatcher rarely needs it to
+          process a DVIR but it's still nice to have on hand. */}
+      <div className="px-6 pb-6">
+        <SectionHeader>Location</SectionHeader>
+        {data.locationLat != null && data.locationLon != null ? (
+          <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)' }}>
+            <MapBlock lat={data.locationLat} lon={data.locationLon} height={180} />
+          </div>
+        ) : (
+          <div className="rounded-xl py-4 px-4 text-[12px] flex items-center gap-2"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+            <MapPin size={13} /> No GPS attached to this report
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Status pill at the top of the inspection panel. Solid colored chip
+ *  so the dispatcher gets a pass/fail read before parsing anything
+ *  else. Green for all-clear, red for defects, with the count baked
+ *  into the label. Matches the calendar cell color language. */
+function InspectionStatusBadge({ defects, passCount }: { defects: number; passCount: number }) {
+  const isClear = defects === 0;
+  const bg     = isClear ? '#e6f4ea' : '#fce8e6';
+  const fg     = isClear ? '#137333' : '#a50e0e';
+  const dotBg  = isClear ? '#1e8e3e' : '#d93025';
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full"
+      style={{ background: bg, padding: '6px 14px 6px 8px' }}>
+      <div
+        className="rounded-full flex items-center justify-center"
+        style={{ width: 24, height: 24, background: dotBg }}>
+        {isClear
+          ? <Check       size={14} color="#fff" strokeWidth={3} />
+          : <AlertCircle size={14} color="#fff" strokeWidth={2.5} />}
+      </div>
+      <span className="text-[15px] font-extrabold" style={{ color: fg }}>
+        {isClear
+          ? 'All Clear'
+          : `${defects} defect${defects === 1 ? '' : 's'}`}
+      </span>
+      <span className="text-[12px] font-semibold ml-1" style={{ color: fg, opacity: 0.7 }}>
+        / {passCount + defects} items
+      </span>
+    </div>
+  );
+}
+
+/** Single KPI tile used in the strip at the top of the inspection
+ *  panel. Big bold value, small uppercase label above. `muted` greys
+ *  it out for missing data ("no trailer", "no duration"). */
+function KpiCard({
+  icon, label, value, suffix, accent, muted,
+}: {
+  icon:    React.ReactNode;
+  label:   string;
+  value:   string;
+  suffix?: React.ReactNode;
+  /** Optional colored left-border accent. */
+  accent?: string;
+  muted?:  boolean;
+}) {
+  return (
+    <div
+      className="rounded-xl px-3 py-3"
+      style={{
+        background:   'var(--gc-surface)',
+        border:       '1px solid var(--gc-border-light)',
+        borderLeft:   accent ? `3px solid ${accent}` : '1px solid var(--gc-border-light)',
+        opacity:      muted ? 0.55 : 1,
+        minWidth:     0,
+      }}>
+      <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-1.5"
+        style={{ color: 'var(--gc-text-3)' }}>
+        {icon}{label}
+      </div>
+      <div className="text-[16px] font-extrabold truncate" style={{ color: 'var(--gc-text-1)', lineHeight: 1.1 }} title={value}>
+        {value}
+      </div>
+      {suffix && (
+        <div className="text-[11px] mt-0.5">{suffix}</div>
+      )}
+    </div>
+  );
+}
+
+/** Section title bar — bigger and bolder than the old all-caps tiny
+ *  label so the panel reads as a sequence of well-defined cards. */
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[11px] font-extrabold uppercase tracking-wider mb-2.5"
+      style={{ color: 'var(--gc-text-3)' }}>
+      {children}
+    </div>
   );
 }
 
