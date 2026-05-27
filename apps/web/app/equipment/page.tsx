@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/OpsTable';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
+import { fetchWithRetry } from '@/lib/fetchWithRetry';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -112,21 +113,48 @@ export default function EquipmentPage() {
 
   // Filter dropdown data — fetched once. Used by both the Driver
   // dropdown and the Equipment dropdown (trucks + trailers merged).
+  // Wrapped in fetchWithRetry because Railway can take 30-60s to
+  // boot after a deploy / restart, and during that window the
+  // request rejects with a 502/503. Without retry the page renders
+  // with empty state and the user is stuck refreshing the browser.
   const [drivers, setDrivers]   = useState<Driver[]>([]);
   const [assets,   setAssets]   = useState<Asset[]>([]);
   const [trailers, setTrailers] = useState<Array<{ id: number; name: string; trailerNumber?: string; category: string }>>([]);
+  const [fixturesLoading, setFixturesLoading] = useState(true);
+  const [fixturesError,   setFixturesError]   = useState<string | null>(null);
+  const [fixturesReloadKey, setFixturesReloadKey] = useState(0);
 
   useEffect(() => {
+    const ctrl = new AbortController();
+    setFixturesLoading(true);
+    setFixturesError(null);
     Promise.allSettled([
-      railway.listDrivers(),
-      railway.listAssets(),
-      railway.listTrailers(),
+      fetchWithRetry(() => railway.listDrivers(),  { signal: ctrl.signal, onAttemptFailed: (err, n, willRetry) => {
+        if (willRetry) console.warn(`[equipment fixtures] drivers attempt ${n} failed, retrying:`, err);
+      }}),
+      fetchWithRetry(() => railway.listAssets(),   { signal: ctrl.signal, onAttemptFailed: (err, n, willRetry) => {
+        if (willRetry) console.warn(`[equipment fixtures] assets attempt ${n} failed, retrying:`, err);
+      }}),
+      fetchWithRetry(() => railway.listTrailers(), { signal: ctrl.signal, onAttemptFailed: (err, n, willRetry) => {
+        if (willRetry) console.warn(`[equipment fixtures] trailers attempt ${n} failed, retrying:`, err);
+      }}),
     ]).then(([d, a, t]) => {
+      if (ctrl.signal.aborted) return;
+      const failures: string[] = [];
       if (d.status === 'fulfilled') setDrivers(d.value.drivers as Driver[]);
+      else                          failures.push('drivers');
       if (a.status === 'fulfilled') setAssets(a.value.assets as Asset[]);
+      else                          failures.push('assets');
       if (t.status === 'fulfilled') setTrailers(t.value.trailers as Array<{ id: number; name: string; trailerNumber?: string; category: string }>);
+      else                          failures.push('trailers');
+      if (failures.length > 0) {
+        setFixturesError(`Failed to load ${failures.join(' + ')}. The API may still be starting up.`);
+      }
+      setFixturesLoading(false);
     });
-  }, []);
+    return () => ctrl.abort();
+  }, [fixturesReloadKey]);
+  const retryFixtures = useCallback(() => setFixturesReloadKey(k => k + 1), []);
 
   const [panel, setPanel] = useState<PanelData | null>(null);
 
@@ -180,6 +208,40 @@ export default function EquipmentPage() {
     // glorified settings panel.
     <div className="h-screen flex flex-col" style={{ background: 'var(--gc-surface)' }}>
       <ManagementHeader title="Equipment" icon={Package} />
+
+      {/* Fixtures-load error banner — shown when drivers/assets/
+          trailers fail to load after retries. The most common cause
+          is Railway mid-restart; the visible Retry button beats the
+          user staring at empty dropdowns wondering what to do. */}
+      {fixturesError && (
+        <div
+          className="px-6 py-2.5 flex items-center justify-between gap-3"
+          style={{
+            background: '#fef2f2',
+            borderBottom: '1px solid #fecaca',
+            color: '#991b1b',
+          }}>
+          <div className="text-[13px]">
+            <strong>{fixturesError}</strong>
+            {' '}If this persists, the API server may be down.
+          </div>
+          <button
+            type="button"
+            onClick={retryFixtures}
+            disabled={fixturesLoading}
+            className="rounded-md text-[12px] font-semibold transition-colors"
+            style={{
+              background: '#fff',
+              color: '#991b1b',
+              border: '1px solid #fecaca',
+              padding: '5px 12px',
+              cursor: fixturesLoading ? 'default' : 'pointer',
+              opacity: fixturesLoading ? 0.5 : 1,
+            }}>
+            {fixturesLoading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
 
       {/* Tab bar. Inner content capped at 1400px (matches my-calendar
           fuel.html and the rest of the management surfaces) and
@@ -587,8 +649,14 @@ function FuelTabContent({
     [period, customStart, customEnd],
   );
 
+  // Fuel fetch error banner — same cold-start trap as the page-level
+  // fixtures fetch. Wrapped in fetchWithRetry so a Railway restart
+  // doesn't permanently empty the table.
+  const [fuelFetchError, setFuelFetchError] = useState<string | null>(null);
+
   const reload = useCallback(async () => {
     setLoading(true);
+    setFuelFetchError(null);
     try {
       // Scope both fetches to the selected period. pEnd from
       // getPeriodRange is midnight-local on the last day, so we
@@ -604,15 +672,24 @@ function FuelTabContent({
       const fromDate = fromIso.slice(0, 10);
       const toDate   = toIso.slice(0, 10);
       const [tx, fr] = await Promise.all([
-        railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 500 }),
-        railway.listFuelReports({ from: fromIso, to: toIso, limit: 500 }),
+        fetchWithRetry(() => railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 500 }), {
+          onAttemptFailed: (err, n, willRetry) => {
+            if (willRetry) console.warn(`[equipment fuel] tx attempt ${n} failed, retrying:`, err);
+          },
+        }),
+        fetchWithRetry(() => railway.listFuelReports({ from: fromIso, to: toIso, limit: 500 }), {
+          onAttemptFailed: (err, n, willRetry) => {
+            if (willRetry) console.warn(`[equipment fuel] report attempt ${n} failed, retrying:`, err);
+          },
+        }),
       ]);
       setTransactions(tx.fuelTransactions);
       setReports(fr.fuelReports);
     } catch (err) {
-      console.error('[equipment] fuel unified:', err);
+      console.error('[equipment] fuel unified failed after retries:', err);
       setTransactions([]);
       setReports([]);
+      setFuelFetchError('Failed to load fuel data. The API may still be starting up.');
     } finally {
       setLoading(false);
     }
@@ -819,6 +896,35 @@ function FuelTabContent({
           onCustomEndChange={setCustomEnd}
         />
       </div>
+      {fuelFetchError && (
+        <div
+          className="rounded-lg flex items-center justify-between gap-3 px-4 py-2.5"
+          style={{
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#991b1b',
+          }}>
+          <div className="text-[13px]">
+            <strong>{fuelFetchError}</strong>
+            {' '}Click retry once it&apos;s back up.
+          </div>
+          <button
+            type="button"
+            onClick={() => void reload()}
+            disabled={loading}
+            className="rounded-md text-[12px] font-semibold transition-colors"
+            style={{
+              background: '#fff',
+              color: '#991b1b',
+              border: '1px solid #fecaca',
+              padding: '5px 12px',
+              cursor: loading ? 'default' : 'pointer',
+              opacity: loading ? 0.5 : 1,
+            }}>
+            {loading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
       <FuelKpiBar
         transactions={transactions}
         reports={reports}
