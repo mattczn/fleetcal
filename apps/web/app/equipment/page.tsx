@@ -314,6 +314,7 @@ export default function EquipmentPage() {
           panel={panel}
           drivers={drivers}
           assets={assets}
+          trailers={trailers}
           driverNameById={driverNameById}
           assetLabelById={assetLabelById}
           trailerLabelById={trailerLabelById}
@@ -3567,12 +3568,13 @@ function StatusPill({ status }: { status: string }) {
 // containing block.
 
 function DetailPanel({
-  panel, drivers, assets, driverNameById, assetLabelById, trailerLabelById,
+  panel, drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById,
   sideMedia, onFuelMutation, onClose, onOpenMedia, onCloseSideMedia,
 }: {
   panel: PanelData;
   drivers: Driver[];
   assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
@@ -3661,7 +3663,16 @@ function DetailPanel({
             so this wrapper is just a flex container that fills the
             available height between the header and the bottom edge. */}
         <div className="flex-1 flex min-h-0" style={{ background: 'var(--gc-bg)' }}>
-          {panel.kind === 'maintenance' && <MaintenanceDetail report={panel.report} driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
+          {panel.kind === 'maintenance' && <MaintenanceDetail
+            report={panel.report}
+            assets={assets}
+            trailers={trailers}
+            driverNameById={driverNameById}
+            assetLabelById={assetLabelById}
+            trailerLabelById={trailerLabelById}
+            onOpenMedia={onOpenMedia}
+            onConverted={onClose}
+          />}
           {panel.kind === 'inspection'  && <InspectionDetail  id={panel.id} onOpenMedia={onOpenMedia} />}
           {panel.kind === 'fuel'        && <FuelDetail
             transaction={panel.transaction}
@@ -3714,48 +3725,245 @@ function DetailPanel({
 }
 
 function MaintenanceDetail({
-  report, driverNameById, assetLabelById, trailerLabelById, onOpenMedia,
+  report, assets, trailers, driverNameById, assetLabelById, trailerLabelById, onOpenMedia, onConverted,
 }: {
   report: MaintenanceReport;
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
   onOpenMedia: (list: MediaList) => void;
+  /** Called after the dispatcher converts the report into a work
+   *  order from inside the panel. Closes the panel — the dispatcher
+   *  jumps back to the work-orders board where the new item lives. */
+  onConverted: () => void;
 }) {
+  // Local state for the embedded conversion modal. Rendering inside
+  // the panel (rather than lifting state to EquipmentPage) keeps the
+  // create-WO-from-report flow self-contained.
+  const [convertOpen, setConvertOpen] = useState(false);
+
+  // ── Display-ready field resolution ────────────────────────────────────
+  // Embedded names from the list response take precedence so we don't
+  // hit the lookups for already-resolved cases. Falls back to the
+  // page-level maps when the API was old or the row didn't embed them.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const r = report as any;
+  const driverName     = (r.driverName as string | undefined)
+    ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById);
+  const truckLabel     = report.assetId
+    ? ((r.assetName as string | undefined) ?? assetLabelById.get(report.assetId) ?? `Asset #${report.assetId}`)
+    : null;
+  const trailerLabel   = report.trailerId
+    ? (r.trailerName ? `Trailer ${r.trailerName}` : (trailerLabelById.get(report.trailerId) ?? `Trailer #${report.trailerId}`))
+    : null;
+  const equipmentLabel = truckLabel ?? trailerLabel ?? '—';
+
+  const reportedDate   = new Date(report.reportedAt);
+  const photoCount     = report.photos?.length ?? 0;
+
+  // Build the media gallery sections (same shape InspectionDetail uses).
   const mediaSections: Array<{ label?: string; photos: { id: string; signedUrl: string | null; caption: string | null }[] }> = [];
   if (report.photos && report.photos.length > 0) {
     mediaSections.push({
       photos: report.photos.map((p: MaintenanceReportPhoto) => ({ id: p.id, signedUrl: p.signedUrl ?? null, caption: null })),
     });
   }
+  const flatItems: MediaList['items'] = [];
+  for (const sec of mediaSections) {
+    for (const p of sec.photos) flatItems.push({ id: p.id, signedUrl: p.signedUrl, caption: p.caption, section: sec.label });
+  }
+
+  const isConverted = report.status === 'converted';
+  const isDismissed = report.status === 'dismissed';
+
   return (
-    <TwoColumnBody
-      mapLat={report.latitude}
-      mapLon={report.longitude}
-      mapState={report.state}
-      media={mediaSections}
-      onOpenMedia={onOpenMedia}
-    >
-      <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12px]">
-        <Field icon={<Clock size={12} />} label="Reported">{new Date(report.reportedAt).toLocaleString()}</Field>
-        <Field icon={<User  size={12} />} label="Driver">{
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (report as any).driverName as string
-          ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById)
-        }</Field>
-        <Field icon={<Truck size={12} />} label="Equipment">{
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (report as any).assetName as string
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ?? ((report as any).trailerName ? `Trailer ${(report as any).trailerName}` : undefined)
-          ?? resolveEquipmentLabel(report.assetId, report.trailerId, assetLabelById, trailerLabelById)
-        }</Field>
-        <Field icon={<FileText size={12} />} label="Status"><StatusPill status={report.status} /></Field>
+    <div className="flex-1 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+      {/* Hero band — status badge + driver/date + CTA. Mirrors the
+          InspectionDetail header rhythm so the two panels feel like
+          siblings, not strangers. */}
+      <div className="px-6 pt-5 pb-5" style={{ background: 'var(--gc-surface)', borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <MaintenanceStatusBadge status={report.status} />
+            <div className="mt-3 flex items-center gap-2 text-[14px] flex-wrap" style={{ color: 'var(--gc-text-2)' }}>
+              <User size={14} style={{ color: 'var(--gc-text-3)' }} />
+              <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{driverName}</span>
+              <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+              <span>{reportedDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
+              <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+              <span className="tabular-nums">{reportedDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
+            </div>
+          </div>
+          {/* Create work order CTA — primary action. Hidden when the
+              report has already been converted (the work order
+              already exists; double-converting would be a 409) or
+              dismissed (the dispatcher chose not to action it). */}
+          {!isConverted && !isDismissed && (
+            <button
+              type="button"
+              onClick={() => setConvertOpen(true)}
+              className="flex items-center gap-1.5 rounded-md text-[13px] font-semibold transition-colors shrink-0"
+              style={{
+                background: 'var(--gc-blue)',
+                color:      '#ffffff',
+                border:     '1px solid var(--gc-blue)',
+                padding:    '8px 14px',
+                cursor:     'pointer',
+                textShadow: '0 1px 1px rgba(0,0,0,0.18)',
+                boxShadow:  '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#1967d2')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+              <Wrench size={14} />
+              Create work order
+            </button>
+          )}
+          {isConverted && (
+            <div className="flex items-center gap-1.5 text-[12px] font-semibold shrink-0"
+              style={{ color: '#137333' }}>
+              <Check size={14} />
+              Converted
+            </div>
+          )}
+        </div>
       </div>
-      <FieldSection label="Description">
-        <p className="text-[12px] whitespace-pre-wrap" style={{ color: 'var(--gc-text-1)' }}>{report.description}</p>
-      </FieldSection>
-    </TwoColumnBody>
+
+      {/* KPI strip — three cards: equipment, when reported, photo count.
+          Status is already in the hero badge so we don't duplicate it
+          here; if the report has GPS we replace photos with state code. */}
+      <div className="px-6 pt-5 pb-4 grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+        <KpiCard
+          icon={truckLabel ? <Truck size={14} /> : <Package size={14} />}
+          label={truckLabel ? 'Truck' : trailerLabel ? 'Trailer' : 'Equipment'}
+          value={equipmentLabel}
+          accent={truckLabel ? '#1a73e8' : trailerLabel ? '#0ea5e9' : undefined}
+          muted={equipmentLabel === '—'}
+        />
+        <KpiCard
+          icon={<Clock size={14} />}
+          label="Reported"
+          value={reportedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+          suffix={<span style={{ color: 'var(--gc-text-3)', fontWeight: 500 }}>{reportedDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>}
+        />
+        <KpiCard
+          icon={<Camera size={14} />}
+          label="Photos"
+          value={String(photoCount)}
+          muted={photoCount === 0}
+        />
+      </div>
+
+      {/* Description — the report's main payload. Card with the same
+          aesthetic as the inspection panel's "Driver notes" block. */}
+      <div className="px-6 pb-4">
+        <SectionHeader>Description</SectionHeader>
+        <div className="rounded-xl p-4 text-[13px] whitespace-pre-wrap"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)', lineHeight: 1.5 }}>
+          {report.description || <span style={{ color: 'var(--gc-text-3)', fontStyle: 'italic' }}>No description.</span>}
+        </div>
+      </div>
+
+      {/* Photos — full-width grid, same tile size as the inspection
+          panel. Click to open MediaSidePanel pre-scrolled to that
+          image. */}
+      {mediaSections.length > 0 && (
+        <div className="px-6 pb-4">
+          <SectionHeader>Photos</SectionHeader>
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+            {mediaSections[0].photos.map((p, idx) => p.signedUrl ? (
+              <button
+                key={p.id}
+                onClick={() => onOpenMedia({ initialIndex: idx, items: flatItems })}
+                title={p.caption ?? 'View photo'}
+                className="overflow-hidden rounded-xl transition-transform"
+                style={{
+                  padding:     0,
+                  border:      '1px solid var(--gc-border)',
+                  background:  'var(--gc-surface)',
+                  cursor:      'pointer',
+                  aspectRatio: '1 / 1',
+                  boxShadow:   '0 1px 3px rgba(0,0,0,0.06)',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={p.signedUrl} alt={p.caption ?? ''}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              </button>
+            ) : (
+              <div key={p.id}
+                className="flex items-center justify-center rounded-xl text-[12px]"
+                style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-3)', aspectRatio: '1 / 1' }}>
+                no preview
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Location — matches the inspection panel's footer treatment. */}
+      <div className="px-6 pb-6">
+        <SectionHeader>Location</SectionHeader>
+        {report.latitude != null && report.longitude != null ? (
+          <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)' }}>
+            <MapBlock lat={report.latitude} lon={report.longitude} height={180} />
+          </div>
+        ) : (
+          <div className="rounded-xl py-4 px-4 text-[12px] flex items-center gap-2"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+            <MapPin size={13} /> No GPS attached to this report
+          </div>
+        )}
+      </div>
+
+      {/* Embedded conversion modal — pre-fills from the report. Same
+          WorkOrderModal the maintenance sub-tab uses; living inside
+          the panel keeps the workflow ("read report → convert") in
+          one place. On save we trigger onConverted which closes the
+          whole panel (back to the work-orders board). */}
+      {convertOpen && (
+        <WorkOrderModal
+          mode="convert"
+          fromReport={report}
+          assets={assets}
+          trailers={trailers}
+          assetLabelById={assetLabelById}
+          trailerLabelById={trailerLabelById}
+          onClose={() => setConvertOpen(false)}
+          onSaved={() => {
+            setConvertOpen(false);
+            onConverted();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Big status chip at the top of the maintenance report panel.
+ *  Same visual language as InspectionStatusBadge — solid color,
+ *  white icon dot, extra-bold label — so the two panels match. */
+function MaintenanceStatusBadge({ status }: { status: string }) {
+  const palette: Record<string, { bg: string; fg: string; dotBg: string; icon: React.ReactNode; label: string }> = {
+    open:      { bg: '#fef7e0', fg: '#b06000', dotBg: '#f9ab00', icon: <AlertCircle size={14} color="#fff" strokeWidth={2.5} />, label: 'Open' },
+    reviewed:  { bg: '#e8f0fe', fg: '#1967d2', dotBg: '#1a73e8', icon: <Check       size={14} color="#fff" strokeWidth={3}   />, label: 'Reviewed' },
+    converted: { bg: '#e6f4ea', fg: '#137333', dotBg: '#0f9d58', icon: <Wrench      size={12} color="#fff" strokeWidth={2.5} />, label: 'Converted' },
+    dismissed: { bg: '#f1f3f4', fg: '#3c4043', dotBg: '#5f6368', icon: <X           size={14} color="#fff" strokeWidth={3}   />, label: 'Dismissed' },
+  };
+  const p = palette[status] ?? palette.open;
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full"
+      style={{ background: p.bg, padding: '6px 14px 6px 8px' }}>
+      <div className="rounded-full flex items-center justify-center"
+        style={{ width: 24, height: 24, background: p.dotBg }}>
+        {p.icon}
+      </div>
+      <span className="text-[15px] font-extrabold" style={{ color: p.fg }}>
+        {p.label}
+      </span>
+    </div>
   );
 }
 
