@@ -426,11 +426,6 @@ export interface OrgSettings {
    *  leak through GET /v1/org-settings; the toggles + cadences here
    *  control HOW we use the key. */
   motiveSettings?: MotiveSettings | null;
-  /** Fuel-side carrier-specific config — currently just the
-   *  buy-on-behalf names list used by the fuel-transactions
-   *  auto-matcher. Empty / undefined ⇒ no special-case handling
-   *  (every receipt is treated as standard driver-name matching). */
-  fuelSettings?: FuelSettings | null;
 }
 
 /**
@@ -457,20 +452,6 @@ export interface MotiveSettings {
   drivingPeriodsSyncIntervalMinutes?: number;
 }
 
-/**
- * Fuel-side carrier-specific config. Currently a single field:
- * names that appear on receipts as the "PURCHASED BY" but who are
- * actually buying fuel for OTHER drivers (owner-operators, dispatch
- * staff, etc.). The fuel-transactions auto-matcher drops the name
- * signal for these receipts and leans harder on gallons + date.
- */
-export interface FuelSettings {
-  /** Lowercase substring matches. e.g. ["michael curzon", "jonathan
-   *  curzon"] matches "Michael Curzon" / "michael curzon" / etc on
-   *  the receipt's PURCHASED BY field. Empty/undefined ⇒ no
-   *  special handling (matcher uses name signal for every receipt). */
-  buyOnBehalfNames?: string[];
-}
 
 /** Per-role capability override map. Outer key is the role; inner
  *  key is the capability string (matches the Capability union in

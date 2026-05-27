@@ -129,62 +129,24 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
 
 // ── Auto-matcher ───────────────────────────────────────────────────────
 //
-// Two scoring modes, chosen by inspecting the transaction's driver_name:
+// Pairs a freshly-ingested card transaction with the driver-app
+// fuel_report from the same time/place. The receipt knows $ + gallons
+// + date; the driver report knows who/what/where. The match makes
+// each fuel-up a complete record.
 //
-// 1. STANDARD MODE — the receipt's PURCHASED BY name is the actual
-//    driver. Score signals:
-//       • Driver name match (substring either direction): +50
-//       • Asset / truck unit match:                       +30
-//       • Diesel gallons within ±5%:                      +15
-//       • Date proximity (same day = +5, ±1 = +3, ±2 = +1): up to +5
-//    Threshold: ≥70 → auto_matched.
+// Scoring (max ~100):
+//   • Driver name match (substring either direction):     +50
+//   • Asset / truck unit match:                           +30
+//   • Diesel gallons within ±5%:                          +15
+//   • Date proximity (same day = +5, ±1 = +3, ±2 = +1):   up to +5
+// Threshold ≥70 → auto_matched. Lower → unmatched (dispatch decides).
 //
-// 2. BUY-ON-BEHALF MODE — the receipt is from someone known to fuel
-//    other drivers' trucks (Curzon brothers in this org). The name on
-//    the receipt is NOT the driver who used the fuel, so we drop the
-//    name signal entirely and require a stronger gallons + date match
-//    to compensate. Score signals:
-//       • Exact gallons (±0.5 gal absolute):              +60
-//       • Gallons within ±2%:                             +40
-//       • Gallons within ±5%:                             +25
-//       • Same calendar day:                              +30
-//       • ±1 day:                                         +15
-//       • Asset / truck unit match (rare on Mudflap):     +20
-//    Threshold: ≥70. So a typical match = same-day + exact gallons = 90.
-//    Multiple drivers with similar gallons on the same day won't
-//    cleanly auto-match (only ONE candidate scores ≥70 in that case),
-//    and dispatch handles the rest manually.
-//
-// The buy-on-behalf list is currently hardcoded. When other carriers
-// onboard we'll surface it in org_settings; for now Curzon Trucking's
-// two owners are the only known cases.
-
-/** Names on a fuel receipt that mean "this person bought fuel for
- *  ANOTHER driver". Loaded per-org from
- *  org_settings.fuel_settings.buyOnBehalfNames — see the FuelSettings
- *  type in @fleetcal/types domain.ts. The matcher uses
- *  case-insensitive substring matches.
- *
- *  Loaded once per /inbound-email request via loadOrgBuyOnBehalfNames()
- *  and threaded through to the scorer so we don't re-hit the DB inside
- *  the per-candidate loop. */
-async function loadOrgBuyOnBehalfNames(orgId: string): Promise<string[]> {
-  const { data } = await supabase
-    .from("org_settings")
-    .select("fuel_settings")
-    .eq("org_id", orgId)
-    .maybeSingle();
-  const settings = (data as { fuel_settings: { buyOnBehalfNames?: string[] } | null } | null)?.fuel_settings;
-  const names = settings?.buyOnBehalfNames ?? [];
-  // Normalize at load time — every callsite expects lowercase strings.
-  return names.map(n => (n ?? "").toString().toLowerCase().trim()).filter(Boolean);
-}
-
-function isBuyOnBehalfReceipt(driverNameOnReceipt: string | null | undefined, buyOnBehalfNames: string[]): boolean {
-  if (!driverNameOnReceipt || buyOnBehalfNames.length === 0) return false;
-  const lower = driverNameOnReceipt.toLowerCase();
-  return buyOnBehalfNames.some(n => lower.includes(n));
-}
+// Note: the name on a receipt may NOT be the driver who actually
+// fueled (e.g. an owner-operator swipes the card for the actual
+// driver). We don't have a clean way to detect that automatically,
+// so for the rare buy-on-behalf case dispatch manually links the
+// transaction to the right report via the UI on Equipment → Fuel →
+// Card Transactions.
 
 interface FuelReportCandidate {
   id:              string;
@@ -205,7 +167,7 @@ function dayDiff(txDate: string, reportedAt: string): number {
   return Math.abs(t - r) / 86_400_000;
 }
 
-function scoreMatchStandard(tx: FuelTransactionRow, r: FuelReportCandidate): number {
+function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
   let score = 0;
 
   // Driver name (case-insensitive substring either direction)
@@ -235,45 +197,9 @@ function scoreMatchStandard(tx: FuelTransactionRow, r: FuelReportCandidate): num
   return score;
 }
 
-function scoreMatchBuyOnBehalf(tx: FuelTransactionRow, r: FuelReportCandidate): number {
-  let score = 0;
-
-  // Gallons — the strongest signal when we can't trust the name.
-  // Tiered: tight tolerance gets a big bump, looser gets less.
-  if (tx.diesel_gallons != null && r.diesel_gallons > 0) {
-    const txG  = Number(tx.diesel_gallons);
-    const absD = Math.abs(txG - r.diesel_gallons);
-    const pctD = absD / r.diesel_gallons;
-    if      (absD <= 0.5)  score += 60;   // exact-to-half-gallon
-    else if (pctD <= 0.02) score += 40;
-    else if (pctD <= 0.05) score += 25;
-  }
-
-  // Date proximity. Same-day is weighted heavier here than in
-  // standard mode because we're leaning on gallons+date to do the
-  // work the name signal normally does.
-  const d = dayDiff(tx.transaction_date, r.reported_at);
-  if      (d <= 1) score += 30;
-  else if (d <= 2) score += 15;
-
-  // Asset match (when present, Mudflap rarely fills this in).
-  if (tx.matched_truck && r.asset_unit && String(tx.matched_truck).trim() === String(r.asset_unit).trim()) {
-    score += 20;
-  }
-
-  return score;
-}
-
-function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate, buyOnBehalfNames: string[]): number {
-  return isBuyOnBehalfReceipt(tx.driver_name, buyOnBehalfNames)
-    ? scoreMatchBuyOnBehalf(tx, r)
-    : scoreMatchStandard(tx, r);
-}
-
 async function tryAutoMatch(
   orgId: string,
   txRow: FuelTransactionRow,
-  buyOnBehalfNames: string[],
 ): Promise<{ fuelReportId: string; confidence: number } | null> {
   // Pull candidate reports within ±3 days of the transaction date and
   // still in 'pending' match status. Limit to a reasonable batch — a
@@ -312,7 +238,7 @@ async function tryAutoMatch(
 
   let best: { id: string; score: number } | null = null;
   for (const c of candidates) {
-    const s = scoreMatch(txRow, c, buyOnBehalfNames);
+    const s = scoreMatch(txRow, c);
     if (!best || s > best.score) best = { id: c.id, score: s };
   }
   if (!best || best.score < 70) return null;
@@ -324,8 +250,7 @@ async function applyAutoMatch(
   txId: string,
   txRow: FuelTransactionRow,
 ): Promise<{ status: FuelTransactionMatchStatus; confidence?: number }> {
-  const buyOnBehalfNames = await loadOrgBuyOnBehalfNames(orgId);
-  const matched = await tryAutoMatch(orgId, txRow, buyOnBehalfNames);
+  const matched = await tryAutoMatch(orgId, txRow);
   if (!matched) return { status: "unmatched" };
 
   // Two-sided update — flip both ends of the link in a single round

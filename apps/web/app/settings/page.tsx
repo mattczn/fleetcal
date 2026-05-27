@@ -3429,11 +3429,8 @@ function IntegrationsPanel() {
           </div>
         )}
 
-        {/* Sync schedule + Fuel matching settings — saas-customizable
-            knobs that live alongside the Motive integration since
-            they're all about how external data lands in FleetCal. */}
+        {/* Sync schedule — Motive feed cadence per org. */}
         <MotiveSyncSettingsCard />
-        <FuelMatchingSettingsCard />
 
       </div>
     </div>
@@ -3528,90 +3525,6 @@ function MotiveSyncSettingsCard() {
                 minute(s) (minimum 5)
               </span>
             </div>
-          </FieldRow>
-          <div className="flex items-center gap-3">
-            <button onClick={() => void save()} disabled={saving}
-              className="text-[13px] font-semibold px-4 py-2 rounded-lg text-white transition-colors disabled:opacity-60"
-              style={{ background: 'var(--gc-blue)' }}>
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            {saved && <span className="text-xs" style={{ color: '#15803d' }}>Saved ✓</span>}
-            {error && <span className="text-xs" style={{ color: '#b71c1c' }}>{error}</span>}
-          </div>
-        </>
-      )}
-    </Card>
-  );
-}
-
-// ─── Fuel transaction matching settings card ────────────────────────────────
-//
-// Currently a single field: the "buy-on-behalf" names list used by
-// the fuel-transactions auto-matcher. When a receipt's PURCHASED BY
-// matches one of these names (substring, case-insensitive), the
-// matcher drops the name signal and leans on gallons + date — useful
-// when owners/dispatchers swipe the card to fuel OTHER drivers'
-// trucks.
-
-function FuelMatchingSettingsCard() {
-  const [loading, setLoading] = useState(true);
-  const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
-  const [error,   setError]   = useState('');
-
-  // Stored as a textarea, one name per line. Easier UX than a list-
-  // editor for a typical 0–3 entries; we split on newlines + trim.
-  const [namesText, setNamesText] = useState('');
-
-  useEffect(() => {
-    railway.getOrgSettings()
-      .then(({ settings }) => {
-        const fs = settings.fuelSettings ?? {};
-        setNamesText((fs.buyOnBehalfNames ?? []).join('\n'));
-      })
-      .catch(err => setError((err as Error).message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  async function save() {
-    setSaving(true); setError(''); setSaved(false);
-    try {
-      const names = namesText
-        .split(/\r?\n/)
-        .map(s => s.trim())
-        .filter(Boolean);
-      await railway.updateOrgSettings({
-        fuelSettings: { buyOnBehalfNames: names },
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card title="Fuel transaction matching" subtitle="Configure how FleetCal pairs card receipts (Mudflap etc.) with driver-submitted fuel reports.">
-      {loading ? (
-        <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
-      ) : (
-        <>
-          <FieldRow
-            label="Buy-on-behalf names"
-            subtitle={
-              "Names that appear as PURCHASED BY on a receipt but who are actually buying fuel for OTHER drivers " +
-              "(e.g. owner-operators, dispatch staff). The matcher drops the name signal for these receipts and " +
-              "leans harder on gallons + date. One name per line. Case-insensitive substring match."
-            }
-          >
-            <Textarea
-              value={namesText}
-              onChange={setNamesText}
-              rows={4}
-              placeholder={'Michael Curzon\nJonathan Curzon'}
-            />
           </FieldRow>
           <div className="flex items-center gap-3">
             <button onClick={() => void save()} disabled={saving}

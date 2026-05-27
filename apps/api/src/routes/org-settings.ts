@@ -37,7 +37,7 @@ orgSettings.get("/", async (c) => {
   const orgId = c.get("orgId");
   const { data, error } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings,fuel_settings")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings")
     .eq("org_id", orgId)
     .maybeSingle();
   if (error) {
@@ -54,7 +54,6 @@ orgSettings.get("/", async (c) => {
     document_types:            DocumentTypeConfig[]   | null;
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
-    fuel_settings:             import("@fleetcal/types").FuelSettings   | null;
   } | null;
   const res: GetOrgSettingsResponse = {
     settings: {
@@ -67,7 +66,6 @@ orgSettings.get("/", async (c) => {
       documentTypes:         row?.document_types          ?? null,
       notificationRules:     row?.notification_rules      ?? null,
       motiveSettings:        row?.motive_settings         ?? null,
-      fuelSettings:          row?.fuel_settings           ?? null,
     },
   };
   return c.json(res);
@@ -86,8 +84,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     body.driverVisibleDocKinds === undefined &&
     body.documentTypes         === undefined &&
     body.notificationRules     === undefined &&
-    body.motiveSettings        === undefined &&
-    body.fuelSettings          === undefined
+    body.motiveSettings        === undefined
   ) {
     return c.json({ error: "validation_failed", errors: ["at least one settable field required"] } satisfies ApiErrorResponse, 400);
   }
@@ -126,7 +123,7 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // clobbering keys the caller didn't include.
   const { data: existing } = await supabase
     .from("org_settings")
-    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings,fuel_settings")
+    .select("show_driver_pay,rate_con_settings,invoice_settings,role_overrides,modules,driver_visible_doc_kinds,document_types,notification_rules,motive_settings")
     .eq("org_id", orgId)
     .maybeSingle();
   const existingRow = existing as {
@@ -139,7 +136,6 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
     document_types:            DocumentTypeConfig[]   | null;
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
-    fuel_settings:             import("@fleetcal/types").FuelSettings   | null;
   } | null;
 
   const nextShowDriverPay = body.showDriverPay ?? existingRow?.show_driver_pay ?? false;
@@ -203,12 +199,6 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       : body.motiveSettings === null
         ? null
         : { ...(existingRow?.motive_settings ?? {}), ...body.motiveSettings };
-  const mergedFuel: import("@fleetcal/types").FuelSettings | null =
-    body.fuelSettings === undefined
-      ? (existingRow?.fuel_settings ?? null)
-      : body.fuelSettings === null
-        ? null
-        : { ...(existingRow?.fuel_settings ?? {}), ...body.fuelSettings };
 
   const { error } = await supabase
     .from("org_settings")
@@ -224,7 +214,6 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
         document_types:            nextDocumentTypes as never,
         notification_rules:        nextNotificationRules as never,
         motive_settings:           mergedMotive as never,
-        fuel_settings:             mergedFuel as never,
       } as never,
       { onConflict: "org_id" },
     );
@@ -251,7 +240,6 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
       documentTypes:         nextDocumentTypes,
       notificationRules:     nextNotificationRules,
       motiveSettings:        mergedMotive,
-      fuelSettings:          mergedFuel,
     },
   };
   return c.json(res);

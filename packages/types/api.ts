@@ -794,9 +794,6 @@ export interface UpdateOrgSettingsRequest {
   /** Motive integration config — sync toggles + cadences. Merged
    *  shallowly with the existing row so a single-field PATCH works. */
   motiveSettings?:   import("./domain").MotiveSettings | null;
-  /** Fuel-side carrier-specific config (currently just the
-   *  buy-on-behalf names list used by the fuel auto-matcher). */
-  fuelSettings?:     import("./domain").FuelSettings | null;
 }
 export interface UpdateOrgSettingsResponse { settings: OrgSettings; }
 
