@@ -40,6 +40,9 @@ import {
 } from '@/components/ui/OpsTable';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { StyledSelect } from '@/components/ui/StyledSelect';
+import { AssetSelect } from '@/components/calendar/AssetSelect';
+import DatePicker from '@/components/calendar/DatePicker';
+import { LOAD_ACCENT } from '@/lib/loadAccent';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
 import { fetchWithRetry } from '@/lib/fetchWithRetry';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
@@ -771,22 +774,23 @@ function WorkOrdersList({
 
 // ─── Work order create / edit / convert modal ──────────────────────────
 //
-// Designed to match the EventModal aesthetic from the calendar:
-//   • Truck and Trailer as two separate StyledSelect fields (asset
-//     can be a truck XOR a trailer — not both, not neither for
-//     creation).
-//   • Priority lives as a colored badge in the header (click the
-//     chevron to change). In edit mode, status joins it as a
-//     second badge. Eliminates the in-form priority/status row.
-//   • One date field ("When") for the common case. DOT-style hard
-//     deadlines are deferred to Phase 2 where compliance PMs get
-//     their own scheduling treatment.
-//   • Vendor / Estimated $ / Category collapsed under "More details"
-//     in create mode (default-closed); auto-opens in edit mode so
-//     the dispatcher can see + edit them. The same row gains
-//     Actual $ / Completed by in edit mode.
+// Visual language mirrors EventModal: same font sizes (15px input,
+// 11px uppercase labels), same StyledSelect + AssetSelect + DatePicker
+// primitives, same 3px accent bar at the top colored by priority,
+// same sticky-footer layout.
 //
-// One form for three flows:
+// The form is intentionally short. Per the workflow Matt described:
+//   "any time i see something, i record it easy, assign to asset,
+//    assign priority, and then it shows up in my dashboard linked
+//    to the asset. i can then see priorities and decide when i
+//    want to make repairs."
+//
+// Create mode = capture-fast (5 fields). Scheduling, vendor, cost
+// all live in edit mode where the dispatcher is actively triaging
+// or closing out — not at log time. OOS scheduling deferred to
+// Phase 3 entirely.
+//
+// One form, three flows:
 //   create   → POST /v1/maintenance-action-items
 //   edit     → PATCH /v1/maintenance-action-items/:id
 //   convert  → POST /v1/maintenance-reports/:id/convert
@@ -803,6 +807,23 @@ const STATUS_STYLES: Record<MaintenanceActionStatus, { bg: string; border: strin
   done:        { bg: '#dcfce7', border: '#bbf7d0', fg: '#166534' },
 };
 
+// EventModal's inputStyle() — kept verbatim so any visual change here
+// stays in lockstep with the load modal. If EventModal's iStyle ever
+// gets refactored to a shared util, both should switch together.
+function workOrderInputStyle(): React.CSSProperties {
+  return {
+    border:        '1px solid var(--gc-border)',
+    borderRadius:  8,
+    padding:       '10px 12px',
+    fontSize:      15,
+    color:         'var(--gc-text-1)',
+    outline:       'none',
+    background:    'var(--gc-surface)',
+    width:         '100%',
+    transition:    'border-color 150ms',
+  };
+}
+
 function WorkOrderModal({
   mode, item, fromReport, assets, trailers, assetLabelById, trailerLabelById,
   onClose, onSaved,
@@ -817,7 +838,6 @@ function WorkOrderModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  // Build initial values from whichever mode we're in.
   const initial = useMemo(() => {
     if (mode === 'edit' && item) {
       return {
@@ -829,7 +849,6 @@ function WorkOrderModal({
         assetId:       item.assetId ?? null,
         trailerId:     item.trailerId ?? null,
         scheduledDate: item.scheduledDate ?? '',
-        outOfService:  item.outOfService,
         vendor:        item.vendor ?? '',
         estimatedCost: item.estimatedCost?.toString() ?? '',
         actualCost:    item.actualCost?.toString() ?? '',
@@ -849,7 +868,6 @@ function WorkOrderModal({
         assetId:       fromReport.assetId ?? null,
         trailerId:     fromReport.trailerId ?? null,
         scheduledDate: '',
-        outOfService:  false,
         vendor:        '',
         estimatedCost: '',
         actualCost:    '',
@@ -865,7 +883,6 @@ function WorkOrderModal({
       assetId:       null as number | null,
       trailerId:     null as number | null,
       scheduledDate: '',
-      outOfService:  false,
       vendor:        '',
       estimatedCost: '',
       actualCost:    '',
@@ -877,20 +894,27 @@ function WorkOrderModal({
   useEffect(() => { setForm(initial); }, [initial]);
   const [busy, setBusy]     = useState(false);
   const [error, setError]   = useState<string | null>(null);
-  // More-details section: closed by default in create + convert,
-  // opened in edit (dispatcher's usually here to fill them in).
+  // More-details collapse — closed by default in create + convert,
+  // open in edit mode where the dispatcher is closing things out.
   const [detailsOpen, setDetailsOpen] = useState(mode === 'edit');
 
   const today = useMemo(() => dateKeyOf(new Date()), []);
 
-  // Active-asset / active-trailer lists. Includes the currently-
-  // assigned one even if retired, so existing assignments don't
-  // disappear from the dropdown.
+  // Active-asset / active-trailer option lists. Currently-assigned
+  // one is preserved even if retired, so existing assignments stay
+  // visible in the picker.
   const truckOptions = useMemo(() => {
     return assets
       .filter(a => isActiveOn(a, today) || a.id === form.assetId)
-      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
+      .map(a => ({
+        id:    a.id,
+        name:  a.name,
+        unit:  a.unit,
+        color: a.color,
+      }));
   }, [assets, form.assetId, today]);
+
   const trailerOptions = useMemo(() => {
     return trailers
       .filter(t => isActiveOn(t as { activeFrom?: string; activeTo?: string | null }, today) || t.id === form.trailerId)
@@ -900,14 +924,17 @@ function WorkOrderModal({
   const priorityStyle = PRIORITY_STYLES[form.priority];
   const statusStyle   = STATUS_STYLES[form.status];
 
-  // Selecting a truck clears trailer and vice versa — one work order
-  // is on one asset. Either is fine, but not both at once (matches
-  // the DB check at the app layer; "general / shop-wide" work with
-  // neither is also allowed but rare).
-  function setTruck(id: number | null) {
-    setForm(f => ({ ...f, assetId: id, trailerId: id ? null : f.trailerId }));
+  // Truck/trailer mutual exclusion. Picking one clears the other.
+  // Either-or, not both. Both-null is allowed for shop-wide work
+  // in edit mode but not at creation (validation below).
+  function pickTruck(id: number) {
+    if (!id) {
+      setForm(f => ({ ...f, assetId: null }));
+    } else {
+      setForm(f => ({ ...f, assetId: id, trailerId: null }));
+    }
   }
-  function setTrailer(id: number | null) {
+  function pickTrailer(id: number | null) {
     setForm(f => ({ ...f, trailerId: id, assetId: id ? null : f.assetId }));
   }
 
@@ -925,7 +952,6 @@ function WorkOrderModal({
         description:   form.description.trim() || undefined,
         category:      form.category,
         priority:      form.priority,
-        outOfService:  form.outOfService,
         scheduledDate: form.scheduledDate || undefined,
         vendor:        form.vendor.trim() || undefined,
         estimatedCost: form.estimatedCost ? Number(form.estimatedCost) : undefined,
@@ -963,33 +989,12 @@ function WorkOrderModal({
     }
   }
 
-  const title =
+  const titleText =
     mode === 'create'  ? 'New work order'
     : mode === 'convert' ? 'Convert driver report'
     : 'Edit work order';
 
-  // Shared input styles — mirror EventModal's "form input"
-  // (1px border var(--gc-border), 8px radius, 7-8px padding,
-  // 13-14px text).
-  const inputStyle: React.CSSProperties = {
-    padding:    '8px 10px',
-    border:     '1px solid var(--gc-border)',
-    borderRadius: 8,
-    background: 'var(--gc-surface)',
-    color:      'var(--gc-text-1)',
-    fontSize:   13,
-    width:      '100%',
-    transition: 'border-color 150ms',
-  };
-  const labelStyle: React.CSSProperties = {
-    fontSize:     11,
-    fontWeight:   600,
-    letterSpacing:'0.06em',
-    textTransform:'uppercase',
-    color:        'var(--gc-text-3)',
-    marginBottom: 6,
-    display:      'block',
-  };
+  const iStyle = workOrderInputStyle();
 
   const content = (
     <div
@@ -1003,23 +1008,22 @@ function WorkOrderModal({
           maxHeight:   '92vh',
           background:  'var(--gc-surface)',
           boxShadow:   'var(--shadow-3)',
-          // 3px accent bar — color reflects current priority, same
-          // pattern as EventModal's status accent.
+          // 3px accent bar — color reflects current priority.
           borderTop:   `3px solid ${priorityStyle.fg}`,
         }}
         onClick={(e) => e.stopPropagation()}>
-        {/* Header — title + priority/status badges + close */}
+        {/* Header */}
         <div
           className="flex items-center justify-between gap-3 px-5 py-3 shrink-0"
           style={{ borderBottom: '1px solid var(--gc-border)' }}>
           <div className="flex items-center gap-2.5 min-w-0">
             <Wrench size={16} style={{ color: 'var(--gc-text-2)', flexShrink: 0 }} />
             <div className="text-[15px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-              {title}
+              {titleText}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Priority chip (always visible) */}
+            {/* Priority chip */}
             <StyledSelect
               value={form.priority}
               onChange={e => setForm(f => ({ ...f, priority: e.target.value as MaintenancePriority }))}
@@ -1039,7 +1043,6 @@ function WorkOrderModal({
               <option value="normal">Normal</option>
               <option value="low">Low</option>
             </StyledSelect>
-            {/* Status chip (edit mode only) */}
             {mode === 'edit' && (
               <StyledSelect
                 value={form.status}
@@ -1075,28 +1078,49 @@ function WorkOrderModal({
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-4">
 
-          {/* Truck + Trailer — paired in 2-col grid, mutually exclusive */}
+          {/* Title */}
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+              style={{ color: 'var(--gc-text-3)' }}>
+              Title <span style={{ color: '#dc2626' }}>*</span>
+            </label>
+            <input
+              value={form.title}
+              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+              placeholder="What needs to be done?"
+              style={iStyle}
+              onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
+              onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+            />
+          </div>
+
+          {/* Truck + Trailer — paired row, mutually exclusive */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label style={labelStyle}>Truck</label>
-              <StyledSelect
-                value={form.assetId == null ? '' : String(form.assetId)}
-                onChange={e => setTruck(e.target.value ? Number(e.target.value) : null)}
-                style={inputStyle}>
-                <option value="">— None —</option>
-                {truckOptions.map(a => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}{a.unit ? ` #${a.unit}` : ''}
-                  </option>
-                ))}
-              </StyledSelect>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Truck
+              </label>
+              <AssetSelect
+                value={form.assetId ?? 0}
+                options={truckOptions}
+                onChange={pickTruck}
+                style={iStyle}
+                focusColor={LOAD_ACCENT}
+                placeholder="— None —"
+              />
             </div>
             <div>
-              <label style={labelStyle}>Trailer</label>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Trailer
+              </label>
               <StyledSelect
                 value={form.trailerId == null ? '' : String(form.trailerId)}
-                onChange={e => setTrailer(e.target.value ? Number(e.target.value) : null)}
-                style={inputStyle}>
+                onChange={e => pickTrailer(e.target.value ? Number(e.target.value) : null)}
+                style={{ ...iStyle, cursor: 'pointer' }}
+                onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
+                onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}>
                 <option value="">— None —</option>
                 {trailerOptions.map(t => (
                   <option key={t.id} value={t.id}>
@@ -1107,63 +1131,55 @@ function WorkOrderModal({
             </div>
           </div>
 
-          {/* Title */}
-          <div>
-            <label style={labelStyle}>
-              Title <span style={{ color: '#dc2626' }}>*</span>
-            </label>
-            <input
-              value={form.title}
-              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
-              placeholder="What needs to be done?"
-              style={inputStyle}
-              onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
-              onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-            />
+          {/* Category + (edit only) When */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Category
+              </label>
+              <StyledSelect
+                value={form.category}
+                onChange={e => setForm(f => ({ ...f, category: e.target.value as MaintenanceCategory }))}
+                style={{ ...iStyle, cursor: 'pointer' }}
+                onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
+                onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}>
+                <option value="repair">Repair</option>
+                <option value="pm">PM (preventive)</option>
+                <option value="inspection">Inspection</option>
+                <option value="other">Other</option>
+              </StyledSelect>
+            </div>
+            {mode === 'edit' && (
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  Scheduled for
+                </label>
+                <DatePicker
+                  value={form.scheduledDate}
+                  onChange={(v) => setForm(f => ({ ...f, scheduledDate: v }))}
+                  headerColor={LOAD_ACCENT}
+                />
+              </div>
+            )}
           </div>
 
-          {/* Notes */}
+          {/* Description */}
           <div>
-            <label style={labelStyle}>Notes</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+              style={{ color: 'var(--gc-text-3)' }}>
+              Description
+            </label>
             <textarea
               value={form.description}
               onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
               rows={3}
               placeholder="Details, symptoms, parts needed…"
-              style={{ ...inputStyle, resize: 'vertical', minHeight: 72 }}
-              onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
+              style={{ ...iStyle, resize: 'vertical', minHeight: 80, fontFamily: 'inherit', lineHeight: 1.5 }}
+              onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
               onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
             />
-          </div>
-
-          {/* Scheduling section — When + OOS */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label style={labelStyle}>When</label>
-              <input
-                type="date"
-                value={form.scheduledDate}
-                onChange={e => setForm(f => ({ ...f, scheduledDate: e.target.value }))}
-                style={inputStyle}
-                onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
-                onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-              />
-            </div>
-            <div>
-              <label style={labelStyle}>Status</label>
-              <label
-                className="flex items-center gap-2 text-[13px] cursor-pointer"
-                style={{ ...inputStyle, padding: '8px 10px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={form.outOfService}
-                  onChange={e => setForm(f => ({ ...f, outOfService: e.target.checked }))}
-                />
-                <span style={{ color: form.outOfService ? '#991b1b' : 'var(--gc-text-2)' }}>
-                  Truck out of service
-                </span>
-              </label>
-            </div>
           </div>
 
           {/* Convert preview — only in convert mode */}
@@ -1171,10 +1187,10 @@ function WorkOrderModal({
             <div
               className="rounded-lg px-3 py-2.5"
               style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
-              <div className="text-[10.5px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
                 From driver report
               </div>
-              <div className="text-[12.5px]" style={{ color: 'var(--gc-text-2)' }}>
+              <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                 {fromReport.assetId ? (assetLabelById.get(fromReport.assetId) ?? `Asset #${fromReport.assetId}`)
                   : fromReport.trailerId ? `Trailer ${trailerLabelById.get(fromReport.trailerId) ?? `#${fromReport.trailerId}`}`
                   : ''}
@@ -1184,107 +1200,104 @@ function WorkOrderModal({
             </div>
           )}
 
-          {/* More details — collapsible */}
-          <div
-            className="rounded-lg overflow-hidden"
-            style={{ border: '1px solid var(--gc-border-light)' }}>
-            <button
-              type="button"
-              onClick={() => setDetailsOpen(o => !o)}
-              className="w-full flex items-center justify-between px-3 py-2 transition-colors"
-              style={{ background: detailsOpen ? 'var(--gc-bg)' : 'var(--gc-surface)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
-              onMouseLeave={e => (e.currentTarget.style.background = detailsOpen ? 'var(--gc-bg)' : 'var(--gc-surface)')}>
-              <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
-                More details {detailsOpen ? '' : '· optional'}
-              </span>
-              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"
-                style={{
-                  color: 'var(--gc-text-3)',
-                  transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                  transition: 'transform 150ms',
-                }}>
-                <path d="M1.5 3.5l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            {detailsOpen && (
-              <div className="px-3 py-3 flex flex-col gap-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-                <div className="grid grid-cols-2 gap-3">
+          {/* More details — collapsible. In edit mode, defaults open
+              so the dispatcher can fill in vendor/cost when closing out. */}
+          {mode === 'edit' && (
+            <div
+              className="rounded-lg overflow-hidden"
+              style={{ border: '1px solid var(--gc-border-light)' }}>
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(o => !o)}
+                className="w-full flex items-center justify-between px-3 py-2 transition-colors"
+                style={{ background: detailsOpen ? 'var(--gc-bg)' : 'var(--gc-surface)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
+                onMouseLeave={e => (e.currentTarget.style.background = detailsOpen ? 'var(--gc-bg)' : 'var(--gc-surface)')}>
+                <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                  Vendor &amp; cost {detailsOpen ? '' : '· optional'}
+                </span>
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none"
+                  style={{
+                    color: 'var(--gc-text-3)',
+                    transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 150ms',
+                  }}>
+                  <path d="M1.5 3.5l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {detailsOpen && (
+                <div className="px-3 py-3 flex flex-col gap-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
                   <div>
-                    <label style={labelStyle}>Category</label>
-                    <StyledSelect
-                      value={form.category}
-                      onChange={e => setForm(f => ({ ...f, category: e.target.value as MaintenanceCategory }))}
-                      style={inputStyle}>
-                      <option value="repair">Repair</option>
-                      <option value="pm">PM (preventive)</option>
-                      <option value="inspection">Inspection</option>
-                      <option value="other">Other</option>
-                    </StyledSelect>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Vendor / shop</label>
+                    <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                      style={{ color: 'var(--gc-text-3)' }}>
+                      Vendor / shop
+                    </label>
                     <input
                       value={form.vendor}
                       onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))}
                       placeholder="NAPA, in-house, …"
-                      style={inputStyle}
-                      onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
+                      style={iStyle}
+                      onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
                       onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
                     />
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label style={labelStyle}>Estimated $</label>
-                    <input
-                      value={form.estimatedCost}
-                      onChange={e => setForm(f => ({ ...f, estimatedCost: e.target.value }))}
-                      placeholder="0.00"
-                      inputMode="decimal"
-                      style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                      onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
-                      onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-                    />
-                  </div>
-                  {mode === 'edit' && (
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label style={labelStyle}>Actual $</label>
+                      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                        style={{ color: 'var(--gc-text-3)' }}>
+                        Estimated $
+                      </label>
+                      <input
+                        value={form.estimatedCost}
+                        onChange={e => setForm(f => ({ ...f, estimatedCost: e.target.value }))}
+                        placeholder="0.00"
+                        inputMode="decimal"
+                        style={{ ...iStyle, fontFamily: 'ui-monospace, monospace' }}
+                        onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
+                        onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                        style={{ color: 'var(--gc-text-3)' }}>
+                        Actual $
+                      </label>
                       <input
                         value={form.actualCost}
                         onChange={e => setForm(f => ({ ...f, actualCost: e.target.value }))}
                         placeholder="0.00"
                         inputMode="decimal"
-                        style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                        onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
+                        style={{ ...iStyle, fontFamily: 'ui-monospace, monospace' }}
+                        onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
                         onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
                       />
                     </div>
-                  )}
-                </div>
-                {mode === 'edit' && (
+                  </div>
                   <div>
-                    <label style={labelStyle}>Completed by</label>
+                    <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                      style={{ color: 'var(--gc-text-3)' }}>
+                      Completed by
+                    </label>
                     <input
                       value={form.completedBy}
                       onChange={e => setForm(f => ({ ...f, completedBy: e.target.value }))}
                       placeholder="Mechanic / shop name"
-                      style={inputStyle}
-                      onFocus={e => (e.currentTarget.style.borderColor = 'var(--gc-blue)')}
+                      style={iStyle}
+                      onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
                       onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
                     />
                   </div>
-                )}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {error && (
-            <div className="text-[12px]" style={{ color: '#dc2626' }}>{error}</div>
+            <div className="text-[13px]" style={{ color: '#dc2626' }}>{error}</div>
           )}
         </div>
 
-        {/* Footer — Delete left, Cancel + Save right */}
+        {/* Footer */}
         <div
           className="flex items-center justify-between gap-2 px-5 py-3 shrink-0"
           style={{ borderTop: '1px solid var(--gc-border)' }}>
@@ -1293,7 +1306,7 @@ function WorkOrderModal({
               type="button"
               onClick={deleteItem}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-md text-[12.5px] font-semibold transition-colors"
+              className="flex items-center gap-1.5 rounded-md text-[13px] font-semibold transition-colors"
               style={{
                 background: 'transparent',
                 color:      '#dc2626',
@@ -1303,7 +1316,7 @@ function WorkOrderModal({
               }}
               onMouseEnter={e => (e.currentTarget.style.background = '#fee2e2')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <Trash2 size={13} /> Delete
+              <Trash2 size={14} /> Delete
             </button>
           ) : <div />}
           <div className="flex items-center gap-2">
@@ -1311,7 +1324,7 @@ function WorkOrderModal({
               type="button"
               onClick={onClose}
               disabled={busy}
-              className="rounded-md text-[12.5px] font-semibold transition-colors"
+              className="rounded-md text-[13px] font-semibold transition-colors"
               style={{
                 background: 'transparent',
                 color:      'var(--gc-text-2)',
@@ -1325,11 +1338,11 @@ function WorkOrderModal({
               type="button"
               onClick={save}
               disabled={busy || !form.title.trim()}
-              className="rounded-md text-[12.5px] font-semibold transition-colors"
+              className="rounded-md text-[13px] font-semibold transition-colors"
               style={{
-                background: (busy || !form.title.trim()) ? 'var(--gc-bg)' : 'var(--gc-blue)',
+                background: (busy || !form.title.trim()) ? 'var(--gc-bg)' : LOAD_ACCENT,
                 color:      (busy || !form.title.trim()) ? 'var(--gc-text-3)' : '#fff',
-                border:     `1px solid ${(busy || !form.title.trim()) ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+                border:     `1px solid ${(busy || !form.title.trim()) ? 'var(--gc-border-light)' : LOAD_ACCENT}`,
                 padding:    '7px 16px',
                 cursor:     (busy || !form.title.trim()) ? 'default' : 'pointer',
               }}>
