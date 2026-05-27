@@ -30,6 +30,7 @@ import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
 import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
+import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import {
   OpsTable, OpsDate, OpsPill, OpsMuted,
   type OpsColumn, type OpsFilter,
@@ -283,8 +284,12 @@ function buildEquipmentOptions(
 }
 
 function buildDriverOptions(drivers: Driver[]): Array<{ value: string; label: string }> {
+  // "Active today" check via isActiveOn — handles future activeTo
+  // dates correctly. A bare `!activeTo` filter would drop every
+  // driver whose retirement is scheduled but hasn't happened yet.
+  const today = dateKeyOf(new Date());
   return drivers
-    .filter(d => !d.activeTo)
+    .filter(d => isActiveOn(d, today))
     .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
     .map(d => ({ value: String(d.id), label: d.name }));
 }
@@ -730,7 +735,7 @@ function FuelTabContent({
       } },
     { kind: 'select', key: 'asset',  label: 'Truck',
       options: assets
-        .filter(a => !a.activeTo)
+        .filter(a => isActiveOn(a, dateKeyOf(new Date())))
         .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
         .map(a => ({ value: String(a.id), label: `Truck ${a.name}${a.unit ? ` #${a.unit}` : ''}` })),
       predicate: (r, v) => {
@@ -1733,20 +1738,25 @@ function AssignmentControls({
     setSavedMessage(null);
   }, [t.id, t.driverId, t.assetId, linkedReport?.id, linkedReport?.driverId, linkedReport?.assetId]);
 
-  // Sorted, active-only lists. Drivers/assets in retired state shouldn't
-  // be assignable here (they'd never be the actual driver of a fresh
-  // fuel-up). Includes the currently-assigned driver/asset even if
-  // retired so existing assignments don't disappear from the dropdown.
+  // Sorted, active-only lists. "Active" = isActiveOn(today) — not a
+  // bare `!activeTo` check, because activeTo can be a FUTURE date for
+  // a planned retirement and those drivers should still appear in the
+  // dropdown. The previous filter dropped any driver/asset with
+  // activeTo set at all, which gave the user an empty dropdown when
+  // their roster had future activeTo dates on every row.
+  // The currently-assigned driver/asset is always kept in the list
+  // even if retired, so existing assignments don't disappear.
+  const today = useMemo(() => dateKeyOf(new Date()), []);
   const driverOptions = useMemo(() => {
-    const list = drivers.filter(d => !d.activeTo || d.id === driverId);
+    const list = drivers.filter(d => isActiveOn(d, today) || d.id === driverId);
     list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
     return list;
-  }, [drivers, driverId]);
+  }, [drivers, driverId, today]);
   const assetOptions = useMemo(() => {
-    const list = assets.filter(a => !a.activeTo || a.id === assetId);
+    const list = assets.filter(a => isActiveOn(a, today) || a.id === assetId);
     list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
     return list;
-  }, [assets, assetId]);
+  }, [assets, assetId, today]);
 
   // Dirty compares against the *effective* assignment (txn fields +
   // linked-report fallback), so changing the dropdown back to the
