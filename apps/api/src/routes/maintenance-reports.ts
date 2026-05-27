@@ -23,6 +23,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { getUserDisplayName } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 
@@ -74,14 +75,16 @@ export interface MaintenanceActionItemRow {
   scheduled_date: string | null;
   due_date:       string | null;
   report_id:      string | null;
-  completed_at:   string | null;
-  completed_by:   string | null;
-  vendor:         string | null;
-  estimated_cost: number | null;
-  actual_cost:    number | null;
-  created_by:     string;
-  created_at:     string;
-  updated_at:     string;
+  completed_at:        string | null;
+  completed_by:        string | null;
+  completed_by_name:   string | null;
+  vendor:              string | null;
+  estimated_cost:      number | null;
+  actual_cost:         number | null;
+  created_by:          string;
+  created_by_name:     string | null;
+  created_at:          string;
+  updated_at:          string;
 }
 
 export function rowToReport(r: MaintenanceReportRow, photos?: MaintenanceReportPhoto[]): MaintenanceReport {
@@ -118,27 +121,29 @@ export function rowToPhoto(r: MaintenanceReportPhotoRow, signedUrl?: string): Ma
 
 export function rowToActionItem(r: MaintenanceActionItemRow): MaintenanceActionItem {
   return {
-    id:            r.id,
-    orgId:         r.org_id,
-    assetId:       r.asset_id   ?? undefined,
-    trailerId:     r.trailer_id ?? undefined,
-    title:         r.title,
-    description:   r.description ?? undefined,
-    category:      r.category as MaintenanceActionItem["category"],
-    priority:      r.priority as MaintenanceActionItem["priority"],
-    status:        r.status   as MaintenanceActionItem["status"],
-    outOfService:  r.out_of_service,
-    scheduledDate: r.scheduled_date ?? undefined,
-    dueDate:       r.due_date       ?? undefined,
-    reportId:      r.report_id      ?? undefined,
-    completedAt:   r.completed_at   ?? undefined,
-    completedBy:   r.completed_by   ?? undefined,
-    vendor:        r.vendor         ?? undefined,
-    estimatedCost: r.estimated_cost != null ? Number(r.estimated_cost) : undefined,
-    actualCost:    r.actual_cost    != null ? Number(r.actual_cost)    : undefined,
-    createdBy:     r.created_by,
-    createdAt:     r.created_at,
-    updatedAt:     r.updated_at,
+    id:              r.id,
+    orgId:           r.org_id,
+    assetId:         r.asset_id   ?? undefined,
+    trailerId:       r.trailer_id ?? undefined,
+    title:           r.title,
+    description:     r.description ?? undefined,
+    category:        r.category as MaintenanceActionItem["category"],
+    priority:        r.priority as MaintenanceActionItem["priority"],
+    status:          r.status   as MaintenanceActionItem["status"],
+    outOfService:    r.out_of_service,
+    scheduledDate:   r.scheduled_date ?? undefined,
+    dueDate:         r.due_date       ?? undefined,
+    reportId:        r.report_id      ?? undefined,
+    completedAt:     r.completed_at   ?? undefined,
+    completedBy:     r.completed_by   ?? undefined,
+    completedByName: r.completed_by_name ?? undefined,
+    vendor:          r.vendor         ?? undefined,
+    estimatedCost:   r.estimated_cost != null ? Number(r.estimated_cost) : undefined,
+    actualCost:      r.actual_cost    != null ? Number(r.actual_cost)    : undefined,
+    createdBy:       r.created_by,
+    createdByName:   r.created_by_name ?? undefined,
+    createdAt:       r.created_at,
+    updatedAt:       r.updated_at,
   };
 }
 
@@ -148,8 +153,10 @@ export const REPORT_COLS =
 
 export const ACTION_ITEM_COLS =
   "id,org_id,asset_id,trailer_id,title,description,category,priority,status," +
-  "out_of_service,scheduled_date,due_date,report_id,completed_at,completed_by," +
-  "vendor,estimated_cost,actual_cost,created_by,created_at,updated_at";
+  "out_of_service,scheduled_date,due_date,report_id," +
+  "completed_at,completed_by,completed_by_name," +
+  "vendor,estimated_cost,actual_cost," +
+  "created_by,created_by_name,created_at,updated_at";
 
 const PHOTO_COLS =
   "id,report_id,org_id,storage_path,file_name,mime_type,size_bytes,uploaded_at";
@@ -373,20 +380,25 @@ maintenanceReports.post("/:id/convert", requireCapability("maintenance.edit"), a
     return head || "Maintenance";
   })();
 
+  // Resolve creator's display name from Clerk — same pattern as the
+  // ad-hoc create endpoint. Required for Activity panel readability.
+  const createdByName = await getUserDisplayName(userId);
+
   const insertAi = {
-    org_id:         orgId,
-    asset_id:       report.asset_id,
-    trailer_id:     report.trailer_id,
-    title:          (body.title ?? "").trim() || autoTitle,
-    description:    (body.description ?? "").trim() || report.description,
-    category:       body.category ?? "repair",
-    priority:       body.priority ?? "normal",
-    status:         "open",
-    out_of_service: !!body.outOfService,
-    scheduled_date: body.scheduledDate ?? null,
-    due_date:       body.dueDate       ?? null,
-    report_id:      report.id,
-    created_by:     userId,
+    org_id:           orgId,
+    asset_id:         report.asset_id,
+    trailer_id:       report.trailer_id,
+    title:            (body.title ?? "").trim() || autoTitle,
+    description:      (body.description ?? "").trim() || report.description,
+    category:         body.category ?? "repair",
+    priority:         body.priority ?? "normal",
+    status:           "open",
+    out_of_service:   !!body.outOfService,
+    scheduled_date:   body.scheduledDate ?? null,
+    due_date:         body.dueDate       ?? null,
+    report_id:        report.id,
+    created_by:       userId,
+    created_by_name:  createdByName,
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1184,8 +1184,13 @@ export interface MaintenanceActionItem {
   /** Source report, when this item was created from a driver submission. */
   reportId?:     string;
 
-  completedAt?:   string;
-  completedBy?:   string;
+  completedAt?:     string;
+  completedBy?:     string;
+  /** Resolved display name for the completer — populated from Clerk
+   *  when the dispatcher marks the item done, or set to the
+   *  free-text vendor / mechanic name when the form's "Completed by"
+   *  field was used. UI prefers this over the raw completedBy id. */
+  completedByName?: string;
 
   // Phase-2 slots, exposed but typically empty in Phase 1.
   vendor?:        string;
@@ -1193,6 +1198,12 @@ export interface MaintenanceActionItem {
   actualCost?:    number;
 
   createdBy:      string;
+  /** Resolved display name for the creator — backfilled from Clerk on
+   *  insert so the dispatcher UI's Activity panel reads "Created … by
+   *  Matt Curzon" instead of the raw Clerk user_id. May be absent on
+   *  legacy rows created before the migration; UI should fall back
+   *  gracefully. */
+  createdByName?: string;
   createdAt:      string;
   updatedAt:      string;
 }

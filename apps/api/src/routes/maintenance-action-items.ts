@@ -23,6 +23,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { getUserDisplayName } from "../lib/clerk.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 import {
@@ -66,21 +67,29 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
   if (body.priority && !(MAINTENANCE_PRIORITIES as readonly string[]).includes(body.priority)) errors.push("priority invalid");
   if (errors.length) return c.json({ error: "validation_failed", errors } satisfies ApiErrorResponse, 400);
 
+  // Resolve creator's display name from Clerk so the dispatcher UI's
+  // Activity panel reads "Created … by Matt Curzon" instead of the
+  // raw Clerk user_id (user_3Cgz7uSjL0IX…). Best-effort: if Clerk is
+  // unreachable, we still insert with a null name and the UI falls
+  // back to a friendlier placeholder. Same pattern as loads.
+  const createdByName = await getUserDisplayName(userId);
+
   const insertRow = {
-    org_id:         orgId,
-    asset_id:       body.assetId   ?? null,
-    trailer_id:     body.trailerId ?? null,
-    title:          body.title.trim(),
-    description:    body.description?.trim() || null,
-    category:       body.category ?? "repair",
-    priority:       body.priority ?? "normal",
-    status:         "open",
-    out_of_service: !!body.outOfService,
-    scheduled_date: body.scheduledDate ?? null,
-    due_date:       body.dueDate       ?? null,
-    vendor:         body.vendor?.trim() || null,
-    estimated_cost: body.estimatedCost ?? null,
-    created_by:     userId,
+    org_id:           orgId,
+    asset_id:         body.assetId   ?? null,
+    trailer_id:       body.trailerId ?? null,
+    title:            body.title.trim(),
+    description:      body.description?.trim() || null,
+    category:         body.category ?? "repair",
+    priority:         body.priority ?? "normal",
+    status:           "open",
+    out_of_service:   !!body.outOfService,
+    scheduled_date:   body.scheduledDate ?? null,
+    due_date:         body.dueDate       ?? null,
+    vendor:           body.vendor?.trim() || null,
+    estimated_cost:   body.estimatedCost ?? null,
+    created_by:       userId,
+    created_by_name:  createdByName,
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -200,10 +209,20 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
     }
     update.status = body.status;
     // Auto-stamp completion when transitioning to 'done'. Caller can
-    // override completedBy via the same payload.
+    // override completedBy via the same payload (typed as a mechanic
+    // / vendor name in the UI). When omitted, fill both id + name
+    // from the acting dispatcher's Clerk identity so Activity reads
+    // "Completed … by <name>" rather than a raw user_id.
     if (body.status === 'done') {
       update.completed_at = new Date().toISOString();
-      if (body.completedBy === undefined) update.completed_by = userId;
+      if (body.completedBy === undefined) {
+        update.completed_by      = userId;
+        update.completed_by_name = await getUserDisplayName(userId);
+      } else {
+        // Dispatcher typed a free-text name (vendor / shop). Mirror
+        // it into both columns so the display path is uniform.
+        update.completed_by_name = body.completedBy?.trim() || null;
+      }
     }
   }
   if ("outOfService" in body && typeof body.outOfService === 'boolean') {
@@ -214,7 +233,12 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   if ("vendor"        in body) update.vendor         = body.vendor ?? null;
   if ("estimatedCost" in body) update.estimated_cost = body.estimatedCost ?? null;
   if ("actualCost"    in body) update.actual_cost    = body.actualCost    ?? null;
-  if ("completedBy"   in body) update.completed_by   = body.completedBy   ?? null;
+  if ("completedBy"   in body) {
+    update.completed_by      = body.completedBy ?? null;
+    // Mirror the free-text name into completed_by_name so the
+    // display path doesn't have to guess which column to read from.
+    update.completed_by_name = body.completedBy?.trim() || null;
+  }
 
   if (Object.keys(update).length <= 1) { // only updated_at
     return c.json({ error: "validation_failed", errors: ["no fields to update"] } satisfies ApiErrorResponse, 400);

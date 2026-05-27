@@ -1347,6 +1347,46 @@ function WorkOrderModal({
   // open in edit mode where the dispatcher is closing things out.
   const [detailsOpen, setDetailsOpen] = useState(mode === 'edit');
 
+  // Dirty-state tracking — shallow-compare form against the snapshot
+  // we initialized with. Used by the close-guard below to prompt
+  // before discarding edits. Object.keys check is fine here: form
+  // is a flat record of primitives/nulls only.
+  const isDirty = useMemo(() => {
+    for (const k of Object.keys(initial) as Array<keyof typeof initial>) {
+      if (form[k] !== initial[k]) return true;
+    }
+    return false;
+  }, [form, initial]);
+
+  // Close-guard. Wraps the parent's onClose so any attempt to dismiss
+  // the modal (X button, backdrop click, Cancel) goes through a
+  // single confirm path when there are unsaved edits. Save / Delete
+  // call onSaved (not onClose) and bypass this entirely.
+  const tryClose = useCallback(() => {
+    if (busy) return; // can't close mid-request
+    if (isDirty) {
+      // window.confirm matches the rest of the app (e.g. Delete
+      // permanently in AssetsModal, the Delete button below). Keeps
+      // the modal-on-modal stacking simple.
+      if (!window.confirm('Discard unsaved changes?')) return;
+    }
+    onClose();
+  }, [busy, isDirty, onClose]);
+
+  // Browser-level guard for hard navigations (tab close, refresh)
+  // while editing. Only fires when dirty + not currently saving.
+  useEffect(() => {
+    if (!isDirty || busy) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // returnValue is the legacy contract; modern browsers ignore
+      // the string but still show their default prompt when it's set.
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty, busy]);
+
   const today = useMemo(() => dateKeyOf(new Date()), []);
 
   // Active-asset / active-trailer option lists. Currently-assigned
@@ -1449,7 +1489,7 @@ function WorkOrderModal({
     <div
       className="fixed inset-0 flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.55)', zIndex: 1100, padding: 24 }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      onClick={(e) => { if (e.target === e.currentTarget) tryClose(); }}>
       <div
         className="flex flex-col rounded-2xl overflow-hidden shrink-0"
         style={{
@@ -1515,7 +1555,7 @@ function WorkOrderModal({
               </StyledSelect>
             )}
             <button
-              onClick={onClose}
+              onClick={tryClose}
               type="button"
               className="p-1.5 rounded-full transition-colors"
               style={{ color: 'var(--gc-text-3)' }}
@@ -1744,53 +1784,62 @@ function WorkOrderModal({
           )}
 
           {/* Activity — created/completed timeline. Edit mode only,
-              since brand-new items have nothing to show yet. Uses
-              the existing maintenance_action_items columns
-              (created_by, created_at, completed_by, completed_at)
-              so no schema change required. */}
-          {mode === 'edit' && item && (
-            <div
-              className="flex flex-col gap-1.5 pt-3 mt-1"
-              style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-              <div className="text-[11px] font-semibold uppercase tracking-wider"
-                style={{ color: 'var(--gc-text-3)' }}>
-                Activity
-              </div>
-              <div className="flex flex-col gap-1">
-                <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
-                  <span style={{ color: 'var(--gc-text-3)' }}>Created</span>{' '}
-                  <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
-                    {new Date(item.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
-                  </span>
-                  {item.createdBy && (
-                    <>
-                      {' by '}
-                      <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{item.createdBy}</span>
-                    </>
-                  )}
+              since brand-new items have nothing to show yet. Prefers
+              the *_by_name columns (resolved via Clerk on write) so
+              the panel reads "by Matt Curzon" instead of leaking a
+              raw user_3Cgz7uSjL0… into the UI. Legacy rows that
+              predate the backfill drop the "by …" segment entirely
+              rather than displaying the raw id. */}
+          {mode === 'edit' && item && (() => {
+            const isClerkId = (s: string) => /^user_[A-Za-z0-9]{8,}$/.test(s);
+            const createdName  = item.createdByName
+              ?? (item.createdBy && !isClerkId(item.createdBy) ? item.createdBy : null);
+            const completedName = item.completedByName
+              ?? (item.completedBy && !isClerkId(item.completedBy) ? item.completedBy : null);
+            return (
+              <div
+                className="flex flex-col gap-1.5 pt-3 mt-1"
+                style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                <div className="text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  Activity
                 </div>
-                {item.completedAt && (
+                <div className="flex flex-col gap-1">
                   <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
-                    <span style={{ color: 'var(--gc-text-3)' }}>Completed</span>{' '}
+                    <span style={{ color: 'var(--gc-text-3)' }}>Created</span>{' '}
                     <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
-                      {new Date(item.completedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                      {new Date(item.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
                     </span>
-                    {item.completedBy && (
+                    {createdName && (
                       <>
                         {' by '}
-                        <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{item.completedBy}</span>
+                        <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{createdName}</span>
                       </>
                     )}
                   </div>
-                )}
-                {item.reportId && (
-                  <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
-                    Converted from a driver report.
-                  </div>
-                )}
+                  {item.completedAt && (
+                    <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
+                      <span style={{ color: 'var(--gc-text-3)' }}>Completed</span>{' '}
+                      <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
+                        {new Date(item.completedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                      </span>
+                      {completedName && (
+                        <>
+                          {' by '}
+                          <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{completedName}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {item.reportId && (
+                    <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
+                      Converted from a driver report.
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {error && (
             <div className="text-[13px]" style={{ color: '#dc2626' }}>{error}</div>
@@ -1822,7 +1871,7 @@ function WorkOrderModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={tryClose}
               disabled={busy}
               className="rounded-md text-[13px] font-semibold transition-colors"
               style={{
