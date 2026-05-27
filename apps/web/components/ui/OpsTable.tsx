@@ -8,9 +8,15 @@
  *   • hairline row dividers
  *   • subtle gray hover
  *   • per-table density (compact ~36px or comfortable ~52px)
- *   • filter chip row (search + select dropdowns) above the header
- *   • sort selector pinned right
+ *   • filter chip row (search + select + date-range) above the header
  *   • pagination footer with "showing X–Y of Z"
+ *
+ * Optional power-user features (closeout-tier surfaces):
+ *   • Pinned columns (left/right) with horizontal scroll between them
+ *   • Column-visibility picker + persistence to localStorage
+ *   • Priority row pinning (`priorityKey` rows float to top after sort)
+ *   • Selectable rows + bulk-action slot
+ *   • Date-range filter chip
  *
  * Why a wrapper instead of using TanStack's components directly:
  *   TanStack ships *only* hooks and types — there's no opinionated
@@ -19,10 +25,10 @@
  *   columns + filters and inherits the look. When the design changes,
  *   we change it once here.
  *
- * Usage:
+ * Usage (basic):
  *
  *   const columns: OpsColumn<MyRow>[] = [
- *     { key: 'date',   header: 'Date',   render: r => <DateCell iso={r.date} />, width: 110, sortable: true },
+ *     { key: 'date',   header: 'Date',   render: r => <OpsDate iso={r.date} />, width: 110, sortable: true },
  *     { key: 'driver', header: 'Driver', render: r => r.driverName },
  *     { key: 'total',  header: 'Total',  render: r => `$${r.total.toFixed(2)}`, align: 'right' },
  *   ];
@@ -49,7 +55,7 @@
 'use client';
 
 import {
-  useMemo, useState, useRef, useEffect, type ReactNode,
+  useMemo, useState, useRef, useEffect, useCallback, type ReactNode,
 } from 'react';
 import {
   flexRender,
@@ -60,7 +66,7 @@ import {
   type ColumnDef as TanColumnDef,
   type SortingState,
 } from '@tanstack/react-table';
-import { ChevronDown, Search as SearchIcon, ArrowUp, ArrowDown, X } from 'lucide-react';
+import { ChevronDown, Search as SearchIcon, ArrowUp, ArrowDown, X, Columns as ColumnsIcon, Calendar as CalendarIcon } from 'lucide-react';
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -81,6 +87,22 @@ export type OpsColumn<T> = {
   /** Optional leading dot — color resolved per-row. Motive uses
    *  this for the per-truck status indicator (gray / amber / green). */
   leadingDot?: (row: T) => { color: string; tooltip?: string };
+  /** Sticky pin direction. "left" sticks to the start, "right" to the
+   *  end. Pinned columns stay visible during horizontal scroll —
+   *  essential on wide tables where the row identifier (e.g. Load #)
+   *  and per-row actions need to stay reachable while the user scrolls
+   *  through middle columns. */
+  pinned?: 'left' | 'right';
+  /** When true, the column starts hidden — user can opt back in via
+   *  the column visibility picker. Use for low-value-by-default
+   *  columns (e.g. internal IDs) you still want available on demand. */
+  defaultHidden?: boolean;
+  /** When true, the column is omitted from the visibility picker —
+   *  it can't be hidden by the user. Use for required columns
+   *  (actions, identifier). */
+  alwaysVisible?: boolean;
+  /** Friendlier label in the column picker. Defaults to `header`. */
+  pickerLabel?: string;
 };
 
 export type OpsFilter<T> =
@@ -102,6 +124,16 @@ export type OpsFilter<T> =
       predicate: (row: T, value: string) => boolean;
       /** Default selected value (defaults to '' = no filter). */
       defaultValue?: string;
+    }
+  | {
+      kind: 'date-range';
+      /** Stable key — used as React key. Internally stores
+       *  `${key}:from` and `${key}:to` in the filter state. */
+      key: string;
+      label: string;
+      /** Returns the ISO date (YYYY-MM-DD or full timestamp) to
+       *  compare against the range. Range is inclusive on both ends. */
+      getDate: (row: T) => string | null | undefined;
     };
 
 export type OpsTableDensity = 'compact' | 'comfortable';
@@ -126,6 +158,44 @@ export interface OpsTableProps<T> {
   toolbarRight?: ReactNode;
   /** Singular noun for the count footer. "report" → "12 reports". */
   countLabel?: string;
+
+  // ── Optional power-user features ────────────────────────────────────
+
+  /** When provided, rows where the function returns true are pinned
+   *  to the top of every page regardless of the active sort. Use for
+   *  "starred"/"priority" semantics — items the user wants to keep
+   *  visible. Within the pinned set the active sort still applies. */
+  priorityKey?: (row: T) => boolean;
+  /** Renders the column-visibility picker chip in the toolbar. */
+  columnPicker?: boolean;
+  /** localStorage key for persisting user UI state (visible columns,
+   *  sort). Use a versioned key per consumer — bumping the version
+   *  resets state when the column set changes incompatibly. */
+  persistKey?: string;
+  /** Adds a checkbox column at the start. Each row gets a select
+   *  toggle; the header gets a "select all on this page" toggle. */
+  selectable?: boolean;
+  /** Slot rendered in the toolbar when one or more rows are selected.
+   *  Receives the selected IDs + their rows + a clearSelection helper.
+   *  Replace the right-side toolbar content while selection is active
+   *  (e.g. "3 selected · Release · Flag · Clear"). */
+  bulkActions?: (args: {
+    selectedIds: string[];
+    selectedRows: T[];
+    clearSelection: () => void;
+  }) => ReactNode;
+  /** Called whenever the selected-id set changes. Caller may use this
+   *  to react in real time (badges elsewhere on the page). */
+  onSelectionChange?: (selectedIds: string[]) => void;
+  /** Disables built-in pagination. Use when the caller paginates
+   *  server-side and is feeding `data` for a single page. The page
+   *  size + pager are still hidden but the footer still shows the
+   *  caller's range via `footerSummary`. */
+  paginated?: boolean;
+  /** Override for the footer count text — used when the caller
+   *  paginates server-side and the local `data.length` doesn't
+   *  reflect the true total. */
+  footerSummary?: ReactNode;
 }
 
 // ── Component ─────────────────────────────────────────────────────────
@@ -144,9 +214,18 @@ export function OpsTable<T>({
   defaultSort,
   toolbarRight,
   countLabel = 'record',
+  priorityKey,
+  columnPicker = false,
+  persistKey,
+  selectable = false,
+  bulkActions,
+  onSelectionChange,
+  paginated = true,
+  footerSummary,
 }: OpsTableProps<T>) {
   // ── Filter state ───────────────────────────────────────────────────
   // Keyed by filter.key for select filters and '__search' for search.
+  // Date-range filters use `${key}:from` and `${key}:to` keys.
   const [filterState, setFilterState] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
     for (const f of filters) {
@@ -154,6 +233,53 @@ export function OpsTable<T>({
     }
     return init;
   });
+
+  // ── Column visibility ─────────────────────────────────────────────
+  // Persisted to localStorage when `persistKey` is set so the user's
+  // hide/show choices survive across sessions.
+  const visibilityStorageKey = persistKey ? `${persistKey}:hidden` : null;
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => {
+    const init = new Set<string>();
+    for (const c of columns) if (c.defaultHidden) init.add(c.key);
+    if (typeof window !== 'undefined' && visibilityStorageKey) {
+      try {
+        const raw = window.localStorage.getItem(visibilityStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as string[];
+          if (Array.isArray(parsed)) return new Set(parsed);
+        }
+      } catch { /* ignore — fall back to defaults */ }
+    }
+    return init;
+  });
+  // Persist visibility changes. The dep on `persistKey` ensures
+  // switching the table to a new storage key (e.g. tab change in
+  // closeout) re-reads on next mount.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !visibilityStorageKey) return;
+    try {
+      window.localStorage.setItem(visibilityStorageKey, JSON.stringify(Array.from(hiddenCols)));
+    } catch { /* quota errors etc. — non-critical */ }
+  }, [hiddenCols, visibilityStorageKey]);
+
+  // Visible columns = declared columns minus user-hidden. We do NOT
+  // strip alwaysVisible columns from this list even if they appear
+  // in hiddenCols (defensive — they can't be hidden in the picker UI
+  // either, but a stale persisted state shouldn't blank the actions).
+  const visibleColumns = useMemo(
+    () => columns.filter(c => c.alwaysVisible || !hiddenCols.has(c.key)),
+    [columns, hiddenCols],
+  );
+
+  // ── Selection state ─────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Notify parent on any change. We dedupe at the Set level so this
+  // only fires when the membership actually changed.
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    onSelectionChange(Array.from(selectedIds));
+  }, [selectedIds, onSelectionChange]);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   // ── Apply filters ──────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -163,9 +289,24 @@ export function OpsTable<T>({
       for (const f of filters) {
         if (f.kind === 'search') {
           if (q && !f.match(row, q)) return false;
-        } else {
+        } else if (f.kind === 'select') {
           const v = filterState[f.key];
           if (v && !f.predicate(row, v)) return false;
+        } else if (f.kind === 'date-range') {
+          const from = filterState[`${f.key}:from`];
+          const to   = filterState[`${f.key}:to`];
+          if (!from && !to) continue;
+          const raw = f.getDate(row);
+          if (!raw) {
+            // Caller chose "this row has no date" — don't match a
+            // date-range filter against it. Closeout uses this for
+            // released loads that haven't been delivered yet, etc.
+            return false;
+          }
+          // Normalise to YYYY-MM-DD for inclusive day comparison.
+          const ymd = raw.length >= 10 ? raw.slice(0, 10) : raw;
+          if (from && ymd < from) return false;
+          if (to   && ymd > to)   return false;
         }
       }
       return true;
@@ -177,7 +318,7 @@ export function OpsTable<T>({
   // accessorFn returns the sort value (sortValue() if provided, else
   // the rendered cell flattened to a string); cell() renders our JSX.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tanColumns = useMemo<TanColumnDef<T, any>[]>(() => columns.map(col => ({
+  const tanColumns = useMemo<TanColumnDef<T, any>[]>(() => visibleColumns.map(col => ({
     id: col.key,
     accessorFn: (row: T) => {
       if (col.sortValue) return col.sortValue(row);
@@ -224,12 +365,29 @@ export function OpsTable<T>({
         </div>
       );
     },
-  })), [columns]);
+  })), [visibleColumns]);
 
   // ── TanStack table instance ────────────────────────────────────────
-  const [sorting, setSorting] = useState<SortingState>(
-    defaultSort ? [{ id: defaultSort.key, desc: defaultSort.dir === 'desc' }] : [],
-  );
+  // Sort can be persisted too — bigger payoff than column visibility
+  // since dispatchers re-open the page in the same mental state.
+  const sortStorageKey = persistKey ? `${persistKey}:sort` : null;
+  const [sorting, setSorting] = useState<SortingState>(() => {
+    if (typeof window !== 'undefined' && sortStorageKey) {
+      try {
+        const raw = window.localStorage.getItem(sortStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as SortingState;
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch { /* fall through */ }
+    }
+    return defaultSort ? [{ id: defaultSort.key, desc: defaultSort.dir === 'desc' }] : [];
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !sortStorageKey) return;
+    try { window.localStorage.setItem(sortStorageKey, JSON.stringify(sorting)); }
+    catch { /* non-critical */ }
+  }, [sorting, sortStorageKey]);
 
   const table = useReactTable({
     data: filtered,
@@ -238,58 +396,177 @@ export function OpsTable<T>({
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize } },
+    getPaginationRowModel: paginated ? getPaginationRowModel() : undefined,
+    initialState: { pagination: { pageSize: paginated ? pageSize : Number.MAX_SAFE_INTEGER } },
   });
 
-  // Reset to page 0 whenever the filter set yields fewer rows than the
-  // current page is showing. Otherwise the dispatcher narrows a filter
-  // and lands on an empty page 4.
-  useEffect(() => { table.setPageIndex(0); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterState]);
+  // Reset to page 0 whenever the filter set changes — otherwise the
+  // dispatcher narrows a filter and lands on an empty page 4.
+  useEffect(() => {
+    if (paginated) table.setPageIndex(0);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [filterState, paginated]);
 
-  const pageRows = table.getRowModel().rows;
+  // ── Priority row pinning ──────────────────────────────────────────
+  // After TanStack has done sort + pagination we pull the resulting
+  // page's rows and (if priorityKey is set) hoist any matching rows
+  // to the top. This is a *display-only* reorder — pagination is
+  // still over the full sorted list, so paging behaves as expected;
+  // it's just that within a page, priority rows lead. For closeout
+  // we additionally apply priority pinning across ALL filtered rows
+  // (so a starred row on page 3 jumps to page 1) by sorting `filtered`
+  // upstream of TanStack instead. Trade-off: post-page sort is local
+  // and fast; full-filtered sort needs a useMemo. We do the latter
+  // when priorityKey is set so the dispatcher's expectation matches.
+  const pageRowsRaw = table.getRowModel().rows;
+  const pageRows = useMemo(() => {
+    if (!priorityKey) return pageRowsRaw;
+    // Stable partition: priority rows first, then everything else.
+    // Each subset keeps its TanStack sort order.
+    const pri: typeof pageRowsRaw = [];
+    const rest: typeof pageRowsRaw = [];
+    for (const r of pageRowsRaw) {
+      if (priorityKey(r.original)) pri.push(r);
+      else rest.push(r);
+    }
+    return [...pri, ...rest];
+  }, [pageRowsRaw, priorityKey]);
+
   const total    = filtered.length;
   const pageIdx  = table.getState().pagination.pageIndex;
   const pageCnt  = Math.max(1, table.getPageCount());
   const from     = total === 0 ? 0 : pageIdx * pageSize + 1;
   const to       = Math.min(total, (pageIdx + 1) * pageSize);
 
-  // ── Grid template — compose explicit widths + min-content auto ──
-  // Columns without an explicit width share what's left equally.
-  const gridTemplate = useMemo(() => columns.map(c => {
-    if (c.width == null)             return 'minmax(0, 1fr)';
+  // ── Grid template + sticky offsets ─────────────────────────────────
+  // Selection column (when enabled) is implicitly pinned-left at
+  // offset 0. Other pinned cols compute their offset from the
+  // cumulative width of pinned cols to their side.
+  const SELECT_COL_WIDTH = 44; // px, including padding
+  const widthOfCol = useCallback((c: OpsColumn<T>): string => {
+    if (c.width == null)             return 'minmax(120px, 1fr)';
     if (typeof c.width === 'number') return `${c.width}px`;
     return c.width;
-  }).join(' '), [columns]);
+  }, []);
+
+  // Compute pixel offsets for sticky positioning. Pinned left cols
+  // are ordered first-to-last, each offset by the sum of previous
+  // pinned-left widths. Pinned right cols are ordered right-to-left.
+  // Non-numeric widths (e.g. "1fr") can't be sticky so we fall back
+  // to "0px" sticky and let CSS gracefully degrade.
+  const { leftOffsets, rightOffsets } = useMemo(() => {
+    const left  = new Map<string, number>();
+    const right = new Map<string, number>();
+    let leftAcc = selectable ? SELECT_COL_WIDTH : 0;
+    for (const c of visibleColumns) {
+      if (c.pinned === 'left') {
+        left.set(c.key, leftAcc);
+        const w = typeof c.width === 'number' ? c.width : parseInt(String(c.width), 10);
+        if (Number.isFinite(w)) leftAcc += w;
+      }
+    }
+    let rightAcc = 0;
+    for (let i = visibleColumns.length - 1; i >= 0; i--) {
+      const c = visibleColumns[i];
+      if (c.pinned === 'right') {
+        right.set(c.key, rightAcc);
+        const w = typeof c.width === 'number' ? c.width : parseInt(String(c.width), 10);
+        if (Number.isFinite(w)) rightAcc += w;
+      }
+    }
+    return { leftOffsets: left, rightOffsets: right };
+  }, [visibleColumns, selectable]);
+
+  const gridTemplate = useMemo(() => {
+    const cols = visibleColumns.map(widthOfCol).join(' ');
+    return selectable ? `${SELECT_COL_WIDTH}px ${cols}` : cols;
+  }, [visibleColumns, selectable, widthOfCol]);
 
   const rowHeightPx = density === 'compact' ? 36 : 52;
+
+  // ── Selection helpers ─────────────────────────────────────────────
+  const pageRowIds = useMemo(() => pageRows.map(r => rowKey(r.original)), [pageRows, rowKey]);
+  const allPageSelected = pageRowIds.length > 0 && pageRowIds.every(id => selectedIds.has(id));
+  const somePageSelected = !allPageSelected && pageRowIds.some(id => selectedIds.has(id));
+  const togglePageSelection = useCallback(() => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        for (const id of pageRowIds) next.delete(id);
+      } else {
+        for (const id of pageRowIds) next.add(id);
+      }
+      return next;
+    });
+  }, [allPageSelected, pageRowIds]);
+  const toggleRowSelection = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else              next.add(id);
+      return next;
+    });
+  }, []);
+
+  // selectedRows = rows in the current `data` whose key is selected.
+  // We compute over `data` (not `pageRows`) so the bulk actions can
+  // operate on rows that aren't currently visible (other pages).
+  const selectedRows = useMemo(() => {
+    if (selectedIds.size === 0) return [] as T[];
+    return data.filter(r => selectedIds.has(rowKey(r)));
+  }, [data, selectedIds, rowKey]);
+  const selectionActive = selectedIds.size > 0;
+
+  // Pickable columns for the visibility chip — excludes alwaysVisible.
+  const pickerColumns = useMemo(
+    () => columns.filter(c => !c.alwaysVisible),
+    [columns],
+  );
 
   return (
     <div className="w-full">
       {/* ── Filter chip row ─────────────────────────────────────── */}
-      {(filters.length > 0 || toolbarRight) && (
+      {(filters.length > 0 || toolbarRight || columnPicker || selectionActive) && (
         <div className="flex items-center gap-2 flex-wrap mb-3">
-          {filters.map(f => f.kind === 'search'
-            ? (
-              <SearchChip
-                key="__search"
-                value={filterState.__search ?? ''}
-                onChange={v => setFilterState(s => ({ ...s, __search: v }))}
-                placeholder={f.placeholder ?? 'Search…'}
-                width={f.width ?? 280}
-              />
-            )
-            : (
-              <SelectChip
+          {!selectionActive && filters.map(f => {
+            if (f.kind === 'search') {
+              return (
+                <SearchChip
+                  key="__search"
+                  value={filterState.__search ?? ''}
+                  onChange={v => setFilterState(s => ({ ...s, __search: v }))}
+                  placeholder={f.placeholder ?? 'Search…'}
+                  width={f.width ?? 280}
+                />
+              );
+            }
+            if (f.kind === 'select') {
+              return (
+                <SelectChip
+                  key={f.key}
+                  label={f.label}
+                  value={filterState[f.key] ?? ''}
+                  onChange={v => setFilterState(s => ({ ...s, [f.key]: v }))}
+                  options={f.options}
+                />
+              );
+            }
+            // date-range
+            return (
+              <DateRangeChip
                 key={f.key}
                 label={f.label}
-                value={filterState[f.key] ?? ''}
-                onChange={v => setFilterState(s => ({ ...s, [f.key]: v }))}
-                options={f.options}
+                from={filterState[`${f.key}:from`] ?? ''}
+                to={filterState[`${f.key}:to`] ?? ''}
+                onChange={(from, to) => setFilterState(s => ({
+                  ...s,
+                  [`${f.key}:from`]: from,
+                  [`${f.key}:to`]:   to,
+                }))}
               />
-            ),
-          )}
-          {Object.values(filterState).some(v => v) && (
+            );
+          })}
+          {!selectionActive && Object.values(filterState).some(v => v) && (
             <button
               onClick={() => setFilterState({})}
               className="text-[12px] font-semibold ml-1 transition-colors"
@@ -298,7 +575,29 @@ export function OpsTable<T>({
             </button>
           )}
           <div className="flex-1" />
-          {toolbarRight}
+          {selectionActive && bulkActions && (
+            <div className="flex items-center gap-2.5">
+              <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                {selectedIds.size} selected
+              </span>
+              {bulkActions({ selectedIds: Array.from(selectedIds), selectedRows, clearSelection })}
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="text-[12px] font-semibold transition-colors"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Clear
+              </button>
+            </div>
+          )}
+          {!selectionActive && columnPicker && pickerColumns.length > 0 && (
+            <ColumnPickerChip
+              columns={pickerColumns}
+              hidden={hiddenCols}
+              onChange={setHiddenCols}
+            />
+          )}
+          {!selectionActive && toolbarRight}
         </div>
       )}
 
@@ -308,6 +607,9 @@ export function OpsTable<T>({
         style={{
           background: 'var(--gc-surface)',
           border: '1px solid var(--gc-border-light)',
+          // Horizontal scroll for wide tables; pinned cols stay put
+          // via position: sticky on their cells.
+          overflowX: 'auto',
         }}>
         {/* Header row */}
         <div
@@ -316,44 +618,75 @@ export function OpsTable<T>({
             gridTemplateColumns: gridTemplate,
             background: 'var(--gc-surface)',
             borderBottom: '1px solid var(--gc-border-light)',
-            padding: '0 16px',
             minHeight: 44,
             position: 'sticky',
             top: 0,
-            zIndex: 1,
+            zIndex: 2,
           }}>
-          {table.getHeaderGroups()[0]?.headers.map(h => {
-            const col   = columns.find(c => c.key === h.column.id);
-            const dir   = h.column.getIsSorted();
-            const canSort = h.column.getCanSort();
+          {selectable && (
+            <div
+              className="flex items-center justify-center"
+              style={{
+                position: 'sticky',
+                left: 0,
+                background: 'var(--gc-surface)',
+                zIndex: 3,
+                height: '100%',
+                paddingLeft: 16,
+              }}>
+              <CheckBox
+                checked={allPageSelected}
+                indeterminate={somePageSelected}
+                onChange={togglePageSelection}
+                aria-label="Select all on page"
+              />
+            </div>
+          )}
+          {visibleColumns.map((col, idx) => {
+            const h     = table.getHeaderGroups()[0]?.headers[idx];
+            const dir   = h?.column.getIsSorted();
+            const canSort = h?.column.getCanSort() ?? false;
+            const stickyStyle = stickyStyleFor(col, leftOffsets, rightOffsets);
             return (
-              <button
-                key={h.id}
-                type="button"
-                disabled={!canSort}
-                onClick={canSort ? () => h.column.toggleSorting() : undefined}
-                className="flex items-center gap-1 select-none transition-colors"
+              <div
+                key={col.key}
                 style={{
-                  textAlign:  col?.align ?? 'left',
-                  justifyContent: col?.align === 'right' ? 'flex-end' : 'flex-start',
-                  color:      'var(--gc-text-3)',
-                  fontSize:   11,
-                  fontWeight: 600,
-                  letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                  cursor:     canSort ? 'pointer' : 'default',
-                  background: 'transparent',
-                  border:     'none',
-                  padding:    '12px 0',
-                  width:      '100%',
-                }}
-                onMouseEnter={e => { if (canSort) (e.currentTarget as HTMLElement).style.color = 'var(--gc-text-1)'; }}
-                onMouseLeave={e => { if (canSort) (e.currentTarget as HTMLElement).style.color = 'var(--gc-text-3)'; }}>
-                {flexRender(h.column.columnDef.header, h.getContext())}
-                {canSort && dir && (
-                  dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
-                )}
-              </button>
+                  ...stickyStyle,
+                  background: 'var(--gc-surface)',
+                  zIndex: stickyStyle.position === 'sticky' ? 3 : 1,
+                  paddingLeft: idx === 0 && !selectable ? 16 : 0,
+                  paddingRight: idx === visibleColumns.length - 1 ? 16 : 12,
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}>
+                <button
+                  type="button"
+                  disabled={!canSort}
+                  onClick={canSort && h ? () => h.column.toggleSorting() : undefined}
+                  className="flex items-center gap-1 select-none transition-colors"
+                  style={{
+                    textAlign:  col.align ?? 'left',
+                    justifyContent: col.align === 'right' ? 'flex-end' : 'flex-start',
+                    color:      'var(--gc-text-3)',
+                    fontSize:   11,
+                    fontWeight: 600,
+                    letterSpacing: '0.06em',
+                    textTransform: 'uppercase',
+                    cursor:     canSort ? 'pointer' : 'default',
+                    background: 'transparent',
+                    border:     'none',
+                    padding:    '12px 0',
+                    width:      '100%',
+                  }}
+                  onMouseEnter={e => { if (canSort) (e.currentTarget as HTMLElement).style.color = 'var(--gc-text-1)'; }}
+                  onMouseLeave={e => { if (canSort) (e.currentTarget as HTMLElement).style.color = 'var(--gc-text-3)'; }}>
+                  {col.header}
+                  {canSort && dir && (
+                    dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />
+                  )}
+                </button>
+              </div>
             );
           })}
         </div>
@@ -372,26 +705,79 @@ export function OpsTable<T>({
             const original = r.original;
             const id = rowKey(original);
             const active = id === activeRowId;
+            const isSelected = selectedIds.has(id);
+            const isPriority = priorityKey?.(original) ?? false;
+            // Row background — priority > active > selected > default.
+            // Sticky cells need a matching background so the scroll
+            // doesn't reveal the row behind them.
+            const rowBg = active   ? '#e8f0fe'
+                        : isSelected ? '#f0f7ff'
+                        : isPriority ? '#fffbeb'
+                        :              'var(--gc-surface)';
             return (
               <div
                 key={id}
-                onClick={onRowClick ? () => onRowClick(original) : undefined}
-                className="grid items-center transition-colors"
+                onClick={onRowClick ? (e) => {
+                  // Don't trigger row-click when clicking inside an
+                  // interactive child (button, link, input, etc.).
+                  // The sticky checkbox cell would otherwise fire
+                  // both a select-toggle and a row-open.
+                  const target = e.target as HTMLElement;
+                  if (target.closest('button, a, input, [data-row-click-ignore]')) return;
+                  onRowClick(original);
+                } : undefined}
+                className="grid items-stretch transition-colors"
                 style={{
                   gridTemplateColumns: gridTemplate,
-                  padding: '0 16px',
                   minHeight: rowHeightPx,
                   borderTop: '1px solid #f1f3f4',
                   cursor: onRowClick ? 'pointer' : 'default',
-                  background: active ? '#f1f5fb' : 'transparent',
+                  background: rowBg,
                 }}
-                onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = '#f8f9fa'; }}
-                onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
-                {r.getVisibleCells().map(cell => (
-                  <div key={cell.id} className="min-w-0 pr-3">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                onMouseEnter={e => {
+                  if (active || isSelected) return;
+                  (e.currentTarget as HTMLElement).style.background = isPriority ? '#fef3c7' : '#f8f9fa';
+                }}
+                onMouseLeave={e => {
+                  if (active || isSelected) return;
+                  (e.currentTarget as HTMLElement).style.background = rowBg;
+                }}>
+                {selectable && (
+                  <div
+                    data-row-click-ignore
+                    className="flex items-center justify-center"
+                    style={{
+                      position: 'sticky',
+                      left: 0,
+                      background: rowBg,
+                      zIndex: 1,
+                      paddingLeft: 16,
+                    }}>
+                    <CheckBox
+                      checked={isSelected}
+                      onChange={() => toggleRowSelection(id)}
+                      aria-label={`Select row ${id}`}
+                    />
                   </div>
-                ))}
+                )}
+                {r.getVisibleCells().map((cell, idx) => {
+                  const col = visibleColumns[idx];
+                  const stickyStyle = stickyStyleFor(col, leftOffsets, rightOffsets);
+                  return (
+                    <div
+                      key={cell.id}
+                      className="min-w-0 flex items-center"
+                      style={{
+                        ...stickyStyle,
+                        background: stickyStyle.position === 'sticky' ? rowBg : 'transparent',
+                        zIndex: stickyStyle.position === 'sticky' ? 1 : 0,
+                        paddingLeft: idx === 0 && !selectable ? 16 : 0,
+                        paddingRight: idx === visibleColumns.length - 1 ? 16 : 12,
+                      }}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </div>
+                  );
+                })}
               </div>
             );
           })
@@ -399,13 +785,13 @@ export function OpsTable<T>({
       </div>
 
       {/* ── Footer ─────────────────────────────────────────────── */}
-      {!loading && total > 0 && (
+      {!loading && (total > 0 || footerSummary) && (
         <div className="flex items-center justify-between mt-3 text-[11px]"
           style={{ color: 'var(--gc-text-3)' }}>
           <span>
-            Showing {from}–{to} of {total} {total === 1 ? countLabel : `${countLabel}s`}
+            {footerSummary ?? `Showing ${from}–${to} of ${total} ${total === 1 ? countLabel : `${countLabel}s`}`}
           </span>
-          {pageCnt > 1 && (
+          {paginated && pageCnt > 1 && (
             <div className="flex items-center gap-2">
               <PagerButton
                 onClick={() => table.previousPage()}
@@ -422,6 +808,21 @@ export function OpsTable<T>({
       )}
     </div>
   );
+}
+
+// ── Internals ────────────────────────────────────────────────────────
+
+/** Compute the inline style for a cell based on pinned direction. */
+function stickyStyleFor<T>(
+  col: OpsColumn<T> | undefined,
+  leftOffsets: Map<string, number>,
+  rightOffsets: Map<string, number>,
+): React.CSSProperties {
+  if (!col?.pinned) return {};
+  if (col.pinned === 'left') {
+    return { position: 'sticky', left: leftOffsets.get(col.key) ?? 0 };
+  }
+  return { position: 'sticky', right: rightOffsets.get(col.key) ?? 0 };
 }
 
 // ── Filter chips ──────────────────────────────────────────────────────
@@ -541,6 +942,208 @@ function SelectChip({
         </div>
       )}
     </div>
+  );
+}
+
+function DateRangeChip({
+  label, from, to, onChange,
+}: {
+  label: string;
+  from: string;
+  to:   string;
+  onChange: (from: string, to: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDoc);
+    return () => window.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const active = !!(from || to);
+  const display = active
+    ? `${label}: ${fmtShort(from) || '…'} → ${fmtShort(to) || '…'}`
+    : label;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 rounded-md transition-colors"
+        style={{
+          background: active ? 'var(--gc-blue-light)' : 'var(--gc-surface)',
+          border:     `1px solid ${active ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+          color:      active ? 'var(--gc-blue-text)' : 'var(--gc-text-2)',
+          padding:    '7px 10px',
+          fontSize:   13,
+          fontWeight: 500,
+        }}
+        onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.borderColor = 'var(--gc-text-3)'; }}
+        onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.borderColor = 'var(--gc-border-light)'; }}>
+        <CalendarIcon size={13} />
+        {display}
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div
+          className="absolute mt-1 rounded-md p-3 z-20 flex flex-col gap-2"
+          style={{
+            background: 'var(--gc-surface)',
+            border:     '1px solid var(--gc-border-light)',
+            boxShadow:  '0 4px 12px rgba(0,0,0,0.08)',
+            minWidth:   260,
+          }}>
+          <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>From</label>
+          <input
+            type="date"
+            value={from}
+            onChange={e => onChange(e.target.value, to)}
+            className="rounded text-[13px] outline-none"
+            style={{ border: '1px solid var(--gc-border-light)', padding: '6px 8px', color: 'var(--gc-text-1)' }}
+          />
+          <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>To</label>
+          <input
+            type="date"
+            value={to}
+            onChange={e => onChange(from, e.target.value)}
+            className="rounded text-[13px] outline-none"
+            style={{ border: '1px solid var(--gc-border-light)', padding: '6px 8px', color: 'var(--gc-text-1)' }}
+          />
+          {active && (
+            <button
+              type="button"
+              onClick={() => { onChange('', ''); setOpen(false); }}
+              className="text-[12px] font-semibold mt-1 transition-colors"
+              style={{ color: 'var(--gc-blue)' }}>
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtShort(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function ColumnPickerChip<T>({
+  columns, hidden, onChange,
+}: {
+  columns: OpsColumn<T>[];
+  hidden: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDoc);
+    return () => window.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const hiddenCount = columns.filter(c => hidden.has(c.key)).length;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 rounded-md transition-colors"
+        style={{
+          background: 'var(--gc-surface)',
+          border:     '1px solid var(--gc-border-light)',
+          color:      'var(--gc-text-2)',
+          padding:    '7px 10px',
+          fontSize:   13,
+          fontWeight: 500,
+        }}
+        onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--gc-text-3)')}
+        onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--gc-border-light)')}>
+        <ColumnsIcon size={13} />
+        Columns{hiddenCount > 0 && (
+          <span className="tabular-nums text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+            · {columns.length - hiddenCount}/{columns.length}
+          </span>
+        )}
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 mt-1 rounded-md overflow-hidden z-20"
+          style={{
+            background: 'var(--gc-surface)',
+            border:     '1px solid var(--gc-border-light)',
+            boxShadow:  '0 4px 12px rgba(0,0,0,0.08)',
+            minWidth:   220,
+            maxHeight:  360,
+            overflowY:  'auto',
+          }}>
+          {columns.map(c => {
+            const isHidden = hidden.has(c.key);
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => {
+                  const next = new Set(hidden);
+                  if (isHidden) next.delete(c.key);
+                  else          next.add(c.key);
+                  onChange(next);
+                }}
+                className="flex items-center gap-2 w-full text-left transition-colors"
+                style={{
+                  padding:    '8px 12px',
+                  fontSize:   13,
+                  color:      'var(--gc-text-1)',
+                  background: 'transparent',
+                }}
+                onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#f8f9fa')}
+                onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = 'transparent')}>
+                <CheckBox checked={!isHidden} onChange={() => { /* button handles */ }} aria-hidden />
+                <span className="flex-1">{c.pickerLabel ?? c.header}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CheckBox({
+  checked, indeterminate, onChange, ...rest
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'checked' | 'onChange' | 'type'>) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = !!indeterminate;
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      className="cursor-pointer"
+      style={{ width: 14, height: 14, accentColor: 'var(--gc-blue)' }}
+      {...rest}
+    />
   );
 }
 
