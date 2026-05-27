@@ -1004,7 +1004,7 @@ function WorkOrderModal({
       <div
         className="flex flex-col rounded-2xl overflow-hidden shrink-0"
         style={{
-          width:       'min(94vw, 620px)',
+          width:       'min(94vw, 810px)',
           maxHeight:   '92vh',
           background:  'var(--gc-surface)',
           boxShadow:   'var(--shadow-3)',
