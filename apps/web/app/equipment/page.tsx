@@ -18,7 +18,7 @@
  * 200-row dump was slow to scan + slow to render on bigger orgs.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
@@ -526,27 +526,55 @@ function FuelTabContent({
   const [transactions, setTransactions] = useState<FuelTransaction[]>([]);
   const [reports, setReports]           = useState<FuelReport[]>([]);
   const [loading, setLoading]           = useState(true);
+  // Sweep button transient state: "running" while the request is
+  // in flight, then a brief result toast ("Linked 3 new pairs") that
+  // auto-dismisses after a few seconds.
+  const [sweepBusy,   setSweepBusy]     = useState(false);
+  const [sweepResult, setSweepResult]   = useState<{ matched: number; scanned: number } | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const reload = useCallback(async () => {
     setLoading(true);
-    // Both calls in parallel. No server-side filtering — the full
-    // working set comes down and OpsTable handles the filtering and
-    // pagination client-side, which feels instant vs the refetch
-    // round-trip.
-    Promise.all([
-      railway.listFuelTransactions({ limit: 500 }),
-      railway.listFuelReports({ limit: 500 }),
-    ])
-      .then(([tx, fr]) => {
-        if (cancelled) return;
-        setTransactions(tx.fuelTransactions);
-        setReports(fr.fuelReports);
-      })
-      .catch(err => { console.error('[equipment] fuel unified:', err); if (!cancelled) { setTransactions([]); setReports([]); } })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    try {
+      // Both calls in parallel. No server-side filtering — the full
+      // working set comes down and OpsTable handles the filtering and
+      // pagination client-side, which feels instant vs the refetch
+      // round-trip.
+      const [tx, fr] = await Promise.all([
+        railway.listFuelTransactions({ limit: 500 }),
+        railway.listFuelReports({ limit: 500 }),
+      ]);
+      setTransactions(tx.fuelTransactions);
+      setReports(fr.fuelReports);
+    } catch (err) {
+      console.error('[equipment] fuel unified:', err);
+      setTransactions([]);
+      setReports([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+  useEffect(() => { void reload(); }, [reload]);
+
+  // Fire the on-demand sweep, then reload the table so new matches
+  // surface. Result toast auto-dismisses; the server runs the same
+  // job every 15 min anyway, the button just shortcuts the wait.
+  const runSweep = useCallback(async () => {
+    if (sweepBusy) return;
+    setSweepBusy(true);
+    setSweepResult(null);
+    try {
+      const r = await railway.runFuelAutoMatchSweep();
+      setSweepResult({ matched: r.matched, scanned: r.scanned });
+      await reload();
+      setTimeout(() => setSweepResult(null), 4000);
+    } catch (err) {
+      console.error('[fuel auto-match sweep] failed:', err);
+      setSweepResult({ matched: -1, scanned: 0 });
+      setTimeout(() => setSweepResult(null), 4000);
+    } finally {
+      setSweepBusy(false);
+    }
+  }, [sweepBusy, reload]);
 
   // Build unified rows. Matched transactions splice their paired
   // report so authoritative driver/asset names win over the receipt's
@@ -698,6 +726,40 @@ function FuelTabContent({
       defaultSort={{ key: 'date', dir: 'desc' }}
       density="compact"
       countLabel="fuel-up"
+      toolbarRight={
+        <div className="flex items-center gap-2">
+          {sweepResult && (
+            <span className="text-[12px] font-medium" style={{
+              color: sweepResult.matched < 0 ? '#dc2626'
+                   : sweepResult.matched > 0 ? '#166534'
+                   : 'var(--gc-text-3)',
+            }}>
+              {sweepResult.matched < 0
+                ? 'Sweep failed — try again'
+                : sweepResult.matched === 0
+                  ? `Scanned ${sweepResult.scanned}, no new matches`
+                  : `Linked ${sweepResult.matched} new pair${sweepResult.matched === 1 ? '' : 's'}`}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={runSweep}
+            disabled={sweepBusy}
+            className="rounded-md transition-colors"
+            style={{
+              background: sweepBusy ? 'var(--gc-bg)' : 'var(--gc-blue)',
+              color:      sweepBusy ? 'var(--gc-text-3)' : '#fff',
+              border:     `1px solid ${sweepBusy ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+              padding:    '7px 12px',
+              fontSize:   13,
+              fontWeight: 600,
+              cursor:     sweepBusy ? 'default' : 'pointer',
+            }}
+            title="Re-run the matcher across the last 24h of unmatched card transactions. Server also runs this every 15 min automatically.">
+            {sweepBusy ? 'Matching…' : 'Run auto-match'}
+          </button>
+        </div>
+      }
     />
   );
 }

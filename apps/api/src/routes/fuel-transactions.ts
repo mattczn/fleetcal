@@ -32,6 +32,8 @@ import type {
 } from "@fleetcal/types";
 
 import { supabase as supabaseTyped } from "../lib/supabase.js";
+import { applyAutoMatch } from "../lib/fuelMatcher.js";
+import { runFuelAutoMatchSweep } from "../jobs/fuelAutoMatchSweep.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireApiKey } from "../middleware/apiKeyAuth.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
@@ -125,160 +127,6 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
     createdAt:             r.created_at,
     updatedAt:             r.updated_at ?? undefined,
   };
-}
-
-// ── Auto-matcher ───────────────────────────────────────────────────────
-//
-// Pairs a freshly-ingested card transaction with the driver-app
-// fuel_report from the same time/place. The receipt knows $ + gallons
-// + date; the driver report knows who/what/where. The match makes
-// each fuel-up a complete record.
-//
-// Scoring (max ~100):
-//   • Driver name match (substring either direction):     +50
-//   • Asset / truck unit match:                           +30
-//   • Diesel gallons within ±5%:                          +15
-//   • Date proximity (same day = +5, ±1 = +3, ±2 = +1):   up to +5
-// Threshold ≥70 → auto_matched. Lower → unmatched (dispatch decides).
-//
-// Note: the name on a receipt may NOT be the driver who actually
-// fueled (e.g. an owner-operator swipes the card for the actual
-// driver). We don't have a clean way to detect that automatically,
-// so for the rare buy-on-behalf case dispatch manually links the
-// transaction to the right report via the UI on Equipment → Fuel →
-// Card Transactions.
-
-interface FuelReportCandidate {
-  id:              string;
-  reported_at:     string;
-  driver_id:       number;
-  asset_id:        number;
-  diesel_gallons:  number;
-  driver_name?:    string;    // joined
-  asset_unit?:     string;    // joined
-}
-
-/** Day-difference between a date-only string ("YYYY-MM-DD") and a
- *  full ISO timestamp. Anchored to UTC to avoid TZ surprises. */
-function dayDiff(txDate: string, reportedAt: string): number {
-  const t = new Date(txDate).getTime();
-  const r = new Date(reportedAt).getTime();
-  if (isNaN(t) || isNaN(r)) return Number.POSITIVE_INFINITY;
-  return Math.abs(t - r) / 86_400_000;
-}
-
-function scoreMatch(tx: FuelTransactionRow, r: FuelReportCandidate): number {
-  let score = 0;
-
-  // Driver name (case-insensitive substring either direction)
-  if (tx.driver_name && r.driver_name) {
-    const txN = tx.driver_name.toLowerCase();
-    const rN  = r.driver_name.toLowerCase();
-    if (txN === rN || txN.includes(rN) || rN.includes(txN)) score += 50;
-  }
-
-  // Asset / truck unit
-  if (tx.matched_truck && r.asset_unit && String(tx.matched_truck).trim() === String(r.asset_unit).trim()) {
-    score += 30;
-  }
-
-  // Diesel gallons within ±5%
-  if (tx.diesel_gallons != null && r.diesel_gallons > 0) {
-    const diff = Math.abs(Number(tx.diesel_gallons) - r.diesel_gallons) / r.diesel_gallons;
-    if (diff <= 0.05) score += 15;
-  }
-
-  // Date proximity (calendar days).
-  const d = dayDiff(tx.transaction_date, r.reported_at);
-  if      (d <= 1) score += 5;
-  else if (d <= 2) score += 3;
-  else if (d <= 3) score += 1;
-
-  return score;
-}
-
-async function tryAutoMatch(
-  orgId: string,
-  txRow: FuelTransactionRow,
-): Promise<{ fuelReportId: string; confidence: number } | null> {
-  // Pull candidate reports within ±3 days of the transaction date and
-  // still in 'pending' match status. Limit to a reasonable batch — a
-  // small org has a handful per day; even with 100/day a 7-day window
-  // is only ~700 rows.
-  const from = new Date(txRow.transaction_date);
-  from.setDate(from.getDate() - 3);
-  const to = new Date(txRow.transaction_date);
-  to.setDate(to.getDate() + 3);
-
-  const { data, error } = await supabase
-    .from("fuel_reports")
-    .select("id, reported_at, driver_id, asset_id, diesel_gallons, drivers!inner(name), assets!inner(unit)")
-    .eq("org_id", orgId)
-    .eq("match_status", "pending")
-    .gte("reported_at", from.toISOString())
-    .lte("reported_at", to.toISOString())
-    .limit(200);
-  if (error) {
-    console.warn("[fuel-tx auto-match] candidate fetch failed:", error);
-    return null;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const candidates: FuelReportCandidate[] = (data ?? []).map((r: any) => {
-    const row = r;
-    return {
-      id:             row.id,
-      reported_at:    row.reported_at,
-      driver_id:      row.driver_id,
-      asset_id:       row.asset_id,
-      diesel_gallons: Number(row.diesel_gallons),
-      driver_name:    row.drivers?.name ?? row.drivers?.[0]?.name,
-      asset_unit:     row.assets?.unit  ?? row.assets?.[0]?.unit,
-    };
-  });
-
-  let best: { id: string; score: number } | null = null;
-  for (const c of candidates) {
-    const s = scoreMatch(txRow, c);
-    if (!best || s > best.score) best = { id: c.id, score: s };
-  }
-  if (!best || best.score < 70) return null;
-  return { fuelReportId: best.id, confidence: best.score };
-}
-
-async function applyAutoMatch(
-  orgId: string,
-  txId: string,
-  txRow: FuelTransactionRow,
-): Promise<{ status: FuelTransactionMatchStatus; confidence?: number }> {
-  const matched = await tryAutoMatch(orgId, txRow);
-  if (!matched) return { status: "unmatched" };
-
-  // Two-sided update — flip both ends of the link in a single round
-  // trip. If the report-side update fails we don't roll back; the
-  // transaction-side link is still correct from the user's perspective.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await supabase
-    .from("fuel_transactions")
-    .update({
-      fuel_report_id:   matched.fuelReportId,
-      match_status:     "auto_matched",
-      match_confidence: matched.confidence,
-      matched_at:       new Date().toISOString(),
-    } as any)
-    .eq("id", txId)
-    .eq("org_id", orgId);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await supabase
-    .from("fuel_reports")
-    .update({
-      transaction_id: txId,
-      match_status:   "matched",
-    } as any)
-    .eq("id", matched.fuelReportId)
-    .eq("org_id", orgId);
-
-  return { status: "auto_matched", confidence: matched.confidence };
 }
 
 // ── POST /v1/fuel-transactions/inbound-email (api-key authed) ─────────
@@ -563,6 +411,31 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
 
   const res: MatchFuelTransactionResponse = { fuelTransaction: rowToTx(updated as unknown as FuelTransactionRow) };
   return c.json(res);
+});
+
+// POST /v1/fuel-transactions/auto-match-sweep — on-demand sweep.
+//
+// Same job that runs every 15 min from index.ts, but a dispatcher
+// can fire it manually before reviewing the fuel table — useful
+// after bulk-editing assets or right after a known late driver-
+// report-arrival batch.
+//
+// Limited to org-scope (the underlying sweep is cross-org, but this
+// endpoint filters the result down so a normal dispatcher only sees
+// their own org's numbers). Auth: fuel.edit capability.
+fuelTxClerk.post("/auto-match-sweep", requireCapability("fuel.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  try {
+    const result = await runFuelAutoMatchSweep();
+    const own = result.byOrg[orgId] ?? { scanned: 0, matched: 0 };
+    return c.json({
+      scanned: own.scanned,
+      matched: own.matched,
+    });
+  } catch (err) {
+    console.error("[fuel auto-match sweep] manual trigger failed:", err);
+    return c.json({ error: "sweep_failed", detail: (err as Error).message } satisfies ApiErrorResponse, 500);
+  }
 });
 
 // Two separate routers exported so index.ts can mount the api-key

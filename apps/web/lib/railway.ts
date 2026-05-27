@@ -803,6 +803,12 @@ class RailwayClient {
   matchFuelTransaction(id: string, body: MatchFuelTransactionRequest) {
     return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match`, body);
   }
+  /** Force a fresh auto-match pass over unmatched fuel transactions
+   *  in the past 24h. Returns this org's scanned + matched counts.
+   *  The server also runs this every 15 min on its own. */
+  runFuelAutoMatchSweep() {
+    return this.req<{ scanned: number; matched: number }>('POST', `/v1/fuel-transactions/auto-match-sweep`);
+  }
 
   // ── Inspection reports (DVIRs) ──────────────────────────────────────
   listInspectionReports(query: {

@@ -51,6 +51,7 @@ import costAnalysisRoute from "./routes/cost-analysis.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
+import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import pkg from "../package.json" with { type: "json" };
 
 import type { HealthResponse } from "@fleetcal/types";
@@ -312,3 +313,49 @@ async function fireOdometerSnapshot(label: string): Promise<void> {
 }
 setTimeout(() => void fireOdometerSnapshot("startup pass"), ODOMETER_STARTUP_DELAY_MS).unref();
 setInterval(() => void fireOdometerSnapshot("hourly tick"), ODOMETER_CHECK_INTERVAL_MS).unref();
+
+// ── Fuel auto-match sweep ──────────────────────────────────────────────
+//
+// Re-attempts matching for unmatched fuel_transactions in the past
+// 24h. The inline matcher fires at /inbound-email ingest (the common
+// case: driver report exists by the time Mudflap delivers the
+// receipt). The sweep catches the asymmetric cases:
+//
+//   • Driver fueled but filed their report AFTER Mudflap had already
+//     polled — the transaction is already in 'unmatched' state, and
+//     would stay there forever without a periodic retry.
+//   • Dispatcher entered a driver fuel report manually on the
+//     driver's behalf, days after the fact.
+//   • Inline match transiently failed (DB hiccup, candidate fetch
+//     error) — the sweep is a safety net.
+//
+// Cadence: every 15 min. Mudflap polls every ~30 min, so the worst-
+// case lag between transaction arrival and a successful match is
+// ~30 min (one Mudflap cycle) + ~15 min (next sweep). The sweep is
+// idempotent — matched rows fall out of the `match_status = unmatched`
+// filter, so subsequent runs over the same 24h window cost nothing.
+//
+// Single-replica caveat: same as the other in-process crons. The
+// sweep is idempotent so accidental double-runs are harmless, but
+// scaling horizontally still wants a primary-instance gate.
+
+const FUEL_AUTO_MATCH_INTERVAL_MS    = Number(process.env.FUEL_AUTO_MATCH_INTERVAL_MS ?? 15 * 60 * 1000);
+const FUEL_AUTO_MATCH_STARTUP_DELAY  = Number(process.env.FUEL_AUTO_MATCH_STARTUP_DELAY_MS ?? 120_000);
+
+async function fireFuelAutoMatch(label: string): Promise<void> {
+  try {
+    const result = await runFuelAutoMatchSweep();
+    if (result.scanned > 0 || result.matched > 0) {
+      console.log(
+        `[fuel auto-match] ${label}: scanned=${result.scanned}, matched=${result.matched}` +
+        (Object.keys(result.byOrg).length > 1
+          ? ` (${Object.entries(result.byOrg).map(([org, b]) => `${org}: ${b.matched}/${b.scanned}`).join(', ')})`
+          : ''),
+      );
+    }
+  } catch (err) {
+    console.error(`[fuel auto-match] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireFuelAutoMatch("startup pass"), FUEL_AUTO_MATCH_STARTUP_DELAY).unref();
+setInterval(() => void fireFuelAutoMatch("tick"), FUEL_AUTO_MATCH_INTERVAL_MS).unref();
