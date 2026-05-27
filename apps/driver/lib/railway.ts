@@ -364,9 +364,22 @@ export const railway = {
     durationSeconds?: number | null;
     locationLat?:     number | null;
     locationLon?:     number | null;
+    /** Driver-local YYYY-MM-DD — omitted only if caller wants the
+     *  server's UTC fallback. New submissions should always pass
+     *  `localYmdToday()` so the inspection lands on the driver's
+     *  actual day rather than UTC's. */
+    inspectionDate?:  string;
   }) {
+    // Auto-fill the driver's local date when the caller didn't
+    // pass one. Safer-by-default than letting the server fall back
+    // to UTC — a 9pm-Tuesday submission from Atlanta would land
+    // on Wednesday otherwise.
+    const payload = {
+      ...body,
+      inspectionDate: body.inspectionDate ?? localYmdToday(),
+    };
     return req<{ inspection: { id: string; submitted_at: string; has_defects: boolean } }>(
-      "POST", "/v1/driver/inspections", body,
+      "POST", "/v1/driver/inspections", payload,
     );
   },
   /** Upload one photo against an existing inspection. Pass `itemId`
@@ -380,14 +393,25 @@ export const railway = {
       { isFormData: true },
     );
   },
-  /** Inspections this driver has submitted today (driver's UTC date).
-   *  Drives the schedule-tab card state. */
+  /** Inspections this driver has submitted today, scoped to the
+   *  driver's local date. The server accepts `?date=YYYY-MM-DD` so
+   *  we don't end up asking "did I do a DVIR today" using UTC when
+   *  the driver's wall clock disagrees. */
   todaysInspections() {
     return req<{ inspections: TodayInspectionSummary[] }>(
-      "GET", "/v1/driver/inspections/today",
+      "GET", `/v1/driver/inspections/today?date=${encodeURIComponent(localYmdToday())}`,
     );
   },
 };
+
+/** Driver-local YYYY-MM-DD. Avoids toISOString() (which is always UTC)
+ *  so the "what day is it for this driver right now" answer is
+ *  correct after 7pm Eastern, etc. */
+function localYmdToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 export interface InspectionItemPayload {
   id:      string;

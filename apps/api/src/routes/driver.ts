@@ -2636,6 +2636,13 @@ interface InspectionBody {
   durationSeconds?: number | null;
   locationLat?:    number | null;
   locationLon?:    number | null;
+  /** Driver-local YYYY-MM-DD for the day this inspection covers.
+   *  REQUIRED for correctness — without it the server falls back to
+   *  UTC date which off-by-ones any submission after the driver's
+   *  local 7pm-ish (when UTC has already rolled to tomorrow). New
+   *  clients always send it; older clients omit it and the server
+   *  fall-back kicks in. */
+  inspectionDate?: string;
 }
 
 driver.post("/inspections", async (c) => {
@@ -2672,7 +2679,17 @@ driver.post("/inspections", async (c) => {
     signedBy = (d?.name ?? `${d?.first_name ?? ""} ${d?.last_name ?? ""}`.trim()) || "Driver";
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Inspection date: prefer the driver's local date if the client
+  // sent one (YYYY-MM-DD). UTC fallback only kicks in for older
+  // driver-app builds that don't send the field. Validate strictly
+  // so a malformed client can't poison the date — anything that
+  // doesn't match the format gets discarded and we fall through to
+  // server UTC.
+  const VALID_YMD = /^\d{4}-\d{2}-\d{2}$/;
+  const clientDate = typeof body.inspectionDate === "string" && VALID_YMD.test(body.inspectionDate)
+    ? body.inspectionDate
+    : null;
+  const today = clientDate ?? new Date().toISOString().slice(0, 10);
 
   // Sanitize duration + coords — clamp to plausible ranges so a bogus
   // client value can't poison the row. Duration capped at 24h (anything
@@ -2800,7 +2817,15 @@ driver.post("/inspections/:id/photos", async (c) => {
 driver.get("/inspections/today", async (c) => {
   const driverId = c.get("driverId");
   const orgId    = c.get("orgId");
-  const today = new Date().toISOString().slice(0, 10);
+  // Accept ?date=YYYY-MM-DD from the client (driver's local day).
+  // Falls back to UTC for older app builds that don't send it —
+  // same off-by-one risk near midnight, but consistent with how
+  // those builds wrote rows in the first place.
+  const VALID_YMD = /^\d{4}-\d{2}-\d{2}$/;
+  const dateParam = new URL(c.req.url).searchParams.get("date");
+  const today = (dateParam && VALID_YMD.test(dateParam))
+    ? dateParam
+    : new Date().toISOString().slice(0, 10);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any)
     .from("inspection_reports")
