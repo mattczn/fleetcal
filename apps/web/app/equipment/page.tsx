@@ -1198,9 +1198,11 @@ function FuelTabContent({
   const [sweepResult, setSweepResult]   = useState<{ matched: number; scanned: number } | null>(null);
 
   // Period selector — scopes both the KPI bar above and the table
-  // below to the same date window. Defaults to "This Month" (matches
-  // the dashboard's default). Custom range opens DatePicker inputs.
-  const [period, setPeriod]             = useState<Period>('month');
+  // below to the same date window. Defaults to "This Week" (Sat→Fri)
+  // because fuel-up cadence is daily — the dispatcher cares most
+  // about the current week's spend. Longer windows are one pill
+  // click away.
+  const [period, setPeriod]             = useState<Period>('week');
   const initialCustom                   = useMemo(() => defaultCustomRangeISO(), []);
   const [customStart, setCustomStart]   = useState<string>(initialCustom.start);
   const [customEnd,   setCustomEnd]     = useState<string>(initialCustom.end);
