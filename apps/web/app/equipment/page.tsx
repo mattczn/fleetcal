@@ -30,7 +30,6 @@ import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
 import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
-import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import {
   OpsTable, OpsDate, OpsPill, OpsMuted,
   type OpsColumn, type OpsFilter,
@@ -294,12 +293,12 @@ function buildEquipmentOptions(
 }
 
 function buildDriverOptions(drivers: Driver[]): Array<{ value: string; label: string }> {
-  // "Active today" check via isActiveOn — handles future activeTo
-  // dates correctly. A bare `!activeTo` filter would drop every
-  // driver whose retirement is scheduled but hasn't happened yet.
-  const today = dateKeyOf(new Date());
-  return drivers
-    .filter(d => isActiveOn(d, today))
+  // No active-status filter. Rows in the table can reference any
+  // driver (current or retired), so the filter chip should let the
+  // dispatcher narrow by any of them. Active-only filtering bit us
+  // hard when activeTo was set on every driver and the dropdown
+  // came back empty.
+  return [...drivers]
     .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
     .map(d => ({ value: String(d.id), label: d.name }));
 }
@@ -749,8 +748,7 @@ function FuelTabContent({
         return r.report?.driverId === n || r.transaction?.driverId === n;
       } },
     { kind: 'select', key: 'asset',  label: 'Truck',
-      options: assets
-        .filter(a => isActiveOn(a, dateKeyOf(new Date())))
+      options: [...assets]
         .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
         .map(a => ({ value: String(a.id), label: `Truck ${a.name}${a.unit ? ` #${a.unit}` : ''}` })),
       predicate: (r, v) => {
@@ -955,14 +953,6 @@ function DetailPanel({
       style={{
         background: 'rgba(0,0,0,0.45)',
         zIndex: 1000,
-        // When the side media panel is open, render it as a flex
-        // SIBLING of the main panel so they sit side-by-side and
-        // both are centered as a group. The earlier rendering had
-        // the media panel as a separate fixed overlay which is why
-        // it ended up unattached in the corner of the viewport.
-        gap: sideMedia ? 12 : 0,
-        // Padding so the two-panel combo (920 + 12 + 520 = 1452px)
-        // doesn't pin to the screen edges on common widths.
         padding: 24,
       }}
       onClick={e => { if (e.target === overlayRef.current) onClose(); }}
@@ -1008,23 +998,41 @@ function DetailPanel({
         </div>
       </div>
 
-      {/* Side media panel — flex sibling of the main panel so they
-          sit attached side-by-side. Same surface + height as main
-          so the visual reads as one paired modal. */}
-      {sideMedia && (
-        <MediaSidePanel
-          media={sideMedia}
-          onClose={onCloseSideMedia}
-        />
-      )}
     </div>
   );
+
+  // Media side panel — its own fixed overlay LAYERED ABOVE the main
+  // detail panel, centered on screen. Earlier this was rendered as a
+  // flex sibling next to the detail panel (520px wide alongside the
+  // 920px main panel), but on smaller laptops the combined width
+  // pushed the main panel out of center and felt visually
+  // unbalanced. As a stacked centered modal it reads cleanly: the
+  // backdrop dims the detail panel behind, the media takes the
+  // dispatcher's full attention while they're reviewing photos.
+  const mediaOverlay = sideMedia ? (
+    <div
+      className="fixed inset-0 flex items-center justify-center"
+      style={{
+        background: 'rgba(0,0,0,0.55)',
+        zIndex: 1100, // above the detail panel (1000)
+        padding: 24,
+      }}
+      onClick={e => { if (e.target === e.currentTarget) onCloseSideMedia(); }}>
+      <MediaSidePanel media={sideMedia} onClose={onCloseSideMedia} />
+    </div>
+  ) : null;
 
   // Portal so the fixed overlay isn't clipped by an ancestor's
   // containing block (transforms / filters / contain). Same pattern
   // as MovementDetailPanel.
   if (typeof document === 'undefined') return null;
-  return createPortal(content, document.body);
+  return createPortal(
+    <>
+      {content}
+      {mediaOverlay}
+    </>,
+    document.body,
+  );
 }
 
 function MaintenanceDetail({
@@ -1294,9 +1302,22 @@ function FuelDetail({
   const totalCharged  = t?.totalCharged    ?? null;
   const totalSaved    = t?.totalSaved      ?? 0;
   const locationText  = t?.location        ?? null;
-  const dieselPpg     = (totalCharged != null && dieselGallons && dieselGallons > 0)
-    ? totalCharged / dieselGallons
-    : null;
+  // $/gallon priority:
+  //   1. dieselDiscountPrice — Mudflap's actual per-gallon rate after
+  //      discount. The number you actually paid for fuel.
+  //   2. dieselTotal / dieselGallons — derived diesel-only price if
+  //      the discount column is empty but we have a diesel subtotal.
+  //   3. totalCharged / dieselGallons — last-resort fallback. ONLY
+  //      accurate when the receipt is pure diesel (no DEF, no fees).
+  //      Otherwise overstates the per-gallon cost.
+  const dieselPpg =
+    t?.dieselDiscountPrice
+    ?? (t?.dieselTotal && dieselGallons && dieselGallons > 0
+        ? t.dieselTotal / dieselGallons
+        : null)
+    ?? (totalCharged != null && dieselGallons && dieselGallons > 0
+        ? totalCharged / dieselGallons
+        : null);
 
   return (
     <div className="flex-1 overflow-auto" style={{ background: 'var(--gc-surface)' }}>
@@ -1988,25 +2009,19 @@ function AssignmentControls({
     setSavedMessage(null);
   }, [t.id, t.driverId, t.assetId, linkedReport?.id, linkedReport?.driverId, linkedReport?.assetId]);
 
-  // Sorted, active-only lists. "Active" = isActiveOn(today) — not a
-  // bare `!activeTo` check, because activeTo can be a FUTURE date for
-  // a planned retirement and those drivers should still appear in the
-  // dropdown. The previous filter dropped any driver/asset with
-  // activeTo set at all, which gave the user an empty dropdown when
-  // their roster had future activeTo dates on every row.
-  // The currently-assigned driver/asset is always kept in the list
-  // even if retired, so existing assignments don't disappear.
-  const today = useMemo(() => dateKeyOf(new Date()), []);
+  // No active-status filter — we've been bitten too many times by
+  // it. Some orgs set activeTo on every driver (planned retirements,
+  // legacy data migrations), some never set it, and the failure mode
+  // is silent: dropdown empty, no error, dispatcher stuck. Better to
+  // show every driver/asset in the org and trust the dispatcher to
+  // pick the right one. If a driver appears retired on a fuel-up
+  // they actually did fuel for, we still want them assignable.
   const driverOptions = useMemo(() => {
-    const list = drivers.filter(d => isActiveOn(d, today) || d.id === driverId);
-    list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
-    return list;
-  }, [drivers, driverId, today]);
+    return [...drivers].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+  }, [drivers]);
   const assetOptions = useMemo(() => {
-    const list = assets.filter(a => isActiveOn(a, today) || a.id === assetId);
-    list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
-    return list;
-  }, [assets, assetId, today]);
+    return [...assets].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+  }, [assets]);
 
   // Dirty compares against the *effective* assignment (txn fields +
   // linked-report fallback), so changing the dropdown back to the
@@ -2354,12 +2369,11 @@ function NoMediaPlaceholder() {
   );
 }
 
-// MediaSidePanel — rendered as a flex SIBLING of the main detail
-// panel inside the same overlay container, so the two sit attached
-// side-by-side, centered together as a paired modal. NOT
-// position: fixed (the parent is fixed; this is just a flex child).
-// Esc handling lives in the parent DetailPanel so it can decide
-// whether Esc closes the side panel first or the whole modal.
+// MediaSidePanel — centered modal that layers above the main detail
+// panel. Used to be a flex sibling; now it's an independent overlay
+// (see DetailPanel for the wrapping). Click-outside on the overlay
+// closes it; Esc handling lives in the parent so Esc closes this
+// first before falling through to the detail panel.
 function MediaSidePanel({ media, onClose }: { media: MediaList; onClose: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -2375,7 +2389,7 @@ function MediaSidePanel({ media, onClose }: { media: MediaList; onClose: () => v
     <div
       onClick={e => e.stopPropagation()}
       className="flex flex-col rounded-2xl overflow-hidden shrink-0"
-      style={{ width: 520, height: 720, background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+      style={{ width: 'min(92vw, 720px)', height: 'min(92vh, 900px)', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
     >
       <div className="flex items-center gap-2.5 px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border)' }}>
         <Camera size={14} style={{ color: 'var(--gc-text-2)' }} />
