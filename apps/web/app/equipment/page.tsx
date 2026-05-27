@@ -515,10 +515,24 @@ function InspectionsList({
 // Row click opens the panel for whichever side carries the richer
 // info: transaction if present, else the driver report.
 
+// Row classification — drives the Source filter chip + per-row
+// badge. Semantics are dispatch-workflow oriented (what needs your
+// attention), not data-shape oriented:
+//
+//   • matched      — transaction has a truck assigned (assetId set).
+//                    Spend is attributed; no further dispatcher
+//                    action required.
+//   • card_only    — transaction exists but no truck assigned. The
+//                    Mudflap card swiped, but the dispatcher hasn't
+//                    classified it yet (or auto-resolve failed).
+//                    Click in → use the dropdowns to assign.
+//   • driver_only  — driver report exists but no card transaction
+//                    yet (waiting on Mudflap, or driver paid out of
+//                    pocket). No action — just visibility.
 type FuelRowKind =
-  | 'matched'       // tx + report linked
-  | 'card_only'     // tx with no report
-  | 'driver_only';  // report with no tx
+  | 'matched'
+  | 'card_only'
+  | 'driver_only';
 
 type UnifiedFuelRow = {
   id:             string;              // tx.id if present, else report.id
@@ -640,7 +654,16 @@ function FuelTabContent({
     for (const t of transactions) {
       const report = t.fuelReportId ? reportById.get(t.fuelReportId) ?? null : null;
       if (report) consumedReportIds.add(report.id);
-      const kind: FuelRowKind = report ? 'matched' : 'card_only';
+      // Matched = the spend is attributed to a truck on the
+      // transaction itself. That asset_id can come from:
+      //   • ingest auto-resolve (matched_truck → assets.unit)
+      //   • the matcher mirroring a linked fuel_report's asset
+      //   • the dispatcher picking via the /assign dropdown
+      // Either way the dispatcher's work is done — no further action.
+      // No truck on the transaction = "card only" needs attention.
+      const hasAssignedTruck = t.assetId != null
+        || (report?.assetId != null); // matched-report side counts too
+      const kind: FuelRowKind = hasAssignedTruck ? 'matched' : 'card_only';
 
       // Driver/Asset resolution chain — tries every signal we have
       // before falling back to a bare-id placeholder. Order matters:
@@ -759,9 +782,9 @@ function FuelTabContent({
                     || (r.location ?? '').toLowerCase().includes(q) },
     { kind: 'select', key: 'source', label: 'Source',
       options: [
-        { value: 'matched',     label: 'Matched',     count: counts.matched },
-        { value: 'card_only',   label: 'Card only',   count: counts.card_only },
-        { value: 'driver_only', label: 'Driver only', count: counts.driver_only },
+        { value: 'matched',     label: 'Matched', count: counts.matched },
+        { value: 'card_only',   label: 'Card',    count: counts.card_only },
+        { value: 'driver_only', label: 'Driver',  count: counts.driver_only },
       ],
       predicate: (r, v) => r.kind === v },
     { kind: 'select', key: 'driver', label: 'Driver',
@@ -1078,23 +1101,22 @@ function FuelKpiBar({
   );
 }
 
-// One source-of-truth badge per row. Matched rows surface the
-// underlying match type (auto / manual) so the dispatcher knows
-// whether to trust it; card-only and driver-only rows are work to do.
+// One source-of-truth badge per row. Matched = truck is attributed;
+// Card = transaction needs attribution; Driver = waiting on receipt.
 function SourceBadge({
-  kind, transaction,
+  kind,
 }: {
   kind: FuelRowKind;
-  transaction: FuelTransaction | null;
+  // Kept for backwards-compat with the column-def signature even
+  // though we no longer split matched by auto/manual at the badge
+  // level (dispatcher cares about "is it attributed?", not "which
+  // path got it there"). The granular auto/manual breakdown still
+  // shows inside the detail panel via MatchStatusPill.
+  transaction?: FuelTransaction | null;
 }) {
-  if (kind === 'matched') {
-    const ms = transaction?.matchStatus;
-    return ms === 'manual_matched'
-      ? <OpsPill color="blue">Manual match</OpsPill>
-      : <OpsPill color="green">{ms === 'auto_matched' ? 'Auto-matched' : 'Matched'}</OpsPill>;
-  }
-  if (kind === 'card_only')   return <OpsPill color="amber">Card only</OpsPill>;
-  return <OpsPill color="purple">Driver only</OpsPill>;
+  if (kind === 'matched')     return <OpsPill color="green">Matched</OpsPill>;
+  if (kind === 'card_only')   return <OpsPill color="amber">Card</OpsPill>;
+  return <OpsPill color="purple">Driver</OpsPill>;
 }
 
 // Granular transaction match-status pill — used inside the open
