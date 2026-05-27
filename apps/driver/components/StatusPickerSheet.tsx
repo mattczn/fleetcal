@@ -11,8 +11,14 @@ const txt = (weight: 500 | 600 | 700 | 800) => ({
                      "PlusJakartaSans_800ExtraBold",
 });
 
+// Every LoadStatus must have a row — Record<LoadStatus, …> enforces
+// this at compile time. Skipping a status (e.g. `assigned` was added
+// to the union but never added here for a stretch) means the picker
+// renders undefined.label / undefined.bg and the whole sheet crashes.
+// Same root-cause class as the load detail's STOP_ACCENT bug.
 const STATUS_META: Record<LoadStatus, { label: string; bg: string; fg: string; group: "progress" | "exception" }> = {
   scheduled:  { label: "Scheduled",  bg: "#f1f3f4", fg: "#5f6368", group: "progress"  },
+  assigned:   { label: "Assigned",   bg: "#e0f2fe", fg: "#075985", group: "progress"  },
   dispatched: { label: "Dispatched", bg: "#e8f0fe", fg: "#1558d6", group: "progress"  },
   en_route:   { label: "En Route",   bg: "#fef3c7", fg: "#92400e", group: "progress"  },
   picked_up:  { label: "Picked Up",  bg: "#f3e8fd", fg: "#6b21a8", group: "progress"  },
@@ -22,7 +28,7 @@ const STATUS_META: Record<LoadStatus, { label: string; bg: string; fg: string; g
   problem:    { label: "Problem",    bg: "#fef0e6", fg: "#b85c00", group: "exception" },
 };
 
-const PROGRESS_ORDER: LoadStatus[] = ["scheduled", "dispatched", "en_route", "picked_up", "delivered"];
+const PROGRESS_ORDER: LoadStatus[] = ["scheduled", "assigned", "dispatched", "en_route", "picked_up", "delivered"];
 const EXCEPTION_ORDER: LoadStatus[] = ["problem"];
 
 type Props = {

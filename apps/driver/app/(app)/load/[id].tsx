@@ -86,9 +86,23 @@ const STATUS_CTA: Partial<Record<LoadStatus, string>> = {
   picked_up:  "Mark Delivered",
 };
 
+// IMPORTANT: every StopType in packages/types/enums.ts (STOP_TYPES)
+// needs a row in BOTH records below. A missing key would resolve to
+// undefined at runtime — StopCard then tries to read `.iconBg` /
+// `.bg` / `.fg` off undefined and the whole load detail screen
+// throws a TypeError. expo-updates' uncaught-exception handler
+// catches it and SIGABRTs the process via ErrorRecovery — i.e.
+// the whole app crashes on a single bad load.
+//
+// The TypeScript compiler enforces this completeness via the
+// Record<Stop["type"], ...> generic. If you add a new StopType,
+// this file will fail to typecheck until you add the row here.
+// (We previously had to remediate `drop` missing — see commit
+// history.)
 const STOP_TYPE_LABEL: Record<Stop["type"], string> = {
   pickup:    "Pickup",
   delivery:  "Delivery",
+  drop:      "Drop",
   drop_hook: "Drop & Hook",
   stop:      "Stop",
   relay:     "Relay",
@@ -97,7 +111,12 @@ const STOP_TYPE_LABEL: Record<Stop["type"], string> = {
 const STOP_ACCENT: Record<Stop["type"], { bg: string; fg: string; iconBg: string }> = {
   pickup:    { bg: "#dcfce7", fg: "#15803d", iconBg: "#16a34a" }, // green
   delivery:  { bg: "#fee2e2", fg: "#b91c1c", iconBg: "#dc2626" }, // red
-  drop_hook: { bg: "#dbeafe", fg: "#1e40af", iconBg: "#2563eb" },
+  // `drop` = trailer drop (no hook), distinct from drop_hook which is
+  // drop one trailer + grab another. Same blue family as drop_hook
+  // but slightly lighter to keep them visually distinguishable on
+  // the same screen.
+  drop:      { bg: "#e0f2fe", fg: "#075985", iconBg: "#0284c7" }, // sky blue
+  drop_hook: { bg: "#dbeafe", fg: "#1e40af", iconBg: "#2563eb" }, // indigo
   stop:      { bg: "#fef9c3", fg: "#854d0e", iconBg: "#eab308" }, // yellow
   relay:     { bg: "#f3e8fd", fg: "#6b21a8", iconBg: "#8b5cf6" },
 };
@@ -563,7 +582,16 @@ function StopCardInner({
   relayRole?: "pickup" | "delivery";
   onViewDocuments?: () => void;
 }) {
-  const accent = STOP_ACCENT[stop.type];
+  // Defensive lookup — if a new StopType ever gets added server-side
+  // before the client knows about it, fall back to neutral colors
+  // rather than crashing on undefined.iconBg. This belt-and-suspenders
+  // is on top of the Record<Stop["type"], …> type guard above; the
+  // TS check catches it at compile time, this catches it if a server
+  // ever returns a value outside the union (e.g. older clients
+  // hitting newer data).
+  const accent = STOP_ACCENT[stop.type] ?? {
+    bg: "#f1f3f4", fg: "#5f6368", iconBg: "#80868b",
+  };
   const facility = stop.facilityName ?? stop.city ?? stop.address ?? "—";
   const copyValue = stop.address ?? stop.city ?? stop.facilityName ?? "";
   // Relay handoff stops carry two times in one row: apptStart = the
@@ -640,7 +668,7 @@ function StopCardInner({
                     the standard type label (PICKUP / DELIVERY / etc.). */}
                 {isRelayStop
                   ? `RELAY HANDOFF · ${relayActionLabel}`
-                  : STOP_TYPE_LABEL[stop.type].toUpperCase()}
+                  : (STOP_TYPE_LABEL[stop.type] ?? stop.type).toUpperCase()}
               </Text>
             </View>
           </View>
