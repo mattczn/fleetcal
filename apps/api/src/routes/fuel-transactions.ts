@@ -426,6 +426,28 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
   }
   const prevReportId = (prev as { fuel_report_id: string | null }).fuel_report_id;
 
+  // When linking to a fuel_report, mirror its driver_id + asset_id
+  // onto the transaction so the unified panel's dropdowns reflect
+  // the correct values without an extra round-trip — and the unified
+  // fuel table can roll up by driver/asset without joining through
+  // fuel_reports. Skip the mirror when the caller already has
+  // driver_id set on the transaction (don't overwrite an intentional
+  // override).
+  let mirroredDriverId: number | null = null;
+  let mirroredAssetId:  number | null = null;
+  if (body.fuelReportId) {
+    const { data: linkedReport } = await supabase
+      .from("fuel_reports")
+      .select("driver_id, asset_id")
+      .eq("id", body.fuelReportId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (linkedReport) {
+      mirroredDriverId = (linkedReport as { driver_id: number | null }).driver_id ?? null;
+      mirroredAssetId  = (linkedReport as { asset_id:  number | null }).asset_id  ?? null;
+    }
+  }
+
   const updateRow: Record<string, unknown> = body.fuelReportId === null
     ? {
         fuel_report_id:   null,
@@ -434,6 +456,9 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
         match_notes:      body.matchNotes ?? null,
         matched_at:       null,
         matched_by:       null,
+        // Unlinking does NOT clear driver_id/asset_id — those may
+        // have been set independently via /assign and should survive
+        // an unlink so the dispatcher's attribution work isn't lost.
       }
     : {
         fuel_report_id:   body.fuelReportId,
@@ -442,7 +467,30 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
         match_notes:      body.matchNotes ?? null,
         matched_at:       new Date().toISOString(),
         matched_by:       userId,
+        // Pre-populate driver/asset from the linked report. The DB
+        // coalesce below preserves any prior intentional override:
+        // if the row already had driver_id=14 and the report says
+        // driver_id=17, we keep 14. Same for asset.
+        driver_id:        mirroredDriverId,
+        asset_id:         mirroredAssetId,
       };
+
+  // For the link case, we want to mirror only when the transaction
+  // doesn't already have a value. The cleanest way is to read first,
+  // then conditionally set. We already read `prev` above with just
+  // fuel_report_id — extend that to also pull driver_id/asset_id so
+  // we can decide here.
+  const { data: prevFull } = await supabase
+    .from("fuel_transactions")
+    .select("driver_id, asset_id")
+    .eq("id", id).eq("org_id", orgId)
+    .maybeSingle();
+  if (body.fuelReportId && prevFull) {
+    const prevDriver = (prevFull as { driver_id: number | null }).driver_id;
+    const prevAsset  = (prevFull as { asset_id:  number | null }).asset_id;
+    if (prevDriver != null) updateRow.driver_id = prevDriver; // preserve override
+    if (prevAsset  != null) updateRow.asset_id  = prevAsset;  // preserve override
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: updated, error } = await supabase

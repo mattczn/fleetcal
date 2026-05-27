@@ -600,27 +600,39 @@ function FuelTabContent({
       if (report) consumedReportIds.add(report.id);
       const kind: FuelRowKind = report ? 'matched' : 'card_only';
 
-      // Driver: priority order is
-      //   1. matched fuel_report's driver_id → name lookup (authoritative)
-      //   2. transaction's own driver_id (set via ingest auto-resolve
-      //      OR the assign UI dropdown) → name lookup
-      //   3. receipt's free-text driverName
-      // Asset is the same shape against asset_id / matched_truck.
+      // Driver/Asset resolution chain — tries every signal we have
+      // before falling back to a bare-id placeholder. Order matters:
+      //   1. transaction's own driver_id/asset_id resolved → name
+      //   2. matched fuel_report's driver_id/asset_id resolved → name
+      //   3. embedded driver_name / asset_name from the API join
+      //   4. receipt's free-text driver_name / matched_truck
+      //      (readable, just not the canonical roster entry)
+      //   5. "Driver #N" / "Asset #N" bare-id fallback — only when
+      //      none of the above pan out, e.g. the linked driver was
+      //      hard-deleted from the org
+      //   6. "—" so the cell never renders blank
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reportEmbedded = report as any;
-      const driverLabel = report
-        ? (reportEmbedded?.driverName as string | undefined
-            ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById))
-        : (t.driverId != null
-            ? (driverNameById.get(t.driverId) ?? `Driver #${t.driverId}`)
-            : (t.driverName ?? '—'));
-      const assetLabel = report
-        ? (reportEmbedded?.assetName as string | undefined
-            ?? assetLabelById.get(report.assetId)
-            ?? `Asset #${report.assetId}`)
-        : (t.assetId != null
-            ? (assetLabelById.get(t.assetId) ?? `Asset #${t.assetId}`)
-            : (t.matchedTruck ? `#${t.matchedTruck}` : '—'));
+      const resolvedDriverName =
+        (t.driverId != null ? driverNameById.get(t.driverId) : undefined)
+        ?? (report?.driverId != null ? driverNameById.get(report.driverId) : undefined)
+        ?? (reportEmbedded?.driverName as string | undefined);
+      const driverLabel: string =
+        resolvedDriverName
+        ?? t.driverName                                                  // receipt text — readable fallback
+        ?? (report?.driverId != null ? `Driver #${report.driverId}` : undefined)
+        ?? (t.driverId      != null ? `Driver #${t.driverId}`       : undefined)
+        ?? '—';
+      const resolvedAssetName =
+        (t.assetId != null ? assetLabelById.get(t.assetId) : undefined)
+        ?? (report?.assetId != null ? assetLabelById.get(report.assetId) : undefined)
+        ?? (reportEmbedded?.assetName as string | undefined);
+      const assetLabel: string =
+        resolvedAssetName
+        ?? (t.matchedTruck ? `#${t.matchedTruck}` : undefined)           // receipt text — readable fallback
+        ?? (report?.assetId != null ? `Asset #${report.assetId}` : undefined)
+        ?? (t.assetId       != null ? `Asset #${t.assetId}`       : undefined)
+        ?? '—';
 
       out.push({
         id:            t.id,
@@ -1333,6 +1345,7 @@ function FuelDetail({
           {t ? (
             <AssignmentControls
               transaction={t}
+              linkedReport={report}
               drivers={drivers}
               assets={assets}
               onChange={setT}
@@ -1682,45 +1695,63 @@ function MatchPanel({
 // intentional overrides aren't blown away).
 
 function AssignmentControls({
-  transaction: t, drivers, assets, onChange,
+  transaction: t, linkedReport, drivers, assets, onChange,
 }: {
   transaction: FuelTransaction;
+  /** Linked driver fuel_report when present. Used as a fallback
+   *  source for the initial driver+truck values so the dropdowns
+   *  pre-fill correctly even for transactions whose match was
+   *  recorded BEFORE we started mirroring driver_id/asset_id onto
+   *  the transaction. */
+  linkedReport: FuelReport | null;
   drivers: Driver[];
   assets: Asset[];
   onChange: (next: FuelTransaction) => void;
 }) {
-  const [driverId, setDriverId] = useState<number | null>(t.driverId ?? null);
-  const [assetId,  setAssetId]  = useState<number | null>(t.assetId  ?? null);
+  // Initial values fall back through:
+  //   1. transaction.driverId (explicit set via /assign)
+  //   2. linkedReport.driverId (matched-report's driver)
+  //   3. null (truly unassigned — dispatcher picks via dropdown)
+  // Same for assetId.
+  const initialDriver = t.driverId ?? linkedReport?.driverId ?? null;
+  const initialAsset  = t.assetId  ?? linkedReport?.assetId  ?? null;
+  const [driverId, setDriverId] = useState<number | null>(initialDriver);
+  const [assetId,  setAssetId]  = useState<number | null>(initialAsset);
   const [applyToSimilar, setApplyToSimilar] = useState(false);
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
-  // Reset local state when the user opens a different transaction.
+  // Reset local state when the user opens a different transaction OR
+  // when the link to a fuel_report changes (e.g. after running auto-
+  // match in the same panel session).
   useEffect(() => {
-    setDriverId(t.driverId ?? null);
-    setAssetId(t.assetId ?? null);
+    setDriverId(t.driverId ?? linkedReport?.driverId ?? null);
+    setAssetId(t.assetId ?? linkedReport?.assetId ?? null);
     setApplyToSimilar(false);
     setError(null);
     setSavedMessage(null);
-  }, [t.id, t.driverId, t.assetId]);
+  }, [t.id, t.driverId, t.assetId, linkedReport?.id, linkedReport?.driverId, linkedReport?.assetId]);
 
   // Sorted, active-only lists. Drivers/assets in retired state shouldn't
   // be assignable here (they'd never be the actual driver of a fresh
   // fuel-up). Includes the currently-assigned driver/asset even if
   // retired so existing assignments don't disappear from the dropdown.
   const driverOptions = useMemo(() => {
-    const list = drivers.filter(d => !d.activeTo || d.id === t.driverId);
+    const list = drivers.filter(d => !d.activeTo || d.id === driverId);
     list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
     return list;
-  }, [drivers, t.driverId]);
+  }, [drivers, driverId]);
   const assetOptions = useMemo(() => {
-    const list = assets.filter(a => !a.activeTo || a.id === t.assetId);
+    const list = assets.filter(a => !a.activeTo || a.id === assetId);
     list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
     return list;
-  }, [assets, t.assetId]);
+  }, [assets, assetId]);
 
-  const dirty = driverId !== (t.driverId ?? null) || assetId !== (t.assetId ?? null);
+  // Dirty compares against the *effective* assignment (txn fields +
+  // linked-report fallback), so changing the dropdown back to the
+  // pre-filled value doesn't mistakenly enable Save.
+  const dirty = driverId !== initialDriver || assetId !== initialAsset;
 
   async function save() {
     if (busy || !dirty) return;

@@ -117,7 +117,7 @@ export const AUTO_MATCH_THRESHOLD = 70;
 export async function tryAutoMatch(
   orgId: string,
   txRow: FuelTxForMatch,
-): Promise<{ fuelReportId: string; confidence: number } | null> {
+): Promise<{ fuelReportId: string; confidence: number; driverId: number | null; assetId: number | null } | null> {
   // Pull candidate reports within ±3 days of the transaction date and
   // still in 'pending' match status. Small windows keep the candidate
   // pool tight even on a busy org.
@@ -152,13 +152,18 @@ export async function tryAutoMatch(
     };
   });
 
-  let best: { id: string; score: number } | null = null;
+  let best: { c: FuelReportCandidate; score: number } | null = null;
   for (const c of candidates) {
     const s = scoreMatch(txRow, c);
-    if (!best || s > best.score) best = { id: c.id, score: s };
+    if (!best || s > best.score) best = { c, score: s };
   }
   if (!best || best.score < AUTO_MATCH_THRESHOLD) return null;
-  return { fuelReportId: best.id, confidence: best.score };
+  return {
+    fuelReportId: best.c.id,
+    confidence:   best.score,
+    driverId:     best.c.driver_id ?? null,
+    assetId:      best.c.asset_id  ?? null,
+  };
 }
 
 export async function applyAutoMatch(
@@ -172,6 +177,21 @@ export async function applyAutoMatch(
   // Two-sided update — flip both ends of the link in a single round
   // trip. If the report-side update fails we don't roll back; the
   // transaction-side link is still correct from the user's perspective.
+  //
+  // Mirror the matched report's driver_id + asset_id onto the
+  // transaction so the unified panel's dropdowns reflect reality
+  // without a join. Existing driver_id/asset_id on the transaction
+  // (set via /assign or ingest auto-resolve) are preserved via
+  // COALESCE — we don't overwrite a dispatcher's intentional pick.
+  const { data: existing } = await supabase
+    .from("fuel_transactions")
+    .select("driver_id, asset_id")
+    .eq("id", txId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const existingDriver = existing ? (existing as { driver_id: number | null }).driver_id : null;
+  const existingAsset  = existing ? (existing as { asset_id:  number | null }).asset_id  : null;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await supabase
     .from("fuel_transactions")
@@ -180,6 +200,8 @@ export async function applyAutoMatch(
       match_status:     "auto_matched",
       match_confidence: matched.confidence,
       matched_at:       new Date().toISOString(),
+      driver_id:        existingDriver ?? matched.driverId,
+      asset_id:         existingAsset  ?? matched.assetId,
     } as any)
     .eq("id", txId)
     .eq("org_id", orgId);
