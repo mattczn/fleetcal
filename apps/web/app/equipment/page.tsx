@@ -758,7 +758,14 @@ function FuelTabContent({
   ];
 
   return (
-    <OpsTable
+    <div className="flex flex-col gap-5">
+      <FuelKpiBar
+        transactions={transactions}
+        reports={reports}
+        assets={assets}
+        loading={loading}
+      />
+      <OpsTable
       columns={columns}
       data={rows}
       filters={filters}
@@ -815,6 +822,222 @@ function FuelTabContent({
         </div>
       }
     />
+    </div>
+  );
+}
+
+// ─── Fuel KPI bar ───────────────────────────────────────────────────
+//
+// Sits above the fuel table. Same four numbers + spend-by-truck bar
+// list that used to live as a separate "Fuel" view on /dashboard,
+// now collocated with the table so the dispatcher sees aggregate
+// spend and the line items together.
+//
+// Driven by the same transactions/reports state the table uses — no
+// extra fetch, no separate period picker. Aggregates over whatever
+// the table currently shows.
+
+function FuelKpiBar({
+  transactions, reports, assets, loading,
+}: {
+  transactions: FuelTransaction[];
+  reports: FuelReport[];
+  assets: Asset[];
+  loading: boolean;
+}) {
+  // For attribution: transactions can carry asset_id directly OR
+  // resolve through their linked fuel_report. We prefer the direct
+  // asset_id (newer flow); fall back to the report's asset_id when
+  // only the link is present.
+  const reportToAssetId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of reports) m.set(r.id, r.assetId);
+    return m;
+  }, [reports]);
+
+  const kpis = useMemo(() => {
+    let spend = 0;
+    let diesel = 0;
+    let def = 0;
+    let dieselSpend = 0;
+    for (const t of transactions) {
+      spend       += t.totalCharged;
+      diesel      += t.dieselGallons ?? 0;
+      def         += t.defGallons ?? 0;
+      dieselSpend += t.dieselTotal ?? (t.dieselDiscountPrice != null && t.dieselGallons != null
+        ? t.dieselDiscountPrice * t.dieselGallons
+        : 0);
+    }
+    // Avg $/gal — use diesel-specific spend when we have it (more
+    // accurate than total/total-gallons which mixes DEF), else fall
+    // back to total ÷ all gallons.
+    const totalGallons = diesel + def;
+    const avgPerGal = dieselSpend > 0 && diesel > 0
+      ? dieselSpend / diesel
+      : (totalGallons > 0 ? spend / totalGallons : 0);
+    return {
+      spend, diesel, def, totalGallons,
+      avgPerGal,
+      txnCount: transactions.length,
+    };
+  }, [transactions]);
+
+  // Per-asset breakdown. Resolution chain for each transaction's asset:
+  //   1. transaction.assetId (new column)
+  //   2. linked fuel_report's asset_id
+  //   3. 'unattributed'
+  const spendByAsset = useMemo(() => {
+    const acc = new Map<number | 'unattributed', { spend: number; gallons: number }>();
+    for (const t of transactions) {
+      const assetId = t.assetId
+        ?? (t.fuelReportId ? reportToAssetId.get(t.fuelReportId) ?? null : null);
+      const key: number | 'unattributed' = assetId ?? 'unattributed';
+      const cur = acc.get(key) ?? { spend: 0, gallons: 0 };
+      cur.spend   += t.totalCharged;
+      cur.gallons += (t.dieselGallons ?? 0) + (t.defGallons ?? 0);
+      acc.set(key, cur);
+    }
+    const assetById = new Map<number, Asset>();
+    for (const a of assets) assetById.set(a.id, a);
+    const rows: Array<{ asset: Asset; spend: number; gallons: number }> = [];
+    for (const [key, stats] of acc) {
+      if (key === 'unattributed') continue;
+      const asset = assetById.get(key);
+      if (!asset) continue;
+      if (stats.spend === 0 && stats.gallons === 0) continue;
+      rows.push({ asset, spend: stats.spend, gallons: stats.gallons });
+    }
+    rows.sort((a, b) => b.spend - a.spend);
+    const unattributed = acc.get('unattributed');
+    return {
+      rows,
+      unattributed: unattributed && (unattributed.spend > 0 || unattributed.gallons > 0)
+        ? unattributed
+        : null,
+    };
+  }, [transactions, reportToAssetId, assets]);
+
+  const maxAssetSpend = useMemo(() => {
+    return Math.max(
+      ...spendByAsset.rows.map(r => r.spend),
+      spendByAsset.unattributed?.spend ?? 0,
+      1,
+    );
+  }, [spendByAsset]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8" style={{ color: 'var(--gc-text-3)' }}>
+        <Loader2 size={18} className="animate-spin" />
+      </div>
+    );
+  }
+
+  if (transactions.length === 0) {
+    return null; // No fuel data → the table's empty state covers it; no KPI bar shown
+  }
+
+  const fmtMoney = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* KPI tiles */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiTile
+          label="Total fuel spend"
+          value={fmtMoney(kpis.spend)}
+          unit={`${kpis.txnCount} transaction${kpis.txnCount === 1 ? '' : 's'}`}
+        />
+        <KpiTile
+          label="Diesel gallons"
+          value={kpis.diesel > 0 ? kpis.diesel.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '—'}
+          unit={kpis.diesel > 0 ? 'gal' : undefined}
+        />
+        <KpiTile
+          label="Avg $/gallon"
+          value={kpis.avgPerGal > 0 ? `$${kpis.avgPerGal.toFixed(3)}` : '—'}
+          unit="diesel only"
+        />
+        <KpiTile
+          label="DEF gallons"
+          value={kpis.def > 0 ? kpis.def.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '—'}
+          unit={kpis.def > 0 ? 'gal' : undefined}
+        />
+      </div>
+
+      {/* Spend by truck. Rendered inline (not in a card) to stay
+          visually flat with the rest of the equipment page. */}
+      {(spendByAsset.rows.length > 0 || spendByAsset.unattributed) && (
+        <div
+          className="rounded-lg px-4 py-3"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+          <div className="text-[11px] font-bold uppercase tracking-wider mb-3" style={{ color: 'var(--gc-text-3)' }}>
+            Fuel spend by truck
+          </div>
+          <div className="flex flex-col gap-2">
+            {spendByAsset.rows.map(({ asset, spend, gallons }) => {
+              const pct = (spend / maxAssetSpend) * 100;
+              const label = asset.unit ? `#${asset.unit} · ${asset.name}` : asset.name;
+              return (
+                <div key={asset.id} className="flex items-center gap-3">
+                  <div
+                    className="shrink-0 text-[12.5px] truncate font-medium"
+                    style={{ color: 'var(--gc-text-1)', width: 140 }}
+                    title={label}>
+                    {label}
+                  </div>
+                  <div className="flex-1 h-4 relative flex items-center">
+                    <div className="absolute rounded"
+                      style={{
+                        width:     `${pct}%`,
+                        height:    6,
+                        background: asset.color || 'var(--gc-blue)',
+                        top:       '50%',
+                        transform: 'translateY(-50%)',
+                        minWidth:  spend > 0 ? 3 : 0,
+                      }} />
+                  </div>
+                  <div className="text-[12.5px] font-semibold tabular-nums shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 72 }}>
+                    {fmtMoney(spend)}
+                  </div>
+                  <div className="text-[11px] tabular-nums shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 64 }}>
+                    {gallons.toFixed(1)} gal
+                  </div>
+                </div>
+              );
+            })}
+            {spendByAsset.unattributed && (
+              <div className="flex items-center gap-3 pt-2 mt-1"
+                style={{ borderTop: '1px dashed var(--gc-border-light)' }}>
+                <div
+                  className="shrink-0 text-[12.5px] truncate font-medium italic"
+                  style={{ color: 'var(--gc-text-3)', width: 140 }}
+                  title="Card transactions not linked to a driver or truck — assign them via the panel">
+                  Unattributed
+                </div>
+                <div className="flex-1 h-4 relative flex items-center">
+                  <div className="absolute rounded"
+                    style={{
+                      width:     `${(spendByAsset.unattributed.spend / maxAssetSpend) * 100}%`,
+                      height:    6,
+                      background: '#9ca3af',
+                      top:       '50%',
+                      transform: 'translateY(-50%)',
+                      minWidth:  3,
+                    }} />
+                </div>
+                <div className="text-[12.5px] font-semibold tabular-nums shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 72 }}>
+                  {fmtMoney(spendByAsset.unattributed.spend)}
+                </div>
+                <div className="text-[11px] tabular-nums shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 64 }}>
+                  {spendByAsset.unattributed.gallons.toFixed(1)} gal
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
