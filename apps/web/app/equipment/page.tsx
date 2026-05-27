@@ -1373,7 +1373,12 @@ function FuelDetail({
             Match
           </div>
           {t ? (
-            <MatchPanel transaction={t} onChange={setT} />
+            <MatchPanel
+              transaction={t}
+              driverNameById={driverNameById}
+              assetLabelById={assetLabelById}
+              onChange={setT}
+            />
           ) : (
             // Driver-only row — there's no card transaction to match
             // FROM. Surface that explicitly so the dispatcher knows
@@ -1383,22 +1388,22 @@ function FuelDetail({
         </div>
       </div>
 
-      {/* Map — uses transaction.location (Mudflap free text) when
-          we have it; otherwise driver report lat/lon if present.
-          Google Maps' /maps?q embed is keyless and tolerates both
-          text and "lat,lon" queries. */}
+      {/* Map — only renders when we have PRECISE coordinates from a
+          driver report. The Mudflap location text ("Maverik #488 -
+          Draper, UT") is too ambiguous for a useful map: Google
+          interprets the brand name and shows every nearby location
+          rather than zooming to the specific one the driver actually
+          used. Text-only locations stay visible in the header — no
+          misleading map. */}
       {(() => {
-        const mapQuery = locationText
-          ?? (report?.latitude != null && report?.longitude != null
-              ? `${report.latitude},${report.longitude}`
-              : null);
-        if (!mapQuery) return null;
+        if (report?.latitude == null || report?.longitude == null) return null;
+        const mapQuery = `${report.latitude},${report.longitude}`;
         return (
           <>
             <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
             <div className="px-5 py-4">
               <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
-                Location
+                Location (driver GPS)
               </div>
               <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', height: 220 }}>
                 <iframe
@@ -1614,13 +1619,18 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 // transaction itself, manual linking is rarely needed.
 
 function MatchPanel({
-  transaction: t, onChange,
+  transaction: t, driverNameById, assetLabelById, onChange,
 }: {
   transaction: FuelTransaction;
+  driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
   onChange: (next: FuelTransaction) => void;
 }) {
   const [busy, setBusy]       = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  // Picker open/closed. Anchored under the row so the candidate list
+  // doesn't push the rest of the panel around.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   async function runAutoMatch() {
     if (busy) return;
@@ -1644,6 +1654,39 @@ function MatchPanel({
     }
   }
 
+  async function linkToReport(reportId: string) {
+    if (busy) return;
+    setBusy(true); setFeedback(null);
+    try {
+      const r = await railway.matchFuelTransaction(t.id, { fuelReportId: reportId });
+      onChange(r.fuelTransaction);
+      setPickerOpen(false);
+      setFeedback('Linked to driver report');
+      setTimeout(() => setFeedback(null), 4000);
+    } catch (err) {
+      setFeedback((err as Error).message ?? 'Link failed');
+      setTimeout(() => setFeedback(null), 5000);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlink() {
+    if (busy) return;
+    setBusy(true); setFeedback(null);
+    try {
+      const r = await railway.matchFuelTransaction(t.id, { fuelReportId: null });
+      onChange(r.fuelTransaction);
+      setFeedback('Unlinked from driver report');
+      setTimeout(() => setFeedback(null), 4000);
+    } catch (err) {
+      setFeedback((err as Error).message ?? 'Unlink failed');
+      setTimeout(() => setFeedback(null), 5000);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -1655,28 +1698,203 @@ function MatchPanel({
         )}
       </div>
 
-      {t.matchStatus === 'unmatched' && (
+      {/* Action row — different affordances per state. Unmatched:
+          Auto-match + Link manually (picker). Matched: Unlink. */}
+      {t.matchStatus === 'unmatched' ? (
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={runAutoMatch}
+            disabled={busy}
+            className="rounded-md transition-colors"
+            style={{
+              background: busy ? 'var(--gc-bg)' : 'var(--gc-blue)',
+              color:      busy ? 'var(--gc-text-3)' : '#fff',
+              border:     `1px solid ${busy ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+              padding:    '6px 12px',
+              fontSize:   12,
+              fontWeight: 600,
+              cursor:     busy ? 'default' : 'pointer',
+            }}>
+            {busy ? 'Matching…' : 'Auto-match'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPickerOpen(o => !o)}
+            disabled={busy}
+            className="rounded-md transition-colors"
+            style={{
+              background: 'var(--gc-surface)',
+              color:      'var(--gc-text-2)',
+              border:     '1px solid var(--gc-border-light)',
+              padding:    '6px 12px',
+              fontSize:   12,
+              fontWeight: 600,
+              cursor:     busy ? 'default' : 'pointer',
+            }}>
+            {pickerOpen ? 'Cancel' : 'Link manually'}
+          </button>
+        </div>
+      ) : (
         <button
           type="button"
-          onClick={runAutoMatch}
+          onClick={unlink}
           disabled={busy}
           className="rounded-md transition-colors self-start"
           style={{
-            background: busy ? 'var(--gc-bg)' : 'var(--gc-blue)',
-            color:      busy ? 'var(--gc-text-3)' : '#fff',
-            border:     `1px solid ${busy ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+            background: 'var(--gc-surface)',
+            color:      '#dc2626',
+            border:     '1px solid #fecaca',
             padding:    '6px 12px',
             fontSize:   12,
             fontWeight: 600,
             cursor:     busy ? 'default' : 'pointer',
           }}>
-          {busy ? 'Matching…' : 'Auto-match'}
+          {busy ? 'Working…' : 'Unlink driver report'}
         </button>
+      )}
+
+      {/* Inline candidate picker — fetches unmatched driver fuel_reports
+          within ±3 days of the transaction date. Sorted by gallons
+          proximity to the receipt (closest first) so the most likely
+          match is on top. */}
+      {pickerOpen && t.matchStatus === 'unmatched' && (
+        <DriverReportPicker
+          transactionDate={t.transactionDate}
+          targetGallons={t.dieselGallons}
+          driverNameById={driverNameById}
+          assetLabelById={assetLabelById}
+          busy={busy}
+          onPick={linkToReport}
+        />
       )}
 
       {feedback && (
         <div className="text-[11.5px]" style={{ color: 'var(--gc-text-2)' }}>
           {feedback}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Lightweight candidate list for manual linking. Pulls unmatched
+// fuel_reports within ±3 days of the transaction's purchase date,
+// sorted by how close their diesel gallons are to the receipt's
+// (closest first, since gallons is the strongest non-id signal).
+//
+// Rows that are already matched to a different transaction don't
+// surface — the listFuelReports endpoint supports matchStatus
+// filtering, so we only fetch 'pending' reports.
+function DriverReportPicker({
+  transactionDate, targetGallons, driverNameById, assetLabelById, busy, onPick,
+}: {
+  transactionDate: string;
+  targetGallons:   number | undefined;
+  driverNameById:  Map<number, string>;
+  assetLabelById:  Map<number, string>;
+  busy:            boolean;
+  onPick:          (reportId: string) => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows]       = useState<FuelReport[]>([]);
+  const [error, setError]     = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true); setError(null);
+    const fromD = new Date(transactionDate); fromD.setDate(fromD.getDate() - 3);
+    const toD   = new Date(transactionDate); toD.setDate(toD.getDate()   + 3);
+    railway.listFuelReports({
+      from:        fromD.toISOString(),
+      to:          toD.toISOString(),
+      matchStatus: 'pending',
+      limit:       100,
+    })
+      .then(res => setRows(res.fuelReports))
+      .catch(err => setError((err as Error).message))
+      .finally(() => setLoading(false));
+  }, [transactionDate]);
+
+  // Sort by gallons-distance from the receipt's target (closest first).
+  // Falls back to date-distance when gallons isn't available.
+  const sorted = useMemo(() => {
+    const target = targetGallons ?? 0;
+    return [...rows].sort((a, b) => {
+      const da = Math.abs(a.dieselGallons - target);
+      const db = Math.abs(b.dieselGallons - target);
+      return da - db;
+    });
+  }, [rows, targetGallons]);
+
+  return (
+    <div
+      className="rounded-md mt-1"
+      style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+      <div className="px-3 py-2 flex items-center justify-between"
+        style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+        <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+          Unmatched driver reports near {new Date(transactionDate).toLocaleDateString()}
+        </div>
+        <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+          ±3 days
+        </div>
+      </div>
+      {loading && (
+        <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+          Loading candidates…
+        </div>
+      )}
+      {error && (
+        <div className="px-3 py-3 text-[12px]" style={{ color: '#dc2626' }}>{error}</div>
+      )}
+      {!loading && !error && sorted.length === 0 && (
+        <div className="px-3 py-3 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+          No unmatched driver reports in the ±3 day window.
+        </div>
+      )}
+      {sorted.length > 0 && (
+        <div className="flex flex-col" style={{ maxHeight: 280, overflowY: 'auto' }}>
+          {sorted.map(r => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const embedded = r as any;
+            const driverName = embedded.driverName as string | undefined
+              ?? driverNameById.get(r.driverId)
+              ?? `Driver #${r.driverId}`;
+            const assetName  = embedded.assetName as string | undefined
+              ?? assetLabelById.get(r.assetId)
+              ?? `Asset #${r.assetId}`;
+            const galDiff = targetGallons != null ? Math.abs(r.dieselGallons - targetGallons) : null;
+            const isClose = galDiff != null && galDiff <= 0.5;
+            return (
+              <button
+                key={r.id}
+                type="button"
+                disabled={busy}
+                onClick={() => onPick(r.id)}
+                className="flex items-center gap-3 px-3 py-2 text-left transition-colors disabled:opacity-50"
+                style={{
+                  borderBottom: '1px solid var(--gc-border-light)',
+                  background:   isClose ? '#f0fdf4' : 'transparent',
+                  cursor:       busy ? 'default' : 'pointer',
+                }}
+                onMouseEnter={e => { if (!busy && !isClose) (e.currentTarget as HTMLElement).style.background = 'var(--gc-surface)'; }}
+                onMouseLeave={e => { if (!busy && !isClose) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                    {driverName} <span style={{ color: 'var(--gc-text-3)', fontWeight: 400 }}>·</span> {assetName}
+                  </div>
+                  <div className="text-[11px] mt-0.5 tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                    {new Date(r.reportedAt).toLocaleString()} · {r.dieselGallons.toFixed(1)} gal
+                    {galDiff != null && galDiff > 0.001 && ` · Δ${galDiff.toFixed(1)} gal from receipt`}
+                    {r.state && ` · ${r.state}`}
+                  </div>
+                </div>
+                <div className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-blue)' }}>
+                  Link →
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
