@@ -34,6 +34,8 @@ import {
   OpsTable, OpsDate, OpsPill, OpsMuted,
   type OpsColumn, type OpsFilter,
 } from '@/components/ui/OpsTable';
+import { PeriodSelector } from '@/components/ui/PeriodSelector';
+import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -559,16 +561,37 @@ function FuelTabContent({
   const [sweepBusy,   setSweepBusy]     = useState(false);
   const [sweepResult, setSweepResult]   = useState<{ matched: number; scanned: number } | null>(null);
 
+  // Period selector — scopes both the KPI bar above and the table
+  // below to the same date window. Defaults to "This Month" (matches
+  // the dashboard's default). Custom range opens DatePicker inputs.
+  const [period, setPeriod]             = useState<Period>('month');
+  const initialCustom                   = useMemo(() => defaultCustomRangeISO(), []);
+  const [customStart, setCustomStart]   = useState<string>(initialCustom.start);
+  const [customEnd,   setCustomEnd]     = useState<string>(initialCustom.end);
+  const { start: pStart, end: pEnd } = useMemo(
+    () => getPeriodRange(period, { startISO: customStart, endISO: customEnd }),
+    [period, customStart, customEnd],
+  );
+
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      // Both calls in parallel. No server-side filtering — the full
-      // working set comes down and OpsTable handles the filtering and
-      // pagination client-side, which feels instant vs the refetch
-      // round-trip.
+      // Scope both fetches to the selected period. pEnd from
+      // getPeriodRange is midnight-local on the last day, so we
+      // bump to end-of-day before serializing — otherwise we'd
+      // miss any fuel-up that happened later that same day.
+      const fromIso = pStart.toISOString();
+      const endOfDay = new Date(pEnd);
+      endOfDay.setHours(23, 59, 59, 999);
+      const toIso = endOfDay.toISOString();
+      // Both calls in parallel. listFuelTransactions takes a date
+      // string for transaction_date filtering; listFuelReports takes
+      // ISO timestamps for reported_at filtering.
+      const fromDate = fromIso.slice(0, 10);
+      const toDate   = toIso.slice(0, 10);
       const [tx, fr] = await Promise.all([
-        railway.listFuelTransactions({ limit: 500 }),
-        railway.listFuelReports({ limit: 500 }),
+        railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 500 }),
+        railway.listFuelReports({ from: fromIso, to: toIso, limit: 500 }),
       ]);
       setTransactions(tx.fuelTransactions);
       setReports(fr.fuelReports);
@@ -579,7 +602,7 @@ function FuelTabContent({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pStart, pEnd]);
   useEffect(() => { void reload(); }, [reload, reloadVersion]);
 
   // Fire the on-demand sweep, then reload the table so new matches
@@ -759,6 +782,20 @@ function FuelTabContent({
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Period selector — right-aligned like the dashboard so the
+          page title (which we don't render here, the tab strip plays
+          that role) and the date range sit on opposite sides of the
+          visual hierarchy. */}
+      <div className="flex justify-end">
+        <PeriodSelector
+          period={period}
+          onPeriodChange={setPeriod}
+          customStart={customStart}
+          customEnd={customEnd}
+          onCustomStartChange={setCustomStart}
+          onCustomEndChange={setCustomEnd}
+        />
+      </div>
       <FuelKpiBar
         transactions={transactions}
         reports={reports}

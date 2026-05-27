@@ -14,8 +14,8 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import { relayLegShare } from '@/lib/legMiles';
 import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
-import DatePicker from '@/components/calendar/DatePicker';
-import { LOAD_ACCENT } from '@/lib/loadAccent';
+import { type Period, PERIODS, getPeriodRange } from '@/lib/periodRange';
+import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
 import type { LoadSummary } from '@fleetcal/types';
@@ -23,57 +23,9 @@ import { usePermissions } from '@/lib/usePermissions';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Period = 'week' | 'month' | '30d' | '90d' | 'ytd' | 'custom';
 type WeekSortField = 'pickupDate' | 'loadNum' | 'broker' | 'title' | 'driver' | 'loadPrice' | 'driverPay' | 'accessorials';
 
-interface PeriodRange { start: Date; end: Date }
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function getPeriodRange(period: Period, custom?: { startISO: string; endISO: string }): PeriodRange {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  switch (period) {
-    case 'week': {
-      // Week runs Saturday → Friday
-      const dow = today.getDay(); // 0=Sun … 6=Sat
-      const sat = new Date(today);
-      sat.setDate(today.getDate() - ((dow + 1) % 7)); // back to most-recent Saturday
-      const fri = new Date(sat);
-      fri.setDate(sat.getDate() + 6);
-      return { start: sat, end: fri };
-    }
-    case 'month':
-      return {
-        start: new Date(today.getFullYear(), today.getMonth(), 1),
-        end: new Date(today.getFullYear(), today.getMonth() + 1, 0),
-      };
-    case '30d': {
-      const s = new Date(today); s.setDate(today.getDate() - 29);
-      return { start: s, end: today };
-    }
-    case '90d': {
-      const s = new Date(today); s.setDate(today.getDate() - 89);
-      return { start: s, end: today };
-    }
-    case 'ytd':
-      return { start: new Date(today.getFullYear(), 0, 1), end: today };
-    case 'custom': {
-      // Local-date parsing avoids the UTC-shift trap on YYYY-MM-DD strings.
-      const parse = (iso: string): Date => {
-        const [y, m, d] = iso.split('-').map(Number);
-        return new Date(y, (m ?? 1) - 1, d ?? 1);
-      };
-      const fallback = { start: today, end: today };
-      if (!custom?.startISO || !custom?.endISO) return fallback;
-      const start = parse(custom.startISO);
-      const end   = parse(custom.endISO);
-      // Guard against an end < start window from typos.
-      return start <= end ? { start, end } : { start: end, end: start };
-    }
-  }
-}
 
 function billableAcc(e: CalendarEvent): number {
   return (e.accessorials ?? []).filter(a => a.billable).reduce((s, a) => s + a.amount, 0);
@@ -117,15 +69,6 @@ const STATUS_CFG = {
 const BROKER_COLORS = [
   '#1a73e8', '#34a853', '#ea4335', '#fbbc04', '#9334e6',
   '#00acc1', '#e67c00', '#e52592', '#137333', '#80868b',
-];
-
-const PERIODS: { value: Period; label: string }[] = [
-  { value: 'week',   label: 'This Week' },
-  { value: 'month',  label: 'This Month' },
-  { value: '30d',    label: '30 Days' },
-  { value: '90d',    label: '90 Days' },
-  { value: 'ytd',    label: 'YTD' },
-  { value: 'custom', label: 'Custom' },
 ];
 
 // ─── SVG Pie / Donut chart ────────────────────────────────────────────────────
@@ -751,41 +694,14 @@ export default function DashboardView() {
                 {organization?.name ? <>{organization.name}&rsquo;s Dashboard</> : 'Dashboard'}
               </h2>
             </div>
-            <div className="flex flex-col items-end gap-1.5 shrink-0">
-              <div
-                className="flex items-center rounded-full"
-                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-hover)', padding: 2 }}
-              >
-                {PERIODS.map(p => (
-                  <button
-                    key={p.value}
-                    onClick={() => setPeriod(p.value)}
-                    className="px-3 py-1 rounded-lg text-[13px] font-medium transition-all"
-                    style={{
-                      background: period === p.value ? 'var(--gc-surface)' : 'transparent',
-                      color:      period === p.value ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-                      boxShadow:  period === p.value ? 'var(--shadow-1)' : 'none',
-                    }}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              {/* Custom range pickers — render right under the pill row when active */}
-              {period === 'custom' && (
-                <div className="flex items-center gap-1.5">
-                  <DatePicker value={customStart} onChange={setCustomStart} headerColor={LOAD_ACCENT} />
-                  <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>–</span>
-                  <DatePicker value={customEnd} onChange={setCustomEnd} headerColor={LOAD_ACCENT} min={customStart || undefined} />
-                </div>
-              )}
-              {/* Date range label */}
-              <span className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>
-                {pStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                {' – '}
-                {pEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-              </span>
-            </div>
+            <PeriodSelector
+              period={period}
+              onPeriodChange={setPeriod}
+              customStart={customStart}
+              customEnd={customEnd}
+              onCustomStartChange={setCustomStart}
+              onCustomEndChange={setCustomEnd}
+            />
           </div>
 
           {/* Performance view — existing revenue/loads dashboard. */}
