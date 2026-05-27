@@ -64,6 +64,8 @@ import type {
   UpdateFuelReportRequest, UpdateFuelReportResponse,
   ListFuelTransactionsRequest, ListFuelTransactionsResponse,
   MatchFuelTransactionRequest, MatchFuelTransactionResponse,
+  AssignFuelTransactionRequest, AssignFuelTransactionResponse,
+  SingleRowAutoMatchResponse,
   ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
   GetMaintenanceReportResponse,
   UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
@@ -802,6 +804,20 @@ class RailwayClient {
   }
   matchFuelTransaction(id: string, body: MatchFuelTransactionRequest) {
     return this.req<MatchFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/match`, body);
+  }
+  /** Assign driver + truck directly on a card transaction, independent
+   *  of any driver fuel_report. When body.applyToSimilar is true the
+   *  server also updates every other unmatched transaction with the
+   *  same driver_name in this org. */
+  assignFuelTransaction(id: string, body: AssignFuelTransactionRequest) {
+    return this.req<AssignFuelTransactionResponse>('PATCH', `/v1/fuel-transactions/${id}/assign`, body);
+  }
+  /** Run the auto-matcher against just this transaction. Same logic
+   *  as the sweep but returns focused feedback ("matched" / "unmatched"
+   *  / "already_matched") so the detail panel can react to the
+   *  specific row. */
+  autoMatchFuelTransaction(id: string) {
+    return this.req<SingleRowAutoMatchResponse>('POST', `/v1/fuel-transactions/${id}/auto-match`);
   }
   /** Force a fresh auto-match pass over unmatched fuel transactions
    *  in the past 24h. Returns this org's scanned + matched counts.

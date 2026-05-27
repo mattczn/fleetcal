@@ -28,6 +28,8 @@ import type {
   ListFuelTransactionsResponse,
   MatchFuelTransactionRequest,
   MatchFuelTransactionResponse,
+  AssignFuelTransactionRequest,
+  AssignFuelTransactionResponse,
   ApiErrorResponse,
 } from "@fleetcal/types";
 
@@ -63,6 +65,8 @@ interface FuelTransactionRow {
   driver_name:              string | null;
   location:                 string | null;
   matched_truck:            string | null;
+  driver_id:                number | null;
+  asset_id:                 number | null;
   diesel_gallons:           number | null;
   diesel_retail_price:      number | null;
   diesel_discount_price:    number | null;
@@ -88,7 +92,7 @@ interface FuelTransactionRow {
 
 const TX_COLS =
   "id,org_id,provider,provider_transaction_id,transaction_date," +
-  "driver_name,location,matched_truck," +
+  "driver_name,location,matched_truck,driver_id,asset_id," +
   "diesel_gallons,diesel_retail_price,diesel_discount_price,diesel_total," +
   "def_gallons,def_retail_price,def_discount_price,def_total," +
   "total_charged,total_saved,payment_last4," +
@@ -106,6 +110,8 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
     driverName:            r.driver_name ?? undefined,
     location:              r.location ?? undefined,
     matchedTruck:          r.matched_truck ?? undefined,
+    driverId:              r.driver_id ?? undefined,
+    assetId:               r.asset_id ?? undefined,
     dieselGallons:         r.diesel_gallons ?? undefined,
     dieselRetailPrice:     r.diesel_retail_price ?? undefined,
     dieselDiscountPrice:   r.diesel_discount_price ?? undefined,
@@ -127,6 +133,54 @@ function rowToTx(r: FuelTransactionRow): FuelTransaction {
     createdAt:             r.created_at,
     updatedAt:             r.updated_at ?? undefined,
   };
+}
+
+// ── Ingest-time driver/asset resolution ───────────────────────────────
+//
+// Try to map the receipt's free-text driver_name → drivers.id and
+// matched_truck → assets.id at insert time, so the unified fuel UI
+// shows authoritative names instead of receipt strings. Failures are
+// non-fatal: the row is still inserted, just without resolved ids;
+// the dispatcher picks them via the dropdowns in the detail panel.
+async function resolveDriverAndAsset(
+  orgId: string,
+  driverName: string | null,
+  matchedTruck: string | null,
+): Promise<{ driverId: number | null; assetId: number | null }> {
+  let driverId: number | null = null;
+  let assetId:  number | null = null;
+
+  if (driverName && driverName.trim()) {
+    // ILIKE substring either direction. Receipts often have a short
+    // name ("Kevin") while FleetCal stores the full ("Kevin Smith")
+    // — ILIKE %name% covers both directions.
+    const { data: dr } = await supabase
+      .from("drivers")
+      .select("id, name")
+      .eq("org_id", orgId)
+      .ilike("name", `%${driverName.trim()}%`)
+      .limit(2);
+    // Only resolve when exactly one driver matches. Multiple hits
+    // means the name is ambiguous (two Kevins on the roster) and
+    // we'd rather leave it unresolved than guess wrong.
+    if (Array.isArray(dr) && dr.length === 1) {
+      driverId = (dr[0] as { id: number }).id;
+    }
+  }
+
+  if (matchedTruck && matchedTruck.trim()) {
+    const { data: as } = await supabase
+      .from("assets")
+      .select("id, unit")
+      .eq("org_id", orgId)
+      .eq("unit", matchedTruck.trim())
+      .limit(2);
+    if (Array.isArray(as) && as.length === 1) {
+      assetId = (as[0] as { id: number }).id;
+    }
+  }
+
+  return { driverId, assetId };
 }
 
 // ── POST /v1/fuel-transactions/inbound-email (api-key authed) ─────────
@@ -157,9 +211,16 @@ fuelTxApiKey.post("/inbound-email", requireApiKey("fuel.ingest"), async (c) => {
     return c.json(res, 422);
   }
 
+  // Resolve driver_name → driver_id and matched_truck → asset_id at
+  // insert time so the unified fuel UI can show authoritative names
+  // even when no driver fuel_report exists to pair with. Failures
+  // here are non-fatal — the dropdown in the detail panel lets the
+  // dispatcher classify the row manually.
+  const tx = parsed.transaction;
+  const resolved = await resolveDriverAndAsset(orgId, tx.driverName ?? null, tx.matchedTruck ?? null);
+
   // Upsert with ON CONFLICT — duplicate transactionId is a 200 not a 409
   // because re-ingest is the GAS's normal retry path.
-  const tx = parsed.transaction;
   const insertRow = {
     org_id:                  orgId,
     provider:                tx.provider,
@@ -168,6 +229,8 @@ fuelTxApiKey.post("/inbound-email", requireApiKey("fuel.ingest"), async (c) => {
     driver_name:             tx.driverName ?? null,
     location:                tx.location ?? null,
     matched_truck:           tx.matchedTruck ?? null,
+    driver_id:               resolved.driverId,
+    asset_id:                resolved.assetId,
     diesel_gallons:          tx.dieselGallons ?? null,
     diesel_retail_price:     tx.dieselRetailPrice ?? null,
     diesel_discount_price:   tx.dieselDiscountPrice ?? null,
@@ -410,6 +473,162 @@ fuelTxClerk.patch("/:id/match", requireCapability("fuel.edit"), async (c) => {
   }
 
   const res: MatchFuelTransactionResponse = { fuelTransaction: rowToTx(updated as unknown as FuelTransactionRow) };
+  return c.json(res);
+});
+
+// POST /v1/fuel-transactions/:id/auto-match — single-row matcher.
+//
+// Same logic as the 15-min sweep and the on-ingest matcher, but
+// scoped to one transaction. Lets the detail panel give the user
+// focused feedback ("matched to driver X's report" vs "no match
+// found within ±3 days") instead of relying on the global sweep
+// which only returns aggregate counts.
+fuelTxClerk.post("/:id/auto-match", requireCapability("fuel.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  // Pull the row first — the matcher needs its date / driver_name /
+  // matched_truck / diesel_gallons.
+  const { data: row, error: fetchErr } = await supabase
+    .from("fuel_transactions")
+    .select(TX_COLS)
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .maybeSingle();
+  if (fetchErr || !row) {
+    return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  }
+  const txRow = row as unknown as FuelTransactionRow;
+  if (txRow.match_status !== "unmatched") {
+    // Already matched (auto, manual, or no_match_needed). Echo the
+    // row back without re-running the matcher — clobbering an existing
+    // manual link from a curious dispatcher click is hostile UX.
+    return c.json({
+      result:          "already_matched",
+      fuelTransaction: rowToTx(txRow),
+    });
+  }
+
+  const result = await applyAutoMatch(orgId, id, txRow);
+
+  // Re-fetch to return the updated row.
+  const { data: updated } = await supabase
+    .from("fuel_transactions")
+    .select(TX_COLS)
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .single();
+
+  return c.json({
+    result:          result.status,
+    confidence:      result.confidence,
+    fuelTransaction: updated ? rowToTx(updated as unknown as FuelTransactionRow) : rowToTx(txRow),
+  });
+});
+
+// PATCH /v1/fuel-transactions/:id/assign — set driver_id + asset_id
+// directly on a card transaction, independent of any driver
+// fuel_report. Used when the dispatcher classifies a card_only
+// row via the dropdowns in the detail panel.
+//
+// When body.applyToSimilar=true, the server also updates every
+// OTHER fuel_transaction in the same org that:
+//   • has the same driver_name (case-insensitive trim match)
+//   • doesn't already have a driver_id set
+//   • isn't deleted
+//
+// Useful for backfilling — "all of Kevin's transactions are Kevin
+// on truck X" — in a single click instead of clicking through each
+// row. Doesn't touch already-classified rows so a previous one-off
+// override (e.g. a Kevin who happened to drive a different truck
+// that day) isn't blown away.
+fuelTxClerk.patch("/:id/assign", requireCapability("fuel.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+  const body  = await c.req.json<AssignFuelTransactionRequest>().catch(() => null);
+  if (!body || (body.driverId !== null && !Number.isFinite(body.driverId))
+            || (body.assetId  !== null && !Number.isFinite(body.assetId))) {
+    return c.json({ error: "bad_request", detail: "driverId and assetId required (number or null)" } satisfies ApiErrorResponse, 400);
+  }
+
+  // Validate driver/asset belong to this org. Skip when null
+  // (caller is clearing the assignment).
+  if (body.driverId != null) {
+    const { data: d } = await supabase
+      .from("drivers")
+      .select("id")
+      .eq("org_id", orgId)
+      .eq("id", body.driverId)
+      .maybeSingle();
+    if (!d) return c.json({ error: "bad_request", detail: "driverId not in this org" } satisfies ApiErrorResponse, 400);
+  }
+  if (body.assetId != null) {
+    const { data: a } = await supabase
+      .from("assets")
+      .select("id")
+      .eq("org_id", orgId)
+      .eq("id", body.assetId)
+      .maybeSingle();
+    if (!a) return c.json({ error: "bad_request", detail: "assetId not in this org" } satisfies ApiErrorResponse, 400);
+  }
+
+  // Fetch the original row first so we know its driver_name for the
+  // applyToSimilar lookup. Also confirms it exists and belongs to
+  // this org.
+  const { data: orig } = await supabase
+    .from("fuel_transactions")
+    .select("id, driver_name")
+    .eq("org_id", orgId)
+    .eq("id", id)
+    .maybeSingle();
+  if (!orig) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const origDriverName = (orig as { driver_name: string | null }).driver_name;
+
+  // Primary update.
+  const { data: updated, error } = await supabase
+    .from("fuel_transactions")
+    .update({
+      driver_id: body.driverId,
+      asset_id:  body.assetId,
+    } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+    .eq("id", id).eq("org_id", orgId)
+    .select(TX_COLS)
+    .single();
+  if (error || !updated) {
+    return c.json({ error: "update_failed", detail: error?.message ?? "unknown" } satisfies ApiErrorResponse, 500);
+  }
+
+  // Bulk-apply path. Match by lower-cased trimmed driver_name. Only
+  // touches rows that don't already have a driver_id (so we don't
+  // overwrite earlier intentional overrides).
+  let alsoUpdated = 0;
+  if (body.applyToSimilar && origDriverName && origDriverName.trim()) {
+    const normalized = origDriverName.trim();
+    const { data: similar, error: simErr } = await supabase
+      .from("fuel_transactions")
+      .update({
+        driver_id: body.driverId,
+        asset_id:  body.assetId,
+      } as any) // eslint-disable-line @typescript-eslint/no-explicit-any
+      .eq("org_id", orgId)
+      .ilike("driver_name", normalized)   // case-insensitive exact match
+      .is("driver_id", null)
+      .is("deleted_at", null)
+      .neq("id", id)
+      .select("id");
+    if (simErr) {
+      // Bulk path errored after the primary update succeeded.
+      // Return the primary update but log + flag the partial.
+      console.warn("[fuel assign] applyToSimilar bulk update failed:", simErr);
+    } else {
+      alsoUpdated = Array.isArray(similar) ? similar.length : 0;
+    }
+  }
+
+  const res: AssignFuelTransactionResponse = {
+    fuelTransaction: rowToTx(updated as unknown as FuelTransactionRow),
+    alsoUpdated:     body.applyToSimilar ? alsoUpdated : undefined,
+  };
   return c.json(res);
 });
 

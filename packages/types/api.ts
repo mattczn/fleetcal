@@ -1211,6 +1211,41 @@ export interface MatchFuelTransactionRequest {
 }
 export interface MatchFuelTransactionResponse { fuelTransaction: FuelTransaction; }
 
+/** POST /v1/fuel-transactions/:id/auto-match — single-row matcher.
+ *  Idempotent: re-running on an already-matched row is a no-op echo.
+ *  `result` mirrors the underlying matcher outcome plus an
+ *  `already_matched` short-circuit for status quo rows. */
+export interface SingleRowAutoMatchResponse {
+  result:          'auto_matched' | 'unmatched' | 'already_matched';
+  confidence?:     number;
+  fuelTransaction: FuelTransaction;
+}
+
+/** PATCH /v1/fuel-transactions/:id/assign — set driver / asset directly
+ *  on a card transaction, independent of any driver fuel_report.
+ *
+ *  When a card transaction can't be paired with a driver report
+ *  (driver paid out of pocket, forgot to file, owner-op swiped on
+ *  someone else's behalf), the dispatcher still wants the spend
+ *  attributed to a driver + truck for cost analysis. This endpoint
+ *  writes driver_id / asset_id directly without requiring a report.
+ *
+ *  applyToSimilar — when true, the server finds every other unmatched
+ *  fuel_transaction in the same org whose driver_name matches this
+ *  one's driver_name (case-insensitive trim) and applies the same
+ *  driver/asset assignment. Useful for backfilling "all of Kevin's
+ *  transactions" in one click. */
+export interface AssignFuelTransactionRequest {
+  driverId:        number | null;
+  assetId:         number | null;
+  applyToSimilar?: boolean;
+}
+export interface AssignFuelTransactionResponse {
+  fuelTransaction: FuelTransaction;
+  /** When applyToSimilar=true, how many additional rows were updated. */
+  alsoUpdated?:    number;
+}
+
 // Re-export the enums for caller convenience.
 export type { FuelTransactionMatchStatus, FuelTransactionProvider };
 

@@ -1054,6 +1054,15 @@ export interface FuelTransaction {
   location?:              string;     // "Maverik #695 - American Fork, UT"
   matchedTruck?:          string;     // unit number from receipt
 
+  /** Resolved FleetCal driver id. Set automatically when the
+   *  ingest path can map driverName → drivers.name (case-insensitive
+   *  substring), or manually via PATCH /:id/assign. Stays null when
+   *  resolution fails — dispatcher classifies via the UI dropdown. */
+  driverId?:              number;
+  /** Resolved FleetCal asset id. Set automatically when matchedTruck
+   *  resolves to assets.unit, or manually via PATCH /:id/assign. */
+  assetId?:               number;
+
   // Diesel
   dieselGallons?:         number;
   dieselRetailPrice?:     number;
