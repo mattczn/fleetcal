@@ -38,6 +38,7 @@ import {
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
 import { fetchWithRetry } from '@/lib/fetchWithRetry';
+import { useCalendarStore } from '@/store/useCalendarStore';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -549,14 +550,35 @@ function InspectionsTabContent({
   );
 }
 
-/** Date helpers — local-time, day-precision string keys (YYYY-MM-DD).
- *  We compare these against InspectionRow.inspectionDate which is also
- *  stored as a YYYY-MM-DD date (driver app submits in their local TZ).
- *  Avoids the cross-timezone "is this inspection on Tuesday or
- *  Wednesday" footgun that would happen with toISOString().slice(0,10). */
+/** Date helpers — day-precision string keys (YYYY-MM-DD). `ymdKey`
+ *  pulls the local-tz date off a JS Date for the calendar's own
+ *  week-stepping arithmetic; `ymdInTz` formats any UTC ISO timestamp
+ *  as a YYYY-MM-DD in a specific IANA timezone, which is how we
+ *  decide which day's cell an inspection belongs in.
+ *
+ *  The latter is the load-bearing piece: the API returns submittedAt
+ *  as a UTC ISO string, but a driver submitting at 8:55pm Tuesday
+ *  Eastern (= 12:55am Wednesday UTC) needs to land on Tuesday's
+ *  column. en-CA's `2026-05-27`-style date format is the cheap way
+ *  to get YYYY-MM-DD out of Intl.DateTimeFormat. */
 function ymdKey(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function ymdInTz(iso: string, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year:  'numeric',
+      month: '2-digit',
+      day:   '2-digit',
+    }).format(new Date(iso));
+  } catch {
+    // Bad tz (typo / missing in browser's ICU data) — fall back to
+    // the JS-local date so the calendar still renders something
+    // useful instead of throwing.
+    return ymdKey(new Date(iso));
+  }
 }
 function addDays(d: Date, n: number): Date {
   const out = new Date(d);
@@ -608,6 +630,13 @@ function InspectionsCalendar({
   onOpen: (r: InspectionRow) => void;
   openId: string | null;
 }) {
+  // Org's chosen calendar timezone. Drives ALL day-bucketing — we
+  // convert each inspection's submitted_at (a UTC ISO string) to a
+  // YYYY-MM-DD in this tz before slotting it into a cell. That makes
+  // an 8:55pm Tuesday submission land on Tuesday's cell even if the
+  // server's stored inspection_date was off-by-one (the legacy UTC
+  // bug) — historical data fixes itself.
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const [anchorDate, setAnchorDate] = useState<Date>(() => new Date());
   const [rows, setRows]             = useState<InspectionRow[]>([]);
   const [loading, setLoading]       = useState(true);
@@ -623,8 +652,14 @@ function InspectionsCalendar({
     const sat = weekStartSat(anchorDate);
     return Array.from({ length: 7 }, (_, i) => addDays(sat, i));
   }, [anchorDate]);
-  const fromKey = ymdKey(days[0]);
-  const toKey   = ymdKey(days[6]);
+  // Fetch window — widened by 1 day on each side. The API filters
+  // by submitted_at (UTC), but our visible columns are in org TZ. A
+  // submission late Friday-org-tz can land on Saturday UTC; without
+  // the buffer it'd fall outside the [from, to) query and never
+  // make it into the calendar. Client-side `byAssetDay` then trims
+  // anything outside the actual 7 visible days using ymdInTz.
+  const fetchFromKey = ymdKey(addDays(days[0], -1));
+  const fetchToKey   = ymdKey(addDays(days[6],  2)); // exclusive upper bound — 2d ahead covers the +1 buffer day
 
   // Today's key for the "highlight today's column" affordance.
   const todayKey = useMemo(() => ymdKey(new Date()), []);
@@ -637,7 +672,7 @@ function InspectionsCalendar({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    railway.listInspectionReports({ from: fromKey, to: toKey, limit: 500 })
+    railway.listInspectionReports({ from: fetchFromKey, to: fetchToKey, limit: 500 })
       .then(r => { if (!cancelled) setRows(r.inspections); })
       .catch(err => {
         console.error('[equipment] inspections-calendar:', err);
@@ -648,14 +683,21 @@ function InspectionsCalendar({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [fromKey, toKey]);
+  }, [fetchFromKey, fetchToKey]);
 
   // Index inspections by `${assetId}|${date}` for O(1) cell lookup.
+  // We derive `date` from submittedAt converted to the org's calendar
+  // timezone — NOT from r.inspectionDate. The server's
+  // inspection_date column was stamped using UTC for a long stretch,
+  // so any submission after the driver's local ~7pm landed a day
+  // late. Re-bucketing on submittedAt fixes both new rows and every
+  // historical row with no app rebuild or backfill required.
   const byAssetDay = useMemo(() => {
     const m = new Map<string, InspectionRow[]>();
     for (const r of rows) {
       if (r.assetId == null) continue;
-      const k = `${r.assetId}|${r.inspectionDate}`;
+      const dayKey = ymdInTz(r.submittedAt, calendarTimezone);
+      const k = `${r.assetId}|${dayKey}`;
       const arr = m.get(k);
       if (arr) arr.push(r); else m.set(k, [r]);
     }
@@ -663,7 +705,7 @@ function InspectionsCalendar({
     // recent submission at the top.
     for (const arr of m.values()) arr.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
     return m;
-  }, [rows]);
+  }, [rows, calendarTimezone]);
 
   // Active (non-retired, non-hidden) trucks in dispatcher's preferred
   // order. The "Unassigned" placeholder bucket (used elsewhere in the
