@@ -223,6 +223,8 @@ export default function EquipmentPage() {
       {panel && (
         <DetailPanel
           panel={panel}
+          drivers={drivers}
+          assets={assets}
           driverNameById={driverNameById}
           assetLabelById={assetLabelById}
           trailerLabelById={trailerLabelById}
@@ -592,19 +594,27 @@ function FuelTabContent({
       if (report) consumedReportIds.add(report.id);
       const kind: FuelRowKind = report ? 'matched' : 'card_only';
 
-      // Driver: prefer the matched report's driver_id → name lookup;
-      // fall back to the receipt's printed driverName.
+      // Driver: priority order is
+      //   1. matched fuel_report's driver_id → name lookup (authoritative)
+      //   2. transaction's own driver_id (set via ingest auto-resolve
+      //      OR the assign UI dropdown) → name lookup
+      //   3. receipt's free-text driverName
+      // Asset is the same shape against asset_id / matched_truck.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const reportEmbedded = report as any;
       const driverLabel = report
         ? (reportEmbedded?.driverName as string | undefined
             ?? resolveDriverName(report.driverId, report.submittedBy, driverNameById))
-        : (t.driverName ?? '—');
+        : (t.driverId != null
+            ? (driverNameById.get(t.driverId) ?? `Driver #${t.driverId}`)
+            : (t.driverName ?? '—'));
       const assetLabel = report
         ? (reportEmbedded?.assetName as string | undefined
             ?? assetLabelById.get(report.assetId)
             ?? `Asset #${report.assetId}`)
-        : (t.matchedTruck ? `#${t.matchedTruck}` : '—');
+        : (t.assetId != null
+            ? (assetLabelById.get(t.assetId) ?? `Asset #${t.assetId}`)
+            : (t.matchedTruck ? `#${t.matchedTruck}` : '—'));
 
       out.push({
         id:            t.id,
@@ -699,13 +709,19 @@ function FuelTabContent({
       predicate: (r, v) => r.kind === v },
     { kind: 'select', key: 'driver', label: 'Driver',
       options: buildDriverOptions(drivers),
-      predicate: (r, v) => r.report?.driverId === Number(v) },
+      predicate: (r, v) => {
+        const n = Number(v);
+        return r.report?.driverId === n || r.transaction?.driverId === n;
+      } },
     { kind: 'select', key: 'asset',  label: 'Truck',
       options: assets
         .filter(a => !a.activeTo)
         .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''))
         .map(a => ({ value: String(a.id), label: `Truck ${a.name}${a.unit ? ` #${a.unit}` : ''}` })),
-      predicate: (r, v) => r.report?.assetId === Number(v) },
+      predicate: (r, v) => {
+        const n = Number(v);
+        return r.report?.assetId === n || r.transaction?.assetId === n;
+      } },
   ];
 
   return (
@@ -814,7 +830,7 @@ function MatchStatusPill({
 // design pass too; folding these into OpsTable now would couple
 // concerns prematurely.
 
-function Muted({ children }: { children: React.ReactNode }) {
+function Muted({ children = '—' }: { children?: React.ReactNode }) {
   return <span style={{ color: 'var(--gc-text-3)' }}>{children}</span>;
 }
 
@@ -844,10 +860,12 @@ function StatusPill({ status }: { status: string }) {
 // containing block.
 
 function DetailPanel({
-  panel, driverNameById, assetLabelById, trailerLabelById,
+  panel, drivers, assets, driverNameById, assetLabelById, trailerLabelById,
   sideMedia, onClose, onOpenMedia, onCloseSideMedia,
 }: {
   panel: PanelData;
+  drivers: Driver[];
+  assets: Asset[];
   driverNameById: Map<number, string>;
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
@@ -930,7 +948,7 @@ function DetailPanel({
           {panel.kind === 'maintenance'      && <MaintenanceDetail      report={panel.report}      driverNameById={driverNameById} assetLabelById={assetLabelById} trailerLabelById={trailerLabelById} onOpenMedia={onOpenMedia} />}
           {panel.kind === 'inspection'       && <InspectionDetail       id={panel.id}                                                                                                              onOpenMedia={onOpenMedia} />}
           {panel.kind === 'fuel'             && <FuelDetail             report={panel.report}      driverNameById={driverNameById} assetLabelById={assetLabelById}                                       onOpenMedia={onOpenMedia} />}
-          {panel.kind === 'fuel_transaction' && <FuelTransactionDetail  transaction={panel.transaction}                                                                                              />}
+          {panel.kind === 'fuel_transaction' && <FuelTransactionDetail  transaction={panel.transaction} drivers={drivers} assets={assets}                                                                  />}
         </div>
       </div>
 
@@ -1230,92 +1248,372 @@ function FuelDetail({
 // from the email + the match status. The two-column TwoColumnBody
 // would feel empty here, so we use a single-column scroll body.
 
-function FuelTransactionDetail({ transaction: initial }: { transaction: FuelTransaction }) {
-  // Local mutable copy of the transaction so manual link / unlink
-  // / no-match actions can refresh the displayed match status without
-  // re-fetching the whole list. Falls back to the prop when the user
-  // opens a different transaction.
+function FuelTransactionDetail({
+  transaction: initial, drivers, assets,
+}: {
+  transaction: FuelTransaction;
+  drivers: Driver[];
+  assets: Asset[];
+}) {
+  // Local mutable copy of the transaction so assign / auto-match
+  // actions can refresh the displayed status without re-fetching the
+  // whole list. Falls back to the prop when the user opens a
+  // different transaction.
   const [t, setT] = useState<FuelTransaction>(initial);
   useEffect(() => { setT(initial); }, [initial]);
 
+  // Receipt is the source of truth — the receipt was generated by the
+  // pump, the driver app is data the driver entered after the fact.
+  // So gallons/total/date all come from `t` (the transaction). The
+  // matched fuel_report only contributes driver attribution + the
+  // map pin (lat/lon) when present.
+  const dieselPpg = (t.dieselGallons && t.dieselGallons > 0)
+    ? t.totalCharged / t.dieselGallons
+    : null;
+
   return (
-    <div className="flex-1 overflow-auto px-5 py-4" style={{ background: 'var(--gc-bg)' }}>
-      <div className="grid grid-cols-3 gap-x-5 gap-y-3 text-[12px]" style={{ maxWidth: 720 }}>
-        <Field icon={<Clock size={12} />} label="Purchase date">{new Date(t.transactionDate).toLocaleDateString()}</Field>
-        <Field icon={<User  size={12} />} label="Driver (on receipt)">{t.driverName ?? <Muted>—</Muted>}</Field>
-        <Field icon={<FuelIcon size={12} />} label="Provider">{t.provider}</Field>
-
-        <Field icon={<Package size={12} />} label="Location" className="col-span-3">{t.location ?? <Muted>—</Muted>}</Field>
-
-        <Field icon={<FuelIcon size={12} />} label="Diesel gallons">{t.dieselGallons != null ? t.dieselGallons.toFixed(3) : <Muted>—</Muted>}</Field>
-        <Field icon={<FuelIcon size={12} />} label="Diesel retail $/gal">{t.dieselRetailPrice != null ? `$${t.dieselRetailPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
-        <Field icon={<FuelIcon size={12} />} label="Diesel Mudflap $/gal">{t.dieselDiscountPrice != null ? `$${t.dieselDiscountPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
-
-        <Field icon={<FuelIcon size={12} />} label="DEF gallons">{t.defGallons != null ? t.defGallons.toFixed(3) : <Muted>—</Muted>}</Field>
-        <Field icon={<FuelIcon size={12} />} label="DEF retail $/gal">{t.defRetailPrice != null ? `$${t.defRetailPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
-        <Field icon={<FuelIcon size={12} />} label="DEF Mudflap $/gal">{t.defDiscountPrice != null ? `$${t.defDiscountPrice.toFixed(4)}` : <Muted>—</Muted>}</Field>
-
-        <Field icon={<Clock size={12} />} label="Total charged"><span className="font-mono">{`$${t.totalCharged.toFixed(2)}`}</span></Field>
-        <Field icon={<Clock size={12} />} label="Saved"><span className="font-mono">{`$${(t.totalSaved ?? 0).toFixed(2)}`}</span></Field>
-        <Field icon={<Clock size={12} />} label="Payment last 4">{t.paymentLast4 ?? <Muted>—</Muted>}</Field>
+    <div className="flex-1 overflow-auto" style={{ background: 'var(--gc-surface)' }}>
+      {/* Header band — date + total. The two facts the dispatcher
+          most needs at a glance when triaging fuel spend. */}
+      <div className="flex items-baseline justify-between px-5 pt-5 pb-3">
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Purchase
+          </div>
+          <div className="text-[20px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+            {new Date(t.transactionDate).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })}
+          </div>
+          {t.location && (
+            <div className="text-[13px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
+              <MapPin size={11} style={{ display: 'inline', marginRight: 4, color: 'var(--gc-text-3)' }} />
+              {t.location}
+            </div>
+          )}
+        </div>
+        <div className="text-right">
+          <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Total charged
+          </div>
+          <div className="text-[24px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+            ${t.totalCharged.toFixed(2)}
+          </div>
+          {t.totalSaved > 0 && (
+            <div className="text-[12px] font-medium tabular-nums" style={{ color: '#166534' }}>
+              Saved ${t.totalSaved.toFixed(2)}
+            </div>
+          )}
+        </div>
       </div>
 
-      <FieldSection label="Match status">
-        <div className="flex items-center gap-2 text-[12px]">
-          <MatchStatusPill status={t.matchStatus} confidence={t.matchConfidence} />
-          {t.matchedAt && (
-            <span style={{ color: 'var(--gc-text-3)' }}>
-              {t.matchStatus === 'auto_matched' ? 'Auto-linked' : 'Linked'} {new Date(t.matchedAt).toLocaleString()}
-            </span>
-          )}
+      {/* KPI tiles — diesel gal, diesel $/gal, DEF gal, total.
+          Pulled out as a row of equal-weight cards because these are
+          the four numbers the dispatcher needs to recall ("how much
+          diesel? at what price? did they fill DEF? what was the
+          total?") without scanning a 12-field grid. */}
+      <div className="grid grid-cols-4 gap-3 px-5 pb-4">
+        <KpiTile
+          label="Diesel"
+          value={t.dieselGallons != null ? t.dieselGallons.toFixed(1) : '—'}
+          unit="gal"
+        />
+        <KpiTile
+          label="$/gallon"
+          value={dieselPpg != null ? `$${dieselPpg.toFixed(2)}` : '—'}
+          unit={t.dieselRetailPrice != null ? `retail $${t.dieselRetailPrice.toFixed(2)}` : undefined}
+        />
+        <KpiTile
+          label="DEF"
+          value={t.defGallons != null && t.defGallons > 0 ? t.defGallons.toFixed(1) : '—'}
+          unit={t.defGallons != null && t.defGallons > 0 ? 'gal' : undefined}
+        />
+        <KpiTile
+          label="Total"
+          value={`$${t.totalCharged.toFixed(2)}`}
+          unit={t.paymentLast4 ? `card ${t.paymentLast4}` : undefined}
+        />
+      </div>
+
+      <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
+
+      {/* Assignment + status — both the actionable surface. Assignment
+          first (most edits happen here for unmatched rows); match
+          status is a quick chip + auto-match button when unmatched. */}
+      <div className="px-5 py-4 grid grid-cols-2 gap-5">
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+            Assigned to
+          </div>
+          <AssignmentControls
+            transaction={t}
+            drivers={drivers}
+            assets={assets}
+            onChange={setT}
+          />
         </div>
-        {t.matchNotes && (
-          <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>{t.matchNotes}</div>
-        )}
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+            Match
+          </div>
+          <MatchPanel transaction={t} onChange={setT} />
+        </div>
+      </div>
 
-        {/* Match controls — render different affordances based on state. */}
-        <MatchControls transaction={t} onChange={setT} />
-      </FieldSection>
+      {/* Map embed — only when we have a location string. Google
+          Maps' /maps?q=… embed works with free-text searches with
+          no API key, which is exactly what Mudflap gives us
+          ("Maverik #695 - American Fork, UT"). Iframe is light
+          enough that no lazy-load is needed for a single instance. */}
+      {t.location && (
+        <>
+          <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
+          <div className="px-5 py-4">
+            <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+              Location
+            </div>
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--gc-border-light)', height: 220 }}>
+              <iframe
+                title="Fuel location"
+                src={`https://www.google.com/maps?q=${encodeURIComponent(t.location)}&output=embed`}
+                style={{ width: '100%', height: '100%', border: 0 }}
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              />
+            </div>
+          </div>
+        </>
+      )}
 
-      <FieldSection label="Provenance">
-        <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-[11px]">
-          <Field icon={<FuelIcon size={11} />} label="Provider txn id"><span className="font-mono break-all">{t.providerTransactionId}</span></Field>
-          <Field icon={<Clock size={11} />} label="Created in FleetCal">{new Date(t.createdAt).toLocaleString()}</Field>
+      {/* Details footer — all the secondary fields collapsed into a
+          compact 2-column key/value list. Provider txn id, retail vs
+          discount prices, etc. Hidden from primary scan but
+          accessible when the dispatcher needs to dig in. */}
+      <div className="h-px mx-5" style={{ background: 'var(--gc-border-light)' }} />
+      <div className="px-5 py-4">
+        <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+          Details
+        </div>
+        <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-[12px]">
+          <DetailRow label="Provider">{t.provider}</DetailRow>
+          <DetailRow label="Driver on receipt">{t.driverName ?? <Muted />}</DetailRow>
+          {t.dieselRetailPrice != null && (
+            <DetailRow label="Diesel retail $/gal">${t.dieselRetailPrice.toFixed(4)}</DetailRow>
+          )}
+          {t.dieselDiscountPrice != null && (
+            <DetailRow label="Diesel Mudflap $/gal">${t.dieselDiscountPrice.toFixed(4)}</DetailRow>
+          )}
+          {t.defRetailPrice != null && (
+            <DetailRow label="DEF retail $/gal">${t.defRetailPrice.toFixed(4)}</DetailRow>
+          )}
+          {t.defDiscountPrice != null && (
+            <DetailRow label="DEF Mudflap $/gal">${t.defDiscountPrice.toFixed(4)}</DetailRow>
+          )}
+          <DetailRow label="Provider txn id">
+            <span className="font-mono break-all text-[11px]">{t.providerTransactionId}</span>
+          </DetailRow>
+          <DetailRow label="Created in FleetCal">
+            {new Date(t.createdAt).toLocaleString()}
+          </DetailRow>
           {t.legacyFormResponseId != null && (
-            <Field icon={<FuelIcon size={11} />} label="Legacy form id">{t.legacyFormResponseId}</Field>
+            <DetailRow label="Legacy form id">{t.legacyFormResponseId}</DetailRow>
           )}
         </div>
-      </FieldSection>
+      </div>
     </div>
   );
 }
 
-// ─── Match controls (link / unlink / no-match) ───────────────────────
-//
-// Behaviour:
-//   • If the transaction is already linked to a fuel_report: show a
-//     summary of the linked report + an Unlink button.
-//   • If unmatched: show a "Find driver report to link" button that
-//     opens a candidate list (fuel_reports within ±3 days of the
-//     transaction date). Each candidate has a Link button. Also offers
-//     "Mark as no driver report needed" for cases where dispatch
-//     confirms there's no app submission to pair with.
+// ─── New-panel helpers ──────────────────────────────────────────────
 
-function MatchControls({
-  transaction: t,
-  onChange,
+function KpiTile({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div
+      className="rounded-lg px-3 py-2.5"
+      style={{
+        background: 'var(--gc-bg)',
+        border: '1px solid var(--gc-border-light)',
+      }}>
+      <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+        {label}
+      </div>
+      <div className="text-[20px] font-semibold tabular-nums mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
+        {value}
+      </div>
+      {unit && (
+        <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>
+          {unit}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-0.5">
+      <span style={{ color: 'var(--gc-text-3)' }}>{label}</span>
+      <span className="text-right" style={{ color: 'var(--gc-text-1)' }}>{children}</span>
+    </div>
+  );
+}
+
+// MatchPanel — compact, redesigned match-status surface.
+//
+//   • Matched: shows the status pill + when it was linked. No action
+//     buttons (manual link/unlink moved out of the per-row UI; if the
+//     dispatcher needs to override an auto-match, they unset the
+//     driver+truck assignment via the dropdowns).
+//   • Unmatched: shows the pill + an "Auto-match" button that runs
+//     the matcher against just this row and reports back what it
+//     found ("Linked to <driver>'s report" or "No match within 3 days").
+//
+// This replaces the older MatchControls + CandidatePicker UX. The
+// candidate-picker was useful when manual report linking was the
+// primary workflow; with the new driver_id/asset_id columns on the
+// transaction itself, manual linking is rarely needed.
+
+function MatchPanel({
+  transaction: t, onChange,
 }: {
   transaction: FuelTransaction;
   onChange: (next: FuelTransaction) => void;
 }) {
+  const [busy, setBusy]       = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  async function runAutoMatch() {
+    if (busy) return;
+    setBusy(true); setFeedback(null);
+    try {
+      const r = await railway.autoMatchFuelTransaction(t.id);
+      onChange(r.fuelTransaction);
+      if (r.result === 'auto_matched') {
+        setFeedback(`Matched · ${r.confidence ?? '?'}% confidence`);
+      } else if (r.result === 'already_matched') {
+        setFeedback('Already matched');
+      } else {
+        setFeedback('No matching driver report within 3 days');
+      }
+      setTimeout(() => setFeedback(null), 5000);
+    } catch (err) {
+      setFeedback((err as Error).message ?? 'Auto-match failed');
+      setTimeout(() => setFeedback(null), 5000);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <MatchStatusPill status={t.matchStatus} confidence={t.matchConfidence} />
+        {t.matchedAt && t.matchStatus !== 'unmatched' && (
+          <span className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+            {t.matchStatus === 'auto_matched' ? 'Auto-linked' : 'Linked'} {new Date(t.matchedAt).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+
+      {t.matchStatus === 'unmatched' && (
+        <button
+          type="button"
+          onClick={runAutoMatch}
+          disabled={busy}
+          className="rounded-md transition-colors self-start"
+          style={{
+            background: busy ? 'var(--gc-bg)' : 'var(--gc-blue)',
+            color:      busy ? 'var(--gc-text-3)' : '#fff',
+            border:     `1px solid ${busy ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+            padding:    '6px 12px',
+            fontSize:   12,
+            fontWeight: 600,
+            cursor:     busy ? 'default' : 'pointer',
+          }}>
+          {busy ? 'Matching…' : 'Auto-match'}
+        </button>
+      )}
+
+      {feedback && (
+        <div className="text-[11.5px]" style={{ color: 'var(--gc-text-2)' }}>
+          {feedback}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Assignment controls (driver + truck dropdowns) ─────────────────
+//
+// Lets the dispatcher attribute a card transaction to a FleetCal
+// driver + asset directly, no fuel_report required. The Mudflap
+// receipt's driver_name + matched_truck are free text and may not
+// resolve automatically (multiple drivers with the same first name,
+// receipt prints the nickname, truck unit not yet in FleetCal). This
+// is the manual override path.
+//
+// "Apply to all other transactions from X" — when the dispatcher
+// classifies "Kevin" once, they almost always want the same
+// classification applied to every other unmatched receipt that
+// printed "Kevin". Checkbox toggles that behavior; the server only
+// touches rows that don't already have a driver_id (so prior
+// intentional overrides aren't blown away).
+
+function AssignmentControls({
+  transaction: t, drivers, assets, onChange,
+}: {
+  transaction: FuelTransaction;
+  drivers: Driver[];
+  assets: Asset[];
+  onChange: (next: FuelTransaction) => void;
+}) {
+  const [driverId, setDriverId] = useState<number | null>(t.driverId ?? null);
+  const [assetId,  setAssetId]  = useState<number | null>(t.assetId  ?? null);
+  const [applyToSimilar, setApplyToSimilar] = useState(false);
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
-  async function callMatch(fuelReportId: string | null, notes?: string) {
-    setBusy(true); setError(null);
+  // Reset local state when the user opens a different transaction.
+  useEffect(() => {
+    setDriverId(t.driverId ?? null);
+    setAssetId(t.assetId ?? null);
+    setApplyToSimilar(false);
+    setError(null);
+    setSavedMessage(null);
+  }, [t.id, t.driverId, t.assetId]);
+
+  // Sorted, active-only lists. Drivers/assets in retired state shouldn't
+  // be assignable here (they'd never be the actual driver of a fresh
+  // fuel-up). Includes the currently-assigned driver/asset even if
+  // retired so existing assignments don't disappear from the dropdown.
+  const driverOptions = useMemo(() => {
+    const list = drivers.filter(d => !d.activeTo || d.id === t.driverId);
+    list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+    return list;
+  }, [drivers, t.driverId]);
+  const assetOptions = useMemo(() => {
+    const list = assets.filter(a => !a.activeTo || a.id === t.assetId);
+    list.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+    return list;
+  }, [assets, t.assetId]);
+
+  const dirty = driverId !== (t.driverId ?? null) || assetId !== (t.assetId ?? null);
+
+  async function save() {
+    if (busy || !dirty) return;
+    setBusy(true); setError(null); setSavedMessage(null);
     try {
-      const res = await railway.matchFuelTransaction(t.id, { fuelReportId, matchNotes: notes });
+      const res = await railway.assignFuelTransaction(t.id, {
+        driverId,
+        assetId,
+        applyToSimilar,
+      });
       onChange(res.fuelTransaction);
+      const extra = res.alsoUpdated && res.alsoUpdated > 0
+        ? ` (+ ${res.alsoUpdated} other ${res.alsoUpdated === 1 ? 'transaction' : 'transactions'})`
+        : '';
+      setSavedMessage(`Saved${extra}`);
+      setApplyToSimilar(false);
+      setTimeout(() => setSavedMessage(null), 4000);
     } catch (err) {
       setError((err as Error).message ?? 'failed');
     } finally {
@@ -1323,201 +1621,103 @@ function MatchControls({
     }
   }
 
-  if (t.fuelReportId) {
-    return (
-      <div className="mt-3">
-        <LinkedReportRow reportId={t.fuelReportId} />
-        <div className="flex items-center gap-2 mt-2">
-          <button
+  // Receipt printed a driver name → offer the bulk-apply checkbox
+  // (the operation only makes sense if there's a name to match on).
+  const showBulk = !!t.driverName && t.driverName.trim().length > 0 && dirty;
+
+  return (
+    <div className="mt-2 flex flex-col gap-2.5">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+            Driver
+          </div>
+          <select
+            value={driverId ?? ''}
+            onChange={e => setDriverId(e.target.value ? Number(e.target.value) : null)}
             disabled={busy}
-            onClick={() => void callMatch(null)}
-            className="text-[11px] font-semibold px-2.5 py-1.5 rounded transition-colors disabled:opacity-50"
-            style={{ background: 'var(--gc-surface)', color: '#dc2626', border: '1px solid #fecaca' }}
-          >
-            Unlink
-          </button>
+            className="w-full text-[13px] outline-none transition-colors"
+            style={{
+              padding: '7px 10px',
+              border: '1px solid var(--gc-border-light)',
+              borderRadius: 6,
+              background: 'var(--gc-surface)',
+              color: driverId ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+            }}>
+            <option value="">— Unassigned —</option>
+            {driverOptions.map(d => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
         </div>
-        {error && <div className="text-[11px] mt-2" style={{ color: '#dc2626' }}>{error}</div>}
-      </div>
-    );
-  }
-
-  // Unmatched. Show candidate finder.
-  return (
-    <div className="mt-3 flex flex-col gap-2">
-      <CandidatePicker
-        transactionDate={t.transactionDate}
-        targetGallons={t.dieselGallons}
-        busy={busy}
-        onPick={(reportId) => void callMatch(reportId)}
-      />
-      <button
-        disabled={busy}
-        onClick={() => {
-          // Mark no-match-needed. The server treats this as 'no_match_needed'
-          // when fuelReportId is null AND matchNotes mentions skip — we use
-          // the matchNotes field as the signal here. (The API can be
-          // extended later with an explicit field if we want fancier UX.)
-          // For now we just leave the row "unlinked" but in a more
-          // intentional state — see API: PATCH /match with null reports.
-          // To mark 'no_match_needed', we pass null + a sentinel note.
-          void callMatch(null, 'no driver report exists');
-        }}
-        className="text-[11px] font-semibold px-2.5 py-1.5 rounded transition-colors disabled:opacity-50 self-start"
-        style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-      >
-        Mark as no driver report needed
-      </button>
-      {error && <div className="text-[11px]" style={{ color: '#dc2626' }}>{error}</div>}
-    </div>
-  );
-}
-
-// Renders the linked driver report inline. Best-effort fetch — if it
-// fails (deleted report, etc.) we just show the id so the dispatcher
-// can investigate.
-function LinkedReportRow({ reportId }: { reportId: string }) {
-  const [report, setReport] = useState<FuelReport | null>(null);
-  const [error,  setError]  = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    // Use listFuelReports filtered by no specific arg — easiest path
-    // since there's no /v1/fuel-reports/:id endpoint exposed yet. The
-    // report carries driverId/assetId; we'll show them as-is.
-    railway.listFuelReports({ limit: 500 })
-      .then(r => {
-        if (cancelled) return;
-        const found = r.fuelReports.find(x => x.id === reportId);
-        setReport(found ?? null);
-      })
-      .catch(err => { if (!cancelled) setError((err as Error).message); });
-    return () => { cancelled = true; };
-  }, [reportId]);
-  if (error) {
-    return <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>Linked: <span className="font-mono">{reportId}</span> (couldn&apos;t fetch details: {error})</div>;
-  }
-  if (!report) {
-    return <div className="text-[11px] mt-2" style={{ color: 'var(--gc-text-3)' }}>Loading linked report…</div>;
-  }
-  return (
-    <div className="rounded p-2.5 mt-2" style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
-      <div className="text-[11px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-        Linked driver report
-      </div>
-      <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-2)' }}>
-        Reported {new Date(report.reportedAt).toLocaleString()} · {report.dieselGallons.toFixed(1)} diesel gal{report.state ? ` · ${report.state}` : ''}
-      </div>
-      <div className="text-[10px] font-mono mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-        Driver #{report.driverId} · Asset #{report.assetId}
-      </div>
-    </div>
-  );
-}
-
-// Loads pending fuel_reports within ±3 days of the transaction date
-// and renders them as a list with a Link button on each. Sorts by
-// gallons-closeness to targetGallons so the most likely match is at
-// the top.
-function CandidatePicker({
-  transactionDate, targetGallons, busy, onPick,
-}: {
-  transactionDate: string;
-  targetGallons:   number | null | undefined;
-  busy:            boolean;
-  onPick:          (reportId: string) => void;
-}) {
-  const [open,    setOpen]    = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [rows,    setRows]    = useState<FuelReport[]>([]);
-  const [error,   setError]   = useState<string | null>(null);
-
-  async function loadCandidates() {
-    setLoading(true); setError(null);
-    try {
-      const fromD = new Date(transactionDate); fromD.setDate(fromD.getDate() - 3);
-      const toD   = new Date(transactionDate); toD.setDate(toD.getDate()   + 3);
-      const res = await railway.listFuelReports({
-        from: fromD.toISOString(),
-        to:   toD.toISOString(),
-        // Show ALL reports in the window — not just pending — because
-        // the dispatcher might be re-linking a manual one. The API
-        // allows reassigning even if the report is currently matched
-        // to a different transaction.
-        limit: 200,
-      });
-      setRows(res.fuelReports);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => { setOpen(true); void loadCandidates(); }}
-        className="text-[11px] font-semibold px-2.5 py-1.5 rounded transition-colors self-start"
-        style={{ background: '#1a73e8', color: '#fff' }}
-      >
-        Find driver report to link
-      </button>
-    );
-  }
-
-  // Sort by gallons-distance from target (closest first) — that's the
-  // signal the matcher cares about most when names don't help.
-  const sorted = [...rows].sort((a, b) => {
-    if (targetGallons == null) return 0;
-    const da = Math.abs(a.dieselGallons - targetGallons);
-    const db = Math.abs(b.dieselGallons - targetGallons);
-    return da - db;
-  });
-
-  return (
-    <div className="rounded p-2.5" style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-[11px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-          Driver reports near {new Date(transactionDate).toLocaleDateString()}
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+            Truck
+          </div>
+          <select
+            value={assetId ?? ''}
+            onChange={e => setAssetId(e.target.value ? Number(e.target.value) : null)}
+            disabled={busy}
+            className="w-full text-[13px] outline-none transition-colors"
+            style={{
+              padding: '7px 10px',
+              border: '1px solid var(--gc-border-light)',
+              borderRadius: 6,
+              background: 'var(--gc-surface)',
+              color: assetId ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+            }}>
+            <option value="">— Unassigned —</option>
+            {assetOptions.map(a => (
+              <option key={a.id} value={a.id}>
+                {a.name}{a.unit ? ` #${a.unit}` : ''}
+              </option>
+            ))}
+          </select>
         </div>
-        <button onClick={() => setOpen(false)} className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Close</button>
       </div>
-      {loading && <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>Loading candidates…</div>}
-      {error && <div className="text-[11px]" style={{ color: '#dc2626' }}>{error}</div>}
-      {!loading && !error && sorted.length === 0 && (
-        <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-          No driver fuel reports in the ±3 day window.
-        </div>
-      )}
-      <div className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
-        {sorted.map(r => {
-          const diff = targetGallons != null ? Math.abs(r.dieselGallons - targetGallons) : null;
-          const close = diff != null && diff <= 0.5;
-          return (
-            <div key={r.id} className="flex items-center gap-2 rounded px-2 py-1.5"
-              style={{ background: close ? '#dcfce7' : 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
-              <div className="flex-1 min-w-0 text-[11px]">
-                <div style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
-                  Driver #{r.driverId} · Asset #{r.assetId}
-                </div>
-                <div style={{ color: 'var(--gc-text-3)' }}>
-                  {new Date(r.reportedAt).toLocaleString()} · {r.dieselGallons.toFixed(1)} gal
-                  {diff != null && diff > 0.001 && ` (${diff > 0 ? '±' : ''}${diff.toFixed(1)} from receipt)`}
-                  {r.matchStatus === 'matched' && ' · already linked'}
-                </div>
-              </div>
-              <button
-                disabled={busy}
-                onClick={() => onPick(r.id)}
-                className="text-[10.5px] font-semibold px-2 py-1 rounded transition-colors disabled:opacity-50"
-                style={{ background: '#1a73e8', color: '#fff' }}
-              >
-                Link
-              </button>
+
+      {showBulk && (
+        <label className="flex items-start gap-2 text-[12px] cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
+          <input
+            type="checkbox"
+            checked={applyToSimilar}
+            onChange={e => setApplyToSimilar(e.target.checked)}
+            disabled={busy}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            Also apply to every other unmatched transaction from{' '}
+            <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{t.driverName}</span>
+            <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+              Skips rows that already have a driver assigned (prior overrides are preserved).
             </div>
-          );
-        })}
+          </span>
+        </label>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy || !dirty}
+          className="rounded-md transition-colors"
+          style={{
+            background: (busy || !dirty) ? 'var(--gc-bg)' : 'var(--gc-blue)',
+            color:      (busy || !dirty) ? 'var(--gc-text-3)' : '#fff',
+            border:     `1px solid ${(busy || !dirty) ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+            padding:    '6px 14px',
+            fontSize:   12,
+            fontWeight: 600,
+            cursor:     (busy || !dirty) ? 'default' : 'pointer',
+          }}>
+          {busy ? 'Saving…' : 'Save assignment'}
+        </button>
+        {savedMessage && (
+          <span className="text-[12px] font-medium" style={{ color: '#166534' }}>{savedMessage}</span>
+        )}
+        {error && (
+          <span className="text-[12px] font-medium" style={{ color: '#dc2626' }}>{error}</span>
+        )}
       </div>
     </div>
   );
