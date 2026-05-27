@@ -486,6 +486,44 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // con doesn't carry the appointment / facility detail.
   const [leftPanelView, setLeftPanelView] = useState<'rateCon' | 'stops'>('rateCon');
 
+  // ── POD-tab horizontal scroll ─────────────────────────────────────
+  // When a load has many PODs (5+) the tab strip overflows. We hide
+  // the native scrollbar (ugly under a tab row) and add chevron
+  // buttons that page through the strip. The buttons only render
+  // when there's something to scroll to in that direction so a
+  // 2-doc load stays clean.
+  const docTabsRef = useRef<HTMLDivElement | null>(null);
+  const [docTabsCanLeft,  setDocTabsCanLeft]  = useState(false);
+  const [docTabsCanRight, setDocTabsCanRight] = useState(false);
+  // Recompute scroll affordances whenever the document set changes,
+  // the active tab changes (we scroll it into view), or the strip
+  // resizes. Run on the next frame so layout has settled before we
+  // read scrollWidth/clientWidth.
+  useEffect(() => {
+    const el = docTabsRef.current;
+    if (!el) return;
+    const update = () => {
+      setDocTabsCanLeft(el.scrollLeft > 1);
+      setDocTabsCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', update); ro.disconnect(); };
+  }, [docs.length]);
+  // When the user picks a tab (e.g. via keyboard or by clicking a
+  // partially-visible one), make sure it's fully in view.
+  useEffect(() => {
+    const el = docTabsRef.current;
+    if (!el) return;
+    const active = el.querySelector<HTMLElement>(`[data-doc-tab-idx="${activeDocIdx}"]`);
+    if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [activeDocIdx, docs.length]);
+  const scrollDocTabsBy = (dx: number) => {
+    docTabsRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+  };
+
   // ── Inline doc rename ──────────────────────────────────────────────
   // When the user clicks Rename in the kebab menu we swap that tab
   // into an inline text input. The keyboard handler pauses while a
@@ -1112,10 +1150,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           );
         })()}
 
-        {/* Main: rate-con + uploaded docs (left) + sidebar (right) */}
-        <div className="flex-1 flex min-h-0">
-          {/* Left/middle: PDFs */}
-          <div className="flex-1 flex min-h-0">
+        {/* Main: 3-column grid (rate-con | docs | sidebar). The
+            sidebar is the priority surface — it holds the verification
+            checklist and action buttons, so it gets an explicit fixed
+            track width that nothing else can encroach on. The two PDF
+            columns split what remains via minmax(0, 1fr), which has
+            a *true* zero minimum (unlike flex's "min-width: auto"
+            footgun) so their content has no choice but to scroll
+            inside its track rather than push the sidebar offscreen. */}
+        <div className="flex-1 min-h-0"
+          style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) 320px' }}>
+          {/* display:contents wrapper kept so the inner column DOM
+              below doesn't need a 200-line renumber. The wrapper
+              vanishes from the layout tree — rate-con and docs
+              participate directly in the grid as tracks 1 and 2. */}
+          <div style={{ display: 'contents' }}>
             {/* Left panel — toggle between Rate Con and Stops. The
                 stops view is handy when verifying delivery against
                 the planned route, or when the rate-con doesn't carry
@@ -1186,46 +1235,107 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
             {/* Uploaded docs */}
             <div className="flex-1 flex flex-col min-w-0">
-              <div className="shrink-0 flex items-center gap-1 px-3 py-2 overflow-x-auto"
+              {/* Tab strip. Position-relative wrapper so the scroll
+                  chevrons can absolute-pin to the right edge without
+                  knocking the strip's layout around. min-w-0 on the
+                  scroller is what lets overflow-x-auto actually fire
+                  (without it the flex child sizes to content). */}
+              <div className="shrink-0 relative"
                 style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                <span className="text-[11px] font-bold uppercase tracking-wider mr-2 shrink-0" style={{ color: 'var(--gc-text-3)' }}>
-                  Uploaded
-                </span>
-                {docs.length === 0 && (
-                  <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
-                    {docsLoading ? 'Loading…' : 'No documents uploaded'}
+                {/* Webkit needs a real CSS rule for ::-webkit-scrollbar
+                    (inline style can't hit pseudo-elements). The
+                    Firefox path goes through scrollbarWidth in the
+                    inline style below. */}
+                <style>{`.fc-doc-tabs::-webkit-scrollbar{display:none}`}</style>
+                <div ref={docTabsRef}
+                  className="fc-doc-tabs flex items-center gap-1 px-3 py-2 overflow-x-auto min-w-0"
+                  style={{
+                    scrollbarWidth: 'none',
+                    msOverflowStyle: 'none',
+                    // Leave room under the chevron overlays so the
+                    // edge tabs aren't hidden behind them when fully
+                    // scrolled to that side.
+                    paddingRight: docTabsCanRight ? 32 : undefined,
+                    paddingLeft:  docTabsCanLeft  ? 32 : undefined,
+                  }}>
+                  <span className="text-[11px] font-bold uppercase tracking-wider mr-2 shrink-0" style={{ color: 'var(--gc-text-3)' }}>
+                    Uploaded
                   </span>
+                  {docs.length === 0 && (
+                    <span className="text-xs" style={{ color: 'var(--gc-text-3)' }}>
+                      {docsLoading ? 'Loading…' : 'No documents uploaded'}
+                    </span>
+                  )}
+                  {docs.map((d, i) => {
+                    const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
+                    const active = i === activeDocIdx;
+                    // Sequence among same-kind docs on this load. Only
+                    // shown when there are multiples — single POD stays
+                    // just "POD" but two PODs become "POD 1" / "POD 2".
+                    // Filename (often a redundant restating of
+                    // {loadNum}_{KIND}) goes to the tooltip instead so
+                    // the tab stays compact and scannable.
+                    const sameKindCount = docs.filter(x => x.kind === d.kind).length;
+                    const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
+                    const labelText     = KIND_LABEL[d.kind] ?? d.kind;
+                    const tabLabel      = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                    return (
+                      <div key={d.id} className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => setActiveDocIdx(i)}
+                          data-doc-tab-idx={i}
+                          title={d.fileName}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold whitespace-nowrap transition-colors"
+                          style={{
+                            background: active ? tint.bg : 'transparent',
+                            color:      active ? tint.fg : tint.bg,
+                            border:     `1.5px solid ${tint.bg}`,
+                          }}
+                          onMouseEnter={e => { if (!active) e.currentTarget.style.background = tint.bg + '14'; }}
+                          onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                          <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Left chevron — only when there's something off-screen
+                    to the left. Sits over the strip with a gradient so
+                    the tab underneath fades out rather than being
+                    abruptly clipped. */}
+                {docTabsCanLeft && (
+                  <button type="button"
+                    onClick={() => scrollDocTabsBy(-240)}
+                    aria-label="Scroll documents left"
+                    className="absolute top-0 bottom-0 left-0 flex items-center justify-start pl-1 transition-opacity hover:opacity-100"
+                    style={{
+                      width: 40,
+                      opacity: 0.92,
+                      background: 'linear-gradient(to right, var(--gc-bg) 40%, rgba(0,0,0,0))',
+                      cursor: 'pointer',
+                    }}>
+                    <span className="flex items-center justify-center rounded-full"
+                      style={{ width: 22, height: 22, background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
+                      <ChevronLeft size={14} />
+                    </span>
+                  </button>
                 )}
-                {docs.map((d, i) => {
-                  const tint = KIND_TINT[d.kind] ?? KIND_TINT.other;
-                  const active = i === activeDocIdx;
-                  // Sequence among same-kind docs on this load. Only
-                  // shown when there are multiples — single POD stays
-                  // just "POD" but two PODs become "POD 1" / "POD 2".
-                  // Filename (often a redundant restating of
-                  // {loadNum}_{KIND}) goes to the tooltip instead so
-                  // the tab stays compact and scannable.
-                  const sameKindCount = docs.filter(x => x.kind === d.kind).length;
-                  const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
-                  const labelText     = KIND_LABEL[d.kind] ?? d.kind;
-                  const tabLabel      = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
-                  return (
-                    <div key={d.id} className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => setActiveDocIdx(i)}
-                        title={d.fileName}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-extrabold whitespace-nowrap transition-colors"
-                        style={{
-                          background: active ? tint.bg : 'transparent',
-                          color:      active ? tint.fg : tint.bg,
-                          border:     `1.5px solid ${tint.bg}`,
-                        }}
-                        onMouseEnter={e => { if (!active) e.currentTarget.style.background = tint.bg + '14'; }}
-                        onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                        <FileText size={11} style={{ flexShrink: 0 }} /> {tabLabel}
-                      </button>
-                    </div>
-                  );
-                })}
+                {docTabsCanRight && (
+                  <button type="button"
+                    onClick={() => scrollDocTabsBy(240)}
+                    aria-label="Scroll documents right"
+                    className="absolute top-0 bottom-0 right-0 flex items-center justify-end pr-1 transition-opacity hover:opacity-100"
+                    style={{
+                      width: 40,
+                      opacity: 0.92,
+                      background: 'linear-gradient(to left, var(--gc-bg) 40%, rgba(0,0,0,0))',
+                      cursor: 'pointer',
+                    }}>
+                    <span className="flex items-center justify-center rounded-full"
+                      style={{ width: 22, height: 22, background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
+                      <ChevronRight size={14} />
+                    </span>
+                  </button>
+                )}
               </div>
               {docs.length > 0 ? (() => {
                 const active = docs[Math.min(activeDocIdx, docs.length - 1)];
@@ -1240,8 +1350,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             </div>
           </div>
 
-          {/* Right: actions sidebar */}
-          <div className="shrink-0 flex flex-col" style={{ width: 300, borderLeft: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+          {/* Right: actions sidebar. Width is dictated by the parent
+              grid's third track (320px) — no width prop here so the
+              two values can't drift out of sync. */}
+          <div className="flex flex-col" style={{ borderLeft: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
             {/* Accessorials banner — surfaces detention / lumper / scale
                 etc. with their amounts so the dispatcher knows what
                 support docs they're verifying against. */}
@@ -1729,11 +1841,12 @@ function Shell({ children, onClose, blocked, zIndex }: { children: React.ReactNo
       <div
         className="flex flex-col rounded-2xl overflow-hidden"
         style={{
-          // ~15% larger than the original modal sizing — still capped so
-          // it doesn't span an ultrawide, but uses more of a laptop
-          // screen so the PDFs render at a comfortable size.
-          width:      'min(98vw, 1725px)',
-          height:     'min(94vh, 1080px)',
+          // Sized so the 320px verification sidebar + two PDF columns
+          // fit comfortably even on a 14" laptop. Capped to leave a
+          // sliver of backdrop on ultrawides so it still reads as a
+          // modal rather than a takeover.
+          width:      'min(99vw, 1900px)',
+          height:     'min(95vh, 1100px)',
           background: 'var(--gc-bg)',
           boxShadow:  '0 24px 64px rgba(0,0,0,0.45)',
           border:     '1px solid var(--gc-border)',
