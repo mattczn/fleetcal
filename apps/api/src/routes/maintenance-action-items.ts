@@ -19,6 +19,9 @@ import {
   type CreateMaintenanceActionItemResponse,
   type UpdateMaintenanceActionItemRequest,
   type UpdateMaintenanceActionItemResponse,
+  type UploadMaintenanceActionItemPhotoResponse,
+  type DeleteMaintenanceActionItemPhotoResponse,
+  type MaintenanceActionItemPhoto,
   type ApiErrorResponse,
 } from "@fleetcal/types";
 
@@ -37,6 +40,89 @@ import {
 const actionItems = new Hono<{ Variables: AuthVariables }>();
 
 actionItems.use("*", requireModule("maintenance"), requireCapability("maintenance.access"));
+
+// ── Shared photo helpers ────────────────────────────────────────────────
+//
+// We reuse the same Supabase Storage bucket maintenance reports use
+// (`maintenance-photos`). Storage paths for action items live under
+// "<org>/action_items/<item-id>/<ts>_<rand>.<ext>" so they can't
+// collide with report photos ("<org>/<report-id>/...").
+//
+// Signed URLs are minted with a 1-hour TTL on every list/upload —
+// long enough for any reasonable dispatcher session, short enough
+// that a leaked URL doesn't grant indefinite access.
+
+const PHOTO_BUCKET = "maintenance-photos";
+const PHOTO_URL_TTL_SECONDS = 60 * 60;
+
+interface ActionItemPhotoRow {
+  id:             string;
+  action_item_id: string;
+  org_id:         string;
+  storage_path:   string;
+  file_name:      string;
+  mime_type:      string | null;
+  size_bytes:     number | null;
+  uploaded_by:    string | null;
+  uploaded_at:    string;
+}
+
+function rowToActionItemPhoto(r: ActionItemPhotoRow, signedUrl?: string): MaintenanceActionItemPhoto {
+  return {
+    id:           r.id,
+    actionItemId: r.action_item_id,
+    fileName:     r.file_name,
+    mimeType:     r.mime_type   ?? undefined,
+    sizeBytes:    r.size_bytes  ?? undefined,
+    uploadedBy:   r.uploaded_by ?? undefined,
+    uploadedAt:   r.uploaded_at,
+    signedUrl,
+  };
+}
+
+/** Bulk-fetch photos for a set of action_item_ids and mint signed
+ *  URLs for each in one batch. Returns Map<actionItemId, photos[]>
+ *  so the LIST endpoint can attach photos onto each item in O(1).
+ *  Best-effort: if the table doesn't exist yet (pre-migration) the
+ *  caller falls back to empty arrays so the board still loads. */
+async function fetchActionItemPhotosMap(
+  ids: string[],
+): Promise<Map<string, MaintenanceActionItemPhoto[]>> {
+  const out = new Map<string, MaintenanceActionItemPhoto[]>();
+  if (ids.length === 0) return out;
+  const { data, error } = await supabase
+    .from("maintenance_action_item_photos")
+    .select("id, action_item_id, org_id, storage_path, file_name, mime_type, size_bytes, uploaded_by, uploaded_at")
+    .in("action_item_id", ids)
+    .order("uploaded_at", { ascending: true });
+  if (error) {
+    // Pre-migration deployments — table doesn't exist yet. Log once
+    // and return empty; the bridge code on the work order itself
+    // still works without photos.
+    if (isMissingColumnError(error) || /relation .* does not exist/i.test(error.message ?? '')) {
+      console.warn("[fetchActionItemPhotosMap] table missing — apply 20260530_maintenance_action_item_photos migration");
+      return out;
+    }
+    console.error("[fetchActionItemPhotosMap] photos query failed:", error);
+    return out;
+  }
+  const rows = (data ?? []) as ActionItemPhotoRow[];
+  if (rows.length === 0) return out;
+  const paths = rows.map(r => r.storage_path);
+  const { data: signed } = await supabase.storage
+    .from(PHOTO_BUCKET)
+    .createSignedUrls(paths, PHOTO_URL_TTL_SECONDS);
+  const urlByPath = new Map<string, string>();
+  for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+    urlByPath.set(s.path, s.signedUrl);
+  }
+  for (const r of rows) {
+    const arr = out.get(r.action_item_id) ?? [];
+    arr.push(rowToActionItemPhoto(r, urlByPath.get(r.storage_path)));
+    out.set(r.action_item_id, arr);
+  }
+  return out;
+}
 
 function clampLimit(raw: string | undefined, fallback = 100): number {
   const n = Number(raw ?? String(fallback));
@@ -179,8 +265,15 @@ actionItems.get("/", async (c) => {
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   const rows = (data ?? []) as unknown as MaintenanceActionItemRow[];
+  // Embed dispatcher-uploaded photos on each item so the board /
+  // modal don't have to round-trip per work order. Pre-migration
+  // envs return an empty map and the board still renders.
+  const photosByItem = await fetchActionItemPhotosMap(rows.map(r => r.id));
   const res: ListMaintenanceActionItemsResponse = {
-    actionItems: rows.map(rowToActionItem),
+    actionItems: rows.map(r => ({
+      ...rowToActionItem(r),
+      photos: photosByItem.get(r.id) ?? [],
+    })),
     total:       count ?? rows.length,
     limit,
     offset,
@@ -201,8 +294,12 @@ actionItems.get("/:id", async (c) => {
     .maybeSingle();
   if (error) return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const photosByItem = await fetchActionItemPhotosMap([id]);
   const res: GetMaintenanceActionItemResponse = {
-    actionItem: rowToActionItem(data as unknown as MaintenanceActionItemRow),
+    actionItem: {
+      ...rowToActionItem(data as unknown as MaintenanceActionItemRow),
+      photos: photosByItem.get(id) ?? [],
+    },
   };
   return c.json(res);
 });
@@ -311,6 +408,134 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   const res: UpdateMaintenanceActionItemResponse = {
     actionItem: rowToActionItem(data as unknown as MaintenanceActionItemRow),
   };
+  return c.json(res);
+});
+
+// ── POST /v1/maintenance-action-items/:id/photos ────────────────────────
+//
+// Multipart upload — one file per request (the client loops over
+// selected files). Mirrors the driver-side maintenance-reports
+// photo upload pattern so storage paths and the bucket are shared.
+// Storage path scheme: "<org>/action_items/<item-id>/<ts>_<rand>.<ext>"
+// — distinct from report uploads ("<org>/<report-id>/...") so the
+// two can coexist in the same bucket without collision.
+
+actionItems.post("/:id/photos", requireCapability("maintenance.edit"), async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const id     = c.req.param("id");
+
+  // Confirm the action item exists in this org. Don't require
+  // capability beyond maintenance.edit (the parent route's gate) —
+  // any dispatcher who can edit work orders can attach evidence.
+  const { data: ai, error: aiErr } = await supabase
+    .from("maintenance_action_items")
+    .select("id")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (aiErr) return c.json({ error: "fetch_failed", detail: aiErr.message } satisfies ApiErrorResponse, 500);
+  if (!ai)   return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  let body: { file?: File };
+  try { body = await c.req.parseBody() as { file?: File }; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] } satisfies ApiErrorResponse, 400); }
+  const file = body.file;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Build a collision-resistant path. Timestamp + random hex inside
+  // the per-item folder so even a rapid burst of uploads can't
+  // overwrite each other.
+  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/action_items/${id}/${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: uploadErr } = await supabase.storage
+    .from(PHOTO_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (uploadErr) {
+    console.error("[POST .../photos] storage upload failed:", uploadErr);
+    return c.json({ error: "upload_failed", detail: uploadErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: photoRow, error: insertErr } = await supabase
+    .from("maintenance_action_item_photos")
+    .insert({
+      action_item_id: id,
+      org_id:         orgId,
+      storage_path:   storagePath,
+      file_name:      file.name,
+      mime_type:      file.type || null,
+      size_bytes:     bytes.length,
+      uploaded_by:    userId,
+    } as any)
+    .select("id, action_item_id, org_id, storage_path, file_name, mime_type, size_bytes, uploaded_by, uploaded_at")
+    .single();
+  if (insertErr || !photoRow) {
+    // Roll back the storage upload if the DB row didn't take —
+    // otherwise we end up with an orphan in the bucket.
+    void supabase.storage.from(PHOTO_BUCKET).remove([storagePath]);
+    console.error("[POST .../photos] insert failed:", insertErr);
+    return c.json({ error: "insert_failed", detail: insertErr?.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // Sign one URL for the response so the client can render the
+  // freshly-uploaded photo without an extra round trip.
+  const { data: signed } = await supabase.storage
+    .from(PHOTO_BUCKET)
+    .createSignedUrl(storagePath, PHOTO_URL_TTL_SECONDS);
+
+  const res: UploadMaintenanceActionItemPhotoResponse = {
+    photo: rowToActionItemPhoto(
+      photoRow as unknown as ActionItemPhotoRow,
+      signed?.signedUrl,
+    ),
+  };
+  return c.json(res);
+});
+
+// ── DELETE /v1/maintenance-action-items/photos/:id ──────────────────────
+//
+// Static "/photos/..." segment must be registered BEFORE the
+// "/:id" delete below so Hono's radix matches it first. (Hono does
+// prefer static over param, but explicit ordering is safer.)
+
+actionItems.delete("/photos/:id", requireCapability("maintenance.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const id    = c.req.param("id");
+
+  const { data: row, error: lookupErr } = await supabase
+    .from("maintenance_action_item_photos")
+    .select("id, org_id, storage_path")
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (lookupErr) return c.json({ error: "fetch_failed", detail: lookupErr.message } satisfies ApiErrorResponse, 500);
+  if (!row)      return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  const storagePath = (row as { storage_path: string }).storage_path;
+
+  const { error: delErr } = await supabase
+    .from("maintenance_action_item_photos")
+    .delete()
+    .eq("id", id)
+    .eq("org_id", orgId);
+  if (delErr) {
+    console.error("[DELETE .../photos/:id] DB delete failed:", delErr);
+    return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // Best-effort bucket cleanup; not fatal if it fails (the DB row
+  // is gone, the orphan can be swept later).
+  void supabase.storage.from(PHOTO_BUCKET).remove([storagePath]);
+
+  const res: DeleteMaintenanceActionItemPhotoResponse = { ok: true };
   return c.json(res);
 });
 

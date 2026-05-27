@@ -74,6 +74,7 @@ import type {
   GetMaintenanceActionItemResponse,
   CreateMaintenanceActionItemRequest, CreateMaintenanceActionItemResponse,
   UpdateMaintenanceActionItemRequest, UpdateMaintenanceActionItemResponse,
+  UploadMaintenanceActionItemPhotoResponse, DeleteMaintenanceActionItemPhotoResponse,
 } from '@fleetcal/types';
 
 const BASE_URL =
@@ -951,6 +952,24 @@ class RailwayClient {
   }
   deleteMaintenanceActionItem(id: string) {
     return this.req<void>('DELETE', `/v1/maintenance-action-items/${id}`);
+  }
+  /** Multipart upload — one photo per call. Browser sets the
+   *  Content-Type with the boundary; req() detects FormData and
+   *  skips its default JSON Content-Type header. */
+  uploadMaintenanceActionItemPhoto(actionItemId: string, file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    return this.req<UploadMaintenanceActionItemPhotoResponse>(
+      'POST',
+      `/v1/maintenance-action-items/${actionItemId}/photos`,
+      fd,
+    );
+  }
+  deleteMaintenanceActionItemPhoto(photoId: string) {
+    return this.req<DeleteMaintenanceActionItemPhotoResponse>(
+      'DELETE',
+      `/v1/maintenance-action-items/photos/${photoId}`,
+    );
   }
 }
 

@@ -1206,6 +1206,24 @@ export interface MaintenanceActionItem {
   createdByName?: string;
   createdAt:      string;
   updatedAt:      string;
+
+  /** Dispatcher-uploaded photos attached directly to this work order.
+   *  Distinct from the linked driver report's photos (those live on
+   *  the report and are inherited via reportId). Populated by list/
+   *  detail endpoints that pre-fetch from maintenance_action_item_photos. */
+  photos?:        MaintenanceActionItemPhoto[];
+}
+
+export interface MaintenanceActionItemPhoto {
+  id:           string;
+  actionItemId: string;
+  fileName:     string;
+  mimeType?:    string;
+  sizeBytes?:   number;
+  uploadedBy?:  string;
+  uploadedAt:   string;
+  /** Signed read URL minted server-side; expires after ~1 hour. */
+  signedUrl?:   string;
 }
 
 

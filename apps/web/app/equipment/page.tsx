@@ -31,7 +31,8 @@ import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
 import type {
   MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto,
-  MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+  MaintenanceActionItem, MaintenanceActionItemPhoto,
+  MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
 } from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import {
@@ -1496,6 +1497,60 @@ function WorkOrderModal({
     return () => { cancelled = true; };
   }, [mode, item?.reportId]);
 
+  // Dispatcher-uploaded photos — these belong to the work order itself
+  // (separate table). Seeded from the item's existing photos in edit
+  // mode; create/convert modes can't upload until the item exists, so
+  // the +Photos button is disabled in those modes.
+  const [ownPhotos, setOwnPhotos] = useState<MaintenanceActionItemPhoto[]>(
+    mode === 'edit' ? (item?.photos ?? []) : []
+  );
+  // Upload state — tracks files currently being POSTed so the UI can
+  // show a spinner per pending tile and disable the +Photos button
+  // while a batch is in flight. We don't keep file blobs here, just a
+  // counter; the file picker can be re-opened mid-upload safely.
+  const [photosUploading, setPhotosUploading] = useState(0);
+  const [photoError,      setPhotoError]      = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Handle multi-file selection — loop and upload sequentially so a
+  // single failure doesn't blow up the whole batch. After each
+  // upload appends to ownPhotos so the new tile shows up immediately.
+  const handlePhotoFiles = useCallback(async (files: FileList | File[]) => {
+    if (mode !== 'edit' || !item) return;
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setPhotoError(null);
+    setPhotosUploading(n => n + list.length);
+    for (const file of list) {
+      try {
+        const res = await railway.uploadMaintenanceActionItemPhoto(item.id, file);
+        setOwnPhotos(prev => [...prev, res.photo]);
+      } catch (err) {
+        console.error('[work-order modal] photo upload failed:', err);
+        setPhotoError((err as Error).message ?? 'Photo upload failed');
+        // Continue with the rest of the batch — one bad file shouldn't
+        // abort an otherwise-good upload session.
+      } finally {
+        setPhotosUploading(n => n - 1);
+      }
+    }
+  }, [mode, item]);
+
+  // Delete a dispatcher-uploaded photo. Optimistic — remove the tile
+  // immediately, restore on failure. (Report photos can't be deleted
+  // from here; they're owned by the report.)
+  const handleDeleteOwnPhoto = useCallback(async (photoId: string) => {
+    const before = ownPhotos;
+    setOwnPhotos(prev => prev.filter(p => p.id !== photoId));
+    try {
+      await railway.deleteMaintenanceActionItemPhoto(photoId);
+    } catch (err) {
+      console.error('[work-order modal] photo delete failed:', err);
+      setPhotoError((err as Error).message ?? 'Failed to remove photo.');
+      setOwnPhotos(before); // roll back
+    }
+  }, [ownPhotos]);
+
   // Dirty-state tracking — shallow-compare form against the snapshot
   // we initialized with. Used by the close-guard below to prompt
   // before discarding edits. Object.keys check is fine here: form
@@ -1879,50 +1934,162 @@ function WorkOrderModal({
             </div>
           )}
 
-          {/* Reference photos — pulled from the linked driver report.
-              Read-only here; the work order doesn't own these, they're
-              just evidence carried over from the driver's submission so
-              the dispatcher can see what they're looking at while
-              closing out. Click a tile to open the full image in a new
-              tab. Empty in create mode (no report linked yet); in
-              convert + edit modes it's auto-populated from the report. */}
-          {reportPhotos.length > 0 && (
+          {/* Photos — unified strip:
+              • Dispatcher-uploaded photos (ownPhotos) come first, with
+                a hover-delete affordance. These belong to the work
+                order itself and survive even if the source report is
+                gone.
+              • Reference photos from the linked driver report follow,
+                rendered with a small "from driver report" badge and
+                no delete control (they live on the report).
+              The "+ Photos" button is only enabled in edit mode (the
+              row needs to exist to attach photos to it). */}
+          {(mode === 'edit' || reportPhotos.length > 0) && (
             <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
-                style={{ color: 'var(--gc-text-3)' }}>
-                Reference photos
-                <span className="ml-1.5 font-medium normal-case tracking-normal" style={{ color: 'var(--gc-text-3)' }}>
-                  from driver report
-                </span>
-              </label>
-              <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))' }}>
-                {reportPhotos.map(p => p.signedUrl ? (
-                  <a
-                    key={p.id}
-                    href={p.signedUrl}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    title="Open full image"
-                    className="block overflow-hidden rounded-lg transition-transform"
-                    style={{
-                      border:      '1px solid var(--gc-border-light)',
-                      background:  'var(--gc-surface)',
-                      aspectRatio: '1 / 1',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.03)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={p.signedUrl} alt="report evidence"
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-                  </a>
-                ) : (
-                  <div key={p.id}
-                    className="flex items-center justify-center rounded-lg text-[11px]"
-                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)', aspectRatio: '1 / 1' }}>
-                    no preview
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  Photos
+                  {ownPhotos.length + reportPhotos.length > 0 && (
+                    <span className="ml-1.5 font-medium normal-case tracking-normal" style={{ color: 'var(--gc-text-3)' }}>
+                      ({ownPhotos.length + reportPhotos.length})
+                    </span>
+                  )}
+                </label>
+                {mode === 'edit' && (
+                  <>
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: 'none' }}
+                      onChange={e => {
+                        if (e.target.files) void handlePhotoFiles(e.target.files);
+                        // Reset so selecting the same file twice fires onChange.
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => photoInputRef.current?.click()}
+                      disabled={photosUploading > 0}
+                      className="flex items-center gap-1.5 rounded-md text-[12px] font-semibold transition-colors"
+                      style={{
+                        background: 'var(--gc-surface)',
+                        color:      'var(--gc-blue)',
+                        border:     '1px solid var(--gc-border)',
+                        padding:    '5px 10px',
+                        cursor:     photosUploading > 0 ? 'default' : 'pointer',
+                        opacity:    photosUploading > 0 ? 0.6 : 1,
+                      }}
+                      onMouseEnter={e => { if (photosUploading === 0) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'var(--gc-surface)'; }}>
+                      {photosUploading > 0
+                        ? <><Loader2 size={12} className="animate-spin" /> Uploading…</>
+                        : <><Camera size={12} /> + Photos</>}
+                    </button>
+                  </>
+                )}
               </div>
+              {photoError && (
+                <div className="text-[12px] mb-2" style={{ color: '#dc2626' }}>{photoError}</div>
+              )}
+              {ownPhotos.length + reportPhotos.length === 0 && photosUploading === 0 && (
+                <div className="rounded-lg text-[12.5px] py-3 px-3 text-center"
+                  style={{ background: 'var(--gc-bg)', border: '1px dashed var(--gc-border-light)', color: 'var(--gc-text-3)' }}>
+                  No photos yet. Click <span className="font-semibold">+ Photos</span> to attach before/after shots, parts receipts, etc.
+                </div>
+              )}
+              {(ownPhotos.length + reportPhotos.length > 0 || photosUploading > 0) && (
+                <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))' }}>
+                  {/* Dispatcher-uploaded — hover to reveal delete */}
+                  {ownPhotos.map(p => (
+                    <div key={p.id}
+                      className="relative overflow-hidden rounded-lg group"
+                      style={{
+                        border:      '1px solid var(--gc-border-light)',
+                        background:  'var(--gc-surface)',
+                        aspectRatio: '1 / 1',
+                      }}>
+                      {p.signedUrl ? (
+                        <a href={p.signedUrl} target="_blank" rel="noreferrer noopener" title="Open full image"
+                          style={{ display: 'block', width: '100%', height: '100%' }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={p.signedUrl} alt={p.fileName}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        </a>
+                      ) : (
+                        <div className="flex items-center justify-center text-[11px] h-full"
+                          style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
+                          no preview
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteOwnPhoto(p.id)}
+                        aria-label="Delete photo"
+                        title="Delete photo"
+                        className="absolute top-1.5 right-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                        style={{
+                          width:      22,
+                          height:     22,
+                          background: 'rgba(0,0,0,0.6)',
+                          color:      '#fff',
+                          border:     'none',
+                          cursor:     'pointer',
+                        }}>
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  ))}
+                  {/* Placeholder tiles while uploading */}
+                  {photosUploading > 0 && Array.from({ length: photosUploading }).map((_, i) => (
+                    <div key={`uploading-${i}`}
+                      className="flex items-center justify-center rounded-lg"
+                      style={{
+                        border:      '1px dashed var(--gc-border)',
+                        background:  'var(--gc-bg)',
+                        aspectRatio: '1 / 1',
+                      }}>
+                      <Loader2 size={20} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
+                    </div>
+                  ))}
+                  {/* Report-inherited — small badge, no delete */}
+                  {reportPhotos.map(p => p.signedUrl ? (
+                    <a
+                      key={p.id}
+                      href={p.signedUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      title="Open full image — from driver report"
+                      className="relative block overflow-hidden rounded-lg"
+                      style={{
+                        border:      '1px solid var(--gc-border-light)',
+                        background:  'var(--gc-surface)',
+                        aspectRatio: '1 / 1',
+                      }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={p.signedUrl} alt="report evidence"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                      <span
+                        className="absolute bottom-1 left-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                        style={{
+                          background: 'rgba(0,0,0,0.65)',
+                          color:      '#fff',
+                        }}>
+                        Driver report
+                      </span>
+                    </a>
+                  ) : (
+                    <div key={p.id}
+                      className="flex items-center justify-center rounded-lg text-[11px]"
+                      style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', color: 'var(--gc-text-3)', aspectRatio: '1 / 1' }}>
+                      no preview
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

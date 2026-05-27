@@ -16,7 +16,7 @@ import type {
   FuelTransaction, FuelTransactionMatchStatus, FuelTransactionProvider,
   InternalNote, Invoice, InvoiceLineItem, InvoiceStatus, Load, LoadAuditEntry,
   MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
-  MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+  MaintenanceActionItem, MaintenanceActionItemPhoto, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
   OrgSettings, PayrollAdjustment, PayrollRecord, RefNum, SavedLocation, Stop, Trailer,
 } from "./domain";
 import type { CheckCallChannel, CheckCallParty, LoadStatus, RelayRole, TrailerCategory } from "./enums";
@@ -1470,11 +1470,22 @@ export interface UpdateMaintenanceActionItemRequest {
 }
 export interface UpdateMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
 
+/** POST /v1/maintenance-action-items/:id/photos — multipart upload.
+ *  Body is `file` as a single multipart field. One file per request
+ *  (the client loops over selected files) to keep the wire shape
+ *  trivial and per-file partial-failure handling possible. */
+export interface UploadMaintenanceActionItemPhotoResponse {
+  photo: MaintenanceActionItemPhoto;
+}
+
+/** DELETE /v1/maintenance-action-items/photos/:id */
+export interface DeleteMaintenanceActionItemPhotoResponse { ok: true; }
+
 /** Re-export so callers that import from this module exclusively get
  *  the maintenance shapes too. */
 export type {
   MaintenanceReport, MaintenanceReportStatus, MaintenanceReportPhoto,
-  MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+  MaintenanceActionItem, MaintenanceActionItemPhoto, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
 };
 
 // ── /v1/reports/loads — load-shaped report endpoint ────────────────────

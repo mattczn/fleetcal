@@ -1060,6 +1060,50 @@ export type Database = {
           },
         ]
       }
+      maintenance_action_item_photos: {
+        Row: {
+          action_item_id: string
+          file_name: string
+          id: string
+          mime_type: string | null
+          org_id: string
+          size_bytes: number | null
+          storage_path: string
+          uploaded_at: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          action_item_id: string
+          file_name: string
+          id?: string
+          mime_type?: string | null
+          org_id: string
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          action_item_id?: string
+          file_name?: string
+          id?: string
+          mime_type?: string | null
+          org_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "maintenance_action_item_photos_action_item_id_fkey"
+            columns: ["action_item_id"]
+            isOneToOne: false
+            referencedRelation: "maintenance_action_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       maintenance_report_photos: {
         Row: {
           file_name: string
