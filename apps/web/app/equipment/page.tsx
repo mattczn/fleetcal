@@ -426,20 +426,41 @@ function MaintenanceTabContent({
   const [woReloadKey, setWoReloadKey] = useState(0);
   const bumpWoReload = useCallback(() => setWoReloadKey(k => k + 1), []);
 
+  // Pending-triage count for the Driver reports sub-tab badge.
+  // Lightweight separate fetch so dispatchers see "you have N reports
+  // to triage" without having to click into the sub-tab first.
+  // Recomputes whenever a convert action fires (via woReloadKey).
+  const [pendingReportCount, setPendingReportCount] = useState<number | null>(null);
+  useEffect(() => {
+    railway.listMaintenanceReports({ limit: 200 })
+      .then(r => {
+        // "Pending" = needs dispatcher attention. Open reports are the
+        // raw inbox; reviewed reports are partially-triaged but not
+        // yet acted on. Converted + dismissed are settled.
+        const pending = r.reports.filter(rep =>
+          rep.status === 'open' || rep.status === 'reviewed',
+        ).length;
+        setPendingReportCount(pending);
+      })
+      .catch(() => setPendingReportCount(null));
+  }, [woReloadKey]);
+
   return (
     <div className="flex flex-col gap-4">
-      {/* Sub-tab strip — pill style, smaller than the top-level tabs. */}
+      {/* Sub-tab strip — pill style, smaller than the top-level tabs.
+          Driver reports gets a badge with the pending-triage count
+          so the dispatcher sees inbox pressure without clicking. */}
       <div className="flex items-center gap-1">
         {([
-          { v: 'work_orders'    as const, label: 'Work orders' },
-          { v: 'driver_reports' as const, label: 'Driver reports' },
+          { v: 'work_orders'    as const, label: 'Work orders',    badge: null },
+          { v: 'driver_reports' as const, label: 'Driver reports', badge: pendingReportCount && pendingReportCount > 0 ? pendingReportCount : null },
         ]).map(t => {
           const active = subTab === t.v;
           return (
             <button key={t.v}
               type="button"
               onClick={() => setSubTab(t.v)}
-              className="rounded-md text-[13px] font-medium transition-colors"
+              className="flex items-center gap-1.5 rounded-md text-[13px] font-medium transition-colors"
               style={{
                 padding:    '5px 12px',
                 background: active ? 'var(--gc-bg)' : 'transparent',
@@ -447,6 +468,19 @@ function MaintenanceTabContent({
                 border:     `1px solid ${active ? 'var(--gc-border-light)' : 'transparent'}`,
               }}>
               {t.label}
+              {t.badge != null && (
+                <span
+                  className="inline-flex items-center justify-center rounded-full text-[10px] font-bold tabular-nums"
+                  style={{
+                    background: active ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                    color:      '#fff',
+                    minWidth:   18,
+                    height:     16,
+                    padding:    '0 5px',
+                  }}>
+                  {t.badge}
+                </span>
+              )}
             </button>
           );
         })}
@@ -460,8 +494,10 @@ function MaintenanceTabContent({
           assetLabelById={assetLabelById}
           trailerLabelById={trailerLabelById}
           reloadKey={woReloadKey}
+          pendingReportCount={pendingReportCount}
           onNewClick={() => setWoModal({ open: true, mode: 'create' })}
           onRowClick={(item) => setWoModal({ open: true, mode: 'edit', item })}
+          onSwitchToReports={() => setSubTab('driver_reports')}
         />
       )}
 
@@ -511,7 +547,7 @@ function MaintenanceTabContent({
 
 function WorkOrdersList({
   drivers, assets, trailers, assetLabelById, trailerLabelById,
-  reloadKey, onNewClick, onRowClick,
+  reloadKey, pendingReportCount, onNewClick, onRowClick, onSwitchToReports,
 }: {
   drivers: Driver[];
   assets: Asset[];
@@ -519,8 +555,12 @@ function WorkOrdersList({
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
   reloadKey: number;
+  pendingReportCount: number | null;
   onNewClick: () => void;
   onRowClick: (item: MaintenanceActionItem) => void;
+  /** Switches the sub-tab to Driver reports. Used by the empty-state
+   *  CTA when there are pending reports the dispatcher could convert. */
+  onSwitchToReports: () => void;
 }) {
   const [items, setItems] = useState<MaintenanceActionItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -628,6 +668,71 @@ function WorkOrdersList({
       options: buildEquipmentOptions(assets, trailers),
       predicate: (r, v) => matchesEquipment(v, r.assetId, r.trailerId) },
   ];
+
+  // First-time / true-empty state: render a friendly CTA instead of
+  // the table's "no rows match" message. We can't tell from inside
+  // OpsTable whether `0 visible` is "filters narrowed to nothing" vs
+  // "carrier has never created one", so we short-circuit here when
+  // the raw count is zero. Once they have any item at all, the
+  // standard filter-no-match message inside OpsTable takes over.
+  if (!loading && items.length === 0) {
+    return (
+      <div
+        className="rounded-lg flex flex-col items-center justify-center text-center"
+        style={{
+          background: 'var(--gc-surface)',
+          border:     '1px solid var(--gc-border-light)',
+          padding:    '56px 24px',
+        }}>
+        <div
+          className="rounded-full flex items-center justify-center mb-4"
+          style={{ width: 56, height: 56, background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
+          <Wrench size={24} />
+        </div>
+        <div className="text-[16px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+          No work orders yet
+        </div>
+        <div className="text-[13px] mt-1.5 max-w-[440px]" style={{ color: 'var(--gc-text-3)' }}>
+          Work orders track every repair, PM, and inspection — open, in-progress, or done.
+          Create one when you schedule a shop visit, or convert a driver report into one.
+        </div>
+        <div className="flex items-center gap-2 mt-5">
+          <button
+            type="button"
+            onClick={onNewClick}
+            className="rounded-md transition-colors"
+            style={{
+              background: 'var(--gc-blue)',
+              color:      '#fff',
+              border:     '1px solid var(--gc-blue)',
+              padding:    '8px 16px',
+              fontSize:   13,
+              fontWeight: 600,
+              cursor:     'pointer',
+            }}>
+            + Create your first work order
+          </button>
+          {pendingReportCount != null && pendingReportCount > 0 && (
+            <button
+              type="button"
+              onClick={onSwitchToReports}
+              className="rounded-md transition-colors"
+              style={{
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-text-2)',
+                border:     '1px solid var(--gc-border-light)',
+                padding:    '8px 14px',
+                fontSize:   13,
+                fontWeight: 600,
+                cursor:     'pointer',
+              }}>
+              {pendingReportCount} driver report{pendingReportCount === 1 ? '' : 's'} to triage →
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <OpsTable
