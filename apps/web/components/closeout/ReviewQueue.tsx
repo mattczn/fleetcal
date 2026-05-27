@@ -1353,12 +1353,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           {/* Right: actions sidebar. Width is dictated by the parent
               grid's third track (320px) — no width prop here so the
               two values can't drift out of sync. */}
-          <div className="flex flex-col" style={{ borderLeft: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+          {/* Right sidebar column. min-h-0 + overflow-hidden are
+              load-bearing — without them, when content above pushes
+              (pending file list grows, PdfCanvas in the middle column
+              fires its ResizeObserver) the flex algorithm can't compress
+              the "Include in invoice" track and the action buttons at
+              the bottom get pushed below the visible area in an
+              oscillating layout fight. */}
+          <div className="flex flex-col min-h-0 overflow-hidden" style={{ borderLeft: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
             {/* Accessorials banner — surfaces detention / lumper / scale
                 etc. with their amounts so the dispatcher knows what
                 support docs they're verifying against. */}
             {(current.accessorials ?? []).length > 0 && (
-              <div className="px-4 py-3" style={{ background: '#fef9c3', borderBottom: '1px solid #fde68a' }}>
+              <div className="shrink-0 px-4 py-3" style={{ background: '#fef9c3', borderBottom: '1px solid #fde68a' }}>
                 <div className="text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#854d0e' }}>
                   Accessorials ({(current.accessorials ?? []).length})
                 </div>
@@ -1379,7 +1386,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             )}
 
             {/* Verification checklist */}
-            <div className="px-4 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+            <div className="shrink-0 px-4 py-4" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
               <div className="text-[11px] font-bold uppercase tracking-wider mb-2.5" style={{ color: 'var(--gc-text-3)' }}>
                 Verification
               </div>
@@ -1406,8 +1413,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </div>
             </div>
 
-            {/* Upload paperwork */}
-            <div className="px-4 py-3.5" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+            {/* Upload paperwork — shrink-0 so the pending-file list
+                doesn't compete for flex space with the scrollable
+                "Include in invoice" section below it. The file list
+                inside is already capped via its own grid so its
+                natural height stays bounded. */}
+            <div className="shrink-0 px-4 py-3.5" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
               <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
                 Add paperwork
               </div>
