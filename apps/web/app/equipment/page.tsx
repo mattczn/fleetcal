@@ -1147,6 +1147,7 @@ function WorkOrdersList({
                       item={item}
                       equipLabel={item._equipLabel}
                       equipColor={item._equipColor}
+                      showOverdue
                       onClick={() => onRowClick(item)}
                     />
                   ))}
@@ -1168,7 +1169,7 @@ function WorkOrdersList({
 // header (i.e. inside a day column in the week grid).
 
 function WorkOrderCard({
-  item, equipLabel, equipColor, compact, onClick, onDragStart, onDragEnd, draggable,
+  item, equipLabel, equipColor, compact, onClick, onDragStart, onDragEnd, draggable, showOverdue,
 }: {
   item: MaintenanceActionItem;
   equipLabel: string;
@@ -1181,16 +1182,31 @@ function WorkOrderCard({
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?:   (e: React.DragEvent) => void;
   draggable?:   boolean;
+  /** Whether to render the OVERDUE pill when the item qualifies.
+   *  Week-view cards leave it off — the day column header already
+   *  tells you the date. Only backlog cards (where the missed date
+   *  isn't otherwise visible) get the badge. */
+  showOverdue?: boolean;
 }) {
   const cs = getCardStatus(item);
   const sp = STATUS_PALETTE[cs];
-  // Overdue only applies to UNTOUCHED work — open status (i.e. not
-  // started, not done) with a scheduledDate in the past. Once a
-  // dispatcher flips it to in_progress, the amber stripe already
-  // signals "in motion / behind schedule"; piling an OVERDUE pill
-  // on top is just noise. Done items are obviously never overdue.
+  // Overdue = open work order whose scheduled date came and went
+  // without anyone touching it. We only ever surface this in the
+  // BACKLOG view (showOverdue=true) — in the week grid, the day
+  // column already shows the date, so an OVERDUE pill there would
+  // be redundant. Done items are obviously never overdue;
+  // in-progress items hide it because the amber stripe already
+  // signals "in motion / behind schedule".
   const today = dateKeyOf(new Date());
-  const overdue = !!(item.status === 'open' && item.scheduledDate && item.scheduledDate < today);
+  const isOverdue = !!(item.status === 'open' && item.scheduledDate && item.scheduledDate < today);
+  const overdue   = isOverdue && showOverdue;
+  // Build a "MAY 25" stamp from the missed date so the OVERDUE
+  // pill is self-explanatory ("scheduled for then, never started").
+  const overdueDateLabel = (() => {
+    if (!overdue || !item.scheduledDate) return '';
+    const [y, m, d] = item.scheduledDate.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+  })();
   // Priority dot — 6px dot in the title row, colored by priority,
   // so urgency stays visible without owning the whole card color.
   const pri = PRIORITY_STYLES[item.priority];
@@ -1201,9 +1217,15 @@ function WorkOrderCard({
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
+      title={isOverdue && item.scheduledDate
+        ? `Scheduled for ${item.scheduledDate} — never started`
+        : undefined}
       className="text-left rounded-md transition-colors flex flex-col gap-1.5"
       style={{
         background: 'var(--gc-surface)',
+        // Only "advertise" the overdue state via the red border when
+        // we're showing the pill — otherwise the card is just a
+        // normal open/in-progress card with a status of its own.
         border:     `1px solid ${overdue ? '#c5221f' : 'var(--gc-border)'}`,
         borderLeft: `5px solid ${sp.stripe}`,
         padding:    compact ? '9px 11px' : '11px 13px',
@@ -1259,12 +1281,13 @@ function WorkOrderCard({
           {overdue && (
             <span
               className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-1 rounded whitespace-nowrap"
+              title={item.scheduledDate ? `Scheduled for ${item.scheduledDate} — never started` : undefined}
               style={{
                 background: '#ea4335',
                 color:      '#ffffff',
                 textShadow: '0 1px 1px rgba(0,0,0,0.18)',
               }}>
-              overdue
+              overdue · {overdueDateLabel}
             </span>
           )}
           <span
