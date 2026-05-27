@@ -1406,15 +1406,6 @@ function WorkOrderModal({
 }) {
   const initial = useMemo(() => {
     if (mode === 'edit' && item) {
-      // Strip raw Clerk user_ids from completedBy display — legacy
-      // rows stored the userId directly; the new server writes the
-      // resolved name. Prefer completedByName when present, else
-      // the existing completedBy text if it doesn't look like a
-      // Clerk id, else empty so the dispatcher fills it themselves.
-      const looksLikeClerkId = /^user_[A-Za-z0-9]{8,}$/;
-      const completedByDisplay =
-        item.completedByName
-        ?? (item.completedBy && !looksLikeClerkId.test(item.completedBy) ? item.completedBy : '');
       return {
         title:         item.title,
         description:   item.description ?? '',
@@ -1425,9 +1416,12 @@ function WorkOrderModal({
         trailerId:     item.trailerId ?? null,
         scheduledDate: item.scheduledDate ?? '',
         vendor:        item.vendor ?? '',
-        estimatedCost: item.estimatedCost?.toString() ?? '',
+        // "Total price" = actual_cost on the wire. We dropped the
+        // separate "estimated" + "completed by" inputs from the UI —
+        // estimated was speculative noise, and completed_by is
+        // auto-filled server-side from the dispatcher's Clerk name on
+        // status→done. Vendor/Shop already records who did the work.
         actualCost:    item.actualCost?.toString() ?? '',
-        completedBy:   completedByDisplay,
       };
     }
     if (mode === 'convert' && fromReport) {
@@ -1444,9 +1438,7 @@ function WorkOrderModal({
         trailerId:     fromReport.trailerId ?? null,
         scheduledDate: '',
         vendor:        '',
-        estimatedCost: '',
         actualCost:    '',
-        completedBy:   '',
       };
     }
     return {
@@ -1459,9 +1451,7 @@ function WorkOrderModal({
       trailerId:     null as number | null,
       scheduledDate: defaultScheduledDate ?? '',
       vendor:        '',
-      estimatedCost: '',
       actualCost:    '',
-      completedBy:   '',
     };
   }, [mode, item, fromReport, defaultScheduledDate]);
 
@@ -1469,9 +1459,6 @@ function WorkOrderModal({
   useEffect(() => { setForm(initial); }, [initial]);
   const [busy, setBusy]     = useState(false);
   const [error, setError]   = useState<string | null>(null);
-  // More-details collapse — closed by default in create + convert,
-  // open in edit mode where the dispatcher is closing things out.
-  const [detailsOpen, setDetailsOpen] = useState(mode === 'edit');
 
   // Dirty-state tracking — shallow-compare form against the snapshot
   // we initialized with. Used by the close-guard below to prompt
@@ -1569,9 +1556,10 @@ function WorkOrderModal({
         priority:      form.priority,
         scheduledDate: form.scheduledDate || undefined,
         vendor:        form.vendor.trim() || undefined,
-        estimatedCost: form.estimatedCost ? Number(form.estimatedCost) : undefined,
+        // Total price → actual_cost on the wire. Estimated dropped
+        // from the UI; completedBy is now server-auto-filled on
+        // status→done from the dispatcher's Clerk identity.
         actualCost:    mode === 'edit' && form.actualCost ? Number(form.actualCost) : undefined,
-        completedBy:   mode === 'edit' && form.completedBy.trim() ? form.completedBy.trim() : undefined,
         status:        mode === 'edit' ? form.status : undefined,
         assetId:       form.assetId ?? undefined,
         trailerId:     form.trailerId ?? undefined,
@@ -1855,95 +1843,45 @@ function WorkOrderModal({
             </div>
           )}
 
-          {/* More details — collapsible. In edit mode, defaults open
-              so the dispatcher can fill in vendor/cost when closing out. */}
+          {/* Vendor + total — edit mode only. Pared back from the
+              earlier vendor/estimated/actual/completed-by quartet
+              because most of those overlapped: vendor records who did
+              the work, completed_by was redundant with vendor (and
+              auto-filled server-side for audit), and estimated was
+              speculative noise. Two fields left:
+                • Vendor / shop  — who did the work
+                • Total price    — what it cost (was "actual" $) */}
           {mode === 'edit' && (
-            <div
-              className="rounded-lg overflow-hidden"
-              style={{ border: '1px solid var(--gc-border-light)' }}>
-              <button
-                type="button"
-                onClick={() => setDetailsOpen(o => !o)}
-                className="w-full flex items-center justify-between px-3 py-2 transition-colors"
-                style={{ background: detailsOpen ? 'var(--gc-bg)' : 'var(--gc-surface)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-bg)')}
-                onMouseLeave={e => (e.currentTarget.style.background = detailsOpen ? 'var(--gc-bg)' : 'var(--gc-surface)')}>
-                <span className="text-[12px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
-                  Vendor &amp; cost {detailsOpen ? '' : '· optional'}
-                </span>
-                <svg width="11" height="11" viewBox="0 0 11 11" fill="none"
-                  style={{
-                    color: 'var(--gc-text-3)',
-                    transform: detailsOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                    transition: 'transform 150ms',
-                  }}>
-                  <path d="M1.5 3.5l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-              {detailsOpen && (
-                <div className="px-3 py-3 flex flex-col gap-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-                  <div>
-                    <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
-                      style={{ color: 'var(--gc-text-3)' }}>
-                      Vendor / shop
-                    </label>
-                    <input
-                      value={form.vendor}
-                      onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))}
-                      placeholder="NAPA, in-house, …"
-                      style={iStyle}
-                      onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
-                      onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
-                        style={{ color: 'var(--gc-text-3)' }}>
-                        Estimated $
-                      </label>
-                      <input
-                        value={form.estimatedCost}
-                        onChange={e => setForm(f => ({ ...f, estimatedCost: e.target.value }))}
-                        placeholder="0.00"
-                        inputMode="decimal"
-                        style={{ ...iStyle, fontFamily: 'ui-monospace, monospace' }}
-                        onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
-                        onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
-                        style={{ color: 'var(--gc-text-3)' }}>
-                        Actual $
-                      </label>
-                      <input
-                        value={form.actualCost}
-                        onChange={e => setForm(f => ({ ...f, actualCost: e.target.value }))}
-                        placeholder="0.00"
-                        inputMode="decimal"
-                        style={{ ...iStyle, fontFamily: 'ui-monospace, monospace' }}
-                        onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
-                        onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
-                      style={{ color: 'var(--gc-text-3)' }}>
-                      Completed by
-                    </label>
-                    <input
-                      value={form.completedBy}
-                      onChange={e => setForm(f => ({ ...f, completedBy: e.target.value }))}
-                      placeholder="Mechanic / shop name"
-                      style={iStyle}
-                      onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
-                      onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-                    />
-                  </div>
-                </div>
-              )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  Vendor / shop
+                </label>
+                <input
+                  value={form.vendor}
+                  onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))}
+                  placeholder="NAPA, in-house, …"
+                  style={iStyle}
+                  onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
+                  onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  Total price
+                </label>
+                <input
+                  value={form.actualCost}
+                  onChange={e => setForm(f => ({ ...f, actualCost: e.target.value }))}
+                  placeholder="0.00"
+                  inputMode="decimal"
+                  style={{ ...iStyle, fontFamily: 'ui-monospace, monospace' }}
+                  onFocus={e => (e.currentTarget.style.borderColor = LOAD_ACCENT)}
+                  onBlur={e =>  (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+                />
+              </div>
             </div>
           )}
 
