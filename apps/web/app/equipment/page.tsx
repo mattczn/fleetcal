@@ -29,7 +29,10 @@ import {
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
 import type { Driver, Asset } from '@/lib/types';
-import type { MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto } from '@fleetcal/types';
+import type {
+  MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto,
+  MaintenanceActionItem, MaintenanceCategory, MaintenancePriority, MaintenanceActionStatus,
+} from '@fleetcal/types';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
 import {
   OpsTable, OpsDate, OpsPill, OpsMuted,
@@ -267,15 +270,15 @@ export default function EquipmentPage() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="mx-auto w-full px-6 py-5" style={{ maxWidth: 1400 }}>
         {tab === 'maintenance' && (
-          <MaintenanceList
+          <MaintenanceTabContent
             drivers={drivers}
             assets={assets}
             trailers={trailers}
             driverNameById={driverNameById}
             assetLabelById={assetLabelById}
             trailerLabelById={trailerLabelById}
-            onOpen={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
-            openId={panel?.kind === 'maintenance' ? panel.id : null}
+            panel={panel}
+            setPanel={setPanel}
           />
         )}
         {tab === 'inspections' && (
@@ -381,8 +384,778 @@ function matchesEquipment(filterValue: string, assetId?: number, trailerId?: num
 
 // ─── Maintenance ──────────────────────────────────────────────────────
 
+// ─── Maintenance tab content (sub-tabs: Work orders / Driver reports) ──
+//
+// The Maintenance tab now has two surfaces:
+//
+//   • Work orders     — proactive ops work. CRUD on maintenance_action_items
+//                       (the ops-tracked job: scheduled repairs, PMs,
+//                       inspections, etc.). Replaces what the legacy my-
+//                       calendar maintenance.html called "Action Queue".
+//   • Driver reports  — reactive. The existing maintenance_reports list
+//                       (driver-submitted defects). Convert action turns
+//                       a report into a work order.
+
+type MaintenanceSubTab = 'work_orders' | 'driver_reports';
+
+function MaintenanceTabContent({
+  drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById,
+  panel, setPanel,
+}: {
+  drivers: Driver[];
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  driverNameById: Map<number, string>;
+  assetLabelById: Map<number, string>;
+  trailerLabelById: Map<number, string>;
+  panel: PanelData | null;
+  setPanel: (p: PanelData | null) => void;
+}) {
+  const [subTab, setSubTab] = useState<MaintenanceSubTab>('work_orders');
+  // Modal state for work-order create/edit. `mode` distinguishes:
+  //   - 'create'  : blank form, POST on save
+  //   - 'edit'    : prefilled from existing item, PATCH on save
+  //   - 'convert' : prefilled from a driver report, POST /convert on save
+  const [woModal, setWoModal] = useState<
+    | { open: true; mode: 'create' }
+    | { open: true; mode: 'edit'; item: MaintenanceActionItem }
+    | { open: true; mode: 'convert'; report: MaintenanceReport }
+    | { open: false }
+  >({ open: false });
+  // Bump-counter so the Work Orders list re-fetches after any mutation.
+  const [woReloadKey, setWoReloadKey] = useState(0);
+  const bumpWoReload = useCallback(() => setWoReloadKey(k => k + 1), []);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Sub-tab strip — pill style, smaller than the top-level tabs. */}
+      <div className="flex items-center gap-1">
+        {([
+          { v: 'work_orders'    as const, label: 'Work orders' },
+          { v: 'driver_reports' as const, label: 'Driver reports' },
+        ]).map(t => {
+          const active = subTab === t.v;
+          return (
+            <button key={t.v}
+              type="button"
+              onClick={() => setSubTab(t.v)}
+              className="rounded-md text-[13px] font-medium transition-colors"
+              style={{
+                padding:    '5px 12px',
+                background: active ? 'var(--gc-bg)' : 'transparent',
+                color:      active ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+                border:     `1px solid ${active ? 'var(--gc-border-light)' : 'transparent'}`,
+              }}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {subTab === 'work_orders' && (
+        <WorkOrdersList
+          drivers={drivers}
+          assets={assets}
+          trailers={trailers}
+          assetLabelById={assetLabelById}
+          trailerLabelById={trailerLabelById}
+          reloadKey={woReloadKey}
+          onNewClick={() => setWoModal({ open: true, mode: 'create' })}
+          onRowClick={(item) => setWoModal({ open: true, mode: 'edit', item })}
+        />
+      )}
+
+      {subTab === 'driver_reports' && (
+        <MaintenanceList
+          drivers={drivers}
+          assets={assets}
+          trailers={trailers}
+          driverNameById={driverNameById}
+          assetLabelById={assetLabelById}
+          trailerLabelById={trailerLabelById}
+          onOpen={(r) => setPanel({ kind: 'maintenance', id: r.id, report: r })}
+          onConvertClick={(r) => setWoModal({ open: true, mode: 'convert', report: r })}
+          openId={panel?.kind === 'maintenance' ? panel.id : null}
+        />
+      )}
+
+      {/* Work-order modal — controlled by the parent so both Work-orders
+          rows and "Convert from driver report" both route to the same
+          form. */}
+      {woModal.open && (
+        <WorkOrderModal
+          mode={woModal.mode}
+          item={woModal.mode === 'edit'    ? woModal.item   : undefined}
+          fromReport={woModal.mode === 'convert' ? woModal.report : undefined}
+          assets={assets}
+          trailers={trailers}
+          assetLabelById={assetLabelById}
+          trailerLabelById={trailerLabelById}
+          onClose={() => setWoModal({ open: false })}
+          onSaved={() => {
+            setWoModal({ open: false });
+            bumpWoReload();
+            // If we converted a driver report, also flip its row to
+            // 'converted' in the panel state if it's currently open.
+            if (woModal.mode === 'convert' && panel?.kind === 'maintenance' && panel.id === woModal.report.id) {
+              setPanel(null);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Work orders list ──────────────────────────────────────────────────
+
+function WorkOrdersList({
+  drivers, assets, trailers, assetLabelById, trailerLabelById,
+  reloadKey, onNewClick, onRowClick,
+}: {
+  drivers: Driver[];
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  assetLabelById: Map<number, string>;
+  trailerLabelById: Map<number, string>;
+  reloadKey: number;
+  onNewClick: () => void;
+  onRowClick: (item: MaintenanceActionItem) => void;
+}) {
+  const [items, setItems] = useState<MaintenanceActionItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  // `drivers` not used here — kept on the prop list for symmetry with
+  // MaintenanceList in case future filters need it (e.g. created_by).
+  void drivers;
+
+  useEffect(() => {
+    setLoading(true);
+    railway.listMaintenanceActionItems({ limit: 500 })
+      .then(r => setItems(r.actionItems))
+      .catch(err => { console.error('[equipment] work orders:', err); setItems([]); })
+      .finally(() => setLoading(false));
+  }, [reloadKey]);
+
+  const resolvedRows = useMemo(() => items.map(i => {
+    const equipLabel = i.assetId
+      ? (assetLabelById.get(i.assetId) ?? `Asset #${i.assetId}`)
+      : i.trailerId
+        ? (trailerLabelById.get(i.trailerId) ?? `Trailer #${i.trailerId}`)
+        : '—';
+    return { ...i, _equipLabel: equipLabel };
+  }), [items, assetLabelById, trailerLabelById]);
+
+  type R = typeof resolvedRows[number];
+
+  const columns: OpsColumn<R>[] = [
+    { key: 'scheduledDate', header: 'Date', width: 110, sortable: true,
+      sortValue: r => r.scheduledDate ?? r.createdAt,
+      render: r => r.scheduledDate
+        ? <OpsDate iso={`${r.scheduledDate}T12:00:00`} />
+        : <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>unscheduled</span> },
+    { key: 'title', header: 'Title', sortable: true,
+      render: r => (
+        <span>
+          {r.outOfService && <OpsPill color="red">OOS</OpsPill>}{r.outOfService && ' '}
+          {r.title.length > 70 ? r.title.slice(0, 70) + '…' : r.title}
+        </span>
+      ) },
+    { key: '_equipLabel', header: 'Equipment', sortable: true,
+      render: r => r._equipLabel },
+    { key: 'category', header: 'Category', width: 110, sortable: true,
+      sortValue: r => r.category,
+      render: r => <span className="text-[12px] capitalize" style={{ color: 'var(--gc-text-2)' }}>{r.category}</span> },
+    { key: 'priority', header: 'Priority', width: 100, sortable: true,
+      sortValue: r => ['urgent', 'high', 'normal', 'low'].indexOf(r.priority),
+      render: r => {
+        const color: 'red' | 'amber' | 'blue' | 'gray' =
+          r.priority === 'urgent' ? 'red'   :
+          r.priority === 'high'   ? 'amber' :
+          r.priority === 'normal' ? 'blue'  :
+                                    'gray';
+        return <OpsPill color={color}>{r.priority}</OpsPill>;
+      } },
+    { key: 'status', header: 'Status', width: 110, sortable: true,
+      sortValue: r => r.status,
+      render: r => {
+        const color: 'amber' | 'blue' | 'green' =
+          r.status === 'open'        ? 'amber' :
+          r.status === 'in_progress' ? 'blue'  :
+                                       'green';   // done
+        return <OpsPill color={color}>{r.status.replace('_', ' ')}</OpsPill>;
+      } },
+    { key: 'cost', header: 'Cost', width: 100, align: 'right',
+      sortValue: r => r.actualCost ?? r.estimatedCost ?? -1,
+      render: r => {
+        const v = r.actualCost ?? r.estimatedCost;
+        return v != null
+          ? <span className="font-mono">${v.toFixed(2)}</span>
+          : <OpsMuted />;
+      } },
+    { key: 'vendor', header: 'Vendor',
+      render: r => r.vendor ?? <OpsMuted /> },
+  ];
+
+  const filters: OpsFilter<R>[] = [
+    { kind: 'search', placeholder: 'Search title, description, vendor…',
+      match: (r, q) => r.title.toLowerCase().includes(q)
+                    || (r.description ?? '').toLowerCase().includes(q)
+                    || (r.vendor ?? '').toLowerCase().includes(q) },
+    { kind: 'select', key: 'status', label: 'Status',
+      options: [
+        { value: 'open',         label: 'Open' },
+        { value: 'in_progress',  label: 'In progress' },
+        { value: 'done',         label: 'Done' },
+      ],
+      predicate: (r, v) => r.status === v },
+    { kind: 'select', key: 'priority', label: 'Priority',
+      options: [
+        { value: 'urgent', label: 'Urgent' },
+        { value: 'high',   label: 'High' },
+        { value: 'normal', label: 'Normal' },
+        { value: 'low',    label: 'Low' },
+      ],
+      predicate: (r, v) => r.priority === v },
+    { kind: 'select', key: 'category', label: 'Category',
+      options: [
+        { value: 'repair',     label: 'Repair' },
+        { value: 'pm',         label: 'PM' },
+        { value: 'inspection', label: 'Inspection' },
+        { value: 'other',      label: 'Other' },
+      ],
+      predicate: (r, v) => r.category === v },
+    { kind: 'select', key: 'equipment', label: 'Equipment',
+      options: buildEquipmentOptions(assets, trailers),
+      predicate: (r, v) => matchesEquipment(v, r.assetId, r.trailerId) },
+  ];
+
+  return (
+    <OpsTable
+      columns={columns}
+      data={resolvedRows}
+      filters={filters}
+      loading={loading}
+      rowKey={r => r.id}
+      onRowClick={r => onRowClick(r)}
+      emptyLabel="No work orders match the current filters."
+      defaultSort={{ key: 'scheduledDate', dir: 'desc' }}
+      density="comfortable"
+      countLabel="work order"
+      toolbarRight={
+        <button
+          type="button"
+          onClick={onNewClick}
+          className="rounded-md transition-colors"
+          style={{
+            background: 'var(--gc-blue)',
+            color:      '#fff',
+            border:     '1px solid var(--gc-blue)',
+            padding:    '7px 12px',
+            fontSize:   13,
+            fontWeight: 600,
+            cursor:     'pointer',
+          }}>
+          + New work order
+        </button>
+      }
+    />
+  );
+}
+
+// ─── Work order create / edit / convert modal ─────────────────────────
+//
+// One form for all three flows. The differences:
+//   create  : empty defaults, POST /v1/maintenance-action-items
+//   edit    : prefilled from `item`, PATCH /v1/maintenance-action-items/:id
+//             + reveals status / actual cost / completed-by fields
+//   convert : prefilled from a driver `report` (title from description,
+//             asset linkage carried over), POST /v1/maintenance-reports/:id/convert
+//
+// All three routes return the saved item; the parent calls onSaved()
+// to close the modal + refresh the list.
+
+function WorkOrderModal({
+  mode, item, fromReport, assets, trailers, assetLabelById, trailerLabelById,
+  onClose, onSaved,
+}: {
+  mode: 'create' | 'edit' | 'convert';
+  item?: MaintenanceActionItem;
+  fromReport?: MaintenanceReport;
+  assets: Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+  assetLabelById: Map<number, string>;
+  trailerLabelById: Map<number, string>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  // Build initial values from whichever mode we're in.
+  const initial = useMemo(() => {
+    if (mode === 'edit' && item) {
+      return {
+        title:         item.title,
+        description:   item.description ?? '',
+        category:      item.category,
+        priority:      item.priority,
+        status:        item.status,
+        assetId:       item.assetId ?? null,
+        trailerId:     item.trailerId ?? null,
+        scheduledDate: item.scheduledDate ?? '',
+        dueDate:       item.dueDate ?? '',
+        outOfService:  item.outOfService,
+        vendor:        item.vendor ?? '',
+        estimatedCost: item.estimatedCost?.toString() ?? '',
+        actualCost:    item.actualCost?.toString() ?? '',
+        completedBy:   item.completedBy ?? '',
+      };
+    }
+    if (mode === 'convert' && fromReport) {
+      // Driver reports don't have a title field — they have a free-text
+      // description. Use a truncated form as the title default so the
+      // dispatcher can sharpen it before saving.
+      const t = fromReport.description.length > 60
+        ? fromReport.description.slice(0, 60) + '…'
+        : fromReport.description;
+      return {
+        title:         t,
+        description:   fromReport.description,
+        category:      'repair' as MaintenanceCategory,
+        priority:      'normal' as MaintenancePriority,
+        status:        'open' as MaintenanceActionStatus,
+        assetId:       fromReport.assetId ?? null,
+        trailerId:     fromReport.trailerId ?? null,
+        scheduledDate: '',
+        dueDate:       '',
+        outOfService:  false,
+        vendor:        '',
+        estimatedCost: '',
+        actualCost:    '',
+        completedBy:   '',
+      };
+    }
+    // create mode
+    return {
+      title:         '',
+      description:   '',
+      category:      'repair' as MaintenanceCategory,
+      priority:      'normal' as MaintenancePriority,
+      status:        'open' as MaintenanceActionStatus,
+      assetId:       null as number | null,
+      trailerId:     null as number | null,
+      scheduledDate: '',
+      dueDate:       '',
+      outOfService:  false,
+      vendor:        '',
+      estimatedCost: '',
+      actualCost:    '',
+      completedBy:   '',
+    };
+  }, [mode, item, fromReport]);
+
+  const [form, setForm] = useState(initial);
+  useEffect(() => { setForm(initial); }, [initial]);
+  const [busy, setBusy]     = useState(false);
+  const [error, setError]   = useState<string | null>(null);
+
+  // Single dropdown drives both asset+trailer via the "asset:N" /
+  // "trailer:N" encoding — same pattern as the OpsTable equipment
+  // filter chip.
+  const equipmentValue = form.assetId
+    ? `asset:${form.assetId}`
+    : form.trailerId
+      ? `trailer:${form.trailerId}`
+      : '';
+  const equipmentOptions = useMemo(() => buildEquipmentOptions(assets, trailers), [assets, trailers]);
+
+  function setEquipment(raw: string) {
+    if (!raw) {
+      setForm(f => ({ ...f, assetId: null, trailerId: null }));
+      return;
+    }
+    const [kind, idStr] = raw.split(':');
+    const id = Number(idStr);
+    if (kind === 'asset')   setForm(f => ({ ...f, assetId: id, trailerId: null }));
+    if (kind === 'trailer') setForm(f => ({ ...f, assetId: null, trailerId: id }));
+  }
+
+  async function save() {
+    if (busy) return;
+    if (!form.title.trim()) {
+      setError('Title is required.');
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      const payload = {
+        title:         form.title.trim(),
+        description:   form.description.trim() || undefined,
+        category:      form.category,
+        priority:      form.priority,
+        outOfService:  form.outOfService,
+        scheduledDate: form.scheduledDate || undefined,
+        dueDate:       form.dueDate || undefined,
+        vendor:        form.vendor.trim() || undefined,
+        estimatedCost: form.estimatedCost ? Number(form.estimatedCost) : undefined,
+        // Only meaningful in edit mode — the API accepts these on
+        // create too but our form doesn't expose them there.
+        actualCost:    mode === 'edit' && form.actualCost ? Number(form.actualCost) : undefined,
+        completedBy:   mode === 'edit' && form.completedBy.trim() ? form.completedBy.trim() : undefined,
+        status:        mode === 'edit' ? form.status : undefined,
+        assetId:       form.assetId ?? undefined,
+        trailerId:     form.trailerId ?? undefined,
+      };
+      if (mode === 'edit' && item) {
+        await railway.updateMaintenanceActionItem(item.id, payload);
+      } else if (mode === 'convert' && fromReport) {
+        await railway.convertMaintenanceReport(fromReport.id, payload);
+      } else {
+        // Convert needs an asset OR trailer; create mode needs the same.
+        if (!payload.assetId && !payload.trailerId) {
+          setError('Pick a truck or trailer.');
+          setBusy(false);
+          return;
+        }
+        await railway.createMaintenanceActionItem(payload);
+      }
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message ?? 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteItem() {
+    if (mode !== 'edit' || !item) return;
+    if (!window.confirm('Delete this work order? This cannot be undone.')) return;
+    setBusy(true); setError(null);
+    try {
+      await railway.deleteMaintenanceActionItem(item.id);
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message ?? 'Delete failed');
+      setBusy(false);
+    }
+  }
+
+  // Render in a portal so the backdrop covers the page chrome.
+  const title =
+    mode === 'create'  ? 'New work order'
+    : mode === 'convert' ? 'Convert driver report → work order'
+    : 'Edit work order';
+
+  const content = (
+    <div
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.55)', zIndex: 1100, padding: 24 }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div
+        className="flex flex-col rounded-2xl overflow-hidden shrink-0"
+        style={{ width: 'min(94vw, 640px)', maxHeight: '92vh', background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)' }}
+        onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 shrink-0"
+          style={{ borderBottom: '1px solid var(--gc-border)' }}>
+          <div className="flex items-center gap-2.5">
+            <Wrench size={15} style={{ color: 'var(--gc-text-2)' }} />
+            <div className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>{title}</div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-full"
+            style={{ color: 'var(--gc-text-3)' }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Form body */}
+        <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+          {/* Equipment */}
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              Truck / Trailer
+            </div>
+            <select
+              value={equipmentValue}
+              onChange={e => setEquipment(e.target.value)}
+              className="w-full text-[13px] outline-none"
+              style={{
+                padding:    '7px 10px',
+                border:     '1px solid var(--gc-border-light)',
+                borderRadius: 6,
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-text-1)',
+              }}>
+              <option value="">— Pick truck or trailer —</option>
+              {equipmentOptions.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Title */}
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              Title <span style={{ color: '#dc2626' }}>*</span>
+            </div>
+            <input
+              value={form.title}
+              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+              placeholder="What needs fixing / doing?"
+              className="w-full text-[13px] outline-none"
+              style={{
+                padding:    '7px 10px',
+                border:     '1px solid var(--gc-border-light)',
+                borderRadius: 6,
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-text-1)',
+              }}
+            />
+          </div>
+
+          {/* Category + Priority */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Category
+              </div>
+              <select
+                value={form.category}
+                onChange={e => setForm(f => ({ ...f, category: e.target.value as MaintenanceCategory }))}
+                className="w-full text-[13px] outline-none"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}>
+                <option value="repair">Repair</option>
+                <option value="pm">PM</option>
+                <option value="inspection">Inspection</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Priority
+              </div>
+              <select
+                value={form.priority}
+                onChange={e => setForm(f => ({ ...f, priority: e.target.value as MaintenancePriority }))}
+                className="w-full text-[13px] outline-none"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="normal">Normal</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Status (edit only) */}
+          {mode === 'edit' && (
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Status
+              </div>
+              <select
+                value={form.status}
+                onChange={e => setForm(f => ({ ...f, status: e.target.value as MaintenanceActionStatus }))}
+                className="w-full text-[13px] outline-none"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}>
+                <option value="open">Open</option>
+                <option value="in_progress">In progress</option>
+                <option value="done">Done</option>
+              </select>
+            </div>
+          )}
+
+          {/* Description */}
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              Description
+            </div>
+            <textarea
+              value={form.description}
+              onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+              rows={3}
+              placeholder="Details, symptoms, parts needed…"
+              className="w-full text-[13px] outline-none"
+              style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+            />
+          </div>
+
+          {/* Scheduled / Due dates */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Scheduled date
+              </div>
+              <input
+                type="date"
+                value={form.scheduledDate}
+                onChange={e => setForm(f => ({ ...f, scheduledDate: e.target.value }))}
+                className="w-full text-[13px] outline-none"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Due date
+              </div>
+              <input
+                type="date"
+                value={form.dueDate}
+                onChange={e => setForm(f => ({ ...f, dueDate: e.target.value }))}
+                className="w-full text-[13px] outline-none"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+          </div>
+
+          {/* OOS */}
+          <label className="flex items-center gap-2 text-[12.5px] cursor-pointer" style={{ color: 'var(--gc-text-2)' }}>
+            <input
+              type="checkbox"
+              checked={form.outOfService}
+              onChange={e => setForm(f => ({ ...f, outOfService: e.target.checked }))}
+            />
+            Truck out of service while this is being done
+          </label>
+
+          {/* Vendor + estimated cost */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Vendor / shop
+              </div>
+              <input
+                value={form.vendor}
+                onChange={e => setForm(f => ({ ...f, vendor: e.target.value }))}
+                placeholder="NAPA, in-house, etc."
+                className="w-full text-[13px] outline-none"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Estimated $
+              </div>
+              <input
+                value={form.estimatedCost}
+                onChange={e => setForm(f => ({ ...f, estimatedCost: e.target.value }))}
+                placeholder="0.00"
+                inputMode="decimal"
+                className="w-full text-[13px] outline-none font-mono"
+                style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+          </div>
+
+          {/* Edit-only: actual cost + completed by */}
+          {mode === 'edit' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                  Actual $
+                </div>
+                <input
+                  value={form.actualCost}
+                  onChange={e => setForm(f => ({ ...f, actualCost: e.target.value }))}
+                  placeholder="0.00"
+                  inputMode="decimal"
+                  className="w-full text-[13px] outline-none font-mono"
+                  style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+                />
+              </div>
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                  Completed by
+                </div>
+                <input
+                  value={form.completedBy}
+                  onChange={e => setForm(f => ({ ...f, completedBy: e.target.value }))}
+                  placeholder="Mechanic name"
+                  className="w-full text-[13px] outline-none"
+                  style={{ padding: '7px 10px', border: '1px solid var(--gc-border-light)', borderRadius: 6, background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Convert-mode: source preview */}
+          {mode === 'convert' && fromReport && (
+            <div className="rounded-md px-3 py-2"
+              style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                From driver report
+              </div>
+              <div className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+                {fromReport.assetId ? assetLabelById.get(fromReport.assetId) : ''}
+                {fromReport.trailerId ? `Trailer ${trailerLabelById.get(fromReport.trailerId) ?? ''}` : ''}
+                {' · '}
+                {new Date(fromReport.reportedAt).toLocaleDateString()}
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="text-[12px]" style={{ color: '#dc2626' }}>{error}</div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between gap-2 px-4 py-3 shrink-0"
+          style={{ borderTop: '1px solid var(--gc-border)' }}>
+          {mode === 'edit' ? (
+            <button
+              type="button"
+              onClick={deleteItem}
+              disabled={busy}
+              className="rounded-md text-[12px] font-semibold transition-colors"
+              style={{
+                background: 'transparent',
+                color:      '#dc2626',
+                border:     '1px solid #fecaca',
+                padding:    '6px 12px',
+                cursor:     busy ? 'default' : 'pointer',
+              }}>
+              Delete
+            </button>
+          ) : <div />}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              className="rounded-md text-[12px] font-semibold transition-colors"
+              style={{
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-text-2)',
+                border:     '1px solid var(--gc-border-light)',
+                padding:    '6px 14px',
+                cursor:     busy ? 'default' : 'pointer',
+              }}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy || !form.title.trim()}
+              className="rounded-md text-[12px] font-semibold transition-colors"
+              style={{
+                background: (busy || !form.title.trim()) ? 'var(--gc-bg)' : 'var(--gc-blue)',
+                color:      (busy || !form.title.trim()) ? 'var(--gc-text-3)' : '#fff',
+                border:     `1px solid ${(busy || !form.title.trim()) ? 'var(--gc-border-light)' : 'var(--gc-blue)'}`,
+                padding:    '6px 14px',
+                cursor:     (busy || !form.title.trim()) ? 'default' : 'pointer',
+              }}>
+              {busy ? 'Saving…' : mode === 'create' ? 'Create' : mode === 'convert' ? 'Convert' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(content, document.body);
+}
+
 function MaintenanceList({
-  drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById, onOpen, openId,
+  drivers, assets, trailers, driverNameById, assetLabelById, trailerLabelById, onOpen, onConvertClick, openId,
 }: {
   drivers: Driver[];
   assets: Asset[];
@@ -391,6 +1164,9 @@ function MaintenanceList({
   assetLabelById: Map<number, string>;
   trailerLabelById: Map<number, string>;
   onOpen: (r: MaintenanceReport) => void;
+  /** Optional: when present, renders a "Convert to work order" action
+   *  on each row. Lifted from the Maintenance tab content wrapper. */
+  onConvertClick?: (r: MaintenanceReport) => void;
   openId: string | null;
 }) {
   const [rows, setRows] = useState<MaintenanceReport[]>([]);
@@ -438,6 +1214,32 @@ function MaintenanceList({
                                      'gray';   // dismissed
         return <OpsPill color={color}>{r.status}</OpsPill>;
       } },
+    // Convert action column — only renders the button on
+    // not-yet-converted rows. Once converted, the row's status pill
+    // already says 'converted' and clicking the action button on it
+    // would just trigger an "already converted" 409 from the API.
+    ...(onConvertClick ? [{
+      key: '_convert',
+      header: '',
+      width: 100,
+      render: (r: R) => r.status === 'converted'
+        ? null
+        : (
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onConvertClick(r); }}
+            className="rounded-md text-[11px] font-semibold transition-colors"
+            style={{
+              background: 'var(--gc-surface)',
+              color:      'var(--gc-blue)',
+              border:     '1px solid var(--gc-blue-light)',
+              padding:    '3px 8px',
+              cursor:     'pointer',
+            }}>
+            Convert →
+          </button>
+        ),
+    }] : []),
   ];
 
   const filters: OpsFilter<R>[] = [
