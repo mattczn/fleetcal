@@ -29,6 +29,8 @@ import { requireCapability, requireModule } from "../middleware/require.js";
 import {
   rowToActionItem,
   ACTION_ITEM_COLS,
+  ACTION_ITEM_COLS_LEGACY,
+  isMissingColumnError,
   type MaintenanceActionItemRow,
 } from "./maintenance-reports.js";
 
@@ -74,7 +76,7 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
   // back to a friendlier placeholder. Same pattern as loads.
   const createdByName = await getUserDisplayName(userId);
 
-  const insertRow = {
+  const insertRow: Record<string, unknown> = {
     org_id:           orgId,
     asset_id:         body.assetId   ?? null,
     trailer_id:       body.trailerId ?? null,
@@ -92,12 +94,19 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
     created_by_name:  createdByName,
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase
-    .from("maintenance_action_items")
-    .insert(insertRow as any)
-    .select(ACTION_ITEM_COLS)
-    .single();
+  // First attempt with the new schema. If Supabase rejects because
+  // the *_by_name column doesn't exist yet, retry without those
+  // fields. Same bridge as the LIST endpoint above.
+  const tryInsert = async (row: Record<string, unknown>, cols: string) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase.from("maintenance_action_items").insert(row as any).select(cols).single();
+
+  let { data, error } = await tryInsert(insertRow, ACTION_ITEM_COLS);
+  if (error && isMissingColumnError(error)) {
+    const { created_by_name: _drop, ...legacyRow } = insertRow;
+    void _drop;
+    ({ data, error } = await tryInsert(legacyRow, ACTION_ITEM_COLS_LEGACY));
+  }
   if (error || !data) {
     console.error("[POST /v1/maintenance-action-items] failed:", error);
     return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
@@ -124,26 +133,39 @@ actionItems.get("/", async (c) => {
   const limit  = clampLimit(url.searchParams.get("limit") ?? undefined);
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? "0") || 0);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let q: any = supabase
-    .from("maintenance_action_items")
-    .select(ACTION_ITEM_COLS, { count: "exact" })
-    .eq("org_id", orgId)
-    .order("priority", { ascending: false }) // 'urgent' / 'high' first alphabetically backwards — overridden below
-    .order("created_at", { ascending: false });
+  // Builder factory — same filters every time, only the SELECT column
+  // list differs between the new-schema and legacy attempts. Wrapping
+  // in a function so we can re-issue cleanly without mutating state.
+  const build = (cols: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = supabase
+      .from("maintenance_action_items")
+      .select(cols, { count: "exact" })
+      .eq("org_id", orgId)
+      .order("priority", { ascending: false })
+      .order("created_at", { ascending: false });
+    if (status   && (MAINTENANCE_ACTION_STATUSES as readonly string[]).includes(status))   q = q.eq("status", status);
+    if (priority && (MAINTENANCE_PRIORITIES      as readonly string[]).includes(priority)) q = q.eq("priority", priority);
+    if (category && (MAINTENANCE_CATEGORIES      as readonly string[]).includes(category)) q = q.eq("category", category);
+    if (oosRaw === "true")  q = q.eq("out_of_service", true);
+    if (oosRaw === "false") q = q.eq("out_of_service", false);
+    if (assetIdRaw) q = q.eq("asset_id",   Number(assetIdRaw));
+    if (trailerRaw) q = q.eq("trailer_id", Number(trailerRaw));
+    if (scheduledFrom) q = q.gte("scheduled_date", scheduledFrom);
+    if (scheduledTo)   q = q.lt("scheduled_date",  scheduledTo);
+    return q.range(offset, offset + limit - 1);
+  };
 
-  if (status   && (MAINTENANCE_ACTION_STATUSES as readonly string[]).includes(status))   q = q.eq("status", status);
-  if (priority && (MAINTENANCE_PRIORITIES      as readonly string[]).includes(priority)) q = q.eq("priority", priority);
-  if (category && (MAINTENANCE_CATEGORIES      as readonly string[]).includes(category)) q = q.eq("category", category);
-  if (oosRaw === "true")  q = q.eq("out_of_service", true);
-  if (oosRaw === "false") q = q.eq("out_of_service", false);
-  if (assetIdRaw) q = q.eq("asset_id",   Number(assetIdRaw));
-  if (trailerRaw) q = q.eq("trailer_id", Number(trailerRaw));
-  if (scheduledFrom) q = q.gte("scheduled_date", scheduledFrom);
-  if (scheduledTo)   q = q.lt("scheduled_date",  scheduledTo);
-  q = q.range(offset, offset + limit - 1);
-
-  const { data, error, count } = await q;
+  // First attempt: full schema. If it fails because the *_by_name
+  // columns are missing (deploy happened before the migration), fall
+  // back to the legacy SELECT so the dispatcher's board still loads.
+  // Without this guard the UI sees an empty array on every fresh
+  // deploy until the operator manually applies the migration.
+  let { data, error, count } = await build(ACTION_ITEM_COLS);
+  if (error && isMissingColumnError(error)) {
+    console.warn("[GET /v1/maintenance-action-items] new columns missing — retrying with legacy schema. Apply the 20260530_maintenance_action_items_created_by_name migration to silence this.");
+    ({ data, error, count } = await build(ACTION_ITEM_COLS_LEGACY));
+  }
   if (error) {
     console.error("[GET /v1/maintenance-action-items] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
@@ -248,14 +270,23 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
     return c.json({ error: "validation_failed", errors: ["no fields to update"] } satisfies ApiErrorResponse, 400);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await supabase
-    .from("maintenance_action_items")
-    .update(update as any)
-    .eq("id", id)
-    .eq("org_id", orgId)
-    .select(ACTION_ITEM_COLS)
-    .maybeSingle();
+  // Same retry-with-legacy-schema bridge as POST + LIST.
+  const tryUpdate = async (patch: Record<string, unknown>, cols: string) =>
+    supabase
+      .from("maintenance_action_items")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update(patch as any)
+      .eq("id", id)
+      .eq("org_id", orgId)
+      .select(cols)
+      .maybeSingle();
+
+  let { data, error } = await tryUpdate(update, ACTION_ITEM_COLS);
+  if (error && isMissingColumnError(error)) {
+    const { completed_by_name: _cn, ...legacyUpdate } = update;
+    void _cn;
+    ({ data, error } = await tryUpdate(legacyUpdate, ACTION_ITEM_COLS_LEGACY));
+  }
   if (error) {
     console.error("[PATCH /v1/maintenance-action-items/:id] failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);

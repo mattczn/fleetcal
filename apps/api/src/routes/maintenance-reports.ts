@@ -77,12 +77,15 @@ export interface MaintenanceActionItemRow {
   report_id:      string | null;
   completed_at:        string | null;
   completed_by:        string | null;
-  completed_by_name:   string | null;
+  /** Optional at the row level — legacy DB rows from before the
+   *  20260530 migration don't have this column, and the LIST/POST
+   *  endpoints fall back to a SELECT without it in that case. */
+  completed_by_name?:  string | null;
   vendor:              string | null;
   estimated_cost:      number | null;
   actual_cost:         number | null;
   created_by:          string;
-  created_by_name:     string | null;
+  created_by_name?:    string | null;
   created_at:          string;
   updated_at:          string;
 }
@@ -157,6 +160,28 @@ export const ACTION_ITEM_COLS =
   "completed_at,completed_by,completed_by_name," +
   "vendor,estimated_cost,actual_cost," +
   "created_by,created_by_name,created_at,updated_at";
+
+// Legacy fallback SELECT — drops the *_by_name columns. Used when a
+// query against ACTION_ITEM_COLS fails with "column does not exist",
+// which happens during the deploy window where the API ships before
+// the migration is applied on Supabase. Once migrations are caught
+// up across all envs we can drop this and the column-check.
+export const ACTION_ITEM_COLS_LEGACY =
+  "id,org_id,asset_id,trailer_id,title,description,category,priority,status," +
+  "out_of_service,scheduled_date,due_date,report_id," +
+  "completed_at,completed_by," +
+  "vendor,estimated_cost,actual_cost," +
+  "created_by,created_at,updated_at";
+
+/** True when a Supabase error reads like "column X does not exist". */
+export function isMissingColumnError(err: { message?: string; code?: string } | null | undefined): boolean {
+  if (!err) return false;
+  // PostgREST surfaces undefined columns with code 42703 (Postgres'
+  // own undefined_column SQLSTATE) or a "column … does not exist"
+  // message. Check both since older Supabase versions varied.
+  if (err.code === '42703') return true;
+  return /column .* does not exist/i.test(err.message ?? '');
+}
 
 const PHOTO_COLS =
   "id,report_id,org_id,storage_path,file_name,mime_type,size_bytes,uploaded_at";
@@ -384,7 +409,7 @@ maintenanceReports.post("/:id/convert", requireCapability("maintenance.edit"), a
   // ad-hoc create endpoint. Required for Activity panel readability.
   const createdByName = await getUserDisplayName(userId);
 
-  const insertAi = {
+  const insertAi: Record<string, unknown> = {
     org_id:           orgId,
     asset_id:         report.asset_id,
     trailer_id:       report.trailer_id,
@@ -401,12 +426,19 @@ maintenanceReports.post("/:id/convert", requireCapability("maintenance.edit"), a
     created_by_name:  createdByName,
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: aiData, error: aiErr } = await supabase
-    .from("maintenance_action_items")
-    .insert(insertAi as any)
-    .select(ACTION_ITEM_COLS)
-    .single();
+  // Same legacy-bridge as the LIST + POST handlers in
+  // maintenance-action-items.ts. Drop the *_by_name columns if the
+  // migration hasn't been applied yet so conversion isn't blocked.
+  const tryAiInsert = async (row: Record<string, unknown>, cols: string) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    supabase.from("maintenance_action_items").insert(row as any).select(cols).single();
+
+  let { data: aiData, error: aiErr } = await tryAiInsert(insertAi, ACTION_ITEM_COLS);
+  if (aiErr && isMissingColumnError(aiErr)) {
+    const { created_by_name: _drop, ...legacyRow } = insertAi;
+    void _drop;
+    ({ data: aiData, error: aiErr } = await tryAiInsert(legacyRow, ACTION_ITEM_COLS_LEGACY));
+  }
   if (aiErr || !aiData) {
     console.error("[convert] action item insert failed:", aiErr);
     return c.json({ error: "insert_failed", detail: aiErr?.message } satisfies ApiErrorResponse, 500);

@@ -589,6 +589,11 @@ function WorkOrdersList({
 }) {
   const [items, setItems] = useState<MaintenanceActionItem[]>([]);
   const [loading, setLoading] = useState(true);
+  // Tracks the most recent fetch failure (after retries). When set
+  // we render an inline banner with a Retry button so the user
+  // isn't staring at an empty board on every Vercel/Railway deploy
+  // gap, wondering whether their work orders just disappeared.
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   // weekOffset = N weeks from the current calendar week (0 = this
   // week, -1 = last, +1 = next). Drives prev/next navigation; the
@@ -598,17 +603,63 @@ function WorkOrdersList({
   // a drag. Renders a dashed highlight so the drop target is
   // obvious. Cleared on dragleave/drop.
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  // Bump-counter that re-runs the work-orders fetch effect. Used by
+  // the inline Retry button + a focus/online listener so things
+  // self-heal when the browser comes back from background or the
+  // network blip ends.
+  const [refetchKey, setRefetchKey] = useState(0);
   // Unused at the moment — kept for prop-shape symmetry.
   void drivers;
   void trailers;
 
+  // Effect: load work orders, retried on transient failures (5x
+  // exponential backoff via fetchWithRetry — same pattern the page-
+  // level fixtures use to survive Railway boot windows after a
+  // deploy). Failures past the retry budget surface as a visible
+  // banner instead of a silently-empty board.
   useEffect(() => {
+    const ctrl = new AbortController();
     setLoading(true);
-    railway.listMaintenanceActionItems({ limit: 500 })
-      .then(r => setItems(r.actionItems))
-      .catch(err => { console.error('[equipment] work orders:', err); setItems([]); })
-      .finally(() => setLoading(false));
-  }, [reloadKey]);
+    setFetchError(null);
+    fetchWithRetry(() => railway.listMaintenanceActionItems({ limit: 500 }), {
+      signal: ctrl.signal,
+      onAttemptFailed: (err, n, willRetry) => {
+        if (willRetry) console.warn(`[equipment] work orders attempt ${n} failed, retrying:`, err);
+      },
+    })
+      .then(r => {
+        if (ctrl.signal.aborted) return;
+        setItems(r.actionItems);
+        setFetchError(null);
+      })
+      .catch(err => {
+        if (ctrl.signal.aborted) return;
+        console.error('[equipment] work orders fetch failed after retries:', err);
+        setFetchError((err as Error).message ?? 'Failed to load work orders.');
+        // Don't clobber items — keep the last good snapshot visible
+        // so a retry-after-deploy doesn't blank a working board.
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [reloadKey, refetchKey]);
+
+  // Auto-recover when the user tabs back to the page or the
+  // network comes online — bumps refetchKey to re-run the fetch.
+  // This is what users will hit after a Vercel deploy: they switch
+  // away, the new build comes up, they switch back. Without this
+  // they'd see whatever state they had pre-deploy until they
+  // manually clicked something.
+  useEffect(() => {
+    const onFocus = () => setRefetchKey(k => k + 1);
+    window.addEventListener('focus',  onFocus);
+    window.addEventListener('online', onFocus);
+    return () => {
+      window.removeEventListener('focus',  onFocus);
+      window.removeEventListener('online', onFocus);
+    };
+  }, []);
 
   // Asset color lookup — for the colored stripe + dot on each card.
   // Falls back to a neutral gray when no asset or no color set.
@@ -722,7 +773,10 @@ function WorkOrdersList({
   }, [items]);
 
   // Empty state — no items at all in the org.
-  if (!loading && items.length === 0) {
+  // Guard the "No work orders yet" empty state behind fetchError so a
+  // failed fetch with no prior snapshot doesn't masquerade as
+  // "fleet has no work" — the error banner above covers that case.
+  if (!loading && items.length === 0 && !fetchError) {
     return (
       <div
         className="rounded-lg flex flex-col items-center justify-center text-center"
@@ -787,6 +841,41 @@ function WorkOrdersList({
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Fetch error banner — shown when the work-orders load failed
+          past its retry budget. Most common cause: Railway mid-deploy
+          window. Visible Retry beats the user wondering whether the
+          board lost its data. We deliberately don't clear `items`
+          on failure, so any prior good snapshot stays on screen and
+          the banner sits on top as the visible signal. */}
+      {fetchError && (
+        <div
+          className="rounded-md flex items-center justify-between gap-3 px-3 py-2.5"
+          style={{
+            background: '#fef2f2',
+            border:     '1px solid #fecaca',
+            color:      '#991b1b',
+          }}>
+          <div className="text-[13px]">
+            <strong>Couldn&apos;t reach work orders.</strong>{' '}
+            The API may be redeploying. Showing the last loaded snapshot.
+          </div>
+          <button
+            type="button"
+            onClick={() => setRefetchKey(k => k + 1)}
+            disabled={loading}
+            className="rounded-md text-[12px] font-semibold transition-colors"
+            style={{
+              background: '#fff',
+              color:      '#991b1b',
+              border:     '1px solid #fecaca',
+              padding:    '5px 12px',
+              cursor:     loading ? 'default' : 'pointer',
+              opacity:    loading ? 0.5 : 1,
+            }}>
+            {loading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
       {/* Toolbar — search + new */}
       <div className="flex items-center gap-2">
         <div
