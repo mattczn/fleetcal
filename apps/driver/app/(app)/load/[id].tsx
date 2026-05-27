@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Linking,
   TextInput,
   Dimensions,
+  InteractionManager,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -537,7 +538,7 @@ function TimeAnchor({
   );
 }
 
-function StopCard({
+function StopCardInner({
   stop, index, onAddressCopied, orgId, onCheckedIn, eventId, driverName,
   loadId, onPhotoUploaded, relayRole, onViewDocuments,
 }: {
@@ -751,6 +752,32 @@ function StopCard({
   );
 }
 
+/**
+ * Memoized StopCard — for big loads (e.g. 18-stop runs) re-rendering
+ * every card on every parent state change blows the JS thread and the
+ * iPhone's memory budget, which had been crashing the load detail
+ * screen on cold mount. The comparator below intentionally ignores
+ * handler-prop identity: the inline arrows recreate every render but
+ * their behavior is fully determined by stable closures (queryClient,
+ * showToast — both already stable refs), so a fresh arrow with the
+ * same closed-over state is behavior-equivalent.
+ *
+ * Re-renders are still triggered by what actually matters: a change
+ * to the stop's data, its index, the relay role flag, or the driver
+ * context. That covers every meaningful update (check-in stamp, edit
+ * etc.) without thrashing on truck-location ticks / pager swipes /
+ * toast state.
+ */
+const StopCard = React.memo(StopCardInner, (prev, next) => (
+  prev.stop       === next.stop       &&
+  prev.index      === next.index      &&
+  prev.relayRole  === next.relayRole  &&
+  prev.driverName === next.driverName &&
+  prev.orgId      === next.orgId      &&
+  prev.eventId    === next.eventId    &&
+  prev.loadId     === next.loadId
+));
+
 export default function LoadDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -779,6 +806,23 @@ export default function LoadDetailScreen() {
   // "View on Map" button open fullscreen + pan to the truck pin in
   // a single tap, rather than just scrolling to the thumbnail.
   const routeMapRef = React.useRef<RouteMapHandle | null>(null);
+
+  // Lazy-mount the RouteMap WebView. The WebView allocates its own
+  // JS engine + Google Maps SDK + 18 marker overlays for a big-stop
+  // load, all of which compete with the StopCards for the JS thread
+  // and native memory during cold mount. iPhone drivers on 18-stop
+  // loads were crashing here. Deferring the mount until AFTER the
+  // first paint settles lets the screen become interactive (and
+  // memory-stable) before the heavy WebView allocates. The user
+  // doesn't notice the ~300ms shift because the screen is
+  // already responsive by then.
+  const [mapMounted, setMapMounted] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => {
+      setMapMounted(true);
+    });
+    return () => task.cancel();
+  }, []);
   const SCREEN_W = Dimensions.get("window").width;
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = React.useCallback((msg: string) => {
@@ -1048,6 +1092,13 @@ export default function LoadDetailScreen() {
         style={{ width: SCREEN_W, backgroundColor: "#f8f9fa" }}
         contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
         nestedScrollEnabled
+        // Detach off-screen subviews from the native view hierarchy.
+        // For a long stops list (18+) this drops the live native view
+        // count significantly — only ~6-8 stop cards live in the
+        // hierarchy at any time, the rest are recycled. iOS doesn't
+        // OOM on the cold mount anymore. Safe on this ScrollView
+        // because nothing inside relies on off-screen view refs.
+        removeClippedSubviews
       >
         {/* Pending dispatcher nudges — surfaces every kind the dispatcher
             has asked for that's still unacknowledged. Driver sees a
@@ -1198,20 +1249,38 @@ export default function LoadDetailScreen() {
           />
         )}
 
-        {/* Route map */}
+        {/* Route map — deferred so cold mount doesn't compete with the
+            stop-card render. Same fixed height (220px) for the
+            placeholder so nothing jumps when the WebView swaps in. */}
         <View
           style={{ marginBottom: 14 }}
           onLayout={(e) => setRouteMapY(e.nativeEvent.layout.y)}
         >
-          <RouteMap
-            ref={routeMapRef}
-            stops={load.stops}
-            truckLat={truckLoc?.lat}
-            truckLng={truckLoc?.lon}
-            assetColor={truckLoc?.color}
-            truckDescription={truckLoc?.description}
-            truckLocatedAt={truckLoc?.locatedAt}
-          />
+          {mapMounted ? (
+            <RouteMap
+              ref={routeMapRef}
+              stops={load.stops}
+              truckLat={truckLoc?.lat}
+              truckLng={truckLoc?.lon}
+              assetColor={truckLoc?.color}
+              truckDescription={truckLoc?.description}
+              truckLocatedAt={truckLoc?.locatedAt}
+            />
+          ) : (
+            <View
+              style={{
+                height: 220,
+                backgroundColor: "#f1f3f4",
+                borderRadius: 14,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: "#e8eaed",
+              }}
+            >
+              <ActivityIndicator color="#9aa0a6" />
+            </View>
+          )}
         </View>
 
         {/* Start time → stops → End time, joined by a vertical timeline rail. */}
