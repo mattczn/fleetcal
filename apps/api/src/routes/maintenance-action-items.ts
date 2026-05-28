@@ -176,6 +176,9 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
     due_date:         body.dueDate       ?? null,
     vendor:           body.vendor?.trim() || null,
     estimated_cost:   body.estimatedCost ?? null,
+    // Optional pre-link to a calendar event (e.g. dispatcher creating
+    // the work order from inside a maintenance block on the calendar).
+    event_id:         body.eventId       ?? null,
     created_by:       userId,
     created_by_name:  createdByName,
   };
@@ -190,8 +193,13 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
   let { data, error } = await tryInsert(insertRow, ACTION_ITEM_COLS);
   if (error && isMissingColumnError(error)) {
     console.warn("[POST /v1/maintenance-action-items] new schema missing — retrying with legacy cols. Error:", { code: error.code, message: error.message });
-    const { created_by_name: _drop, ...legacyRow } = insertRow;
-    void _drop;
+    // Drop both forward-only columns (created_by_name + event_id) so
+    // we can still insert against an environment that hasn't applied
+    // the latest migration. event_id was added in
+    // 20260527_action_item_event_link.sql — pre-migration envs reject
+    // it with "column does not exist."
+    const { created_by_name: _drop1, event_id: _drop2, ...legacyRow } = insertRow;
+    void _drop1; void _drop2;
     ({ data, error } = await tryInsert(legacyRow, ACTION_ITEM_COLS_LEGACY));
   }
   if (error || !data) {
@@ -224,6 +232,7 @@ actionItems.get("/", async (c) => {
   const trailerRaw    = url.searchParams.get("trailerId");
   const scheduledFrom = url.searchParams.get("scheduledFrom");
   const scheduledTo   = url.searchParams.get("scheduledTo");
+  const eventIdRaw    = url.searchParams.get("eventId");
   const limit  = clampLimit(url.searchParams.get("limit") ?? undefined);
   const offset = Math.max(0, Number(url.searchParams.get("offset") ?? "0") || 0);
 
@@ -247,6 +256,13 @@ actionItems.get("/", async (c) => {
     if (trailerRaw) q = q.eq("trailer_id", Number(trailerRaw));
     if (scheduledFrom) q = q.gte("scheduled_date", scheduledFrom);
     if (scheduledTo)   q = q.lt("scheduled_date",  scheduledTo);
+    // Calendar-side query: "give me every work order linked to this
+    // event." Powers the Linked Work Orders section on a non-revenue
+    // maintenance block. Falls through silently on the legacy-cols
+    // retry because event_id isn't in ACTION_ITEM_COLS_LEGACY — the
+    // server returns an empty list rather than 500, which is the
+    // right behavior pre-migration (nothing CAN be linked yet).
+    if (eventIdRaw)    q = q.eq("event_id", eventIdRaw);
     return q.range(offset, offset + limit - 1);
   };
 
@@ -364,6 +380,10 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   if ("vendor"        in body) update.vendor         = body.vendor ?? null;
   if ("estimatedCost" in body) update.estimated_cost = body.estimatedCost ?? null;
   if ("actualCost"    in body) update.actual_cost    = body.actualCost    ?? null;
+  // Link / unlink the calendar event. null = unlink; string = link
+  // (or re-link). Field absence leaves the link unchanged, same
+  // semantics as every other "in body" field above.
+  if ("eventId"       in body) update.event_id      = body.eventId      ?? null;
   if ("completedBy"   in body) {
     update.completed_by      = body.completedBy ?? null;
     // Mirror the free-text name into completed_by_name so the
@@ -389,10 +409,12 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   let { data, error } = await tryUpdate(update, ACTION_ITEM_COLS);
   if (error && isMissingColumnError(error)) {
     console.warn("[PATCH /v1/maintenance-action-items] new schema missing — retrying with legacy cols. Error:", { code: error.code, message: error.message });
-    // Drop both *_by_name columns from the update payload too, since
-    // the schema cache complaint can be triggered by either.
-    const { completed_by_name: _cn, created_by_name: _cbn, ...legacyUpdate } = update;
-    void _cn; void _cbn;
+    // Drop every forward-only column from the update payload — the
+    // schema-cache error can be triggered by ANY of them. Same set as
+    // the POST handler. event_id was added in
+    // 20260527_action_item_event_link.sql.
+    const { completed_by_name: _cn, created_by_name: _cbn, event_id: _ev, ...legacyUpdate } = update;
+    void _cn; void _cbn; void _ev;
     ({ data, error } = await tryUpdate(legacyUpdate, ACTION_ITEM_COLS_LEGACY));
   }
   if (error) {

@@ -1428,6 +1428,10 @@ export interface CreateMaintenanceActionItemRequest {
   dueDate?:        string;
   vendor?:         string;
   estimatedCost?:  number;
+  /** Optionally pre-link to a calendar event at create time. Used when
+   *  the dispatcher creates a work order directly from a maintenance
+   *  block on the calendar. */
+  eventId?:        string;
 }
 export interface CreateMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
 
@@ -1442,6 +1446,10 @@ export interface ListMaintenanceActionItemsQuery {
   /** Inclusive `scheduledDate >= from`. */
   scheduledFrom?: string;
   scheduledTo?:   string;
+  /** Filter to work orders linked to this calendar event. The calendar
+   *  side uses this to populate the "Linked work orders" section on
+   *  a non-revenue maintenance event. */
+  eventId?:       string;
   limit?:         number;
   offset?:        number;
 }
@@ -1467,6 +1475,10 @@ export interface UpdateMaintenanceActionItemRequest {
   estimatedCost?:  number | null;
   actualCost?:     number | null;
   completedBy?:    string | null;
+  /** Pass `null` to UNLINK the work order from its current event;
+   *  pass an event UUID to LINK (or re-point). Omitting the field
+   *  leaves the link unchanged. */
+  eventId?:        string | null;
 }
 export interface UpdateMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
 

@@ -84,6 +84,10 @@ export interface MaintenanceActionItemRow {
   vendor:              string | null;
   estimated_cost:      number | null;
   actual_cost:         number | null;
+  /** Linked calendar event. Optional at the row level — pre-migration
+   *  DB rows don't have this column, so LIST/POST/PATCH fall back to a
+   *  SELECT without it in that case (same bridge as completed_by_name). */
+  event_id?:           string | null;
   created_by:          string;
   created_by_name?:    string | null;
   created_at:          string;
@@ -143,6 +147,7 @@ export function rowToActionItem(r: MaintenanceActionItemRow): MaintenanceActionI
     vendor:          r.vendor         ?? undefined,
     estimatedCost:   r.estimated_cost != null ? Number(r.estimated_cost) : undefined,
     actualCost:      r.actual_cost    != null ? Number(r.actual_cost)    : undefined,
+    eventId:         r.event_id       ?? undefined,
     createdBy:       r.created_by,
     createdByName:   r.created_by_name ?? undefined,
     createdAt:       r.created_at,
@@ -156,7 +161,7 @@ export const REPORT_COLS =
 
 export const ACTION_ITEM_COLS =
   "id,org_id,asset_id,trailer_id,title,description,category,priority,status," +
-  "out_of_service,scheduled_date,due_date,report_id," +
+  "out_of_service,scheduled_date,due_date,report_id,event_id," +
   "completed_at,completed_by,completed_by_name," +
   "vendor,estimated_cost,actual_cost," +
   "created_by,created_by_name,created_at,updated_at";

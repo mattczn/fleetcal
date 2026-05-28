@@ -936,6 +936,7 @@ class RailwayClient {
     if (query.trailerId)    qs.set('trailerId',    String(query.trailerId));
     if (query.scheduledFrom) qs.set('scheduledFrom', query.scheduledFrom);
     if (query.scheduledTo)   qs.set('scheduledTo',   query.scheduledTo);
+    if (query.eventId)       qs.set('eventId',       query.eventId);
     if (query.limit)        qs.set('limit',        String(query.limit));
     if (query.offset)       qs.set('offset',       String(query.offset));
     const s = qs.toString();

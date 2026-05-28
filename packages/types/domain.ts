@@ -1184,6 +1184,13 @@ export interface MaintenanceActionItem {
   /** Source report, when this item was created from a driver submission. */
   reportId?:     string;
 
+  /** Linked calendar event, when this work order is scheduled into a
+   *  non-revenue maintenance block. Many work orders can share one
+   *  event (e.g. "in the shop Tuesday" covering brakes + DOT
+   *  inspection at the same time). Cleared automatically if the
+   *  event is deleted — the work order survives, just unscheduled. */
+  eventId?:      string;
+
   completedAt?:     string;
   completedBy?:     string;
   /** Resolved display name for the completer — populated from Clerk
