@@ -1238,12 +1238,24 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
         background: has ? '#dbeafe' : 'transparent',
         border:     `1px solid ${has ? '#1a73e8' : 'var(--gc-border)'}`,
         color:      has ? '#1a73e8' : 'var(--gc-text-3)',
+        overflow:   'visible',
       }}>
       <MessageSquare size={11} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
-      {has && count > 1 && (
-        <span className="absolute -top-1 -right-1 text-[8px] font-bold rounded-lg px-1 leading-3 tabular-nums"
-          style={{ background: '#1a73e8', color: '#fff', minWidth: 12, textAlign: 'center' }}>
-          {count}
+      {has && (
+        <span
+          className="absolute text-[9px] font-bold rounded-full tabular-nums flex items-center justify-center"
+          style={{
+            top:        -5,
+            right:      -5,
+            minWidth:   14,
+            height:     14,
+            padding:    '0 3px',
+            background: '#1a73e8',
+            color:      '#fff',
+            boxShadow:  '0 0 0 2px var(--gc-surface)',
+            lineHeight: 1,
+          }}>
+          {count > 9 ? '9+' : count}
         </span>
       )}
     </button>

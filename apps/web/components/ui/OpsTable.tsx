@@ -873,7 +873,15 @@ export function OpsTable<T>({
         <div className="flex items-center justify-between mt-3 text-[11px]"
           style={{ color: 'var(--gc-text-3)' }}>
           <span>
-            {footerSummary ?? `Showing ${from}–${to} of ${total} ${total === 1 ? countLabel : `${countLabel}s`}`}
+            {footerSummary ?? (
+              // When pagination is disabled, all `total` rows render at
+              // once — "Showing 1-25 of 40" would be a lie because the
+              // pageSize prop default is 25 even though we show all 40.
+              // Use a flat count instead.
+              paginated
+                ? `Showing ${from}–${to} of ${total} ${total === 1 ? countLabel : `${countLabel}s`}`
+                : `Showing ${total} ${total === 1 ? countLabel : `${countLabel}s`}`
+            )}
           </span>
           {paginated && pageCnt > 1 && (
             <div className="flex items-center gap-2">
