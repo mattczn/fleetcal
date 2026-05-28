@@ -419,6 +419,38 @@ events.delete("/:id", async (c) => {
     return c.json({ error: "delete_failed", detail: delErr.message } satisfies ApiErrorResponse, 500);
   }
 
+  // Unlink any maintenance work orders that pointed at this event.
+  // The schema's FK cascades (ON DELETE CASCADE on the M:N join table,
+  // ON DELETE SET NULL on the event_id column) only fire on a hard
+  // DELETE; we soft-delete (set deleted_at), so the WOs would
+  // otherwise still appear linked to a dead event — the "View"
+  // button would land on a soft-deleted row and the maintenance
+  // board would still place the WO on the dead event's day.
+  //
+  // Both writes are best-effort: a failure here is logged but
+  // doesn't fail the event delete (the event is already gone from
+  // the user's perspective, and the join cleanup can be re-applied
+  // later by a sweeper if we ever build one).
+  const { error: clearColErr } = await supabase
+    .from("maintenance_action_items")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ event_id: null, updated_at: new Date().toISOString() } as any)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .eq("event_id" as any, eventId)
+    .eq("org_id", orgId);
+  if (clearColErr && !/column .* does not exist/i.test(clearColErr.message ?? "")) {
+    console.warn("[DELETE /v1/events/:id] clearing event_id column failed (non-fatal):", clearColErr);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabaseAny: any = supabase;
+  const { error: clearJoinErr } = await supabaseAny
+    .from("maintenance_action_item_events")
+    .delete()
+    .eq("event_id", eventId);
+  if (clearJoinErr && !/relation .* does not exist/i.test(clearJoinErr.message ?? "")) {
+    console.warn("[DELETE /v1/events/:id] clearing join table failed (non-fatal):", clearJoinErr);
+  }
+
   const res: DeleteEventResponse = { ok: true, eventId };
   return c.json(res);
 });
