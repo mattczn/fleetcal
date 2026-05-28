@@ -207,7 +207,15 @@ export default function LinkedWorkOrdersSection({
           {available.length === 0 && linked.length === 0 ? (
             <div className="px-2 py-3 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
               No open work orders for this truck.{' '}
-              <span style={{ opacity: 0.7 }}>(Create one from Equipment → Maintenance.)</span>
+              <a
+                href="/equipment?tab=maintenance"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-semibold underline underline-offset-2"
+                style={{ color: '#7c3aed' }}>
+                Create one
+              </a>{' '}
+              <span style={{ opacity: 0.7 }}>(opens Equipment → Maintenance in a new tab).</span>
             </div>
           ) : (
             available.map(wo => {

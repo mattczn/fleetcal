@@ -1783,6 +1783,7 @@ export default function EventModal() {
   const {
     assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
+    prefillWorkOrderLinkIds,
     refetchEvent, refetchingEventIds,
     addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
@@ -2572,9 +2573,12 @@ export default function EventModal() {
     setConfirmRelayRemove(false);
     setConfirmSkip(false);
     setConfirmBatchCancel(false);
-    // Wipe any in-flight create-mode pending work-order links so a
-    // previous session's selections don't leak into a fresh modal.
-    setPendingWorkOrderLinks([]);
+    // Drain the cross-page handoff buffer if it was set (e.g. user
+    // came from a maintenance work order via "Schedule on calendar"
+    // — that flow stuffs the WO IDs into prefillWorkOrderLinkIds so
+    // they pre-check here and the very first save links them).
+    // Otherwise clear, so a previous session's selections don't leak.
+    setPendingWorkOrderLinks(prefillWorkOrderLinkIds ?? []);
   }, [modalOpen, modalEventId, batchIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-recover loads that landed in the cache with empty stops. The

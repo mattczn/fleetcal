@@ -19,12 +19,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
+  Calendar, Plus,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import ManagementHeader from '@/components/nav/ManagementHeader';
@@ -1899,6 +1900,24 @@ function WorkOrderModal({
             )}
           </div>
 
+          {/* Calendar link — Phase 3 of the work-order ↔ event linking
+              flow. Only meaningful on existing work orders (edit mode);
+              in create mode the work order has no id yet to link.
+              Linked  → "View in calendar" jumps to /calendar with the
+                        non-revenue event opened in edit mode.
+              Unlinked → "Schedule on calendar" jumps to /calendar with
+                         a pre-filled create modal (asset + scheduled
+                         date as the block's start) and pre-checks the
+                         current work order in the Linked Work Orders
+                         section so the very first save persists the
+                         link. */}
+          {mode === 'edit' && item && (
+            <CalendarLinkBlock
+              item={item}
+              onLinked={onSaved}
+            />
+          )}
+
           {/* Description */}
           <div>
             <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
@@ -2266,6 +2285,163 @@ function WorkOrderModal({
 
   if (typeof document === 'undefined') return null;
   return createPortal(content, document.body);
+}
+
+/**
+ * CalendarLinkBlock — inline section inside WorkOrderModal showing the
+ * work order's relationship to the dispatch calendar. Two states:
+ *
+ *   LINKED   — a non-revenue maintenance event references this work
+ *              order. Shows "Scheduled in calendar" + a "View" button
+ *              that hands off to /calendar and opens the event modal
+ *              in edit mode, and an "Unlink" button that clears the
+ *              link via PATCH (the event itself is unaffected).
+ *
+ *   UNLINKED — Shows a single "Schedule on calendar" button that hands
+ *              off to /calendar and opens the event modal in create
+ *              mode, pre-filled with the work order's asset and
+ *              scheduled date as the block start. The current work
+ *              order id is stuffed into `prefillWorkOrderLinkIds` on
+ *              the calendar store so EventModal pre-checks it in the
+ *              Linked Work Orders section — the user's first save
+ *              persists the link without a manual second step.
+ *
+ * Note: viewing the linked event details (start/end times, etc.)
+ * intentionally happens in the calendar UI rather than inline here.
+ * The work order detail panel stays focused on the work itself; the
+ * "View in calendar" handoff is the bridge to scheduling context.
+ */
+function CalendarLinkBlock({
+  item, onLinked,
+}: {
+  item: MaintenanceActionItem;
+  onLinked: () => void;
+}) {
+  const router = useRouter();
+  const openCreateModal = useCalendarStore(s => s.openCreateModal);
+  const openEditModal   = useCalendarStore(s => s.openEditModal);
+  const [busy, setBusy] = useState(false);
+
+  const linked = !!item.eventId;
+
+  // "Schedule on calendar" — preseed the calendar create modal with
+  // this asset + work order's scheduled date (default 8a–5p block, a
+  // reasonable shop day). Stuff the work order id into the prefill
+  // buffer so the first save in EventModal auto-links.
+  const goSchedule = () => {
+    const date = item.scheduledDate ?? localTodayYmd();
+    const start = `${date}T08:00`;
+    const end   = `${date}T17:00`;
+    openCreateModal(
+      {
+        title:           item.title,
+        assetId:         item.assetId,
+        start,
+        end,
+        eventKind:       'non_revenue',
+        nonRevenueType:  'Maintenance',
+      },
+      { prefillWorkOrderLinkIds: [item.id] },
+    );
+    router.push('/calendar');
+  };
+
+  const goView = () => {
+    if (!item.eventId) return;
+    openEditModal(item.eventId);
+    router.push('/calendar');
+  };
+
+  const doUnlink = async () => {
+    if (!item.eventId || busy) return;
+    setBusy(true);
+    try {
+      await railway.updateMaintenanceActionItem(item.id, { eventId: null });
+      onLinked(); // re-fetch the parent list so the modal closes/refreshes correctly
+    } catch (err) {
+      console.error('[CalendarLinkBlock] unlink failed:', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
+        style={{ color: 'var(--gc-text-3)' }}>
+        Calendar
+      </label>
+      <div
+        className="rounded-lg flex items-center gap-3 px-3 py-2.5"
+        style={{
+          background: linked ? '#f5f3ff' : 'var(--gc-bg)',
+          border:     `1px solid ${linked ? '#e9d5ff' : 'var(--gc-border-light)'}`,
+        }}>
+        {linked ? (
+          <>
+            <CheckCircle2 size={16} style={{ color: '#7c3aed', flexShrink: 0 }} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                Scheduled in calendar
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                Linked to a non-revenue maintenance block
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={goView}
+              className="flex items-center gap-1 text-[12px] font-semibold px-3 py-1.5 rounded-lg shrink-0 transition-colors"
+              style={{ background: '#7c3aed', color: '#fff' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#6b21a8')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#7c3aed')}>
+              <ExternalLink size={12} /> View
+            </button>
+            <button
+              type="button"
+              onClick={doUnlink}
+              disabled={busy}
+              className="text-[12px] font-semibold px-2.5 py-1.5 rounded-lg shrink-0 transition-colors disabled:opacity-50"
+              style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              {busy ? <Loader2 size={12} className="animate-spin" /> : 'Unlink'}
+            </button>
+          </>
+        ) : (
+          <>
+            <Calendar size={16} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                Not on the calendar
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                Block out the truck for this work
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={goSchedule}
+              className="flex items-center gap-1 text-[12px] font-semibold px-3 py-1.5 rounded-lg shrink-0 transition-colors"
+              style={{ background: '#7c3aed', color: '#fff' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#6b21a8')}
+              onMouseLeave={e => (e.currentTarget.style.background = '#7c3aed')}>
+              <Plus size={12} /> Schedule on calendar
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Local today as YYYY-MM-DD. Used when a work order doesn't have a
+ *  scheduledDate yet — we still need SOMETHING to pass as the
+ *  calendar block's start. The user can adjust it in the EventModal. */
+function localTodayYmd(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function MaintenanceList({

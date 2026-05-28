@@ -104,6 +104,13 @@ interface ModalState {
   modalDefaults?: Partial<CalendarEvent>;
   modalShowMap: boolean;
   modalConflict: 'updated' | 'deleted' | null;
+  /** Cross-page hand-off: when the maintenance work-order modal sends
+   *  the user to /calendar via "Schedule on calendar", it stuffs the
+   *  work-order ID(s) here. EventModal's open-effect drains this into
+   *  its pendingWorkOrderLinks buffer so the WO is pre-checked in the
+   *  Linked Work Orders section, and the user's first save persists
+   *  the link without needing a manual second step. */
+  prefillWorkOrderLinkIds?: string[];
 }
 
 export interface DeletedEvent extends CalendarEvent {
@@ -443,7 +450,7 @@ interface CalendarStore extends ModalState {
   eldLocations: EldLocation[];
   setEldLocations: (locs: EldLocation[]) => void;
 
-  openCreateModal: (defaults?: Partial<CalendarEvent>) => void;
+  openCreateModal: (defaults?: Partial<CalendarEvent>, opts?: { prefillWorkOrderLinkIds?: string[] }) => void;
   openEditModal: (eventId: string) => void;
   openEditModalWithMap: (eventId: string) => void;
   closeModal: () => void;
@@ -2019,21 +2026,26 @@ export const useCalendarStore = create<CalendarStore>()(
   modalDefaults:  undefined,
   modalShowMap:   false,
   modalConflict:  null,
+  prefillWorkOrderLinkIds: undefined,
 
   eldLocations: [],
   setEldLocations: (locs) => set({ eldLocations: locs }),
 
-  openCreateModal: (defaults) =>
-    set({ modalOpen: true, modalMode: 'create', modalEventId: undefined, modalDefaults: defaults, modalShowMap: false }),
+  openCreateModal: (defaults, opts) =>
+    set({
+      modalOpen: true, modalMode: 'create', modalEventId: undefined,
+      modalDefaults: defaults, modalShowMap: false,
+      prefillWorkOrderLinkIds: opts?.prefillWorkOrderLinkIds,
+    }),
 
   openEditModal: (eventId) =>
-    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: false }),
+    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: false, prefillWorkOrderLinkIds: undefined }),
 
   openEditModalWithMap: (eventId) =>
-    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: true }),
+    set({ modalOpen: true, modalMode: 'edit', modalEventId: eventId, modalDefaults: undefined, modalShowMap: true, prefillWorkOrderLinkIds: undefined }),
 
   closeModal: () =>
-    set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false }),
+    set({ modalOpen: false, modalEventId: undefined, modalDefaults: undefined, modalShowMap: false, modalConflict: null, batchItems: [], batchIndex: 0, batchParseProgress: 0, batchParseTotal: 0, batchMinimized: false, batchCancelRequested: false, prefillWorkOrderLinkIds: undefined }),
 
   clearModalConflict: () => set({ modalConflict: null }),
 
