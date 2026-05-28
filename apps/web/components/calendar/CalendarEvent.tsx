@@ -167,6 +167,16 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
       newStart: viewStart,
       newEnd: viewEnd,
       hasMoved: false,
+      // Anchor for the slop-distance check in calendar/index.tsx so
+      // a click + 1px pointer jitter doesn't turn into a database
+      // write at a snapped slot.
+      pointerStartX: e.clientX,
+      pointerStartY: e.clientY,
+      // Snapshot the original asset + times so the save handler can
+      // verify the drag actually moved the event before committing.
+      originAssetId: asset.id,
+      originStart:   viewStart,
+      originEnd:     viewEnd,
     });
   };
 

@@ -106,11 +106,44 @@ export default function CalendarView() {
     }
   }, [rowHeight]);
 
-  // Global drag handlers — set up once
+  // Global drag handlers — set up once.
+  //
+  // Drag-arm slop. A pointer has to travel more than DRAG_SLOP_PX
+  // (in either axis) between mousedown and mousemove before we
+  // treat the gesture as a drag. Without this, *any* pointer jitter
+  // between mousedown and mouseup — even sub-pixel motion from a
+  // trackpad or a 1px wobble while clicking — promoted `hasMoved`
+  // to true and the mouseup handler wrote the event to whatever
+  // 15-min slot the pointer happened to be over.
+  //
+  // The dispatcher's bug report ("event jumps to a different day
+  // when I click it") matches that pattern exactly: a click with
+  // any pointer motion at all + the time-zone round-trip on save
+  // could send an event into a neighbouring column or, if the
+  // motion crossed a midnight seam in view-tz space, into the
+  // previous/next day.
+  //
+  // 6px matches the spec the OS uses for the same purpose
+  // (Windows is 4px, macOS is 5px) — generous enough to absorb a
+  // tap with motion, tight enough that an intentional drag still
+  // feels responsive.
+  const DRAG_SLOP_PX = 6;
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       const ds = dragStateRef.current;
       if (!ds || !gridBodyRef.current) return;
+
+      // Slop gate — do NOTHING until the pointer has actually moved
+      // past the threshold. The drag preview, the store update, the
+      // assetIndex math, all of it stays paused. The first move past
+      // the threshold flips the gate and from then on we behave as a
+      // drag.
+      if (!ds.hasMoved) {
+        const dx = Math.abs(e.clientX - ds.pointerStartX);
+        const dy = Math.abs(e.clientY - ds.pointerStartY);
+        if (dx < DRAG_SLOP_PX && dy < DRAG_SLOP_PX) return;
+      }
 
       const { assets: allAssets, resourceWidth: rw, rowHeight: hourH, setDragState, events, activeCategoryFilter: catFilter, showUnassigned: su, unassignedAssetId: uaid, currentDate: dragCurrentDate, viewMode: dragViewMode, calendarTimezone: dragTz } = useCalendarStore.getState();
       const unassignedInDrag = su && uaid !== null ? allAssets.find(a => a.id === uaid) ?? null : null;
@@ -176,7 +209,18 @@ export default function CalendarView() {
       const ds = dragStateRef.current;
       if (ds) {
         const { updateEvent, openEditModal, setDragState, calendarTimezone } = useCalendarStore.getState();
-        if (ds.hasMoved) {
+        // Belt-and-braces: even if hasMoved flipped to true at some
+        // point during the gesture, only persist a drag when the
+        // FINAL position differs from where the user grabbed the
+        // event. A drag that ends back on its origin slot (or never
+        // changed asset + time) is treated as a click — fixes the
+        // "I picked it up and put it back, why did it move?" report.
+        const actuallyMoved = ds.hasMoved && (
+             ds.targetAssetId !== ds.originAssetId
+          || ds.newStart      !== ds.originStart
+          || ds.newEnd        !== ds.originEnd
+        );
+        if (actuallyMoved) {
           const { driverPrefs, driverPrefsSecondary, drivers } = useCalendarStore.getState();
           // On drag, the column's preferred driver wins over the old
           // driver — otherwise the load ends up with a driver who

@@ -64,7 +64,24 @@ export interface DragState {
   durationMs: number;
   newStart: string;
   newEnd: string;
+  /** Becomes true only AFTER the pointer has moved past the slop
+   *  threshold (DRAG_SLOP_PX). Until then a mouseup is treated as a
+   *  click → opens the modal. This is what prevents tiny pointer
+   *  jitter from silently writing the event to a new slot. */
   hasMoved: boolean;
+  /** Initial pointer position at mousedown, in viewport coords.
+   *  Used by the slop guard in calendar/index.tsx so the drag has
+   *  to travel a real distance before it arms. */
+  pointerStartX: number;
+  pointerStartY: number;
+  /** Original asset + start/end at mousedown (in view-tz space, same
+   *  units as newStart/newEnd). Used by handleMouseUp to verify the
+   *  drag actually moved the event before committing — a drag that
+   *  ends up snapping back to the original slot is treated as a
+   *  click instead of a no-op database write. */
+  originAssetId: number;
+  originStart:   string;
+  originEnd:     string;
 }
 
 export interface BatchItem {
