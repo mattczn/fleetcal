@@ -24,7 +24,7 @@
  * want to move it, they can unlink on the source event first.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Wrench, AlertTriangle, Link2, Loader2, Plus, Check } from 'lucide-react';
+import { Wrench, AlertTriangle, Link2, Loader2, Plus, Check, ExternalLink } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { MaintenanceActionItem, MaintenancePriority } from '@fleetcal/types';
 
@@ -200,6 +200,7 @@ export default function LinkedWorkOrdersSection({
               checked
               saving={savingId === wo.id}
               onToggle={() => unlinkNow(wo.id)}
+              showView
             />
           ))}
 
@@ -239,10 +240,11 @@ export default function LinkedWorkOrdersSection({
 }
 
 /** One row — checkbox + title + priority chip + scheduled-date hint
- *  + optional out-of-service tag. Kept dumb so the parent can drive
- *  both modes through the same UI. */
+ *  + optional out-of-service tag + optional "View" jump on linked
+ *  rows. Kept dumb so the parent can drive both modes through the
+ *  same UI. */
 function WorkOrderRow({
-  wo, checked, saving, onToggle, showLinkOnHover,
+  wo, checked, saving, onToggle, showLinkOnHover, showView,
 }: {
   wo:       MaintenanceActionItem;
   checked:  boolean;
@@ -252,60 +254,89 @@ function WorkOrderRow({
    *  obvious the row is interactive. Unchecked create-mode rows already
    *  read as "select me" via the empty checkbox. */
   showLinkOnHover?: boolean;
+  /** When true, render a "View" button that opens the work-order
+   *  modal in a new tab (Equipment → Maintenance, with this work
+   *  order's id in the URL — the equipment page picks it up and
+   *  opens the WorkOrderModal in edit mode). Only useful for
+   *  already-linked rows, where the work order is a settled record
+   *  the dispatcher might want to inspect. */
+  showView?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={saving}
-      className="group w-full flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors disabled:opacity-60 text-left"
+    <div
+      className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors"
       style={{ background: checked ? 'rgba(124,58,237,0.10)' : 'transparent' }}
       onMouseEnter={e => { if (!checked) e.currentTarget.style.background = 'var(--gc-hover)'; }}
       onMouseLeave={e => { if (!checked) e.currentTarget.style.background = 'transparent'; }}>
-      {/* Checkbox visual. We use a custom box so its checked state can
-          stay in sync with both edit-mode (server) and create-mode
-          (parent state) without juggling controlled-input
-          semantics. */}
-      <div
-        className="flex items-center justify-center rounded shrink-0"
-        style={{
-          width: 16, height: 16,
-          background: checked ? '#7c3aed' : 'transparent',
-          border: checked ? '1px solid #7c3aed' : '1px solid var(--gc-border)',
-        }}>
-        {saving
-          ? <Loader2 size={10} color="#fff" className="animate-spin" />
-          : checked
-            ? <Check size={11} color="#fff" strokeWidth={3} />
-            : null}
-      </div>
-      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-        <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
-          {wo.title}
-        </span>
-        {priorityChip(wo.priority)}
-        {wo.outOfService && (
-          <span
-            title="Out of service — truck cannot run loads"
-            className="inline-flex items-center gap-0.5 text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-            style={{ background: '#fce8e6', color: '#b91c1c' }}>
-            <AlertTriangle size={9} /> OOS
+      {/* The checkbox + label sit inside an inner button so the
+          OUTER row (which also contains the View link) can still
+          show hover affordances + handle layout without making the
+          whole thing a single clickable area — clicking View
+          shouldn't toggle the link. */}
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={saving}
+        className="flex items-center gap-2.5 flex-1 min-w-0 text-left disabled:opacity-60">
+        {/* Checkbox visual. We use a custom box so its checked state can
+            stay in sync with both edit-mode (server) and create-mode
+            (parent state) without juggling controlled-input
+            semantics. */}
+        <div
+          className="flex items-center justify-center rounded shrink-0"
+          style={{
+            width: 16, height: 16,
+            background: checked ? '#7c3aed' : 'transparent',
+            border: checked ? '1px solid #7c3aed' : '1px solid var(--gc-border)',
+          }}>
+          {saving
+            ? <Loader2 size={10} color="#fff" className="animate-spin" />
+            : checked
+              ? <Check size={11} color="#fff" strokeWidth={3} />
+              : null}
+        </div>
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <span className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+            {wo.title}
           </span>
-        )}
-        {wo.scheduledDate && (
-          <span className="text-[11px] tabular-nums shrink-0" style={{ color: 'var(--gc-text-3)' }}>
-            {new Date(wo.scheduledDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-          </span>
-        )}
-      </div>
-      {showLinkOnHover && !checked && (
+          {priorityChip(wo.priority)}
+          {wo.outOfService && (
+            <span
+              title="Out of service — truck cannot run loads"
+              className="inline-flex items-center gap-0.5 text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+              style={{ background: '#fce8e6', color: '#b91c1c' }}>
+              <AlertTriangle size={9} /> OOS
+            </span>
+          )}
+          {wo.scheduledDate && (
+            <span className="text-[11px] tabular-nums shrink-0" style={{ color: 'var(--gc-text-3)' }}>
+              {new Date(wo.scheduledDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </span>
+          )}
+        </div>
+      </button>
+      {showLinkOnHover && !checked && !showView && (
         <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] font-semibold shrink-0" style={{ color: '#7c3aed' }}>
           <Plus size={11} /> Link
         </span>
       )}
-      {checked && !saving && (
+      {showView && (
+        <a
+          href={`/equipment?tab=maintenance&workOrder=${encodeURIComponent(wo.id)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
+          className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded shrink-0"
+          style={{ color: '#7c3aed', background: 'rgba(124,58,237,0.08)' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(124,58,237,0.18)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(124,58,237,0.08)')}
+          title="Open work order in a new tab">
+          <ExternalLink size={11} /> View
+        </a>
+      )}
+      {checked && !saving && !showView && (
         <Link2 size={11} className="shrink-0" style={{ color: '#7c3aed' }} />
       )}
-    </button>
+    </div>
   );
 }

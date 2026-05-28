@@ -434,6 +434,42 @@ function MaintenanceTabContent({
   const [woReloadKey, setWoReloadKey] = useState(0);
   const bumpWoReload = useCallback(() => setWoReloadKey(k => k + 1), []);
 
+  // Deep-link handler: when the page mounts with ?workOrder=<id> in the
+  // URL (the "View" button on the calendar's LinkedWorkOrdersSection
+  // opens this in a new tab), fetch that work order and pop the modal
+  // open in edit mode. Then strip the param via router.replace so a
+  // refresh / back navigation doesn't re-open it (the dispatcher might
+  // have already done their thing and closed the modal). One-shot —
+  // guard via a ref so re-renders don't keep firing it.
+  const router = useRouter();
+  const searchParamsTab = useSearchParams();
+  const woDeepLinkConsumed = useRef(false);
+  useEffect(() => {
+    if (woDeepLinkConsumed.current) return;
+    const woId = searchParamsTab?.get('workOrder');
+    if (!woId) return;
+    woDeepLinkConsumed.current = true;
+    let cancelled = false;
+    railway.getMaintenanceActionItem(woId)
+      .then(r => {
+        if (cancelled) return;
+        setWoModal({ open: true, mode: 'edit', item: r.actionItem });
+      })
+      .catch(err => {
+        console.error('[equipment] work-order deep link fetch failed:', err);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        // Drop the query param so refresh doesn't re-fire. Keep the
+        // tab param + any other state.
+        const next = new URLSearchParams(searchParamsTab?.toString() ?? '');
+        next.delete('workOrder');
+        const q = next.toString();
+        router.replace(`/equipment${q ? `?${q}` : ''}`);
+      });
+    return () => { cancelled = true; };
+  }, [searchParamsTab, router]);
+
   // Pending-triage count for the Driver reports sub-tab badge.
   // Lightweight separate fetch so dispatchers see "you have N reports
   // to triage" without having to click into the sub-tab first.
