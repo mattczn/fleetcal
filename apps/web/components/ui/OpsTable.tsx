@@ -67,6 +67,7 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import { ChevronDown, Search as SearchIcon, ArrowUp, ArrowDown, X, Columns as ColumnsIcon, Calendar as CalendarIcon } from 'lucide-react';
+import DatePicker from '../calendar/DatePicker';
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -1081,27 +1082,46 @@ function DateRangeChip({
             boxShadow:  '0 4px 12px rgba(0,0,0,0.08)',
             minWidth:   260,
           }}>
+          {/* Use the shared DatePicker component for visual parity with
+              the rest of the app (work-order modal, EventModal, etc.).
+              DatePicker spawns its own portal'd calendar pop-up; the
+              trigger button sits inline here. */}
           <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>From</label>
-          <input
-            type="date"
+          <DatePicker
             value={from}
-            onChange={e => onChange(e.target.value, to)}
-            className="rounded text-[13px] outline-none"
-            style={{ border: '1px solid var(--gc-border-light)', padding: '6px 8px', color: 'var(--gc-text-1)' }}
+            onChange={(v) => onChange(v, to)}
+            headerColor="#1a73e8"
+            buttonClassName="text-[13px] rounded text-left"
+            buttonStyle={{
+              border: '1px solid var(--gc-border-light)',
+              padding: '7px 10px',
+              color: from ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+              background: 'var(--gc-surface)',
+              width: '100%',
+            }}
+            displayText={from ? undefined : 'Select date'}
           />
-          <label className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>To</label>
-          <input
-            type="date"
+          <label className="text-[10px] font-bold uppercase tracking-wider mt-1" style={{ color: 'var(--gc-text-3)' }}>To</label>
+          <DatePicker
             value={to}
-            onChange={e => onChange(from, e.target.value)}
-            className="rounded text-[13px] outline-none"
-            style={{ border: '1px solid var(--gc-border-light)', padding: '6px 8px', color: 'var(--gc-text-1)' }}
+            onChange={(v) => onChange(from, v)}
+            headerColor="#1a73e8"
+            buttonClassName="text-[13px] rounded text-left"
+            buttonStyle={{
+              border: '1px solid var(--gc-border-light)',
+              padding: '7px 10px',
+              color: to ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+              background: 'var(--gc-surface)',
+              width: '100%',
+            }}
+            displayText={to ? undefined : 'Select date'}
+            min={from || undefined}
           />
           {active && (
             <button
               type="button"
               onClick={() => { onChange('', ''); setOpen(false); }}
-              className="text-[12px] font-semibold mt-1 transition-colors"
+              className="text-[12px] font-semibold mt-1 transition-colors text-left"
               style={{ color: 'var(--gc-blue)' }}>
               Clear
             </button>
