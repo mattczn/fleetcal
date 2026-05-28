@@ -1470,11 +1470,13 @@ function groupByEquipment(items: ResolvedWorkOrderItem[]): EquipGroup[] {
  *  (so an out-of-service truck reads RED at a glance even while the
  *  group is collapsed). Cards render below when expanded.
  *
- *  The asset name is a separate click target from the row's
- *  expand/collapse — clicking the name fires onFilterClick (drills
- *  the whole board to this truck), clicking anywhere else toggles.
- *  Same gesture wherever asset names show, so the dispatcher learns
- *  it once. */
+ *  Click gestures on the header:
+ *    • Anywhere on the row EXCEPT the asset name → expand/collapse.
+ *    • The asset name text only → drill the equipment filter to
+ *      this truck/trailer (when onFilterClick is wired).
+ *
+ *  Keeps the title as the one and only filter affordance — the rest
+ *  of the row is the easy oversized hit-target for expand/collapse. */
 function AssetGroup({
   label, color, items, defaultOpen, onItemClick, onFilterClick,
 }: {
@@ -1493,18 +1495,28 @@ function AssetGroup({
   const anyOos = items.some(i => i.outOfService);
   return (
     <div className="flex flex-col gap-1">
+      {/* The whole header row is one toggle hit-area. Asset name
+          inside stopPropagations so a title-click filters instead
+          of toggling. */}
       <div
-        className="flex items-center gap-1.5 px-1.5 py-1.5 rounded transition-colors"
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen(v => !v)}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen(v => !v);
+          }
+        }}
+        aria-expanded={open}
+        aria-label={open ? 'Collapse group' : 'Expand group'}
+        className="flex items-center gap-1.5 px-1.5 py-1.5 rounded transition-colors cursor-pointer"
         style={{ background: open ? 'var(--gc-hover)' : 'transparent' }}
         onMouseEnter={e => { if (!open) e.currentTarget.style.background = 'var(--gc-hover)'; }}
         onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}>
-        {/* Toggle area — chevron + color dot. Clicking either expands
-            or collapses the group. */}
-        <button
-          type="button"
-          onClick={() => setOpen(v => !v)}
-          className="flex items-center gap-1.5 shrink-0"
-          aria-label={open ? 'Collapse group' : 'Expand group'}>
+        {/* Chevron + color dot — purely visual; the row owns the
+            click so we don't need a button here. */}
+        <div className="flex items-center gap-1.5 shrink-0">
           {open
             ? <ChevronDown  size={11} style={{ color: 'var(--gc-text-3)' }} />
             : <ChevronRight size={11} style={{ color: 'var(--gc-text-3)' }} />}
@@ -1512,31 +1524,39 @@ function AssetGroup({
             className="rounded-full shrink-0"
             style={{ width: 8, height: 8, background: color }}
           />
-        </button>
-        {/* Asset name — separate click target. When onFilterClick is
-            wired, becomes an inline "filter to this truck" action.
-            Underline on hover signals the affordance. */}
+        </div>
+        {/* Asset name — the ONE filter affordance. stopPropagation
+            keeps the row's toggle from also firing. Underline on
+            hover signals it's a link, not just label text. When
+            there's nothing to filter to (no-equipment group), it's
+            inert text so the title doesn't lie about its behavior. */}
         {onFilterClick ? (
-          <button
-            type="button"
-            onClick={onFilterClick}
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={e => { e.stopPropagation(); onFilterClick(); }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onFilterClick();
+              }
+            }}
             title={`Filter board to ${label}`}
-            className="text-[12.5px] font-bold truncate text-left flex-1 hover:underline"
+            className="text-[12.5px] font-bold truncate text-left flex-1 hover:underline cursor-pointer"
             style={{ color: 'var(--gc-text-1)' }}>
             {label}
-          </button>
+          </span>
         ) : (
           <span
-            onClick={() => setOpen(v => !v)}
-            className="text-[12.5px] font-bold truncate flex-1 cursor-pointer"
+            className="text-[12.5px] font-bold truncate flex-1"
             style={{ color: 'var(--gc-text-1)' }}>
             {label}
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => setOpen(v => !v)}
-          className="flex items-center gap-1.5 shrink-0">
+        {/* Right-side count + OOS pill — also part of the toggle
+            hit-area (no inner button). */}
+        <div className="flex items-center gap-1.5 shrink-0">
           <span className="text-[11px] font-extrabold tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
             {items.length}
           </span>
@@ -1547,7 +1567,7 @@ function AssetGroup({
               OOS
             </span>
           )}
-        </button>
+        </div>
       </div>
       {open && (
         <div className="flex flex-col gap-1.5 pl-1.5">
