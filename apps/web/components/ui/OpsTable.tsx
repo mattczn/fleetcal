@@ -196,6 +196,17 @@ export interface OpsTableProps<T> {
    *  paginates server-side and the local `data.length` doesn't
    *  reflect the true total. */
   footerSummary?: ReactNode;
+  /** When true, the table fills its parent's height and the row body
+   *  scrolls internally on BOTH axes — vertical for long lists
+   *  (paginated=false), horizontal for column sets wider than the
+   *  viewport. The parent must be a flex column with a constrained
+   *  height (e.g. `flex-1 min-h-0`). Default false to preserve the
+   *  natural-height layout existing consumers rely on. */
+  fillHeight?: boolean;
+  /** Enables the column-order up/down controls inside the column
+   *  picker dropdown. Persists order alongside visibility to the
+   *  same `persistKey`. Only meaningful when `columnPicker` is true. */
+  columnReorder?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────
@@ -222,6 +233,8 @@ export function OpsTable<T>({
   onSelectionChange,
   paginated = true,
   footerSummary,
+  fillHeight = false,
+  columnReorder = false,
 }: OpsTableProps<T>) {
   // ── Filter state ───────────────────────────────────────────────────
   // Keyed by filter.key for select filters and '__search' for search.
@@ -262,13 +275,57 @@ export function OpsTable<T>({
     } catch { /* quota errors etc. — non-critical */ }
   }, [hiddenCols, visibilityStorageKey]);
 
-  // Visible columns = declared columns minus user-hidden. We do NOT
+  // Column order — user-controlled via the picker dropdown's
+  // up/down buttons when `columnReorder` is enabled. Stored as an
+  // ordered array of column keys; columns not present in the array
+  // keep their declared position (new columns appended after a
+  // future code change won't disappear from view).
+  const orderStorageKey = persistKey ? `${persistKey}:order` : null;
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+    if (typeof window !== 'undefined' && orderStorageKey) {
+      try {
+        const raw = window.localStorage.getItem(orderStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as string[];
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch { /* fall through */ }
+    }
+    return columns.map(c => c.key);
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !orderStorageKey) return;
+    try { window.localStorage.setItem(orderStorageKey, JSON.stringify(columnOrder)); }
+    catch { /* non-critical */ }
+  }, [columnOrder, orderStorageKey]);
+
+  // Apply the user-chosen order to the declared columns. Any column
+  // not in `columnOrder` falls in at its declared position (so newly-
+  // added columns don't vanish for users with a stale persisted
+  // order). Pinned columns keep their pin direction regardless of
+  // where the user moves them in the order — sticky positioning
+  // would break otherwise.
+  const orderedColumns = useMemo(() => {
+    const byKey = new Map(columns.map(c => [c.key, c]));
+    const seen  = new Set<string>();
+    const out: OpsColumn<T>[] = [];
+    for (const k of columnOrder) {
+      const c = byKey.get(k);
+      if (c) { out.push(c); seen.add(k); }
+    }
+    for (const c of columns) {
+      if (!seen.has(c.key)) out.push(c);
+    }
+    return out;
+  }, [columns, columnOrder]);
+
+  // Visible columns = ordered columns minus user-hidden. We do NOT
   // strip alwaysVisible columns from this list even if they appear
   // in hiddenCols (defensive — they can't be hidden in the picker UI
   // either, but a stale persisted state shouldn't blank the actions).
   const visibleColumns = useMemo(
-    () => columns.filter(c => c.alwaysVisible || !hiddenCols.has(c.key)),
-    [columns, hiddenCols],
+    () => orderedColumns.filter(c => c.alwaysVisible || !hiddenCols.has(c.key)),
+    [orderedColumns, hiddenCols],
   );
 
   // ── Selection state ─────────────────────────────────────────────────
@@ -523,8 +580,26 @@ export function OpsTable<T>({
     [columns],
   );
 
+  // Move-up / move-down helpers for the picker dropdown. The slot
+  // arg here is "position in the picker's column list" (= pickerColumns
+  // index). We translate that into the full columnOrder array since
+  // pickerColumns excludes alwaysVisible entries. Pinned columns
+  // shouldn't be reorderable across the pinned/non-pinned boundary,
+  // but the picker doesn't list them so this is naturally enforced.
+  const moveColumn = useCallback((key: string, dir: -1 | 1) => {
+    setColumnOrder(prev => {
+      const next = [...prev];
+      const i = next.indexOf(key);
+      if (i === -1) return prev;
+      const j = i + dir;
+      if (j < 0 || j >= next.length) return prev;
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }, []);
+
   return (
-    <div className="w-full">
+    <div className={fillHeight ? 'w-full h-full flex flex-col min-h-0' : 'w-full'}>
       {/* ── Filter chip row ─────────────────────────────────────── */}
       {(filters.length > 0 || toolbarRight || columnPicker || selectionActive) && (
         <div className="flex items-center gap-2 flex-wrap mb-3">
@@ -595,6 +670,8 @@ export function OpsTable<T>({
               columns={pickerColumns}
               hidden={hiddenCols}
               onChange={setHiddenCols}
+              reorder={columnReorder}
+              onMove={moveColumn}
             />
           )}
           {!selectionActive && toolbarRight}
@@ -602,14 +679,20 @@ export function OpsTable<T>({
       )}
 
       {/* ── Table card ──────────────────────────────────────────── */}
+      {/* In fillHeight mode the card fills the parent's remaining
+          height (flex-1 min-h-0) and scrolls BOTH axes internally —
+          vertical for long lists (paginated=false), horizontal for
+          column sets wider than the viewport. Pinned columns + the
+          sticky header stay anchored within this scroll container.
+          The non-fillHeight default keeps existing consumers' layout
+          untouched: horizontal scroll only, natural row height. */}
       <div
-        className="rounded-lg"
+        className={fillHeight ? 'rounded-lg flex-1 min-h-0' : 'rounded-lg'}
         style={{
           background: 'var(--gc-surface)',
           border: '1px solid var(--gc-border-light)',
-          // Horizontal scroll for wide tables; pinned cols stay put
-          // via position: sticky on their cells.
-          overflowX: 'auto',
+          overflow: fillHeight ? 'auto' : undefined,
+          overflowX: fillHeight ? undefined : 'auto',
         }}>
         {/* Header row */}
         <div
@@ -1037,11 +1120,15 @@ function fmtShort(iso: string): string {
 }
 
 function ColumnPickerChip<T>({
-  columns, hidden, onChange,
+  columns, hidden, onChange, reorder, onMove,
 }: {
   columns: OpsColumn<T>[];
   hidden: Set<string>;
   onChange: (next: Set<string>) => void;
+  /** Show up/down buttons to reorder columns inline. */
+  reorder?: boolean;
+  /** Move a column up (-1) or down (+1) in the column order. */
+  onMove?: (key: string, dir: -1 | 1) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -1087,34 +1174,80 @@ function ColumnPickerChip<T>({
             background: 'var(--gc-surface)',
             border:     '1px solid var(--gc-border-light)',
             boxShadow:  '0 4px 12px rgba(0,0,0,0.08)',
-            minWidth:   220,
+            minWidth:   260,
             maxHeight:  360,
             overflowY:  'auto',
           }}>
-          {columns.map(c => {
+          {columns.map((c, idx) => {
             const isHidden = hidden.has(c.key);
+            const atTop    = idx === 0;
+            const atBottom = idx === columns.length - 1;
             return (
-              <button
+              <div
                 key={c.key}
-                type="button"
-                onClick={() => {
-                  const next = new Set(hidden);
-                  if (isHidden) next.delete(c.key);
-                  else          next.add(c.key);
-                  onChange(next);
-                }}
-                className="flex items-center gap-2 w-full text-left transition-colors"
+                className="flex items-center gap-2 transition-colors"
                 style={{
-                  padding:    '8px 12px',
+                  padding:    '6px 8px 6px 12px',
                   fontSize:   13,
                   color:      'var(--gc-text-1)',
                   background: 'transparent',
                 }}
                 onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#f8f9fa')}
                 onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = 'transparent')}>
-                <CheckBox checked={!isHidden} onChange={() => { /* button handles */ }} aria-hidden />
-                <span className="flex-1">{c.pickerLabel ?? c.header}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new Set(hidden);
+                    if (isHidden) next.delete(c.key);
+                    else          next.add(c.key);
+                    onChange(next);
+                  }}
+                  className="flex items-center gap-2 flex-1 text-left"
+                  style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer' }}>
+                  <CheckBox checked={!isHidden} onChange={() => { /* button handles */ }} aria-hidden />
+                  <span className="flex-1">{c.pickerLabel ?? c.header}</span>
+                </button>
+                {reorder && onMove && (
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => onMove(c.key, -1)}
+                      disabled={atTop}
+                      aria-label={`Move ${c.pickerLabel ?? c.header} up`}
+                      className="flex items-center justify-center rounded transition-colors"
+                      style={{
+                        width: 22, height: 22,
+                        background: 'transparent',
+                        color: atTop ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
+                        opacity: atTop ? 0.4 : 1,
+                        cursor: atTop ? 'default' : 'pointer',
+                        border: 'none',
+                      }}
+                      onMouseEnter={e => { if (!atTop) (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+                      <ArrowUp size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onMove(c.key, 1)}
+                      disabled={atBottom}
+                      aria-label={`Move ${c.pickerLabel ?? c.header} down`}
+                      className="flex items-center justify-center rounded transition-colors"
+                      style={{
+                        width: 22, height: 22,
+                        background: 'transparent',
+                        color: atBottom ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
+                        opacity: atBottom ? 0.4 : 1,
+                        cursor: atBottom ? 'default' : 'pointer',
+                        border: 'none',
+                      }}
+                      onMouseEnter={e => { if (!atBottom) (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+                      <ArrowDown size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>

@@ -985,10 +985,12 @@ export default function CloseoutView() {
                 defaultSort={{ key: 'age', dir: 'desc' }}
                 priorityKey={r => !!r.priority}
                 columnPicker
+                columnReorder
                 persistKey={`closeout-${tab}`}
                 selectable
                 onSelectionChange={setSelectedIds}
                 paginated={false}
+                fillHeight
                 emptyLabel={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
                 bulkActions={({ selectedIds: ids, clearSelection }) => (
                   <div className="flex items-center gap-2">
