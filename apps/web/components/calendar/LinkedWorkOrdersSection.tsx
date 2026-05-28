@@ -140,9 +140,15 @@ export default function LinkedWorkOrdersSection({
     }
     try {
       await railway.updateMaintenanceActionItem(woId, { eventIds: desiredIds });
+      // Force a clean re-fetch from the server so the linked/
+      // available split reflects the canonical state. Cheap (two
+      // small list queries) and removes any chance of optimistic
+      // drift if the server's link write reshaped things (e.g.
+      // dedup, validation tweak).
+      setReloadKey(k => k + 1);
     } catch (err) {
       console.error('[LinkedWorkOrders] link failed:', err);
-      // Force a clean re-fetch instead of trying to thread rollback.
+      // Same re-fetch on error to roll the optimistic toggle back.
       setReloadKey(k => k + 1);
     } finally {
       setSavingId(null);
@@ -162,6 +168,7 @@ export default function LinkedWorkOrdersSection({
     }
     try {
       await railway.updateMaintenanceActionItem(woId, { eventIds: desiredIds });
+      setReloadKey(k => k + 1);
     } catch (err) {
       console.error('[LinkedWorkOrders] unlink failed:', err);
       setReloadKey(k => k + 1);

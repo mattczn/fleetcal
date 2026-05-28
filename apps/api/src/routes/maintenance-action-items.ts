@@ -133,14 +133,17 @@ async function replaceLinkedEvents(
     .eq("action_item_id", actionItemId);
   if (delErr) {
     if (/relation .* does not exist/i.test(delErr.message ?? "")) {
-      console.warn("[replaceLinkedEvents] join table missing — write skipped");
+      console.warn("[replaceLinkedEvents] join table missing — write skipped (apply 20260601 migration)");
       return null;
     }
     console.error("[replaceLinkedEvents] delete failed:", delErr);
     throw delErr;
   }
 
-  if (wanted.length === 0) return [];
+  if (wanted.length === 0) {
+    console.info("[replaceLinkedEvents]", actionItemId, "cleared all links");
+    return [];
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const insertRows = wanted.map(id => ({ action_item_id: actionItemId, event_id: id })) as any[];
@@ -148,9 +151,10 @@ async function replaceLinkedEvents(
     .from("maintenance_action_item_events")
     .insert(insertRows);
   if (insErr) {
-    console.error("[replaceLinkedEvents] insert failed:", insErr);
+    console.error("[replaceLinkedEvents] insert failed:", insErr, "rows:", insertRows);
     throw insErr;
   }
+  console.info("[replaceLinkedEvents]", actionItemId, "wrote", wanted.length, "links:", wanted);
 
   // Re-fetch with event start dates for the response.
   return (await fetchLinkedEventsMap([actionItemId])).get(actionItemId) ?? [];
@@ -376,36 +380,65 @@ actionItems.get("/", async (c) => {
 
   // Calendar-side query: "give me every work order linked to this
   // event." Powers the Linked Work Orders section on a non-revenue
-  // maintenance block. Under M:N, the linkage lives in the join
-  // table, so we look up the action_item_ids there first, then add
-  // them as an `in()` filter on the main query. Empty result short-
-  // circuits before we even hit the items table.
-  let eventLinkedIds: string[] | null = null;
+  // maintenance block. We union TWO sources to be resilient to any
+  // data inconsistency between the join table and the denormalized
+  // column (e.g. an older code path wrote only to the column, or a
+  // partial migration left rows in one place but not the other):
+  //
+  //   1. maintenance_action_item_events  (the canonical M:N join)
+  //   2. maintenance_action_items.event_id (legacy 1:1 column)
+  //
+  // Either source matching is enough to surface the WO as "linked."
+  // The PATCH handler writes to BOTH, so going forward they stay
+  // in sync; this defensive read keeps stragglers from any prior
+  // schema state from disappearing from the UI.
+  let eventLinkedIdsUnion: Set<string> | null = null;
   if (eventIdRaw) {
+    const ids = new Set<string>();
+
+    // Source 1: the M:N join.
     const { data: joinData, error: joinErr } = await supabaseAny
       .from("maintenance_action_item_events")
       .select("action_item_id")
       .eq("event_id", eventIdRaw);
     if (joinErr && !/relation .* does not exist/i.test(joinErr.message ?? "")) {
-      console.error("[GET /v1/maintenance-action-items?eventId] join lookup failed:", joinErr);
+      console.error("[GET .../action-items?eventId] join lookup failed:", joinErr);
       return c.json({ error: "fetch_failed", detail: joinErr.message } satisfies ApiErrorResponse, 500);
     }
-    eventLinkedIds = ((joinData ?? []) as Array<{ action_item_id: string }>).map(r => r.action_item_id);
-    // Pre-migration safety: fall back to the legacy event_id column
-    // so callers don't see an empty list right after deploy.
-    if (joinErr && /relation .* does not exist/i.test(joinErr.message ?? "")) {
-      console.warn("[GET .../action-items?eventId] join missing — falling back to legacy event_id column");
-      eventLinkedIds = null; // signal legacy-column fallback below
+    for (const r of (joinData ?? []) as Array<{ action_item_id: string }>) {
+      ids.add(r.action_item_id);
     }
+
+    // Source 2: the denormalized column. Catch missing-column
+    // errors so an org on an older schema still gets a sensible
+    // response (no rows just means nothing's linked yet).
+    const { data: colData, error: colErr } = await supabase
+      .from("maintenance_action_items")
+      .select("id")
+      .eq("org_id", orgId)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .eq("event_id" as any, eventIdRaw);
+    if (colErr && !isMissingColumnError(colErr)) {
+      console.error("[GET .../action-items?eventId] column lookup failed:", colErr);
+    }
+    for (const r of (colData ?? []) as Array<{ id: string }>) {
+      ids.add(r.id);
+    }
+
+    eventLinkedIdsUnion = ids;
+    // Useful while we're debugging the multi-link rollout — strip
+    // once the rollout has settled.
+    console.info("[GET .../action-items?eventId] event:", eventIdRaw, "linked WOs:", Array.from(ids));
   }
   const applyEventFilter = (q: ReturnType<typeof build>) => {
     if (!eventIdRaw) return q;
-    if (eventLinkedIds !== null) {
-      if (eventLinkedIds.length === 0) return q.eq("id", "00000000-0000-0000-0000-000000000000"); // empty result sentinel
-      return q.in("id", eventLinkedIds);
+    if (eventLinkedIdsUnion === null) return q;
+    if (eventLinkedIdsUnion.size === 0) {
+      // Empty result sentinel — postgrest .in("id", []) returns
+      // every row, so use a no-match uuid instead.
+      return q.eq("id", "00000000-0000-0000-0000-000000000000");
     }
-    // Legacy fallback path
-    return q.eq("event_id", eventIdRaw);
+    return q.in("id", Array.from(eventLinkedIdsUnion));
   };
 
   // First attempt: full schema. If it fails because the *_by_name
@@ -548,6 +581,8 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   }
   if (desiredEventIds !== undefined) {
     update.event_id = desiredEventIds[0] ?? null;
+    // Diagnostic — strip once the multi-link rollout has settled.
+    console.info("[PATCH .../action-items]", id, "desiredEventIds:", desiredEventIds, "→ column event_id:", update.event_id);
   }
   if ("completedBy"   in body) {
     update.completed_by      = body.completedBy ?? null;
