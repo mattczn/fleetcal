@@ -78,6 +78,7 @@ function PayCell({ load }: { load: CalendarEvent }) {
   const [raw, setRaw] = useState('');
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   function startEdit() {
     setRaw(String(load.driverPay ?? ''));
@@ -85,7 +86,7 @@ function PayCell({ load }: { load: CalendarEvent }) {
     setTimeout(() => inputRef.current?.select(), 0);
   }
 
-  async function commit() {
+  async function commit({ advance }: { advance?: boolean } = {}) {
     const val = parseFloat(raw);
     if (!isNaN(val) && val !== load.driverPay) {
       setSaving(true);
@@ -93,6 +94,26 @@ function PayCell({ load }: { load: CalendarEvent }) {
       setSaving(false);
     }
     setEditing(false);
+    if (advance) {
+      // Spreadsheet-style: pressing Enter commits THIS cell, then
+      // jumps focus to the next pay cell on the page. We query every
+      // [data-pay-cell] in document order so the order matches what
+      // the dispatcher sees scanning the page top-to-bottom.
+      //
+      // Wrapped in setTimeout(0) so the editing→display swap finishes
+      // first (the button needs to exist before we can click it). Use
+      // the saved buttonRef from THIS cell to find our position rather
+      // than relying on document.activeElement (which is the input,
+      // about to be unmounted).
+      const here = buttonRef.current;
+      setTimeout(() => {
+        if (typeof document === 'undefined') return;
+        const cells = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-pay-cell]'));
+        const idx = cells.findIndex(el => el === here);
+        const next = cells[idx + 1];
+        if (next) next.click();
+      }, 0);
+    }
   }
 
   if (editing) {
@@ -105,8 +126,11 @@ function PayCell({ load }: { load: CalendarEvent }) {
           step="0.01"
           value={raw}
           onChange={e => setRaw(e.target.value)}
-          onBlur={commit}
-          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
+          onBlur={() => commit()}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); void commit({ advance: true }); }
+            if (e.key === 'Escape') setEditing(false);
+          }}
           className="w-24 px-2 py-0.5 rounded text-sm font-semibold text-right"
           style={{
             background: 'var(--gc-bg)',
@@ -122,12 +146,14 @@ function PayCell({ load }: { load: CalendarEvent }) {
 
   return (
     <button
+      ref={buttonRef}
+      data-pay-cell
       onClick={startEdit}
       className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors"
       style={{ background: 'transparent' }}
       onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
       onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
-      title="Click to edit driver pay"
+      title="Click to edit driver pay (Enter saves + jumps to next)"
     >
       {saving ? (
         <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
@@ -1383,6 +1409,29 @@ export default function PayrollView() {
     }
     return seen.size;
   }, [weekEvents]);
+  // Total load revenue — dedupe by loadId AND take the MAX loadPrice
+  // across legs, same logic legRevenue uses per row. Relays often
+  // duplicate the load price on every leg; without dedupe + max we
+  // either double-count or miss the value depending on which leg
+  // happens to carry the canonical price. This is "gross revenue
+  // we booked this week," which is what the % calc below wants.
+  const totalRevenue = useMemo(() => {
+    const byLoad = new Map<string, number>();
+    for (const ev of weekEvents) {
+      const key = ev.loadId ?? ev.id;
+      const cur = byLoad.get(key) ?? 0;
+      byLoad.set(key, Math.max(cur, ev.loadPrice ?? 0));
+    }
+    let total = 0;
+    for (const v of byLoad.values()) total += v;
+    return total;
+  }, [weekEvents]);
+  // Payroll as % of revenue — the headline labor-cost ratio. Null
+  // when revenue is zero (we'd be dividing by 0) so the UI can render
+  // an em-dash instead of "Infinity%".
+  const payrollPctOfRevenue = totalRevenue > 0
+    ? (totalPay / totalRevenue) * 100
+    : null;
 
   const orgName    = organization?.name    ?? 'My Organization';
   const orgLogoUrl = organization?.imageUrl;
@@ -1436,6 +1485,42 @@ export default function PayrollView() {
                 </div>
                 <div className="text-[22px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
                   {fmtMoney(totalPay)}
+                </div>
+              </div>
+              <div style={{ width: 1, height: 40, background: 'var(--gc-border)' }} />
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Total Revenue
+                </div>
+                <div className="text-[22px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  {fmtMoney(totalRevenue)}
+                </div>
+              </div>
+              <div style={{ width: 1, height: 40, background: 'var(--gc-border)' }} />
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                  Payroll % of Revenue
+                </div>
+                <div
+                  className="text-[22px] font-semibold"
+                  // Color tints the headline figure when the ratio
+                  // crosses notable bands so the dispatcher gets an
+                  // at-a-glance read: green under 30% (healthy), neutral
+                  // 30–40%, amber 40–50%, red above 50% (loss-leader
+                  // territory). Numbers are conservative — tighten the
+                  // thresholds for your fleet if needed.
+                  style={{
+                    color:
+                      payrollPctOfRevenue == null   ? 'var(--gc-text-3)' :
+                      payrollPctOfRevenue < 30       ? '#1e8e3e' :
+                      payrollPctOfRevenue < 40       ? 'var(--gc-text-1)' :
+                      payrollPctOfRevenue < 50       ? '#b85c00' :
+                                                       '#d93025',
+                  }}
+                >
+                  {payrollPctOfRevenue == null
+                    ? '—'
+                    : `${payrollPctOfRevenue.toFixed(1)}%`}
                 </div>
               </div>
               <div style={{ width: 1, height: 40, background: 'var(--gc-border)' }} />
