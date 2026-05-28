@@ -988,6 +988,37 @@ function WorkOrdersList({
           assets={assets}
           trailers={trailers}
         />
+        {/* Clear-filters chip — visible only when something is
+            actually filtered. Wipes search AND equipment filter in
+            one click so the dispatcher doesn't have to walk both
+            controls back to "All …" manually. */}
+        {(search.trim() !== '' || equipFilter !== 'all') && (
+          <button
+            type="button"
+            onClick={() => { setSearch(''); setEquipFilter('all'); }}
+            title="Clear all filters"
+            aria-label="Clear all filters"
+            className="rounded-md text-[12.5px] font-semibold flex items-center gap-1 transition-colors"
+            style={{
+              border:     '1px solid var(--gc-border-light)',
+              background: 'var(--gc-surface)',
+              color:      'var(--gc-text-2)',
+              padding:    '6px 10px',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = '#fee2e2';
+              e.currentTarget.style.borderColor = '#fca5a5';
+              e.currentTarget.style.color = '#991b1b';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'var(--gc-surface)';
+              e.currentTarget.style.borderColor = 'var(--gc-border-light)';
+              e.currentTarget.style.color = 'var(--gc-text-2)';
+            }}>
+            <X size={13} />
+            Clear
+          </button>
+        )}
         <div className="flex-1" />
         <button
           type="button"
