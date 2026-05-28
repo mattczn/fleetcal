@@ -1317,6 +1317,17 @@ function WorkOrdersList({
                             ? undefined
                             : () => setEquipFilter(g.key.replace('-', ':'))
                         }
+                        // Backlog cards are draggable — drop onto a
+                        // day column above to set scheduledDate (same
+                        // handleDrop the week grid already uses, so
+                        // the optimistic move + rollback behavior is
+                        // shared).
+                        draggableItems
+                        onDragStartItem={(item, e) => {
+                          e.dataTransfer.setData('text/plain', item.id);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEndItem={() => setDragOverKey(null)}
                       />
                     ));
                   })()}
@@ -1501,7 +1512,7 @@ function groupByEquipment(items: ResolvedWorkOrderItem[]): EquipGroup[] {
  *  Keeps the title as the one and only filter affordance — the rest
  *  of the row is the easy oversized hit-target for expand/collapse. */
 function AssetGroup({
-  label, color, items, defaultOpen, onItemClick, onFilterClick,
+  label, color, items, defaultOpen, onItemClick, onFilterClick, draggableItems, onDragStartItem, onDragEndItem,
 }: {
   label:         string;
   color:         string;
@@ -1513,6 +1524,14 @@ function AssetGroup({
    *  group's filter key, e.g. "a:42" or "t:7"). Omit for the "No
    *  equipment" / unlinked group where there's nothing to filter to. */
   onFilterClick?: () => void;
+  /** When true, the inner WorkOrderCards are draggable. Used in the
+   *  backlog so a card can be dragged onto a day column to schedule
+   *  it. History defaults to false (done items don't reschedule). */
+  draggableItems?: boolean;
+  /** Hoisted drag handlers — set by the parent so the same drop
+   *  target on the day column already knows what to do. */
+  onDragStartItem?: (item: MaintenanceActionItem, e: React.DragEvent) => void;
+  onDragEndItem?:   () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const anyOos = items.some(i => i.outOfService);
@@ -1603,6 +1622,9 @@ function AssetGroup({
               showOverdue
               onClick={() => onItemClick(item)}
               onFilterClick={onFilterClick}
+              draggable={draggableItems}
+              onDragStart={draggableItems && onDragStartItem ? (e) => onDragStartItem(item, e) : undefined}
+              onDragEnd={draggableItems && onDragEndItem ? () => onDragEndItem() : undefined}
             />
           ))}
         </div>
@@ -2317,12 +2339,15 @@ function WorkOrderModal({
     }
     setBusy(true); setError(null);
     try {
-      const payload = {
+      // Shared (mode-agnostic) fields. scheduledDate is split out
+      // below because edit-mode needs to send null on clear while
+      // create/convert can't (those request types don't accept null
+      // — the column starts null on insert, so undefined is correct).
+      const sharedPayload = {
         title:         form.title.trim(),
         description:   form.description.trim() || undefined,
         category:      form.category,
         priority:      form.priority,
-        scheduledDate: form.scheduledDate || undefined,
         vendor:        form.vendor.trim() || undefined,
         // Total price → actual_cost on the wire. Estimated dropped
         // from the UI; completedBy is now server-auto-filled on
@@ -2334,13 +2359,26 @@ function WorkOrderModal({
       };
       let savedId: string;
       if (mode === 'edit' && item) {
-        const res = await railway.updateMaintenanceActionItem(item.id, payload);
+        // Empty string ⇒ explicit clear. Sending null routes through
+        // the PATCH handler's `update.scheduled_date = body.scheduledDate ?? null`
+        // and clears the column; sending undefined would skip the
+        // field entirely and the date couldn't be removed once set.
+        const res = await railway.updateMaintenanceActionItem(item.id, {
+          ...sharedPayload,
+          scheduledDate: form.scheduledDate || null,
+        });
         savedId = res.actionItem.id;
       } else if (mode === 'convert' && fromReport) {
-        const res = await railway.convertMaintenanceReport(fromReport.id, payload);
+        const res = await railway.convertMaintenanceReport(fromReport.id, {
+          ...sharedPayload,
+          scheduledDate: form.scheduledDate || undefined,
+        });
         savedId = res.actionItem.id;
       } else {
-        const res = await railway.createMaintenanceActionItem(payload);
+        const res = await railway.createMaintenanceActionItem({
+          ...sharedPayload,
+          scheduledDate: form.scheduledDate || undefined,
+        });
         savedId = res.actionItem.id;
       }
       if (!opts?.quiet) onSaved();
@@ -2599,10 +2637,31 @@ function WorkOrderModal({
             </div>
             {mode !== 'convert' && (
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
-                  style={{ color: 'var(--gc-text-3)' }}>
-                  Scheduled for
-                </label>
+                <div className="flex items-baseline justify-between mb-2">
+                  <label className="text-[11px] font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--gc-text-3)' }}>
+                    Scheduled for
+                  </label>
+                  {/* Clear affordance — only renders when a date is
+                      set, so an empty field doesn't show a no-op
+                      button. Clicking resets form.scheduledDate to ''
+                      which the save path translates to null on the
+                      wire (clearing the column). The card flips back
+                      from blue "Scheduled" to gray "Open" and the
+                      backlog picks it up. */}
+                  {form.scheduledDate && (
+                    <button
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, scheduledDate: '' }))}
+                      className="text-[11px] font-semibold flex items-center gap-1 transition-colors"
+                      style={{ color: 'var(--gc-text-3)' }}
+                      onMouseEnter={e => (e.currentTarget.style.color = '#b91c1c')}
+                      onMouseLeave={e => (e.currentTarget.style.color = 'var(--gc-text-3)')}
+                      title="Remove the scheduled date (sends back to backlog)">
+                      <X size={11} /> Clear
+                    </button>
+                  )}
+                </div>
                 <DatePicker
                   value={form.scheduledDate}
                   onChange={(v) => setForm(f => ({ ...f, scheduledDate: v }))}
