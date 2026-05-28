@@ -2953,26 +2953,31 @@ export default function EventModal() {
         createdByName: isEdit ? (existingEv?.createdByName ?? currentUserName) : currentUserName,
         ...(isEdit ? { auditLog: nextAuditLog } : {}),
       };
-      isEdit && modalEventId ? updateEvent(modalEventId, payload) : addEvent(payload, newEventId);
       // Apply any pending work-order links collected by
       // LinkedWorkOrdersSection while the event was being composed.
       // Edit mode flushes immediately on each toggle (so the buffer
-      // stays empty there); create mode fills the buffer and we
-      // apply once the event exists. Fire-and-forget — the modal
-      // closes regardless; a failed link is non-fatal and the user
-      // can re-link from the maintenance side later.
-      if (eventKind === 'non_revenue' && pendingWorkOrderLinks.length > 0) {
-        const targetEventId = isEdit && modalEventId ? modalEventId : newEventId;
-        // Dynamic import to match the pattern used elsewhere in this
-        // file — keeps railway out of the synchronous module graph.
-        void import('@/lib/railway').then(({ railway }) =>
-          Promise.all(
-            pendingWorkOrderLinks.map(woId =>
-              railway.updateMaintenanceActionItem(woId, { eventId: targetEventId })
-                .catch(err => console.error('[EventModal] link work order failed:', woId, err))
+      // stays empty there); create mode defers to addEvent so the
+      // link uses the SERVER-allocated event id (not the optimistic
+      // tempId — that gets swapped out when the createEvent .then
+      // resolves, leaving any link we fired here pointing at a
+      // ghost uuid). Edit-mode pending list should be empty, but
+      // we still flush defensively just in case.
+      const pendingLinks = eventKind === 'non_revenue' ? pendingWorkOrderLinks : [];
+      if (isEdit && modalEventId) {
+        updateEvent(modalEventId, payload);
+        if (pendingLinks.length > 0) {
+          const targetEventId = modalEventId;
+          void import('@/lib/railway').then(({ railway }) =>
+            Promise.all(
+              pendingLinks.map(woId =>
+                railway.updateMaintenanceActionItem(woId, { eventId: targetEventId })
+                  .catch(err => console.error('[EventModal] link work order failed:', woId, err))
+              )
             )
-          )
-        );
+          );
+        }
+      } else {
+        addEvent(payload, newEventId, pendingLinks.length > 0 ? { linkWorkOrderIds: pendingLinks } : undefined);
       }
     }
     closeModal();

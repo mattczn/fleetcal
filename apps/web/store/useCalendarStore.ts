@@ -255,7 +255,17 @@ interface CalendarStore extends ModalState {
   setDriverPref: (assetId: number, driverId: number | null) => void;
   setDriverPrefSecondary: (assetId: number, driverId: number | null) => void;
 
-  addEvent: (event: Omit<CalendarEvent, 'id'>, presetId?: string) => void;
+  /** Create an event. `presetId` is the optimistic local id used
+   *  until the server responds with the real uuid. `options.linkWorkOrderIds`
+   *  (non-revenue only) names maintenance action items to attach via
+   *  `eventId` AFTER the server-allocated id is known — addressing the
+   *  race where flushing against `presetId` would target a temp uuid
+   *  that the server immediately swaps out. */
+  addEvent: (
+    event: Omit<CalendarEvent, 'id'>,
+    presetId?: string,
+    options?: { linkWorkOrderIds?: string[] },
+  ) => void;
   updateEvent: (id: string, updates: Partial<Omit<CalendarEvent, 'id'>>) => void;
   /** Soft-delete just the event row and leave the parent load intact.
    *  Used by the "Cancel & Remove from Calendar" flow — load stays in
@@ -1224,7 +1234,7 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   // ── Events ────────────────────────────────────────────────────────────────
-  addEvent: (event, presetId?) => {
+  addEvent: (event, presetId?, options?) => {
     if (get().isDemo) return;
     const tempId = presetId ?? crypto.randomUUID();
     // Optimistic insert with temp id; gets swapped for the server-allocated
@@ -1263,6 +1273,22 @@ export const useCalendarStore = create<CalendarStore>()(
               created,
             ],
           }));
+          // Flush pending work-order links AFTER the server-allocated
+          // event id is known. Previously EventModal fired these against
+          // the temp id (presetId) immediately after addEvent returned,
+          // which then got swapped out, leaving the WOs linked to a
+          // ghost uuid that didn't exist on the server. Fire-and-forget
+          // — failure is non-fatal; the user can re-link from the
+          // maintenance side.
+          const linkIds = options?.linkWorkOrderIds;
+          if (linkIds && linkIds.length > 0) {
+            void Promise.all(
+              linkIds.map((woId) =>
+                railway.updateMaintenanceActionItem(woId, { eventId: created.id })
+                  .catch((err) => console.error('[addEvent] link work order failed:', woId, err)),
+              ),
+            );
+          }
         })
         .catch((err) => console.error('addEvent (non-revenue):', err));
       return;
