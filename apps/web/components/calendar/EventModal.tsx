@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
+import LinkedWorkOrdersSection from './LinkedWorkOrdersSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { useUser } from '@clerk/nextjs';
@@ -1916,6 +1917,13 @@ export default function EventModal() {
   const [priority,   setPriority]   = useState(false);
   const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue'>('revenue');
   const [nonRevenueType, setNonRevenueType] = useState<string>('Maintenance');
+  // Buffer of maintenance work-order IDs the dispatcher has checked
+  // in the Linked Work Orders section, but not yet saved (because the
+  // event is still being created). On a successful create save we
+  // flush these via railway.updateMaintenanceActionItem for each id.
+  // In edit mode the section persists toggles immediately and this
+  // stays empty.
+  const [pendingWorkOrderLinks, setPendingWorkOrderLinks] = useState<string[]>([]);
   // Read-only mode for this modal instance: true when the role can
   // VIEW the underlying record but not modify it (maintenance opening
   // a revenue load is the canonical case). Field controls get
@@ -2564,6 +2572,9 @@ export default function EventModal() {
     setConfirmRelayRemove(false);
     setConfirmSkip(false);
     setConfirmBatchCancel(false);
+    // Wipe any in-flight create-mode pending work-order links so a
+    // previous session's selections don't leak into a fresh modal.
+    setPendingWorkOrderLinks([]);
   }, [modalOpen, modalEventId, batchIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-recover loads that landed in the cache with empty stops. The
@@ -2931,6 +2942,26 @@ export default function EventModal() {
         ...(isEdit ? { auditLog: nextAuditLog } : {}),
       };
       isEdit && modalEventId ? updateEvent(modalEventId, payload) : addEvent(payload, newEventId);
+      // Apply any pending work-order links collected by
+      // LinkedWorkOrdersSection while the event was being composed.
+      // Edit mode flushes immediately on each toggle (so the buffer
+      // stays empty there); create mode fills the buffer and we
+      // apply once the event exists. Fire-and-forget — the modal
+      // closes regardless; a failed link is non-fatal and the user
+      // can re-link from the maintenance side later.
+      if (eventKind === 'non_revenue' && pendingWorkOrderLinks.length > 0) {
+        const targetEventId = isEdit && modalEventId ? modalEventId : newEventId;
+        // Dynamic import to match the pattern used elsewhere in this
+        // file — keeps railway out of the synchronous module graph.
+        void import('@/lib/railway').then(({ railway }) =>
+          Promise.all(
+            pendingWorkOrderLinks.map(woId =>
+              railway.updateMaintenanceActionItem(woId, { eventId: targetEventId })
+                .catch(err => console.error('[EventModal] link work order failed:', woId, err))
+            )
+          )
+        );
+      }
     }
     closeModal();
   };
@@ -4703,6 +4734,21 @@ export default function EventModal() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Linked work orders — only meaningful when this event
+                represents shop time (Maintenance type). The section
+                handles its own data fetch + asset-empty state; we
+                just pass through eventId + the currently-selected
+                asset. On save the parent flushes pendingWorkOrderLinks
+                into PATCH calls. */}
+            {eventKind === 'non_revenue' && nonRevenueType === 'Maintenance' && (
+              <LinkedWorkOrdersSection
+                eventId={isEdit ? (modalEventId ?? null) : null}
+                assetId={assetId ?? null}
+                pendingLinkIds={pendingWorkOrderLinks}
+                onPendingLinkIdsChange={setPendingWorkOrderLinks}
+              />
             )}
 
             <div className="grid grid-cols-2 gap-4">
