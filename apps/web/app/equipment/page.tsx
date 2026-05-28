@@ -634,6 +634,17 @@ function WorkOrdersList({
   // gap, wondering whether their work orders just disappeared.
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  // Equipment filter — narrows the whole board (week grid + backlog
+  // columns) to one truck or one trailer. Values:
+  //   "all"        — no filter, show every asset's items
+  //   "a:<id>"     — filter to that specific truck
+  //   "t:<id>"     — filter to that specific trailer
+  // The compound-string format keeps state simple (no separate
+  // kind/id) and round-trips through the <select> cleanly. When set,
+  // the same priority columns + week calendar render but scoped to
+  // one asset, so the dispatcher can ask "what's the punch list for
+  // this truck specifically" without losing the existing UI.
+  const [equipFilter, setEquipFilter] = useState<string>('all');
   // weekOffset = N weeks from the current calendar week (0 = this
   // week, -1 = last, +1 = next). Drives prev/next navigation; the
   // "Today" button just resets it to 0.
@@ -735,10 +746,20 @@ function WorkOrdersList({
       return { ...i, _equipLabel: equipLabel, _equipColor: equipColor, _searchBlob: searchBlob };
     })
     .filter(i => {
-      if (!search.trim()) return true;
-      return i._searchBlob.includes(search.trim().toLowerCase());
+      // Search filter (existing)
+      if (search.trim() && !i._searchBlob.includes(search.trim().toLowerCase())) return false;
+      // Equipment filter (new). Empty/'all' is a no-op so the board
+      // renders every item unless the dispatcher explicitly drills in.
+      if (equipFilter !== 'all') {
+        if (equipFilter.startsWith('a:')) {
+          if (i.assetId !== Number(equipFilter.slice(2))) return false;
+        } else if (equipFilter.startsWith('t:')) {
+          if (i.trailerId !== Number(equipFilter.slice(2))) return false;
+        }
+      }
+      return true;
     }),
-  [items, search, assetNameById, trailerLabelById, assetColorById]);
+  [items, search, equipFilter, assetNameById, trailerLabelById, assetColorById]);
 
   // Visible week — Sat → Fri, shifted by weekOffset.
   const week = useMemo(() => {
@@ -926,7 +947,7 @@ function WorkOrdersList({
           </button>
         </div>
       )}
-      {/* Toolbar — search + new */}
+      {/* Toolbar — search + equipment filter + new */}
       <div className="flex items-center gap-2">
         <div
           className="flex items-center gap-2 rounded-md flex-1"
@@ -945,6 +966,16 @@ function WorkOrdersList({
             style={{ color: 'var(--gc-text-1)' }}
           />
         </div>
+        {/* Equipment filter — drills the whole board (week grid +
+            backlog priority columns) to one truck or one trailer. The
+            select uses optgroups so trucks and trailers stay visually
+            separated even when the org has a lot of each. */}
+        <EquipmentFilterSelect
+          value={equipFilter}
+          onChange={setEquipFilter}
+          assets={assets}
+          trailers={trailers}
+        />
         <div className="flex-1" />
         <button
           type="button"
@@ -1221,6 +1252,74 @@ function WorkOrdersList({
         </div>
       </section>
     </div>
+  );
+}
+
+// ─── Equipment filter select ──────────────────────────────────────────
+//
+// Drives the board's "show me only this truck" mode. Lists every
+// active truck and trailer the org owns, grouped via <optgroup> so
+// trucks and trailers don't intermix even on long fleets.
+
+function EquipmentFilterSelect({
+  value, onChange, assets, trailers,
+}: {
+  value:    string;
+  onChange: (v: string) => void;
+  assets:   Asset[];
+  trailers: Array<{ id: number; name: string; trailerNumber?: string; category: string }>;
+}) {
+  // Active trucks only — drop the "Unassigned" placeholder + retired
+  // + hidden, sort alphabetically by name. Same treatment as the
+  // calendar's other asset pickers so the dispatcher sees a familiar
+  // list everywhere.
+  const truckOpts = useMemo(() => {
+    return [...assets]
+      .filter(a => !a.activeTo && !a.hidden && a.name !== 'Unassigned' && a.type !== 'Unassigned')
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [assets]);
+  // Trailers — sort by number when available, else by name.
+  const trailerOpts = useMemo(() => {
+    return [...trailers].sort((a, b) =>
+      (a.trailerNumber || a.name).localeCompare(b.trailerNumber || b.name)
+    );
+  }, [trailers]);
+
+  const isFiltered = value !== 'all';
+
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="rounded-md text-[13px] outline-none cursor-pointer"
+      style={{
+        border:     `1px solid ${isFiltered ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+        background: isFiltered ? 'var(--gc-blue-light)' : 'var(--gc-surface)',
+        color:      isFiltered ? 'var(--gc-blue)' : 'var(--gc-text-1)',
+        padding:    '6px 10px',
+        fontWeight: isFiltered ? 600 : 500,
+        minWidth:   170,
+      }}>
+      <option value="all">All equipment</option>
+      {truckOpts.length > 0 && (
+        <optgroup label="Trucks">
+          {truckOpts.map(a => (
+            <option key={`a-${a.id}`} value={`a:${a.id}`}>
+              {a.name}{a.unit ? ` · #${a.unit}` : ''}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {trailerOpts.length > 0 && (
+        <optgroup label="Trailers">
+          {trailerOpts.map(t => (
+            <option key={`t-${t.id}`} value={`t:${t.id}`}>
+              {t.trailerNumber ? `#${t.trailerNumber}` : t.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </select>
   );
 }
 
