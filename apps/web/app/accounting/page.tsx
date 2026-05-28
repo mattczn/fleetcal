@@ -20,9 +20,9 @@
  *   All       — every billable artifact (except voids)
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Receipt, Loader2, AlertTriangle, AlertCircle, Search, X, Send, Check, FilePlus,
+  Receipt, Loader2, AlertCircle, Search, X, Send, Check, FilePlus,
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
@@ -39,10 +39,7 @@ import {
   Th, Td, DocBadge, CopyableCell, CopyableLoadNum, NotesButton,
   moneyFmt, fmtShortDate, daysSince,
 } from '@/components/queue/QueueTablePrimitives';
-import type { QueueSortState, QueueFilterState } from '@/components/queue/QueueTable';
-import {
-  QueueTable, QueueColumnsButton, usePersistedColumnPrefs, type QueueColumn,
-} from '@/components/queue/QueueTable';
+import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 import type {
   Invoice, InvoiceStatus, Customer, Load,
   BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
@@ -71,95 +68,42 @@ type ColKey =
   | 'age' | 'released' | 'issued' | 'due' | 'method' | 'sendTo' | 'status'
   | 'flags' | 'view';
 
-interface ColumnDef {
-  key:        ColKey;
-  label:      string;
-  align:      'left' | 'right';
-  /** Filterable columns surface a multi-select dropdown in the
-   *  header menu. Non-filterable columns only get sort. */
-  filterable: boolean;
-  /** Toggleable columns appear in the Columns menu and can be
-   *  hidden. Always-on columns (none right now) would set false. */
-  toggleable: boolean;
-}
-
-// Column order = render order in the table. The columns menu shows
-// the same order so the user's mental model matches what's on screen.
-//
-// Priority isn't a column — priority loads get a soft yellow row
-// band + left border instead (same treatment as /closeout).
-const COLUMNS: ColumnDef[] = [
-  // Inline icons (priority star + notes button). Pinned left next to
-  // the Select checkbox. No header label, no sort, no filter, no
-  // toggle — it's a row-utility column.
-  { key: 'flags',        label: '',              align: 'left',  filterable: false, toggleable: false },
-  { key: 'invoiceNum',   label: 'Invoice #',     align: 'left',  filterable: false, toggleable: true },
-  { key: 'loadNum',      label: 'Load #',        align: 'left',  filterable: false, toggleable: true },
-  { key: 'customer',     label: 'Customer',      align: 'left',  filterable: true,  toggleable: true },
-  { key: 'rate',         label: 'Rate',          align: 'right', filterable: false, toggleable: true },
-  { key: 'docs',         label: 'Docs',          align: 'left',  filterable: false, toggleable: true },
-  { key: 'age',          label: 'Age',           align: 'left',  filterable: false, toggleable: true },
-  { key: 'released',     label: 'Released',      align: 'left',  filterable: false, toggleable: true },
-  { key: 'issued',       label: 'Issued',        align: 'left',  filterable: false, toggleable: true },
-  { key: 'due',          label: 'Due',           align: 'left',  filterable: false, toggleable: true },
-  { key: 'title',        label: 'Title',         align: 'left',  filterable: false, toggleable: true },
-  { key: 'method',       label: 'Method',        align: 'left',  filterable: true,  toggleable: true },
-  // Send-to surfaces the actual email + missing-email state so the
-  // user can verify before clicking Send. Hidden on Invoiced / Paid
-  // (the send already happened) and on All (mixed bag).
-  { key: 'sendTo',       label: 'Send to',       align: 'left',  filterable: false, toggleable: true },
-  { key: 'accessorials', label: 'Accessorials',  align: 'right', filterable: false, toggleable: true },
-  { key: 'total',        label: 'Total',         align: 'right', filterable: false, toggleable: true },
-  { key: 'status',       label: 'Status',        align: 'left',  filterable: true,  toggleable: true },
-  // View opens the combined PDF + actions modal. Hidden on Released
-  // — no invoice exists yet there.
-  { key: 'view',         label: '',              align: 'left',  filterable: false, toggleable: false },
-];
-
-const COL_BY_KEY: Record<ColKey, ColumnDef> = COLUMNS.reduce((m, c) => { m[c.key] = c; return m; }, {} as Record<ColKey, ColumnDef>);
-
-// Default column widths in px — used when the user hasn't resized
-// the column yet. table-layout: fixed honors these strictly, so
-// resize can shrink columns below their content (truncates).
+// Default column widths in px. Passed to OpsColumn.width so the
+// dispatcher gets a sensible starting layout. OpsTable persists user
+// hide/show + order per persistKey; widths aren't user-resizable
+// yet (deferred from v1 of the port).
 const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
   age:           80,
   released:     100,
   issued:       100,
   due:          100,
-  invoiceNum:   110,
-  loadNum:      110,
-  title:        260,
-  customer:     150,
-  method:        90,
-  sendTo:       200,
-  rate:         100,
-  accessorials: 120,
-  total:        110,
-  docs:         220,
+  invoiceNum:   120,
+  loadNum:      120,
+  title:        280,
+  customer:     170,
+  method:       100,
+  sendTo:       220,
+  rate:         110,
+  accessorials: 130,
+  total:        120,
+  docs:         240,
   status:       110,
   flags:         80,
-  view:          70,
+  view:          80,
 };
-const SELECT_COL_WIDTH = 40;
 
-// Per-bucket column visibility. Hides what doesn't make sense.
-const COLS_HIDDEN_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
-  released: new Set(['invoiceNum', 'issued', 'due', 'view']),
+// Per-bucket column visibility. Omits columns entirely (rather than
+// hiding) so they don't show up in the Columns picker on the wrong
+// bucket. Released has no invoice yet, so invoice-specific cols
+// vanish; Invoiced/Paid have sent already, so Send-to vanishes.
+const COLS_OMITTED_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
+  released: new Set(['invoiceNum', 'issued', 'due', 'view', 'status']),
   queued:   new Set(['status']),
-  // Send-to is only useful before the invoice ships. Once it's
-  // Invoiced or Paid, the email has been verified at send time —
-  // hide by default to keep the row uncluttered.
   invoiced: new Set(['status', 'sendTo']),
   paid:     new Set(['status', 'sendTo']),
   all:      new Set(['sendTo']),
 };
 
-// Default column visibility (user can override and we persist).
-const DEFAULT_VISIBLE: Record<ColKey, boolean> = Object.fromEntries(
-  COLUMNS.map(c => [c.key, true]),
-) as Record<ColKey, boolean>;
-
-const COLS_STORAGE_KEY = 'accounting-cols-v1';
 const PAGE_SIZE = 50;
 
 // ─── Page ───────────────────────────────────────────────────────────────
@@ -198,28 +142,16 @@ function AccountingPageInner() {
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
 
-  // UI state
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [search,   setSearch]   = useState('');
-  const [sort,     setSort]     = useState<QueueSortState>({ key: null, dir: 'asc' });
-  const [filters,  setFilters]  = useState<QueueFilterState>({});
-  const [page,     setPage]     = useState(0);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE);
-
-  // Column visibility (persisted)
-  const [visibleCols, setVisibleCols] = useState<Record<ColKey, boolean>>(() => {
-    if (typeof window === 'undefined') return DEFAULT_VISIBLE;
-    try {
-      const stored = window.localStorage.getItem(COLS_STORAGE_KEY);
-      if (!stored) return DEFAULT_VISIBLE;
-      const parsed = JSON.parse(stored) as Partial<Record<ColKey, boolean>>;
-      return { ...DEFAULT_VISIBLE, ...parsed };
-    } catch { return DEFAULT_VISIBLE; }
-  });
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols));
-  }, [visibleCols]);
+  // UI state — sort, filters, pagination, and column visibility now
+  // live inside OpsTable. We mirror the selection set externally so
+  // the bulk-action handlers can reach into it from outside the
+  // table's bulkActions slot (e.g. the BatchSendDialog needs to map
+  // invoice ids → loads for broker resolution).
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Bumping this versioned key remounts OpsTable on bucket change so
+  // its internal selection set + sort/filter reset cleanly.
+  const [tableResetKey, setTableResetKey] = useState(0);
+  const [search, setSearch] = useState('');
 
   // Sibling modals
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
@@ -232,15 +164,12 @@ function AccountingPageInner() {
   const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
   const [markPaidBusy,    setMarkPaidBusy]    = useState(false);
 
-  // Reset selection / sort / pagination on bucket change so a stale
-  // id can't get acted on against the wrong list. Filters are
-  // preserved — a customer or method filter applies consistently
-  // across buckets (you want to follow one broker through the whole
-  // pipeline without re-applying).
+  // Reset selection on bucket change so a stale id can't get acted on
+  // against the wrong list. Sort / filter / pagination resets are
+  // handled by OpsTable via the tableResetKey remount.
   useEffect(() => {
-    setSelected(new Set());
-    setSort({ key: null, dir: 'asc' });
-    setPage(0);
+    setSelectedIds([]);
+    setTableResetKey(k => k + 1);
   }, [bucket]);
 
   // ── Data fetch ──────────────────────────────────────────────────────
@@ -401,140 +330,37 @@ function AccountingPageInner() {
     };
   }, [releasedRows, queuedRows, invoicedRows, paidRows, allRows]);
 
-  // ── Projection helpers (one place that knows how to read each col) ──
-  function projectCol(r: Row, col: ColKey): { sortValue: string | number; filterValue?: string; display?: string } {
-    switch (col) {
-      case 'invoiceNum':   return { sortValue: r.invoice?.invoiceNumber ?? '' };
-      case 'loadNum':      return { sortValue: r.load.loadNum ?? '' };
-      case 'customer': {
-        const name = r.customer?.name ?? r.load.broker ?? '';
-        return { sortValue: name, filterValue: name || '— (no broker)' };
-      }
-      case 'title':        return { sortValue: r.load.title ?? '' };
-      case 'rate':         return { sortValue: r.load.loadPrice ?? 0 };
-      case 'accessorials': return { sortValue: (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0) };
-      case 'total':        return { sortValue: r.invoice?.total ?? (r.load.loadPrice ?? 0) };
-      case 'docs':         return { sortValue: 0 };
-      case 'flags':        return { sortValue: 0 };
-      case 'age': {
-        // Days since delivery. For relays we want the DELIVERY leg's
-        // end (the actual hand-off date), not the pickup leg's end —
-        // resolved via deliveryEndByLoadId.
-        const key = r.load.loadId ?? r.load.id;
-        const deliveryEnd = deliveryEndByLoadId.get(key) ?? r.load.end;
-        return { sortValue: daysSince(deliveryEnd) };
-      }
-      case 'released':     return { sortValue: r.load.verifiedAt ?? '' };
-      case 'issued':       return { sortValue: r.invoice?.issuedAt ?? '' };
-      case 'due':          return { sortValue: r.invoice?.dueAt ?? '' };
-      case 'method': {
-        const m = r.customer?.invoiceMethod ?? 'email';
-        return { sortValue: m, filterValue: m === 'portal' ? 'Portal' : 'Email' };
-      }
-      case 'sendTo':       return { sortValue: r.customer?.invoiceEmail ?? '' };
-      case 'status':       return { sortValue: r.invoice?.status ?? '', filterValue: r.invoice?.status ?? '—' };
-      case 'view':         return { sortValue: 0 };
-    }
-  }
-
-  // ── Filter + search + sort ──────────────────────────────────────────
-  const filteredRows = useMemo(() => {
+  // Client-side search runs across the bucket's rows before OpsTable
+  // applies its own filters/sort/pagination. The OpsTable filter
+  // chips handle Customer / Method / Status / Released / Issued / Due
+  // — the search box on the toolbar handles the broader keyword scan
+  // across invoice #, load #, customer name, title, internal id.
+  const searchedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rowsForBucket.filter(r => {
-      if (q) {
-        const matches =
-             (r.invoice?.invoiceNumber ?? '').toLowerCase().includes(q)
-          || (r.load.loadNum ?? '').toLowerCase().includes(q)
-          || (r.customer?.name ?? r.load.broker ?? '').toLowerCase().includes(q)
-          || (r.load.title ?? '').toLowerCase().includes(q)
-          || String(r.load.internalLoadId ?? '').includes(q);
-        if (!matches) return false;
-      }
-      for (const [col, vals] of Object.entries(filters)) {
-        if (!vals) continue;
-        // Date-range filter — value is { from?, to? }.
-        if (typeof vals === 'object' && !Array.isArray(vals)) {
-          const range = vals as { from?: string; to?: string };
-          if (!range.from && !range.to) continue;
-          const proj = projectCol(r, col as ColKey);
-          const iso = String(proj.sortValue ?? '');
-          if (!iso) return false;
-          const day = iso.slice(0, 10);
-          if (range.from && day < range.from) return false;
-          if (range.to && day > range.to) return false;
-          continue;
-        }
-        if (Array.isArray(vals) ? vals.length === 0 : vals === '') continue;
-        const proj = projectCol(r, col as ColKey);
-        const cellVal = (proj.filterValue ?? String(proj.sortValue ?? '')).toLowerCase();
-        if (Array.isArray(vals)) {
-          if (!vals.includes(proj.filterValue ?? String(proj.sortValue ?? ''))) return false;
-        } else {
-          if (!cellVal.includes(String(vals).toLowerCase())) return false;
-        }
-      }
-      return true;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowsForBucket, search, filters]);
+    if (!q) return rowsForBucket;
+    return rowsForBucket.filter(r =>
+         (r.invoice?.invoiceNumber ?? '').toLowerCase().includes(q)
+      || (r.load.loadNum ?? '').toLowerCase().includes(q)
+      || (r.customer?.name ?? r.load.broker ?? '').toLowerCase().includes(q)
+      || (r.load.title ?? '').toLowerCase().includes(q)
+      || String(r.load.internalLoadId ?? '').includes(q),
+    );
+  }, [rowsForBucket, search]);
 
-  const sortedRows = useMemo(() => {
-    if (!sort.key) return filteredRows;
-    const key = sort.key as ColKey;
-    const dir = sort.dir === 'asc' ? 1 : -1;
-    return [...filteredRows].sort((a, b) => {
-      const av = projectCol(a, key).sortValue;
-      const bv = projectCol(b, key).sortValue;
-      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
-      return String(av).localeCompare(String(bv)) * dir;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredRows, sort.key, sort.dir]);
-
-  const total = sortedRows.length;
-  const paged = useMemo(() => sortedRows.slice(page * pageSize, (page + 1) * pageSize), [sortedRows, page, pageSize]);
-
-  // (filter options now computed inline in tableColumns where needed)
-
-  // ── Visible columns for this bucket (intersect persisted + per-bucket hidden) ──
-  const visibleColsForBucket = useMemo(() => {
-    const hidden = COLS_HIDDEN_PER_BUCKET[bucket];
-    const out: Record<ColKey, boolean> = { ...visibleCols };
-    for (const k of hidden) out[k] = false;
-    return out;
-  }, [bucket, visibleCols]);
-
-  // Persisted column prefs — hidden / order / widths / pinned.
-  const {
-    hidden: hiddenCols, setHidden: setHiddenCols,
-    order: colOrder, setOrder: setColOrder,
-    widths: colWidths, setWidths: setColWidths,
-    pinned: pinnedCols, setPinned: setPinnedCols,
-  } = usePersistedColumnPrefs('accounting-cols-v3');
-
-  // Per-bucket hidden columns are ANDed with the user's hidden set.
-  const effectiveHidden = useMemo(() => {
-    const out = new Set(hiddenCols);
-    for (const k of COLS_HIDDEN_PER_BUCKET[bucket]) out.add(k);
-    return out;
-  }, [hiddenCols, bucket]);
-
-
-  // QueueTable handles per-row checkbox toggling internally; we only
-  // tell it WHICH buckets allow selection.
+  // Selection lookups — mirror what the bulk-action handlers need.
+  // selectedIds holds the rowKey for each selected row; we resolve
+  // them back to load/invoice arrays here.
   const canSelect = bucket === 'released' || bucket === 'queued' || bucket === 'invoiced';
-  const someSelected = selected.size > 0;
-
-  const selectedLoads = useMemo(() =>
-    bucket === 'released'
-      ? paged.filter(r => selected.has(r.load.loadId ?? r.load.id)).map(r => r.load)
-      : [],
-    [bucket, paged, selected]);
-  const selectedInvoices = useMemo(() =>
-    (bucket === 'queued' || bucket === 'invoiced')
-      ? paged.filter(r => r.invoice && selected.has(r.invoice.id)).map(r => r.invoice!)
-      : [],
-    [bucket, paged, selected]);
+  const selectedLoads = useMemo(() => {
+    if (bucket !== 'released') return [];
+    const set = new Set(selectedIds);
+    return rowsForBucket.filter(r => set.has(r.load.loadId ?? r.load.id)).map(r => r.load);
+  }, [bucket, rowsForBucket, selectedIds]);
+  const selectedInvoices = useMemo(() => {
+    if (bucket !== 'queued' && bucket !== 'invoiced') return [];
+    const set = new Set(selectedIds);
+    return rowsForBucket.filter(r => r.invoice && set.has(r.invoice.id)).map(r => r.invoice!);
+  }, [bucket, rowsForBucket, selectedIds]);
 
   async function handleMarkPaid() {
     if (selectedInvoices.length === 0 || markPaidBusy) return;
@@ -545,7 +371,8 @@ function AccountingPageInner() {
         catch (err) { console.warn('[accounting] markPaid failed for', inv.invoiceNumber, err); }
       }
       await refresh();
-      setSelected(new Set());
+      setSelectedIds([]);
+      setTableResetKey(k => k + 1);
     } finally {
       setMarkPaidBusy(false);
     }
@@ -571,7 +398,8 @@ function AccountingPageInner() {
         }
       }
       await refresh();
-      setSelected(new Set());
+      setSelectedIds([]);
+      setTableResetKey(k => k + 1);
       if (failed.length > 0) {
         alert(`Regenerated ${drafts.length - failed.length} of ${drafts.length} invoices. Failed: ${failed.join(', ')}`);
       }
@@ -582,192 +410,305 @@ function AccountingPageInner() {
 
   const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
 
-  // ── QueueTable column config ────────────────────────────────────────
-  // One renderer per ColKey. Closures capture state setters above so
-  // each cell can wire its own action handlers without prop-drilling.
-  const tableColumns = useMemo<QueueColumn<Row>[]>(() => {
-    const customerOpts = Array.from(new Set(customers.map(c => c.name).filter(Boolean))).sort();
-    const methodOpts: string[] = ['Email', 'Portal'];
-    const statusOpts: string[] = ['draft', 'sent', 'paid', 'void'];
-    // Columns that stick to the left during horizontal scroll. The
-    // user can change this set via `pinLeft` per column; this list
-    // is the default starting set for accounting. Selection
-    // checkbox sticks at left:0 implicitly when selectable.
-    // Utility columns (priority star + notes button) sit at the far
-    // LEFT alongside the Select checkbox. Hardcoded; not user-
-    // configurable. The rest of the user-pinnable data columns
-    // (Invoice #, Load #, Customer, Rate, Docs) follow.
-    const PIN_LEFT_HARD: Set<string> = new Set(['flags']);
-    const PIN_LEFT: Set<string> = new Set([
-      ...PIN_LEFT_HARD,
-      'invoiceNum', 'loadNum', 'customer', 'rate', 'docs',
-    ]);
-    return COLUMNS.map<QueueColumn<Row>>((c) => {
-      const base = {
-        key: c.key,
-        label: PIN_LEFT_HARD.has(c.key) ? '' : c.label,
-        width: DEFAULT_COL_WIDTHS[c.key],
-        align: c.align,
-        sortable: c.toggleable && c.key !== 'flags' && c.key !== 'view' && c.key !== 'docs',
-        pinLeft: PIN_LEFT.has(c.key),
-        // Hardcoded utility columns aren't togglable in the Columns dropdown.
-        pinned: PIN_LEFT_HARD.has(c.key) ? true : undefined,
-      };
-      const filter: QueueColumn<Row>['filter'] =
-        c.key === 'customer' ? { kind: 'multi', options: customerOpts }
-        : c.key === 'method' ? { kind: 'multi', options: methodOpts }
-        : c.key === 'status' ? { kind: 'multi', options: statusOpts }
-        : c.key === 'released' || c.key === 'due' || c.key === 'issued'
-          ? { kind: 'date-range' }
-        : c.key === 'loadNum' || c.key === 'invoiceNum' || c.key === 'title' || c.key === 'sendTo'
-          ? { kind: 'text' } : undefined;
+  // ── OpsTable column config ──────────────────────────────────────────
+  // One OpsColumn per visible column. Closures capture state setters
+  // so each cell can wire its own action handlers. Per-bucket col
+  // omission filters the array AFTER build so the visibility picker
+  // never shows columns that don't make sense for the active bucket.
+  const tableColumns = useMemo<OpsColumn<Row>[]>(() => {
+    const all: OpsColumn<Row>[] = [];
 
-      const sortValue = (r: Row) => projectCol(r, c.key).sortValue;
-      const filterValue = (r: Row) => projectCol(r, c.key).filterValue ?? String(projectCol(r, c.key).sortValue ?? '');
+    // Star + Notes pinned LEFT — utility column.
+    all.push({
+      key: 'flags', header: '', width: DEFAULT_COL_WIDTHS.flags,
+      pinned: 'left', alwaysVisible: true, pickerLabel: 'Star / notes',
+      render: r => {
+        const notesCount = (r.load.internalNotes ?? []).length;
+        return (
+          <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            <PriorityToggle load={r.load} actorName={actorName} onAfter={() => void refresh()} />
+            <NotesButton count={notesCount} onOpen={() => setNotesTarget(r.load)} />
+          </div>
+        );
+      },
+    });
 
-      let render: (r: Row) => React.ReactNode;
-      switch (c.key) {
-        case 'age': render = (r) => {
-          const key = r.load.loadId ?? r.load.id;
-          const deliveryEnd = deliveryEndByLoadId.get(key) ?? r.load.end;
-          const a = daysSince(deliveryEnd);
-          return (
-            <span style={{ background: ageBg(a), color: ageFg(a), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-              {a === 0 ? 'today' : a === 1 ? '1 day' : `${a}d`}
-            </span>
-          );
-        }; break;
-        case 'released': render = (r) => r.load.verifiedAt ? fmtShortDate(r.load.verifiedAt) : '—'; break;
-        case 'issued':   render = (r) => r.invoice?.issuedAt ? fmtShortDate(r.invoice.issuedAt) : '—'; break;
-        case 'due':      render = (r) => r.invoice?.dueAt ? fmtShortDate(r.invoice.dueAt) : '—'; break;
-        case 'invoiceNum': render = (r) => r.invoice
-          ? <CopyableCell value={r.invoice.invoiceNumber} displayValue={`#${r.invoice.invoiceNumber}`} title="Copy invoice #" />
-          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
-        case 'loadNum': render = (r) => r.load.loadNum
-          ? <CopyableLoadNum value={r.load.loadNum} />
-          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
-        case 'title': render = (r) => (
-          <button type="button"
-            onClick={(e) => { e.stopPropagation(); openEditModal(r.load.id); }}
-            className="text-left font-semibold hover:underline truncate"
-            style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
-            title="Open load details">{r.load.title}</button>
-        ); break;
-        case 'customer': render = (r) => {
-          const cust = displayBrokerName(r.customer?.name ?? r.load.broker ?? '', customers);
-          const method = r.customer?.invoiceMethod ?? 'email';
-          const missingEmail = method === 'email' && !r.customer?.invoiceEmail && (bucket === 'released' || r.invoice?.status === 'draft');
-          return (
-            <div className="flex items-center gap-1.5">
-              {r.customer ? (
-                <button onClick={(e) => { e.stopPropagation(); setBrokerProfileId(r.customer!.id); }}
-                  className="text-left hover:underline truncate"
-                  style={{ color: 'var(--gc-blue)' }}>{cust}</button>
-              ) : (
-                <span className="truncate" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-                  {cust || '—'}
+    all.push({
+      key: 'invoiceNum', header: 'Invoice #', width: DEFAULT_COL_WIDTHS.invoiceNum,
+      sortable: true,
+      sortValue: r => r.invoice?.invoiceNumber ?? '',
+      render: r => r.invoice
+        ? <CopyableCell value={r.invoice.invoiceNumber} displayValue={`#${r.invoice.invoiceNumber}`} title="Copy invoice #" />
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    all.push({
+      key: 'loadNum', header: 'Load #', width: DEFAULT_COL_WIDTHS.loadNum,
+      sortable: true,
+      sortValue: r => r.load.loadNum ?? '',
+      render: r => r.load.loadNum
+        ? <CopyableLoadNum value={r.load.loadNum} />
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    all.push({
+      key: 'customer', header: 'Customer', width: DEFAULT_COL_WIDTHS.customer,
+      sortable: true,
+      sortValue: r => r.customer?.name ?? r.load.broker ?? '',
+      render: r => {
+        const cust = displayBrokerName(r.customer?.name ?? r.load.broker ?? '', customers);
+        const method = r.customer?.invoiceMethod ?? 'email';
+        const missingEmail = method === 'email' && !r.customer?.invoiceEmail && (bucket === 'released' || r.invoice?.status === 'draft');
+        return (
+          <div className="flex items-center gap-1.5">
+            {r.customer ? (
+              <button onClick={(e) => { e.stopPropagation(); setBrokerProfileId(r.customer!.id); }}
+                className="text-left hover:underline truncate"
+                style={{ color: 'var(--gc-blue)' }}>{cust}</button>
+            ) : (
+              <span className="truncate" style={{ color: cust ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                {cust || '—'}
+              </span>
+            )}
+            {missingEmail ? (
+              <button onClick={(e) => { e.stopPropagation(); r.customer && setBrokerProfileId(r.customer.id); }}
+                className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+                title="No invoice email set"><AlertCircle size={9} /> No email</button>
+            ) : null}
+          </div>
+        );
+      },
+    });
+
+    all.push({
+      key: 'rate', header: 'Rate', width: DEFAULT_COL_WIDTHS.rate,
+      align: 'right', sortable: true,
+      sortValue: r => r.load.loadPrice ?? 0,
+      render: r => (
+        <span className="font-semibold tabular-nums">
+          {r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice) : '—'}
+        </span>
+      ),
+    });
+
+    all.push({
+      key: 'accessorials', header: 'Accessorials', width: DEFAULT_COL_WIDTHS.accessorials,
+      align: 'right', sortable: true,
+      sortValue: r => (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
+      render: r => {
+        const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        const accCount = (r.load.accessorials ?? []).length;
+        return accCount === 0
+          ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+          : <span className="tabular-nums" title={`${accCount} accessorial${accCount === 1 ? '' : 's'}`}>{moneyFmt.format(accSum)}</span>;
+      },
+    });
+
+    all.push({
+      key: 'total', header: 'Total', width: DEFAULT_COL_WIDTHS.total,
+      align: 'right', sortable: true,
+      sortValue: r => r.invoice?.total ?? (r.load.loadPrice ?? 0),
+      render: r => {
+        const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        return (
+          <span className="font-bold tabular-nums">
+            {r.invoice ? moneyFmt.format(r.invoice.total)
+              : r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice + accSum)
+              : '—'}
+          </span>
+        );
+      },
+    });
+
+    all.push({
+      key: 'docs', header: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
+      render: r => {
+        const counts = docCounts[r.load.loadId ?? r.load.id] ?? {};
+        const hasRC = !!r.load.rateConPdf || (counts.rate_con ?? 0) > 0;
+        return (
+          <div className="flex flex-wrap gap-1">
+            {hasRC
+              ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0)} />
+              : (
+                <span
+                  className="text-[10px] font-semibold"
+                  style={{ color: '#991b1b' }}
+                  title="No rate confirmation uploaded">
+                  Missing RC
                 </span>
               )}
-              {missingEmail ? (
-                <button onClick={(e) => { e.stopPropagation(); r.customer && setBrokerProfileId(r.customer.id); }}
-                  className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                  style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-                  title="No invoice email set"><AlertCircle size={9} /> No email</button>
-              ) : null}
-            </div>
-          );
-        }; break;
-        case 'method': render = (r) => {
-          const m = r.customer?.invoiceMethod ?? 'email';
-          return (
-            <span className="text-[11px] font-semibold uppercase tracking-wider"
-              style={{ color: m === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
-              {m === 'portal' ? 'Portal' : 'Email'}
-            </span>
-          );
-        }; break;
-        case 'sendTo': render = (r) => {
-          const m = r.customer?.invoiceMethod ?? 'email';
-          if (m === 'portal') return <span className="text-[11.5px] italic" style={{ color: 'var(--gc-text-3)' }}>Portal — manual</span>;
-          if (!r.customer?.invoiceEmail) return (
-            <button onClick={(e) => { e.stopPropagation(); r.customer && setBrokerProfileId(r.customer.id); }}
-              className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-              style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
-              title="No invoice email — click to fix"><AlertCircle size={10} /> No email</button>
-          );
-          return <span className="text-[12px] tabular-nums truncate inline-block"
-            style={{ color: 'var(--gc-text-1)', maxWidth: '100%' }}
-            title={r.customer.invoiceEmail}>{r.customer.invoiceEmail}</span>;
-        }; break;
-        case 'rate': render = (r) => (
-          <span className="font-semibold tabular-nums">
-            {r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice) : '—'}
-          </span>
-        ); break;
-        case 'accessorials': render = (r) => {
-          const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-          const accCount = (r.load.accessorials ?? []).length;
-          return accCount === 0
-            ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-            : <span className="tabular-nums" title={`${accCount} accessorial${accCount === 1 ? '' : 's'}`}>{moneyFmt.format(accSum)}</span>;
-        }; break;
-        case 'total': render = (r) => {
-          const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-          return (
-            <span className="font-bold tabular-nums">
-              {r.invoice ? moneyFmt.format(r.invoice.total)
-                : r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice + accSum)
-                : '—'}
-            </span>
-          );
-        }; break;
-        case 'docs': render = (r) => {
-          const counts = docCounts[r.load.loadId ?? r.load.id] ?? {};
-          const hasRC = !!r.load.rateConPdf || (counts.rate_con ?? 0) > 0;
-          return (
-            <div className="flex flex-wrap gap-1">
-              {hasRC
-                ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0)} />
-                : (
-                  <span
-                    className="text-[10px] font-semibold"
-                    style={{ color: '#991b1b' }}
-                    title="No rate confirmation uploaded">
-                    Missing RC
-                  </span>
-                )}
-              {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
-              {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
-              {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
-              {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
-              {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
-            </div>
-          );
-        }; break;
-        case 'status': render = (r) => r.invoice
-          ? <StatusPill status={r.invoice.status} />
-          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
-        case 'flags': render = (r) => {
-          const notesCount = (r.load.internalNotes ?? []).length;
-          return (
-            <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-              <PriorityToggle load={r.load} actorName={actorName} onAfter={() => void refresh()} />
-              <NotesButton count={notesCount} onOpen={() => setNotesTarget(r.load)} />
-            </div>
-          );
-        }; break;
-        case 'view': render = (r) => r.invoice ? (
-          <button onClick={(e) => { e.stopPropagation(); setInvoiceModalId(r.invoice!.id); }}
-            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
-            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-            title="View invoice — PDF + actions"><Eye size={11} /> View</button>
-        ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>; break;
-        default: render = () => '—';
-      }
-      return { ...base, render, sortValue, filterValue, filter };
+            {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
+            {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
+            {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
+            {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
+            {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
+          </div>
+        );
+      },
     });
+
+    all.push({
+      key: 'age', header: 'Age', width: DEFAULT_COL_WIDTHS.age,
+      sortable: true,
+      sortValue: r => {
+        const key = r.load.loadId ?? r.load.id;
+        return daysSince(deliveryEndByLoadId.get(key) ?? r.load.end);
+      },
+      render: r => {
+        const key = r.load.loadId ?? r.load.id;
+        const deliveryEnd = deliveryEndByLoadId.get(key) ?? r.load.end;
+        const a = daysSince(deliveryEnd);
+        return (
+          <span style={{ background: ageBg(a), color: ageFg(a), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+            {a === 0 ? 'today' : a === 1 ? '1 day' : `${a}d`}
+          </span>
+        );
+      },
+    });
+
+    all.push({
+      key: 'released', header: 'Released', width: DEFAULT_COL_WIDTHS.released,
+      sortable: true,
+      sortValue: r => r.load.verifiedAt ?? '',
+      render: r => r.load.verifiedAt ? fmtShortDate(r.load.verifiedAt) : '—',
+    });
+
+    all.push({
+      key: 'issued', header: 'Issued', width: DEFAULT_COL_WIDTHS.issued,
+      sortable: true,
+      sortValue: r => r.invoice?.issuedAt ?? '',
+      render: r => r.invoice?.issuedAt ? fmtShortDate(r.invoice.issuedAt) : '—',
+    });
+
+    all.push({
+      key: 'due', header: 'Due', width: DEFAULT_COL_WIDTHS.due,
+      sortable: true,
+      sortValue: r => r.invoice?.dueAt ?? '',
+      render: r => r.invoice?.dueAt ? fmtShortDate(r.invoice.dueAt) : '—',
+    });
+
+    all.push({
+      key: 'title', header: 'Title', width: DEFAULT_COL_WIDTHS.title,
+      sortable: true,
+      sortValue: r => r.load.title ?? '',
+      render: r => (
+        <button type="button"
+          onClick={(e) => { e.stopPropagation(); openEditModal(r.load.id); }}
+          className="text-left font-semibold hover:underline truncate"
+          style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
+          title="Open load details">{r.load.title}</button>
+      ),
+    });
+
+    all.push({
+      key: 'method', header: 'Method', width: DEFAULT_COL_WIDTHS.method,
+      sortable: true,
+      sortValue: r => r.customer?.invoiceMethod ?? 'email',
+      render: r => {
+        const m = r.customer?.invoiceMethod ?? 'email';
+        return (
+          <span className="text-[11px] font-semibold uppercase tracking-wider"
+            style={{ color: m === 'portal' ? '#9a3412' : 'var(--gc-text-2)' }}>
+            {m === 'portal' ? 'Portal' : 'Email'}
+          </span>
+        );
+      },
+    });
+
+    all.push({
+      key: 'sendTo', header: 'Send to', width: DEFAULT_COL_WIDTHS.sendTo,
+      sortable: true,
+      sortValue: r => r.customer?.invoiceEmail ?? '',
+      render: r => {
+        const m = r.customer?.invoiceMethod ?? 'email';
+        if (m === 'portal') return <span className="text-[11.5px] italic" style={{ color: 'var(--gc-text-3)' }}>Portal — manual</span>;
+        if (!r.customer?.invoiceEmail) return (
+          <button onClick={(e) => { e.stopPropagation(); r.customer && setBrokerProfileId(r.customer.id); }}
+            className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+            style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
+            title="No invoice email — click to fix"><AlertCircle size={10} /> No email</button>
+        );
+        return <span className="text-[12px] tabular-nums truncate inline-block"
+          style={{ color: 'var(--gc-text-1)', maxWidth: '100%' }}
+          title={r.customer.invoiceEmail}>{r.customer.invoiceEmail}</span>;
+      },
+    });
+
+    all.push({
+      key: 'status', header: 'Status', width: DEFAULT_COL_WIDTHS.status,
+      sortable: true,
+      sortValue: r => r.invoice?.status ?? '',
+      render: r => r.invoice
+        ? <StatusPill status={r.invoice.status} />
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    all.push({
+      key: 'view', header: '', width: DEFAULT_COL_WIDTHS.view,
+      align: 'right', pinned: 'right', alwaysVisible: true, pickerLabel: 'View invoice',
+      render: r => r.invoice ? (
+        <button onClick={(e) => { e.stopPropagation(); setInvoiceModalId(r.invoice!.id); }}
+          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
+          style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+          title="View invoice — PDF + actions"><Eye size={11} /> View</button>
+      ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    // Strip columns that don't apply to the active bucket so the
+    // picker doesn't expose useless toggles. e.g. Released has no
+    // invoice yet → no invoice #, Issued, Due, View, or Status.
+    const omit = COLS_OMITTED_PER_BUCKET[bucket];
+    return all.filter(c => !omit.has(c.key as ColKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customers, docCounts, deliveryEndByLoadId, bucket, actorName]);
+
+  // OpsTable filters — Customer / Method / Status multi-selects plus
+  // Released / Issued / Due date-range chips. Options come from the
+  // current bucket's rows so users only see values that actually
+  // exist there.
+  const tableFilters = useMemo<OpsFilter<Row>[]>(() => {
+    const customerOpts = Array.from(new Set(
+      rowsForBucket.map(r => r.customer?.name ?? r.load.broker ?? '').filter(Boolean),
+    )).sort().map(v => ({ value: v, label: v }));
+
+    const filters: OpsFilter<Row>[] = [
+      { kind: 'select', key: 'customer', label: 'Customer',
+        options: customerOpts,
+        predicate: (r, v) => (r.customer?.name ?? r.load.broker ?? '') === v },
+      { kind: 'select', key: 'method',   label: 'Method',
+        options: [
+          { value: 'email',  label: 'Email'  },
+          { value: 'portal', label: 'Portal' },
+        ],
+        predicate: (r, v) => (r.customer?.invoiceMethod ?? 'email') === v },
+    ];
+    // Status only meaningful on All bucket — other buckets are
+    // already filtered to one status (Queued = draft, Invoiced = sent,
+    // Paid = paid).
+    if (bucket === 'all') {
+      filters.push({
+        kind: 'select', key: 'status', label: 'Status',
+        options: [
+          { value: 'draft', label: 'Unsent' },
+          { value: 'sent',  label: 'Sent'   },
+          { value: 'paid',  label: 'Paid'   },
+        ],
+        predicate: (r, v) => (r.invoice?.status ?? '') === v,
+      });
+    }
+    // Released-date range only useful on buckets that have loads (all
+    // of them). Issued / Due only on buckets that have invoices.
+    filters.push({ kind: 'date-range', key: 'released', label: 'Released',
+      getDate: r => r.load.verifiedAt ?? null });
+    if (bucket !== 'released') {
+      filters.push({ kind: 'date-range', key: 'issued', label: 'Issued',
+        getDate: r => r.invoice?.issuedAt ?? null });
+      filters.push({ kind: 'date-range', key: 'due', label: 'Due',
+        getDate: r => r.invoice?.dueAt ?? null });
+    }
+    return filters;
+  }, [rowsForBucket, bucket]);
 
   // Row id for selection — bucket-specific (loadId on released, invoice.id elsewhere).
   const rowKey = useCallback((r: Row) => {
@@ -823,14 +764,17 @@ function AccountingPageInner() {
             })}
           </div>
 
-          {/* Toolbar */}
+          {/* Toolbar — search + Refresh. Column picker + filter chips
+              + bulk-action buttons all live INSIDE OpsTable below
+              (the bulk-actions slot in particular replaces the
+              chip row when rows are selected). */}
           <div className="flex items-center gap-3 flex-wrap">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }} />
               <input type="text"
                 placeholder="Search broker, invoice #, load #, title…"
                 value={search}
-                onChange={e => { setSearch(e.target.value); setPage(0); }}
+                onChange={e => setSearch(e.target.value)}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
                 style={{ width: 320, background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
               {search && (
@@ -841,71 +785,6 @@ function AccountingPageInner() {
               )}
             </div>
             <div className="flex-1" />
-            {someSelected && (
-              <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>{selected.size} selected</span>
-            )}
-            {bucket === 'released' && someSelected && (
-              <>
-                <button onClick={() => setSummaryAction('generate')}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                  style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
-                  <FilePlus size={12} className="inline mr-1.5" /> Generate Invoice
-                </button>
-                <button onClick={() => setSummaryAction('generateSend')}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                  style={{ background: '#1a73e8', color: '#fff' }}>
-                  <Send size={12} className="inline mr-1.5" /> Create &amp; Send
-                </button>
-              </>
-            )}
-            {bucket === 'queued' && someSelected && (
-              <>
-                {/* Regenerate refreshes each invoice's snapshot from
-                    current load data. Useful when a POD was uploaded or
-                    an accessorial fixed after the draft was first
-                    generated. Server voids each old draft + creates a
-                    fresh one atomically. */}
-                <button onClick={() => void handleRegenerateSelected()} disabled={regenBusy}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
-                  style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
-                  {regenBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <RefreshCw size={12} className="inline mr-1.5" />}
-                  Regenerate {selected.size}
-                </button>
-                <button onClick={() => setBatchSendOpen(true)}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                  style={{ background: '#1a73e8', color: '#fff' }}>
-                  <Send size={12} className="inline mr-1.5" /> Submit {selected.size} invoice{selected.size === 1 ? '' : 's'}
-                </button>
-              </>
-            )}
-            {bucket === 'invoiced' && someSelected && (
-              <>
-                {/* Resend kicks off the same per-invoice email flow as
-                    Submit in the Queued bucket. Useful when a broker
-                    AP rep asks for another copy or the original send
-                    bounced. Refreshes sent_at on each invoice. */}
-                <button onClick={() => setBatchResendOpen(true)}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
-                  style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
-                  <Send size={12} className="inline mr-1.5" /> Resend {selected.size}
-                </button>
-                <button onClick={() => void handleMarkPaid()} disabled={markPaidBusy}
-                  className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
-                  style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
-                  {markPaidBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Check size={12} className="inline mr-1.5" />}
-                  Mark {selected.size} paid
-                </button>
-              </>
-            )}
-            <QueueColumnsButton
-              columns={tableColumns}
-              hiddenColumns={hiddenCols}
-              onHiddenColumnsChange={setHiddenCols}
-              columnOrder={colOrder.length > 0 ? colOrder : tableColumns.map(c => c.key)}
-              onColumnOrderChange={setColOrder}
-              pinnedColumns={pinnedCols}
-              onPinnedColumnsChange={setPinnedCols}
-            />
             <button onClick={() => void refresh()}
               className="text-[12px] font-medium px-3 py-1.5 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'var(--gc-surface)' }}>
@@ -913,48 +792,86 @@ function AccountingPageInner() {
             </button>
           </div>
 
-          {/* Table fills remaining vertical space — its internal viewport
-              scrolls in both axes, page chrome stays put. */}
+          {/* Table — OpsTable owns sort, filter chips, column picker,
+              selection, and built-in 50-row pagination. Per-bucket
+              persistKey means each bucket remembers its own visible-
+              column + order preferences. */}
           {error ? (
             <div className="rounded-xl p-4 text-sm" style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }}>
               {error}
             </div>
           ) : (
             <div className="flex-1 min-h-0 min-w-0 flex">
-              <QueueTable<Row>
-                rows={paged}
+              <OpsTable<Row>
+                key={`accounting-${bucket}-${tableResetKey}`}
+                data={searchedRows}
                 columns={tableColumns}
+                filters={tableFilters}
                 rowKey={rowKey}
-                sort={sort}
-                onSortChange={setSort}
-                filters={filters}
-                onFiltersChange={(next) => { setFilters(next); setPage(0); }}
-                page={page}
-                pageSize={pageSize}
-                total={total}
-                onPageChange={setPage}
-                onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
-                hiddenColumns={effectiveHidden}
-                onHiddenColumnsChange={setHiddenCols}
-                columnOrder={colOrder}
-                onColumnOrderChange={setColOrder}
-                columnWidths={colWidths}
-                onColumnWidthsChange={setColWidths}
-                pinnedColumns={pinnedCols}
-                onPinnedColumnsChange={setPinnedCols}
+                loading={loading}
+                priorityKey={r => !!r.load.priority}
+                columnPicker
+                columnReorder
+                persistKey={`accounting-${bucket}`}
                 selectable={canSelect}
-                selected={selected}
-                onSelectionChange={setSelected}
-                rowClassName={(r) => r.load.priority ? 'bg-[#fefce8]' : ''}
-                emptyMessage={search.trim() !== '' || Object.values(filters).some(v => {
-                  if (v == null) return false;
-                  if (Array.isArray(v)) return v.length > 0;
-                  if (typeof v === 'string') return v.trim() !== '';
-                  const r = v as { from?: string; to?: string };
-                  return !!r.from || !!r.to;
-                })
-                  ? 'No rows match the current filters.'
+                onSelectionChange={setSelectedIds}
+                pageSize={PAGE_SIZE}
+                fillHeight
+                emptyLabel={search.trim() !== ''
+                  ? `No rows match "${search.trim()}".`
                   : 'No loads in this bucket.'}
+                bulkActions={!canSelect ? undefined : ({ clearSelection }) => (
+                  <div className="flex items-center gap-2">
+                    {bucket === 'released' && (
+                      <>
+                        <button onClick={() => setSummaryAction('generate')}
+                          className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                          style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
+                          <FilePlus size={12} className="inline mr-1.5" /> Generate Invoice
+                        </button>
+                        <button onClick={() => setSummaryAction('generateSend')}
+                          className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                          style={{ background: '#1a73e8', color: '#fff' }}>
+                          <Send size={12} className="inline mr-1.5" /> Create &amp; Send
+                        </button>
+                      </>
+                    )}
+                    {bucket === 'queued' && (
+                      <>
+                        <button onClick={() => void handleRegenerateSelected()} disabled={regenBusy}
+                          className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                          style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
+                          {regenBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <RefreshCw size={12} className="inline mr-1.5" />}
+                          Regenerate {selectedIds.length}
+                        </button>
+                        <button onClick={() => setBatchSendOpen(true)}
+                          className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                          style={{ background: '#1a73e8', color: '#fff' }}>
+                          <Send size={12} className="inline mr-1.5" /> Submit {selectedIds.length} invoice{selectedIds.length === 1 ? '' : 's'}
+                        </button>
+                      </>
+                    )}
+                    {bucket === 'invoiced' && (
+                      <>
+                        <button onClick={() => setBatchResendOpen(true)}
+                          className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                          style={{ background: 'var(--gc-surface)', color: '#1a73e8', border: '1px solid #bfdbfe' }}>
+                          <Send size={12} className="inline mr-1.5" /> Resend {selectedIds.length}
+                        </button>
+                        <button onClick={() => void handleMarkPaid()} disabled={markPaidBusy}
+                          className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                          style={{ background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
+                          {markPaidBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <Check size={12} className="inline mr-1.5" />}
+                          Mark {selectedIds.length} paid
+                        </button>
+                      </>
+                    )}
+                    {/* clearSelection is handled by OpsTable's own
+                        "Clear" button to the right; no need to wire
+                        anything extra. */}
+                    {void clearSelection}
+                  </div>
+                )}
               />
             </div>
           )}
@@ -978,7 +895,7 @@ function AccountingPageInner() {
           action={summaryAction}
           onClose={() => setSummaryAction(null)}
           onOpenBroker={(id) => setBrokerProfileId(id)}
-          onComplete={() => { setSummaryAction(null); setSelected(new Set()); void refresh(); }} />
+          onComplete={() => { setSummaryAction(null); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh(); }} />
       )}
       {batchSendOpen && (
         <BatchSendDialog
@@ -987,7 +904,7 @@ function AccountingPageInner() {
           // the broker was set) groups under the load's CURRENT broker
           // rather than under "(no broker set)".
           rows={(() => {
-            const byInvId = new Map(paged.map(r => [r.invoice?.id, r.load] as const));
+            const byInvId = new Map(rowsForBucket.map(r => [r.invoice?.id, r.load] as const));
             return selectedInvoices.map(inv => {
               const load = byInvId.get(inv.id);
               const broker = load ? findCustomerForLoad(load) ?? null : null;
@@ -996,14 +913,14 @@ function AccountingPageInner() {
           })()}
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchSendOpen(false)}
-          onComplete={() => { setBatchSendOpen(false); setSelected(new Set()); void refresh(); }} />
+          onComplete={() => { setBatchSendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh(); }} />
       )}
       {batchResendOpen && (
         // Same dialog as send, just hits the resend endpoint. Mode flag
         // switches title + button label + the underlying API call.
         <BatchSendDialog
           rows={(() => {
-            const byInvId = new Map(paged.map(r => [r.invoice?.id, r.load] as const));
+            const byInvId = new Map(rowsForBucket.map(r => [r.invoice?.id, r.load] as const));
             return selectedInvoices.map(inv => {
               const load = byInvId.get(inv.id);
               const broker = load ? findCustomerForLoad(load) ?? null : null;
@@ -1013,7 +930,7 @@ function AccountingPageInner() {
           mode="resend"
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchResendOpen(false)}
-          onComplete={() => { setBatchResendOpen(false); setSelected(new Set()); void refresh(); }} />
+          onComplete={() => { setBatchResendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh(); }} />
       )}
       {notesTarget && (
         <InternalNotesModal load={notesTarget} actorName={actorName}
@@ -1111,33 +1028,8 @@ function ageFg(days: number): string {
   return '#991b1b';
 }
 
-// ─── Bucket empty state ─────────────────────────────────────────────────
-
-function BucketEmpty({ bucket, hasFilters }: { bucket: Bucket; hasFilters: boolean }) {
-  if (hasFilters) {
-    return (
-      <div className="rounded-2xl py-16 text-center" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)' }}>
-        <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>No matches</div>
-        <div className="text-sm">Filters hide every row on this page.</div>
-      </div>
-    );
-  }
-  const messages: Record<Bucket, { title: string; sub: string }> = {
-    released: { title: 'Nothing released yet',   sub: 'Loads land here once Closeout marks them verified.' },
-    queued:   { title: 'Nothing queued',         sub: 'Generated invoices waiting to be sent show up here.' },
-    invoiced: { title: 'Nothing invoiced',       sub: 'Sent invoices show up here until they\'re marked paid.' },
-    paid:     { title: 'Nothing paid yet',       sub: 'Paid invoices show up here for record-keeping.' },
-    all:      { title: 'No invoices yet',        sub: 'Generate one from the Released bucket.' },
-  };
-  const m = messages[bucket];
-  return (
-    <div className="rounded-2xl py-16 text-center" style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)' }}>
-      <Receipt size={28} className="mx-auto mb-3" style={{ color: 'var(--gc-text-3)' }} />
-      <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>{m.title}</div>
-      <div className="text-sm">{m.sub}</div>
-    </div>
-  );
-}
+// (BucketEmpty removed — OpsTable owns its own empty-state messaging
+// via the emptyLabel prop on the consumer.)
 
 // ─── Status pill ────────────────────────────────────────────────────────
 
