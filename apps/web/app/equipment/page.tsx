@@ -1474,6 +1474,13 @@ function WorkOrderModal({
   const [busy, setBusy]     = useState(false);
   const [error, setError]   = useState<string | null>(null);
 
+  // Calendar handoff handles — pulled here so the "Schedule on
+  // calendar" button (create-mode CTA + edit-mode CalendarLinkBlock)
+  // can route the user to /calendar with an opening event modal
+  // pre-filled for this work order.
+  const router          = useRouter();
+  const openCreateModal = useCalendarStore(s => s.openCreateModal);
+
   // Reference photos from the source driver report — fetched when:
   //   • create-from-convert: fromReport already has photos in-hand,
   //     we just use them directly.
@@ -1632,12 +1639,18 @@ function WorkOrderModal({
     setForm(f => ({ ...f, trailerId: id, assetId: id ? null : f.assetId }));
   }
 
-  async function save() {
-    if (busy) return;
-    if (!form.title.trim()) { setError('Title is required.'); return; }
+  /** Run the persist. Returns the work order's id on success (so a
+   *  caller chaining a follow-up action — like "schedule on calendar"
+   *  — knows which row to link to). Returns null on validation or
+   *  network failure; `setError` has already surfaced the reason.
+   *  Skips the parent's onSaved() callback when `quiet: true` so the
+   *  caller can sequence the close themselves. */
+  async function persist(opts?: { quiet?: boolean }): Promise<string | null> {
+    if (busy) return null;
+    if (!form.title.trim()) { setError('Title is required.'); return null; }
     if (mode !== 'edit' && !form.assetId && !form.trailerId) {
       setError('Pick a truck or a trailer.');
-      return;
+      return null;
     }
     setBusy(true); setError(null);
     try {
@@ -1656,19 +1669,55 @@ function WorkOrderModal({
         assetId:       form.assetId ?? undefined,
         trailerId:     form.trailerId ?? undefined,
       };
+      let savedId: string;
       if (mode === 'edit' && item) {
-        await railway.updateMaintenanceActionItem(item.id, payload);
+        const res = await railway.updateMaintenanceActionItem(item.id, payload);
+        savedId = res.actionItem.id;
       } else if (mode === 'convert' && fromReport) {
-        await railway.convertMaintenanceReport(fromReport.id, payload);
+        const res = await railway.convertMaintenanceReport(fromReport.id, payload);
+        savedId = res.actionItem.id;
       } else {
-        await railway.createMaintenanceActionItem(payload);
+        const res = await railway.createMaintenanceActionItem(payload);
+        savedId = res.actionItem.id;
       }
-      onSaved();
+      if (!opts?.quiet) onSaved();
+      return savedId;
     } catch (err) {
       setError((err as Error).message ?? 'Save failed');
+      return null;
     } finally {
       setBusy(false);
     }
+  }
+
+  // Public save handler used by the modal's primary Save button.
+  const save = () => { void persist(); };
+
+  /** Save-then-schedule handoff. Same persist path, but on success
+   *  opens the calendar create modal pre-filled for this work order
+   *  (asset + scheduled date → 8a-5p block) AND pre-links the row
+   *  we just saved so the dispatcher's first calendar save persists
+   *  the link without an extra step. Closes the WO modal afterward
+   *  because the user is leaving for /calendar anyway. */
+  async function saveAndSchedule() {
+    const savedId = await persist({ quiet: true });
+    if (!savedId) return;
+    const date = form.scheduledDate || localTodayYmd();
+    const start = `${date}T08:00`;
+    const end   = `${date}T17:00`;
+    openCreateModal(
+      {
+        title:           form.title.trim(),
+        assetId:         form.assetId ?? undefined,
+        start,
+        end,
+        eventKind:       'non_revenue',
+        nonRevenueType:  'Maintenance',
+      },
+      { prefillWorkOrderLinkIds: [savedId] },
+    );
+    onSaved();          // refresh parent so the new/updated WO shows in the list
+    router.push('/calendar');
   }
 
   // Inline two-stage delete confirm. Click 1 arms the button (turns
@@ -1900,23 +1949,24 @@ function WorkOrderModal({
             )}
           </div>
 
-          {/* Calendar link — Phase 3 of the work-order ↔ event linking
-              flow. Only meaningful on existing work orders (edit mode);
-              in create mode the work order has no id yet to link.
-              Linked  → "View in calendar" jumps to /calendar with the
-                        non-revenue event opened in edit mode.
-              Unlinked → "Schedule on calendar" jumps to /calendar with
-                         a pre-filled create modal (asset + scheduled
-                         date as the block's start) and pre-checks the
-                         current work order in the Linked Work Orders
-                         section so the very first save persists the
-                         link. */}
-          {mode === 'edit' && item && (
-            <CalendarLinkBlock
-              item={item}
-              onLinked={onSaved}
-            />
-          )}
+          {/* Calendar block — visible in every mode so the dispatcher
+              can schedule shop time as part of the same form, not as
+              a separate trip back to the calendar.
+                edit + linked    → View / Unlink the linked event.
+                edit + unlinked  → "Schedule on calendar" (already has id).
+                create / convert → "Save & schedule on calendar" — runs
+                                   persist() first, captures the new
+                                   work order's id, then hands off to
+                                   /calendar with that id pre-linked.
+              The save-then-schedule path also calls onSaved() before
+              navigating so the parent list refreshes with the freshly
+              created row visible. */}
+          <CalendarLinkBlock
+            item={mode === 'edit' ? item : undefined}
+            onLinked={onSaved}
+            onScheduleCreate={mode !== 'edit' ? () => void saveAndSchedule() : undefined}
+            canScheduleCreate={!busy && form.title.trim().length > 0 && (!!form.assetId || !!form.trailerId)}
+          />
 
           {/* Description */}
           <div>
@@ -2312,23 +2362,34 @@ function WorkOrderModal({
  * "View in calendar" handoff is the bridge to scheduling context.
  */
 function CalendarLinkBlock({
-  item, onLinked,
+  item, onLinked, onScheduleCreate, canScheduleCreate,
 }: {
-  item: MaintenanceActionItem;
+  /** Set in edit mode; undefined in create/convert. */
+  item?: MaintenanceActionItem;
   onLinked: () => void;
+  /** Set in create/convert mode. Implementation is provided by the
+   *  parent (WorkOrderModal) — it persists the form, captures the
+   *  new id, and hands off to /calendar with that id pre-linked.
+   *  We just invoke it here. */
+  onScheduleCreate?: () => void;
+  /** False when the form isn't valid enough to save yet (missing
+   *  title or asset). Disables the create-mode CTA so the user
+   *  can't fire a save with bad input. */
+  canScheduleCreate?: boolean;
 }) {
   const router = useRouter();
   const openCreateModal = useCalendarStore(s => s.openCreateModal);
   const openEditModal   = useCalendarStore(s => s.openEditModal);
   const [busy, setBusy] = useState(false);
 
-  const linked = !!item.eventId;
+  // Three rendered shapes from one component. We could split, but the
+  // shared header + colors make this collapse nicely.
+  const linked    = !!item?.eventId;
+  const isCreate  = !item;  // create OR convert mode (parent decides)
 
-  // "Schedule on calendar" — preseed the calendar create modal with
-  // this asset + work order's scheduled date (default 8a–5p block, a
-  // reasonable shop day). Stuff the work order id into the prefill
-  // buffer so the first save in EventModal auto-links.
+  // EDIT-mode handlers (only reachable when item is set).
   const goSchedule = () => {
+    if (!item) return;
     const date = item.scheduledDate ?? localTodayYmd();
     const start = `${date}T08:00`;
     const end   = `${date}T17:00`;
@@ -2347,17 +2408,17 @@ function CalendarLinkBlock({
   };
 
   const goView = () => {
-    if (!item.eventId) return;
+    if (!item?.eventId) return;
     openEditModal(item.eventId);
     router.push('/calendar');
   };
 
   const doUnlink = async () => {
-    if (!item.eventId || busy) return;
+    if (!item?.eventId || busy) return;
     setBusy(true);
     try {
       await railway.updateMaintenanceActionItem(item.id, { eventId: null });
-      onLinked(); // re-fetch the parent list so the modal closes/refreshes correctly
+      onLinked();
     } catch (err) {
       console.error('[CalendarLinkBlock] unlink failed:', err);
     } finally {
@@ -2377,7 +2438,33 @@ function CalendarLinkBlock({
           background: linked ? '#f5f3ff' : 'var(--gc-bg)',
           border:     `1px solid ${linked ? '#e9d5ff' : 'var(--gc-border-light)'}`,
         }}>
-        {linked ? (
+        {isCreate ? (
+          // Create / convert mode — no row id yet, so the only meaningful
+          // action is "save the work order then schedule." The button is
+          // disabled until the parent form is valid enough to persist.
+          <>
+            <Calendar size={16} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                Block the truck on the calendar
+              </div>
+              <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                Saves this work order, then opens the calendar pre-filled
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onScheduleCreate}
+              disabled={!canScheduleCreate}
+              className="flex items-center gap-1 text-[12px] font-semibold px-3 py-1.5 rounded-lg shrink-0 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: '#7c3aed', color: '#fff' }}
+              onMouseEnter={e => { if (canScheduleCreate) e.currentTarget.style.background = '#6b21a8'; }}
+              onMouseLeave={e => (e.currentTarget.style.background = '#7c3aed')}
+              title={canScheduleCreate ? 'Save & schedule on calendar' : 'Add a title and pick a truck/trailer first'}>
+              <Plus size={12} /> Save &amp; schedule
+            </button>
+          </>
+        ) : linked ? (
           <>
             <CheckCircle2 size={16} style={{ color: '#7c3aed', flexShrink: 0 }} />
             <div className="flex-1 min-w-0">

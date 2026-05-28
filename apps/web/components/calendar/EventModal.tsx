@@ -2543,6 +2543,14 @@ export default function EventModal() {
       const [sd, st = '08:00'] = (d.start ?? `${today}T08:00`).split('T');
       const [ed, et = '09:00'] = (d.end   ?? `${today}T09:00`).split('T');
       setTitle(d.title ?? '');
+      // Apply event-kind defaults — without these the modal would
+      // ignore eventKind/nonRevenueType from the caller and always
+      // open as a revenue load. (See: WorkOrderModal's "Schedule on
+      // calendar" handoff, which passes eventKind='non_revenue',
+      // nonRevenueType='Maintenance' so the dispatcher lands on the
+      // right form straight away.)
+      if (d.eventKind)      setEventKind(d.eventKind);
+      if (d.nonRevenueType) setNonRevenueType(d.nonRevenueType);
       const initialAssetId = d.assetId ?? assets[0]?.id ?? 1;
       setAssetId(initialAssetId);
       setDriverName(
