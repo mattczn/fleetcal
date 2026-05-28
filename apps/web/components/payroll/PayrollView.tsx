@@ -78,7 +78,14 @@ function PayCell({ load }: { load: CalendarEvent }) {
   const [raw, setRaw] = useState('');
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  // The wrapper span (below) carries data-pay-cell-id and stays
+  // mounted across the editing↔display toggle. Earlier version put
+  // the data attribute on the inner button — but the button unmounts
+  // while we're editing, so when commit() ran, querySelectorAll
+  // couldn't find this cell and findIndex returned -1 → "next" was
+  // resolved to cells[0] (the very first cell on the page). Anchoring
+  // the marker on a stable wrapper fixes that.
+  const cellRef = useRef<HTMLSpanElement>(null);
 
   function startEdit() {
     setRaw(String(load.driverPay ?? ''));
@@ -95,75 +102,71 @@ function PayCell({ load }: { load: CalendarEvent }) {
     }
     setEditing(false);
     if (advance) {
-      // Spreadsheet-style: pressing Enter commits THIS cell, then
-      // jumps focus to the next pay cell on the page. We query every
-      // [data-pay-cell] in document order so the order matches what
-      // the dispatcher sees scanning the page top-to-bottom.
-      //
-      // Wrapped in setTimeout(0) so the editing→display swap finishes
-      // first (the button needs to exist before we can click it). Use
-      // the saved buttonRef from THIS cell to find our position rather
-      // than relying on document.activeElement (which is the input,
-      // about to be unmounted).
-      const here = buttonRef.current;
+      // Capture our wrapper's identity NOW (before the timeout) so
+      // even if React re-renders we still know which cell was "this
+      // one." Then in the next tick (after editing→display swap),
+      // find the next sibling cell in document order and click its
+      // button to open it for edit.
+      const here = cellRef.current;
       setTimeout(() => {
-        if (typeof document === 'undefined') return;
-        const cells = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-pay-cell]'));
+        if (typeof document === 'undefined' || !here) return;
+        const cells = Array.from(document.querySelectorAll<HTMLSpanElement>('[data-pay-cell-id]'));
         const idx = cells.findIndex(el => el === here);
+        // idx === -1 should be impossible now (here is the same node
+        // that has the data attribute), but defensive guard anyway.
+        if (idx < 0) return;
         const next = cells[idx + 1];
-        if (next) next.click();
+        next?.querySelector('button')?.click();
       }, 0);
     }
   }
 
-  if (editing) {
-    return (
-      <div className="flex items-center gap-1">
-        <span style={{ color: 'var(--gc-text-3)' }} className="text-sm">$</span>
-        <input
-          ref={inputRef}
-          type="number"
-          step="0.01"
-          value={raw}
-          onChange={e => setRaw(e.target.value)}
-          onBlur={() => commit()}
-          onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); void commit({ advance: true }); }
-            if (e.key === 'Escape') setEditing(false);
-          }}
-          className="w-24 px-2 py-0.5 rounded text-sm font-semibold text-right"
-          style={{
-            background: 'var(--gc-bg)',
-            border: '1px solid var(--gc-blue)',
-            color: 'var(--gc-text-1)',
-            outline: 'none',
-          }}
-          autoFocus
-        />
-      </div>
-    );
-  }
-
   return (
-    <button
-      ref={buttonRef}
-      data-pay-cell
-      onClick={startEdit}
-      className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors"
-      style={{ background: 'transparent' }}
-      onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-      onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
-      title="Click to edit driver pay (Enter saves + jumps to next)"
-    >
-      {saving ? (
-        <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
+    <span ref={cellRef} data-pay-cell-id={load.id} className="inline-flex">
+      {editing ? (
+        <div className="flex items-center gap-1">
+          <span style={{ color: 'var(--gc-text-3)' }} className="text-sm">$</span>
+          <input
+            ref={inputRef}
+            type="number"
+            step="0.01"
+            value={raw}
+            onChange={e => setRaw(e.target.value)}
+            onBlur={() => commit()}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); void commit({ advance: true }); }
+              if (e.key === 'Escape') setEditing(false);
+            }}
+            className="w-24 px-2 py-0.5 rounded text-sm font-semibold text-right"
+            style={{
+              background: 'var(--gc-bg)',
+              border: '1px solid var(--gc-blue)',
+              color: 'var(--gc-text-1)',
+              outline: 'none',
+            }}
+            autoFocus
+          />
+        </div>
       ) : (
-        <span className="text-[13px] font-semibold" style={{ color: load.driverPay != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-          {load.driverPay != null ? fmtMoney(load.driverPay) : '—'}
-        </span>
+        <button
+          onClick={startEdit}
+          className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors"
+          style={{ background: 'transparent' }}
+          onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseOut={e => (e.currentTarget.style.background = 'transparent')}
+          title="Click to edit driver pay (Enter saves + jumps to next)"
+        >
+          {saving ? (
+            <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-blue)' }} />
+          ) : (
+            <span className="text-[13px] font-semibold" style={{ color: load.driverPay != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+              {load.driverPay != null ? fmtMoney(load.driverPay) : '—'}
+            </span>
+          )}
+          <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0" style={{ color: 'var(--gc-text-3)' }} />
+        </button>
       )}
-      <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity shrink-0" style={{ color: 'var(--gc-text-3)' }} />
-    </button>
+    </span>
   );
 }
 
