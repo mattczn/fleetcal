@@ -3002,13 +3002,15 @@ function WorkOrderModal({
 
 /**
  * CalendarLinkBlock — inline section inside WorkOrderModal showing the
- * work order's relationship to the dispatch calendar. Two states:
+ * work order's relationship to the dispatch calendar. Three states:
  *
- *   LINKED   — a non-revenue maintenance event references this work
- *              order. Shows "Scheduled in calendar" + a "View" button
- *              that hands off to /calendar and opens the event modal
- *              in edit mode, and an "Unlink" button that clears the
- *              link via PATCH (the event itself is unaffected).
+ *   LINKED (1+ events) — one or more non-revenue maintenance events
+ *              reference this work order. Renders ONE ROW PER linked
+ *              event, each with its own View + Unlink buttons.
+ *              Unlinking a row removes JUST that event from the WO's
+ *              eventIds set; the other links and the events themselves
+ *              survive. A small "+ Schedule another" affordance below
+ *              lets the user attach another shop day.
  *
  *   UNLINKED — Shows a single "Schedule on calendar" button that hands
  *              off to /calendar and opens the event modal in create
@@ -3018,6 +3020,9 @@ function WorkOrderModal({
  *              the calendar store so EventModal pre-checks it in the
  *              Linked Work Orders section — the user's first save
  *              persists the link without a manual second step.
+ *
+ *   CREATE/CONVERT — single "Save & schedule" button that defers to
+ *              the parent's onScheduleCreate (persist row → handoff).
  *
  * Note: viewing the linked event details (start/end times, etc.)
  * intentionally happens in the calendar UI rather than inline here.
@@ -3043,14 +3048,27 @@ function CalendarLinkBlock({
   const router = useRouter();
   const openCreateModal = useCalendarStore(s => s.openCreateModal);
   const openEditModal   = useCalendarStore(s => s.openEditModal);
-  const [busy, setBusy] = useState(false);
+  // Per-event busy state — only the row being unlinked spins, the
+  // others stay clickable.
+  const [busyEventId, setBusyEventId] = useState<string | null>(null);
 
-  // Three rendered shapes from one component. We could split, but the
-  // shared header + colors make this collapse nicely.
-  const linked    = !!item?.eventId;
-  const isCreate  = !item;  // create OR convert mode (parent decides)
+  const isCreate = !item;
+  // Source of truth: the M:N linkedEvents list from the API. Falls
+  // back to the legacy single eventId hint so a freshly-PATCHed row
+  // (where the server-side join write was a no-op pre-migration) still
+  // renders as linked.
+  const linkedEvents: Array<{ id: string; start: string }> =
+    item?.linkedEvents && item.linkedEvents.length > 0
+      ? item.linkedEvents
+      : item?.eventId
+        ? [{ id: item.eventId, start: item.scheduledDate ? `${item.scheduledDate}T08:00:00` : new Date().toISOString() }]
+        : [];
+  const linked = linkedEvents.length > 0;
 
-  // EDIT-mode handlers (only reachable when item is set).
+  // EDIT-mode: open create modal for ANOTHER event. Same pre-fill
+  // semantics as the empty-state "Schedule on calendar" — the
+  // prefillWorkOrderLinkIds ensures the new event links back to
+  // this WO on first save (additive multi-link, not replacement).
   const goSchedule = () => {
     if (!item) return;
     const date = item.scheduledDate ?? localTodayYmd();
@@ -3070,33 +3088,52 @@ function CalendarLinkBlock({
     router.push('/calendar');
   };
 
-  const goView = () => {
-    if (!item?.eventId) return;
-    openEditModal(item.eventId);
+  const goView = (eventId: string) => {
+    openEditModal(eventId);
     router.push('/calendar');
   };
 
-  const doUnlink = async () => {
-    if (!item?.eventId || busy) return;
-    setBusy(true);
+  /** Unlink ONE specific event from this WO. Other links survive. */
+  const doUnlinkOne = async (eventIdToRemove: string) => {
+    if (!item || busyEventId) return;
+    setBusyEventId(eventIdToRemove);
+    // Build the new set by stripping just this id. Pull from
+    // linkedEvents (canonical) first; fall back to the single
+    // eventId hint when the API hasn't surfaced the array yet
+    // (pre-migration legacy rows).
+    const currentIds = item.linkedEvents?.map(e => e.id)
+      ?? (item.eventId ? [item.eventId] : []);
+    const nextIds = currentIds.filter(id => id !== eventIdToRemove);
     try {
-      await railway.updateMaintenanceActionItem(item.id, { eventId: null });
+      await railway.updateMaintenanceActionItem(item.id, { eventIds: nextIds });
       onLinked();
     } catch (err) {
       console.error('[CalendarLinkBlock] unlink failed:', err);
     } finally {
-      setBusy(false);
+      setBusyEventId(null);
     }
+  };
+
+  // Format an event's start datetime for the row label. Same shape
+  // as the rest of the maintenance board's date cells — short
+  // weekday + month/day + time. Local-tz parse to match how
+  // EventModal/Calendar pages render.
+  const fmtEventLabel = (startIso: string): string => {
+    const d = new Date(startIso);
+    if (Number.isNaN(d.getTime())) return 'Unknown date';
+    const date = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `${date} · ${time}`;
   };
 
   return (
     <div>
       <label className="text-[11px] font-semibold uppercase tracking-wider block mb-2"
         style={{ color: 'var(--gc-text-3)' }}>
-        Calendar
+        Calendar{linked && linkedEvents.length > 1 ? ` · ${linkedEvents.length} events` : ''}
       </label>
       <div
-        className="rounded-lg flex items-center gap-3 px-3 py-2.5"
+        className="rounded-lg"
         style={{
           background: linked ? '#f5f3ff' : 'var(--gc-bg)',
           border:     `1px solid ${linked ? '#e9d5ff' : 'var(--gc-border-light)'}`,
@@ -3105,7 +3142,7 @@ function CalendarLinkBlock({
           // Create / convert mode — no row id yet, so the only meaningful
           // action is "save the work order then schedule." The button is
           // disabled until the parent form is valid enough to persist.
-          <>
+          <div className="flex items-center gap-3 px-3 py-2.5">
             <Calendar size={16} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
@@ -3126,40 +3163,68 @@ function CalendarLinkBlock({
               title={canScheduleCreate ? 'Save & schedule on calendar' : 'Add a title and pick a truck/trailer first'}>
               <Plus size={12} /> Save &amp; schedule
             </button>
-          </>
+          </div>
         ) : linked ? (
-          <>
-            <CheckCircle2 size={16} style={{ color: '#7c3aed', flexShrink: 0 }} />
-            <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                Scheduled in calendar
+          <div className="flex flex-col">
+            {/* One row per linked event — each with its own View +
+                Unlink. Unlinking one preserves the others (multi-link
+                slice semantics). */}
+            {linkedEvents.map((ev, idx) => (
+              <div
+                key={ev.id}
+                className="flex items-center gap-3 px-3 py-2.5"
+                style={{
+                  borderTop: idx === 0 ? 'none' : '1px solid #e9d5ff',
+                }}>
+                <CheckCircle2 size={16} style={{ color: '#7c3aed', flexShrink: 0 }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                    {fmtEventLabel(ev.start)}
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                    Non-revenue maintenance block
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => goView(ev.id)}
+                  className="flex items-center gap-1 text-[12px] font-semibold px-3 py-1.5 rounded-lg shrink-0 transition-colors"
+                  style={{ background: '#7c3aed', color: '#fff' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#6b21a8')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '#7c3aed')}>
+                  <ExternalLink size={12} /> View
+                </button>
+                <button
+                  type="button"
+                  onClick={() => doUnlinkOne(ev.id)}
+                  disabled={busyEventId !== null}
+                  title="Unlink this event only (other events stay linked)"
+                  className="text-[12px] font-semibold px-2.5 py-1.5 rounded-lg shrink-0 transition-colors disabled:opacity-50"
+                  style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.04)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {busyEventId === ev.id ? <Loader2 size={12} className="animate-spin" /> : 'Unlink'}
+                </button>
               </div>
-              <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-                Linked to a non-revenue maintenance block
-              </div>
-            </div>
+            ))}
+            {/* Schedule-another footer — same gesture as the empty-
+                state CTA, just framed as an additive action. */}
             <button
               type="button"
-              onClick={goView}
-              className="flex items-center gap-1 text-[12px] font-semibold px-3 py-1.5 rounded-lg shrink-0 transition-colors"
-              style={{ background: '#7c3aed', color: '#fff' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#6b21a8')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#7c3aed')}>
-              <ExternalLink size={12} /> View
-            </button>
-            <button
-              type="button"
-              onClick={doUnlink}
-              disabled={busy}
-              className="text-[12px] font-semibold px-2.5 py-1.5 rounded-lg shrink-0 transition-colors disabled:opacity-50"
-              style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onClick={goSchedule}
+              className="flex items-center justify-center gap-1 text-[12px] font-semibold px-3 py-2 rounded-b-lg transition-colors"
+              style={{
+                color: '#7c3aed',
+                background: 'transparent',
+                borderTop: '1px solid #e9d5ff',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(124,58,237,0.08)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              {busy ? <Loader2 size={12} className="animate-spin" /> : 'Unlink'}
+              <Plus size={12} /> Schedule another
             </button>
-          </>
+          </div>
         ) : (
-          <>
+          <div className="flex items-center gap-3 px-3 py-2.5">
             <Calendar size={16} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
@@ -3178,7 +3243,7 @@ function CalendarLinkBlock({
               onMouseLeave={e => (e.currentTarget.style.background = '#7c3aed')}>
               <Plus size={12} /> Schedule on calendar
             </button>
-          </>
+          </div>
         )}
       </div>
     </div>
