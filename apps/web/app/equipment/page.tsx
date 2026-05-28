@@ -2255,18 +2255,16 @@ function WorkOrderModal({
     return false;
   }, [form, initial]);
 
-  // Close-guard. Wraps the parent's onClose so any attempt to dismiss
-  // the modal (X button, backdrop click, Cancel) goes through a
-  // single confirm path when there are unsaved edits. Save / Delete
-  // call onSaved (not onClose) and bypass this entirely.
+  // When the user tries to close while there are unsaved edits, we
+  // pop a styled 3-option confirm (Save changes / Discard / Keep
+  // editing) instead of the browser's native window.confirm. The
+  // dialog lives at the bottom of the JSX as an overlay on top of
+  // this modal. Save / Delete paths still call onSaved (not
+  // onClose) so they bypass this entirely.
+  const [closeConfirm, setCloseConfirm] = useState(false);
   const tryClose = useCallback(() => {
     if (busy) return; // can't close mid-request
-    if (isDirty) {
-      // window.confirm matches the rest of the app (e.g. Delete
-      // permanently in AssetsModal, the Delete button below). Keeps
-      // the modal-on-modal stacking simple.
-      if (!window.confirm('Discard unsaved changes?')) return;
-    }
+    if (isDirty) { setCloseConfirm(true); return; }
     onClose();
   }, [busy, isDirty, onClose]);
 
@@ -3017,7 +3015,7 @@ function WorkOrderModal({
                 e.currentTarget.style.background = 'transparent';
               }}>
               <Trash2 size={14} />
-              {deleteArmed ? 'Click again to confirm' : 'Delete'}
+              {deleteArmed ? 'Confirm?' : 'Delete'}
             </button>
           ) : <div />}
           <div className="flex items-center gap-2">
@@ -3052,6 +3050,77 @@ function WorkOrderModal({
           </div>
         </div>
       </div>
+
+      {/* Unsaved-changes confirm — overlays the modal when the user
+          tries to close (X / backdrop / Cancel) with dirty form
+          state. Three explicit paths so accidental clicks don't
+          silently drop work. */}
+      {closeConfirm && (
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.45)', zIndex: 1200 }}
+          onClick={e => { if (e.target === e.currentTarget) setCloseConfirm(false); }}>
+          <div
+            className="rounded-xl shadow-xl"
+            style={{
+              background:  'var(--gc-surface)',
+              border:      '1px solid var(--gc-border)',
+              width:       'min(86vw, 380px)',
+              padding:     '20px 22px',
+            }}
+            onClick={e => e.stopPropagation()}>
+            <div className="text-[15px] font-bold mb-1" style={{ color: 'var(--gc-text-1)' }}>
+              Unsaved changes
+            </div>
+            <div className="text-[13px] mb-4" style={{ color: 'var(--gc-text-2)' }}>
+              You have unsaved edits. What do you want to do?
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => { setCloseConfirm(false); void persist(); }}
+                disabled={busy || !form.title.trim()}
+                className="rounded-md text-[13px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  background: LOAD_ACCENT,
+                  color:      '#fff',
+                  border:     `1px solid ${LOAD_ACCENT}`,
+                  padding:    '8px 14px',
+                }}>
+                {busy ? 'Saving…' : 'Save changes'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setCloseConfirm(false); onClose(); }}
+                className="rounded-md text-[13px] font-semibold transition-colors"
+                style={{
+                  background: 'transparent',
+                  color:      '#b91c1c',
+                  border:     '1px solid #fecaca',
+                  padding:    '8px 14px',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#fef2f2')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => setCloseConfirm(false)}
+                className="rounded-md text-[13px] font-semibold transition-colors"
+                style={{
+                  background: 'transparent',
+                  color:      'var(--gc-text-2)',
+                  border:     '1px solid var(--gc-border-light)',
+                  padding:    '8px 14px',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                Keep editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 

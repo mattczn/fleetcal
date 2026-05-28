@@ -648,8 +648,49 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
     freshLinkedEvents = (await fetchLinkedEventsMap([id])).get(id);
   }
 
+  // Auto-fill scheduledDate from the earliest linked event when:
+  //   1. Links are being added (desiredEventIds non-empty), AND
+  //   2. The caller didn't explicitly set scheduledDate in this
+  //      PATCH (so we don't override an explicit value), AND
+  //   3. The row's scheduled_date column is currently null (so we
+  //      don't override an existing user choice).
+  // Mirrors the product rule: "scheduling a WO on the calendar
+  // should reflect in the modal's Scheduled for picker." Done as a
+  // second UPDATE (small, fire-and-forget) — keeps the first
+  // update minimal so the schema-bridge / retry logic stays simple.
+  let postScheduledRow: MaintenanceActionItemRow | null = null;
+  if (
+    !("scheduledDate" in body)
+    && freshLinkedEvents
+    && freshLinkedEvents.length > 0
+    && (data as unknown as MaintenanceActionItemRow).scheduled_date == null
+  ) {
+    // freshLinkedEvents is sorted oldest-first by fetchLinkedEventsMap;
+    // strip the time portion so we store YYYY-MM-DD (the column is
+    // DATE, not timestamp).
+    const earliestIso = freshLinkedEvents[0].start;
+    const earliestDate = earliestIso.slice(0, 10);
+    const { data: schedData, error: schedErr } = await supabase
+      .from("maintenance_action_items")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .update({ scheduled_date: earliestDate, updated_at: new Date().toISOString() } as any)
+      .eq("id", id)
+      .eq("org_id", orgId)
+      .select(ACTION_ITEM_COLS)
+      .maybeSingle();
+    if (schedErr) {
+      console.warn("[PATCH .../action-items] scheduledDate auto-fill failed (non-fatal):", schedErr);
+    } else if (schedData) {
+      postScheduledRow = schedData as unknown as MaintenanceActionItemRow;
+      console.info("[PATCH .../action-items]", id, "auto-filled scheduled_date:", earliestDate);
+    }
+  }
+
   const res: UpdateMaintenanceActionItemResponse = {
-    actionItem: rowToActionItem(data as unknown as MaintenanceActionItemRow, freshLinkedEvents),
+    actionItem: rowToActionItem(
+      postScheduledRow ?? (data as unknown as MaintenanceActionItemRow),
+      freshLinkedEvents,
+    ),
   };
   return c.json(res);
 });

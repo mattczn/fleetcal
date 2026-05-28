@@ -2598,18 +2598,32 @@ export default function EventModal() {
   useEffect(() => {
     if (!modalOpen || !isEdit || !modalEventId) return;
     const ev = events.find(e => e.id === modalEventId);
-    if (!ev) return;
-    // Only retry for revenue loads — non-revenue events have no stops
-    // by design, so an empty stops array is the correct state.
-    if (ev.eventKind === 'non_revenue') return;
-    if ((ev.stops?.length ?? 0) > 0) return;
     // Don't stack refetches on top of an in-flight one.
     if (refetchingEventIds.has(modalEventId)) return;
+    // Case A: event missing from the local cache entirely. Happens
+    // when openEditModal was called with an event id from a different
+    // week than the calendar's current view (e.g. clicking "View" on
+    // a linked event from /equipment that's on next month). Without
+    // this, the form-init useEffect silently bails on `if (!ev) return`
+    // and the modal renders empty / stale — which is what the user
+    // sees when "View doesn't show the correct event". Refetch by id
+    // pulls just that row in and re-initializes the form.
+    if (!ev) {
+      void refetchEvent(modalEventId).then(() => {
+        const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+        if (fresh) reinitForm(fresh);
+      });
+      return;
+    }
+    // Case B: revenue load present but with empty stops (cache landed
+    // in a partial state). Retry to fill stops.
+    if (ev.eventKind === 'non_revenue') return;
+    if ((ev.stops?.length ?? 0) > 0) return;
     void refetchEvent(modalEventId).then(() => {
       const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
       if (fresh) reinitForm(fresh);
     });
-  }, [modalOpen, modalEventId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [modalOpen, modalEventId, events]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Force non-revenue for users without loads.create when opening the
   // modal in create mode. Maintenance has nonRevenueEvents.create only
