@@ -41,11 +41,9 @@ import {
 } from '@/components/queue/QueueTablePrimitives';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 import type {
-  Invoice, InvoiceStatus, Customer, Load,
+  Invoice, InvoiceStatus, Customer, LoadSummary,
   BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
 } from '@fleetcal/types';
-// CalendarEvent is an app-side alias of Load (legacy naming).
-type CalendarEvent = Load;
 
 // ─── Buckets ────────────────────────────────────────────────────────────
 
@@ -133,12 +131,12 @@ function AccountingPageInner() {
 
   const [bucket, setBucket] = useState<Bucket>('released');
 
-  // Source data
-  const [verifiedLoads,  setVerifiedLoads]  = useState<CalendarEvent[]>([]);
-  const [invoicedLoads,  setInvoicedLoads]  = useState<CalendarEvent[]>([]);
-  const [paidLoads,      setPaidLoads]      = useState<CalendarEvent[]>([]);
-  const [docCounts,      setDocCounts]      = useState<Record<string, Record<string, number>>>({});
-  const [allInvoices,    setAllInvoices]    = useState<Invoice[]>([]);
+  // Source data — single call to /v1/reports/loads returns load-shaped
+  // rows (one per loadId). No relay-leg dedup needed; the server has
+  // already joined events back into their parent load. Invoices come
+  // from the dedicated /v1/invoices endpoint and are matched by loadId.
+  const [loads,       setLoads]       = useState<LoadSummary[]>([]);
+  const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
 
@@ -161,7 +159,7 @@ function AccountingPageInner() {
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
   const [batchResendOpen, setBatchResendOpen] = useState(false);
-  const [notesTarget,     setNotesTarget]     = useState<Load | null>(null);
+  const [notesTarget,     setNotesTarget]     = useState<LoadSummary | null>(null);
   const [markPaidBusy,    setMarkPaidBusy]    = useState(false);
 
   // Reset selection on bucket change so a stale id can't get acted on
@@ -174,40 +172,30 @@ function AccountingPageInner() {
 
   // ── Data fetch ──────────────────────────────────────────────────────
   //
-  // Cap: 2000 events per bucket. Each event is one relay leg, so 2000
-  // ≈ 1000-2000 unique loads after the client-side dedup below. Matches
-  // the closeout candidate cap. Past this, we log a warning so the
-  // operator catches it before users see drifted totals; a real fix
-  // would be server-side aggregation for these tabs (same shape the
-  // wide-candidate path already returns).
-  const BUCKET_LIMIT = 2000;
+  // One server call fetches every load in billing_status ∈ {verified,
+  // invoiced, paid} — that's the entire accounting universe. The
+  // server already returns one row per load (relays collapsed into
+  // legs[]), so there's nothing to dedup client-side. 5000 limit is
+  // ample for a year's worth of loads at any reasonable fleet size;
+  // we log a warning if we hit the ceiling so the operator catches
+  // it before totals start drifting.
+  const BUCKET_LIMIT = 5000;
   async function refresh() {
     setLoading(true);
     setError(null);
     try {
-      const [verifiedRes, invoicedRes, paidRes, invoicesRes] = await Promise.all([
-        railway.listCloseoutQueue('verified', { limit: BUCKET_LIMIT }),
-        railway.listCloseoutQueue('invoiced', { limit: BUCKET_LIMIT }),
-        railway.listCloseoutQueue('paid',     { limit: BUCKET_LIMIT }),
+      const [loadsRes, invoicesRes] = await Promise.all([
+        railway.listLoadSummaries({
+          billingStatus: 'verified,invoiced,paid',
+          limit:         String(BUCKET_LIMIT),
+        }),
         railway.listInvoices({}),
       ]);
-      // Compare each response's row count to the requested limit so
-      // we surface silent truncation. The server's `total` field (when
-      // it's the DB-paginated path) gives us the true count.
-      for (const [name, res] of [['verified', verifiedRes], ['invoiced', invoicedRes], ['paid', paidRes]] as const) {
-        if (res.loads.length >= BUCKET_LIMIT || (res.total != null && res.total > BUCKET_LIMIT)) {
-          console.warn(`[accounting] ${name} bucket fetch may be truncated (returned ${res.loads.length}, server total ${res.total ?? '?'}, cap ${BUCKET_LIMIT}) — totals may be undercounting`);
-        }
+      if (loadsRes.loads.length >= BUCKET_LIMIT || loadsRes.total > BUCKET_LIMIT) {
+        console.warn(`[accounting] /reports/loads returned ${loadsRes.loads.length} of ${loadsRes.total} — totals may be undercounting; bump BUCKET_LIMIT`);
       }
-      setVerifiedLoads(verifiedRes.loads as CalendarEvent[]);
-      setInvoicedLoads(invoicedRes.loads as CalendarEvent[]);
-      setPaidLoads(paidRes.loads as CalendarEvent[]);
-      setDocCounts({ ...verifiedRes.docCounts, ...invoicedRes.docCounts, ...paidRes.docCounts });
+      setLoads(loadsRes.loads);
       setAllInvoices(invoicesRes.invoices);
-
-      // Merge into the calendar store so the EventModal can find the
-      // load when the user clicks a title.
-      mergeEvents([...verifiedRes.loads, ...invoicedRes.loads, ...paidRes.loads] as CalendarEvent[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounting data');
     } finally {
@@ -222,13 +210,14 @@ function AccountingPageInner() {
 
   // ── Build rows per bucket ───────────────────────────────────────────
   //
-  // A row marries a load with its active invoice (when one exists).
-  // The closeout queue returns Load[] keyed by billing_status; we
-  // overlay invoices by loadId to figure out which slice goes into
-  // Queued vs Invoiced (both share billing_status='invoiced').
+  // A row marries a LoadSummary with its active invoice (when one
+  // exists). The /reports/loads endpoint returns one entry per load
+  // (relays already collapsed into legs[]) so there's no client-side
+  // dedup work to do. Buckets are computed by partitioning on
+  // billingStatus + the matched invoice's status.
 
   interface Row {
-    load:     Load;
+    load:     LoadSummary;
     invoice?: Invoice;
     customer?: Customer;
   }
@@ -244,72 +233,53 @@ function AccountingPageInner() {
     return m;
   }, [allInvoices]);
 
-  // Closeout queue returns both legs of a relay as separate events.
-  // Dedupe by loadId so a relay shows up as ONE accounting row (we
-  // keep the pickup leg; deliveryEnd lookup below pulls in the
-  // delivery-leg end for the Age calculation).
-  const dedupedVerifiedLoads  = useMemo(() => dedupedLoads(verifiedLoads),  [verifiedLoads]);
-  const dedupedInvoicedLoads  = useMemo(() => dedupedLoads(invoicedLoads),  [invoicedLoads]);
-  const dedupedPaidLoads      = useMemo(() => dedupedLoads(paidLoads),      [paidLoads]);
-
-  // Map of loadId → delivery-leg end. For non-relay loads this is
-  // just the load's own end; for relays the leg flagged
-  // relayRole='delivery' wins.
-  const deliveryEndByLoadId = useMemo(() => {
-    const m = new Map<string, string>();
-    const all = [...verifiedLoads, ...invoicedLoads, ...paidLoads];
-    for (const l of all) {
-      const key = l.loadId ?? l.id;
-      if (!m.has(key)) m.set(key, l.end);
-    }
-    for (const l of all) {
-      if (l.relayRole === 'delivery') {
-        const key = l.loadId ?? l.id;
-        m.set(key, l.end);
-      }
-    }
-    return m;
-  }, [verifiedLoads, invoicedLoads, paidLoads]);
-
   // Resolve customer for a load. Prefer the explicit customerId; if
   // not set (legacy loads), fall back to a fuzzy name+aliases match.
-  // Same lookup CloseoutView uses.
-  function findCustomerForLoad(l: Load): Customer | undefined {
+  // Genericized so it works against either Load or LoadSummary.
+  function findCustomerForLoad(l: { customerId?: string; broker?: string }): Customer | undefined {
     if (l.customerId) return customerById.get(l.customerId);
     if (!l.broker)    return undefined;
     return customers.find(c => c.name === l.broker || (c.aliases ?? []).includes(l.broker ?? ''));
   }
 
-  const releasedRows: Row[] = useMemo(() => dedupedVerifiedLoads.map(l => ({
-    load: l,
+  /** Calendar event id for the load — the pickup leg's eventId.
+   *  Used to open the load in EventModal (which keys on events). */
+  function pickupEventId(l: LoadSummary): string | undefined {
+    return l.legs.find(g => g.relayRole === 'pickup' || !g.relayRole)?.eventId
+        ?? l.legs[0]?.eventId;
+  }
+
+  const allRowsRaw: Row[] = useMemo(() => loads.map(l => ({
+    load:     l,
+    invoice:  invoiceByLoadId.get(l.loadId),
     customer: findCustomerForLoad(l),
-  })), [dedupedVerifiedLoads, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
+  })), [loads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const queuedRows: Row[] = useMemo(() => {
-    return dedupedInvoicedLoads
-      .map(l => {
-        const inv = l.loadId ? invoiceByLoadId.get(l.loadId) : undefined;
-        return { load: l, invoice: inv, customer: findCustomerForLoad(l) };
-      })
-      .filter(r => r.invoice && r.invoice.status === 'draft');
-  }, [dedupedInvoicedLoads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const invoicedRows: Row[] = useMemo(() => {
-    return dedupedInvoicedLoads
-      .map(l => {
-        const inv = l.loadId ? invoiceByLoadId.get(l.loadId) : undefined;
-        return { load: l, invoice: inv, customer: findCustomerForLoad(l) };
-      })
-      .filter(r => r.invoice && r.invoice.status === 'sent');
-  }, [dedupedInvoicedLoads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const paidRows: Row[] = useMemo(() => dedupedPaidLoads.map(l => ({
-    load: l,
-    invoice: l.loadId ? invoiceByLoadId.get(l.loadId) : undefined,
-    customer: findCustomerForLoad(l),
-  })), [dedupedPaidLoads, invoiceByLoadId, customerById, customers]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const allRows: Row[] = useMemo(() => [...queuedRows, ...invoicedRows, ...paidRows], [queuedRows, invoicedRows, paidRows]);
+  // Bucket partition. Released = verified loads not yet invoiced.
+  // Queued / Invoiced both share billingStatus='invoiced' but split
+  // on the matched invoice's status (draft vs sent). Paid = paid.
+  const releasedRows = useMemo(
+    () => allRowsRaw.filter(r => r.load.billingStatus === 'verified'),
+    [allRowsRaw],
+  );
+  const queuedRows = useMemo(
+    () => allRowsRaw.filter(r => r.load.billingStatus === 'invoiced' && r.invoice?.status === 'draft'),
+    [allRowsRaw],
+  );
+  const invoicedRows = useMemo(
+    () => allRowsRaw.filter(r => r.load.billingStatus === 'invoiced' && r.invoice?.status === 'sent'),
+    [allRowsRaw],
+  );
+  const paidRows = useMemo(
+    () => allRowsRaw.filter(r => r.load.billingStatus === 'paid'),
+    [allRowsRaw],
+  );
+  // "All" excludes loads still in `verified` (those live in Released).
+  // Mirrors the prior behaviour which only summed queued+invoiced+paid.
+  const allRows = useMemo(
+    () => [...queuedRows, ...invoicedRows, ...paidRows],
+    [queuedRows, invoicedRows, paidRows],
+  );
 
   const rowsForBucket: Row[] = bucket === 'released' ? releasedRows
                               : bucket === 'queued'   ? queuedRows
@@ -354,7 +324,7 @@ function AccountingPageInner() {
   const selectedLoads = useMemo(() => {
     if (bucket !== 'released') return [];
     const set = new Set(selectedIds);
-    return rowsForBucket.filter(r => set.has(r.load.loadId ?? r.load.id)).map(r => r.load);
+    return rowsForBucket.filter(r => set.has(r.load.loadId)).map(r => r.load);
   }, [bucket, rowsForBucket, selectedIds]);
   const selectedInvoices = useMemo(() => {
     if (bucket !== 'queued' && bucket !== 'invoiced') return [];
@@ -524,7 +494,7 @@ function AccountingPageInner() {
     all.push({
       key: 'docs', header: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
       render: r => {
-        const counts = docCounts[r.load.loadId ?? r.load.id] ?? {};
+        const counts = r.load.documentCounts ?? {};
         const hasRC = !!r.load.rateConPdf || (counts.rate_con ?? 0) > 0;
         return (
           <div className="flex flex-wrap gap-1">
@@ -551,14 +521,12 @@ function AccountingPageInner() {
     all.push({
       key: 'age', header: 'Age', width: DEFAULT_COL_WIDTHS.age,
       sortable: true,
-      sortValue: r => {
-        const key = r.load.loadId ?? r.load.id;
-        return daysSince(deliveryEndByLoadId.get(key) ?? r.load.end);
-      },
+      // deliveryAt is already the actual delivery (for relays the
+      // server resolves to the delivery leg's end). No leg lookup
+      // needed any more.
+      sortValue: r => daysSince(r.load.deliveryAt),
       render: r => {
-        const key = r.load.loadId ?? r.load.id;
-        const deliveryEnd = deliveryEndByLoadId.get(key) ?? r.load.end;
-        const a = daysSince(deliveryEnd);
+        const a = daysSince(r.load.deliveryAt);
         return (
           <span style={{ background: ageBg(a), color: ageFg(a), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
             {a === 0 ? 'today' : a === 1 ? '1 day' : `${a}d`}
@@ -594,10 +562,10 @@ function AccountingPageInner() {
       sortValue: r => r.load.title ?? '',
       render: r => (
         <button type="button"
-          onClick={(e) => { e.stopPropagation(); openEditModal(r.load.id); }}
+          onClick={(e) => { e.stopPropagation(); void openLoadInModal(r.load); }}
           className="text-left font-semibold hover:underline truncate"
           style={{ color: 'var(--gc-blue)', maxWidth: '100%' }}
-          title="Open load details">{r.load.title}</button>
+          title="Open load details">{r.load.title ?? `#${r.load.internalLoadId}`}</button>
       ),
     });
 
@@ -661,7 +629,7 @@ function AccountingPageInner() {
     const omit = COLS_OMITTED_PER_BUCKET[bucket];
     return all.filter(c => !omit.has(c.key as ColKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, docCounts, deliveryEndByLoadId, bucket, actorName]);
+  }, [customers, bucket, actorName]);
 
   // OpsTable filters — Customer / Method / Status multi-selects plus
   // Released / Issued / Due date-range chips. Options come from the
@@ -710,10 +678,31 @@ function AccountingPageInner() {
     return filters;
   }, [rowsForBucket, bucket]);
 
-  // Row id for selection — bucket-specific (loadId on released, invoice.id elsewhere).
+  // Row id for selection — bucket-specific (loadId on released,
+  // invoice.id elsewhere with the loadId as the fallback).
   const rowKey = useCallback((r: Row) => {
-    return bucket === 'released' ? (r.load.loadId ?? r.load.id) : (r.invoice?.id ?? r.load.id);
+    return bucket === 'released' ? r.load.loadId : (r.invoice?.id ?? r.load.loadId);
   }, [bucket]);
+
+  // Open a load in the EventModal. EventModal keys on event id (legs),
+  // so we resolve the pickup leg's eventId and merge the load's legs
+  // into the calendar store if they aren't already there. Mirrors the
+  // closeout page's openLoadInModal — same fetch-on-demand fallback.
+  async function openLoadInModal(load: LoadSummary) {
+    const eventId = pickupEventId(load);
+    if (!eventId) return;
+    const storeEvents = useCalendarStore.getState().events;
+    const inStore = storeEvents.some(e => e.id === eventId);
+    if (!inStore) {
+      try {
+        const { loads: legs } = await railway.getLoad(load.loadId);
+        mergeEvents(legs);
+      } catch (err) {
+        console.error('[accounting] failed to load legs for modal:', err);
+      }
+    }
+    openEditModal(eventId);
+  }
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
@@ -809,7 +798,7 @@ function AccountingPageInner() {
                 filters={tableFilters}
                 rowKey={rowKey}
                 loading={loading}
-                priorityKey={r => !!r.load.priority}
+                priorityKey={r => !!r.load.pickupPriority}
                 columnPicker
                 columnReorder
                 persistKey={`accounting-${bucket}`}
@@ -951,18 +940,19 @@ function AccountingPageInner() {
 function PriorityToggle({
   load, actorName, onAfter,
 }: {
-  load:     Load;
+  /** LoadSummary's pickup-leg priority is the load's priority. */
+  load:     { loadId: string; pickupPriority?: boolean };
   actorName?: string;
   onAfter:  () => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const on = !!load.priority;
+  const on = !!load.pickupPriority;
   async function handleClick(e: React.MouseEvent) {
     e.stopPropagation();
     if (busy) return;
     setBusy(true);
     try {
-      const targetId = load.loadId ?? load.id;
+      const targetId = load.loadId;
       // Suppress the realtime echo of this load-level write so the
       // dispatcher doing the toggle doesn't get "updated by another
       // dispatcher" pop on themselves.
@@ -992,26 +982,9 @@ function PriorityToggle({
   );
 }
 
-// ─── Relay dedupe ───────────────────────────────────────────────────────
-//
-// Closeout queue returns both legs of a relay as separate events.
-// Accounting treats a relay as ONE billable thing, so we collapse the
-// pair into a single row (pickup leg wins).
-function dedupedLoads(loads: Load[]): Load[] {
-  const groups = new Map<string, Load[]>();
-  for (const l of loads) {
-    const key = l.loadId ?? l.id;
-    const arr = groups.get(key) ?? [];
-    arr.push(l);
-    groups.set(key, arr);
-  }
-  const out: Load[] = [];
-  for (const arr of groups.values()) {
-    const pickup = arr.find(l => l.relayRole === 'pickup');
-    out.push(pickup ?? arr[0]);
-  }
-  return out;
-}
+// (Relay dedupe removed — the /reports/loads endpoint already
+// returns one row per load. legs[] carries both relay legs for
+// detail consumers; the page no longer cares.)
 
 // ─── Age color helpers (mirror closeout) ────────────────────────────────
 
@@ -1053,7 +1026,7 @@ function StatusPill({ status }: { status: InvoiceStatus }) {
 // Identical to the previous implementation — preserved here.
 
 interface InvoiceSummaryModalProps {
-  loads:        Load[];
+  loads:        LoadSummary[];
   customerById: Map<string, Customer>;
   action:       'generate' | 'generateSend';
   onOpenBroker: (id: string) => void;
@@ -1080,7 +1053,7 @@ function InvoiceSummaryModal({
   async function handleGo() {
     setBusy(true);
     try {
-      const loadIds = loads.map(l => l.loadId ?? l.id);
+      const loadIds = loads.map(l => l.loadId);
       const res = await railway.batchGenerateInvoices({ loadIds, thenSend: willSend, bccSelf, attachLoadDocs });
       setResult(res);
     } catch (err) {
@@ -1140,7 +1113,7 @@ function InvoiceSummaryModal({
                       const brokerName = customer?.name ?? l.broker ?? '—';
                       const noEmail = willSend && customer && (customer.invoiceMethod ?? 'email') === 'email' && !customer.invoiceEmail;
                       return (
-                        <tr key={l.loadId ?? l.id} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+                        <tr key={l.loadId} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
                           <Td>
                             <div className="flex items-center gap-1.5">
                               {customer ? (

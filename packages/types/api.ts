@@ -1530,6 +1530,11 @@ export interface LoadSummary {
   loadNum?:         string;
   /** True iff this load has two legs (relayGroupId set on the events). */
   isRelay:          boolean;
+  /** Pickup-leg title — surfaced here so single-row displays (accounting,
+   *  reports) have a label without joining back to the events table.
+   *  Relay loads use the pickup leg's title; non-relay loads have one
+   *  leg, so this is just its title. */
+  title?:           string;
 
   // Customer / dispatch
   broker?:          string;
@@ -1562,6 +1567,14 @@ export interface LoadSummary {
   verifiedAt?:      string;
   verifiedBy?:      string;
   invoiceDocIds?:   string[];
+  /** Truck Order Not Used — POD requirement is waived for these. */
+  isTonu?:          boolean;
+  /** Per-load document counts (rate_con, pod, bol, lumper, scale,
+   *  receipt, driver_sheet, invoice, other) — denormalized onto loads
+   *  via DB trigger so reports don't need to JOIN documents. Same
+   *  shape the /v1/closeout/queue endpoint returns in its docCounts
+   *  side dictionary. */
+  documentCounts?:  Record<string, number>;
 
   // Audit
   auditLog?:        LoadAuditEntry[];

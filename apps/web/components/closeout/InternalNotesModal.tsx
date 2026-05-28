@@ -16,12 +16,25 @@
 
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import type { Load } from '@/lib/types';
+import type { InternalNote } from '@fleetcal/types';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
+/** Minimal load shape the notes modal actually needs — typed
+ *  structurally so both Load (event-shaped) and LoadSummary (load-
+ *  shaped) consumers can pass their row in without conversion. */
+interface NotesLoad {
+  loadId?: string;
+  /** Event id — only present on Load. LoadSummary callers pass undefined
+   *  and rely on loadId being set (which it always is on LoadSummary). */
+  id?: string;
+  title?: string;
+  loadNum?: string;
+  internalNotes?: InternalNote[];
+}
+
 interface Props {
-  load: Load;
+  load: NotesLoad;
   actorName?: string;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
@@ -45,6 +58,12 @@ export default function InternalNotesModal({
     setSaving(true);
     try {
       const targetId = load.loadId ?? load.id;
+      if (!targetId) {
+        // Defensive — shouldn't happen since both call sites set one.
+        // Without an id we can't PATCH; bail rather than 404 the API.
+        setSaving(false);
+        return;
+      }
       // Suppress the realtime echo of this internal-note append so
       // the dispatcher saving the note doesn't get "updated by
       // another dispatcher" pop on themselves.

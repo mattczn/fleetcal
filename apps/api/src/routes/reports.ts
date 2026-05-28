@@ -77,6 +77,10 @@ interface LoadRow {
   verified_at:      string | null;
   verified_by:      string | null;
   invoice_doc_ids:  string[] | null;
+  is_tonu:          boolean | null;
+  /** Denormalized per-load doc counts maintained by DB trigger.
+   *  Shape: { rate_con?: number; pod?: number; bol?: number; ... } */
+  document_counts:  Record<string, number> | null;
   audit_log:        unknown;
   deleted_at:       string | null;
   created_at:       string | null;
@@ -86,6 +90,10 @@ interface LoadRow {
 interface EventRow {
   id:           string;
   load_id:      string | null;
+  /** Calendar title surfaced as the pickup-leg title on LoadSummary so
+   *  single-row consumers (accounting, reports) have a label without
+   *  joining back to events. */
+  title:        string | null;
   asset_id:     number;
   driver_id:    number | null;
   driver_name:  string | null;
@@ -127,11 +135,11 @@ const LOAD_COLS =
   "load_price,rate_con_pdf,accessorials,ref_nums,notes,internal_notes," +
   "commodity,weight," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
-  "verified_at,verified_by,invoice_doc_ids,document_counts,audit_log," +
+  "verified_at,verified_by,invoice_doc_ids,is_tonu,document_counts,audit_log," +
   "deleted_at,created_at,updated_at";
 
 const EVENT_COLS =
-  "id,load_id,asset_id,driver_id,driver_name,driver_pay,start,end,status,priority," +
+  "id,load_id,title,asset_id,driver_id,driver_name,driver_pay,start,end,status,priority," +
   "relay_role,loaded_miles,trailer_id,trailer_type";
 
 const STOP_COLS =
@@ -249,6 +257,9 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
     internalLoadId:   load.internal_load_id,
     loadNum:          load.load_num ?? undefined,
     isRelay,
+    // Pickup-leg title elevated to load level so single-row consumers
+    // (accounting page, reports) have a label without joining events.
+    title:            pickup.title ?? undefined,
 
     broker:           load.broker ?? undefined,
     customerId:       load.customer_id ?? undefined,
@@ -277,6 +288,8 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
     verifiedAt:       load.verified_at ?? undefined,
     verifiedBy:       load.verified_by ?? undefined,
     invoiceDocIds:    load.invoice_doc_ids ?? undefined,
+    isTonu:           load.is_tonu ?? undefined,
+    documentCounts:   load.document_counts ?? undefined,
 
     auditLog:         parseJson<LoadAuditEntry[]>(load.audit_log),
 
