@@ -14,14 +14,17 @@
  *
  * Asset-scoped: we only ever show work orders whose asset_id matches
  * the currently selected asset. No asset → empty-state nudge. Status
- * filter = 'open' (we don't surface in_progress / done — those are
- * closed-ish and don't make sense to attach to a fresh maintenance
- * block).
+ * filter = 'open' OR 'in_progress' (multi-link only makes sense while
+ * the WO is still active — done items don't get attached to new
+ * blocks).
  *
- * The "available" list excludes anything already linked to a DIFFERENT
- * event so the UI doesn't tempt the dispatcher into accidentally
- * stealing a work order from another scheduled block. If they really
- * want to move it, they can unlink on the source event first.
+ * Multi-link: a single open/in-progress work order can be linked to
+ * multiple events ("scheduled into Tuesday's shop day, deferred,
+ * finally finished Friday" → both Tuesday and Friday blocks carry the
+ * link). The available list shows ALL active WOs on the asset; the
+ * linked list shows those already attached to THIS event. Link/unlink
+ * actions edit just this event's slice of the WO's eventIds set so
+ * other events' links survive.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Wrench, AlertTriangle, Link2, Loader2, Plus, Check, ExternalLink } from 'lucide-react';
@@ -86,20 +89,24 @@ export default function LinkedWorkOrdersSection({
           .then(r => r.actionItems)
           .catch(() => [])
       : Promise.resolve([]);
-    const availQ = railway.listMaintenanceActionItems({ assetId, status: 'open', limit: 100 })
+    // Pull BOTH open and in-progress — multi-link is useful for
+    // anything still being worked. Done is excluded (settled).
+    const availOpenQ = railway.listMaintenanceActionItems({ assetId, status: 'open', limit: 100 })
       .then(r => r.actionItems)
       .catch(() => []);
-    Promise.all([linkedQ, availQ]).then(([linkedRows, allOpen]) => {
+    const availActiveQ = railway.listMaintenanceActionItems({ assetId, status: 'in_progress', limit: 100 })
+      .then(r => r.actionItems)
+      .catch(() => []);
+    Promise.all([linkedQ, availOpenQ, availActiveQ]).then(([linkedRows, allOpen, allActive]) => {
       if (cancelled) return;
-      // "Available" = open WOs on this asset that aren't already linked
-      // somewhere else. Anything linked to THIS event lives in `linked`,
-      // not here. Anything linked to a DIFFERENT event is hidden until
-      // the dispatcher unlinks it on the source — avoids accidental
-      // theft.
+      // "Available" = every active WO on this asset that ISN'T already
+      // linked to THIS specific event. Under multi-link, we no longer
+      // hide WOs attached to other events — the dispatcher can attach
+      // them here too, and the other event's link survives independently.
       const linkedIds = new Set(linkedRows.map(r => r.id));
-      const avail = allOpen.filter(
-        wo => !linkedIds.has(wo.id) && (!wo.eventId || wo.eventId === eventId)
-      );
+      const merged = [...allOpen, ...allActive];
+      const dedup  = Array.from(new Map(merged.map(w => [w.id, w])).values());
+      const avail  = dedup.filter(wo => !linkedIds.has(wo.id));
       setLinked(linkedRows);
       setAvailable(avail);
       setLoading(false);
@@ -110,16 +117,29 @@ export default function LinkedWorkOrdersSection({
   // EDIT MODE: persist a link/unlink immediately. Optimistically move
   // the row between the two arrays so the UI feels instant; rollback
   // on error.
+  //
+  // Under multi-link, link/unlink edits ONLY this event's slice of the
+  // WO's eventIds set so other events' links survive. We compute the
+  // desired set from the WO's current eventIds (or fall back to the
+  // legacy single eventId hint when the API hasn't surfaced the array
+  // yet — pre-migration).
+  const currentEventIdsOf = (wo: MaintenanceActionItem): string[] => {
+    if (Array.isArray(wo.eventIds)) return wo.eventIds;
+    return wo.eventId ? [wo.eventId] : [];
+  };
   const linkNow = useCallback(async (woId: string) => {
     if (!eventId) return;
     setSavingId(woId);
     const target = available.find(w => w.id === woId);
+    const desiredIds = target
+      ? Array.from(new Set([...currentEventIdsOf(target), eventId]))
+      : [eventId];
     if (target) {
       setAvailable(a => a.filter(w => w.id !== woId));
-      setLinked(l => [...l, { ...target, eventId }]);
+      setLinked(l => [...l, { ...target, eventId, eventIds: desiredIds }]);
     }
     try {
-      await railway.updateMaintenanceActionItem(woId, { eventId });
+      await railway.updateMaintenanceActionItem(woId, { eventIds: desiredIds });
     } catch (err) {
       console.error('[LinkedWorkOrders] link failed:', err);
       // Force a clean re-fetch instead of trying to thread rollback.
@@ -133,12 +153,15 @@ export default function LinkedWorkOrdersSection({
     if (!eventId) return;
     setSavingId(woId);
     const target = linked.find(w => w.id === woId);
+    const desiredIds = target
+      ? currentEventIdsOf(target).filter(id => id !== eventId)
+      : [];
     if (target) {
       setLinked(l => l.filter(w => w.id !== woId));
-      setAvailable(a => [...a, { ...target, eventId: undefined }]);
+      setAvailable(a => [...a, { ...target, eventId: undefined, eventIds: desiredIds }]);
     }
     try {
-      await railway.updateMaintenanceActionItem(woId, { eventId: null });
+      await railway.updateMaintenanceActionItem(woId, { eventIds: desiredIds });
     } catch (err) {
       console.error('[LinkedWorkOrders] unlink failed:', err);
       setReloadKey(k => k + 1);

@@ -1475,10 +1475,16 @@ export interface UpdateMaintenanceActionItemRequest {
   estimatedCost?:  number | null;
   actualCost?:     number | null;
   completedBy?:    string | null;
-  /** Pass `null` to UNLINK the work order from its current event;
-   *  pass an event UUID to LINK (or re-point). Omitting the field
-   *  leaves the link unchanged. */
+  /** Legacy single-link field. Semantics preserved for back-compat:
+   *    • `string` → REPLACE the link set with just this event id.
+   *    • `null`   → CLEAR all links.
+   *    • omitted  → no change.
+   *  For multi-link UI flows prefer `eventIds` below. */
   eventId?:        string | null;
+  /** Replace the entire set of linked events in one PATCH. Pass an
+   *  empty array to clear, or a deduplicated list of event UUIDs to
+   *  set. Takes precedence over `eventId` if both are present. */
+  eventIds?:       string[];
 }
 export interface UpdateMaintenanceActionItemResponse { actionItem: MaintenanceActionItem; }
 

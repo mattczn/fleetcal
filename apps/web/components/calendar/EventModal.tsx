@@ -2967,12 +2967,20 @@ export default function EventModal() {
         updateEvent(modalEventId, payload);
         if (pendingLinks.length > 0) {
           const targetEventId = modalEventId;
+          // Multi-link: ADD this event id to each WO's existing
+          // eventIds set so other event links survive.
           void import('@/lib/railway').then(({ railway }) =>
             Promise.all(
-              pendingLinks.map(woId =>
-                railway.updateMaintenanceActionItem(woId, { eventId: targetEventId })
-                  .catch(err => console.error('[EventModal] link work order failed:', woId, err))
-              )
+              pendingLinks.map(async woId => {
+                try {
+                  const cur = await railway.getMaintenanceActionItem(woId);
+                  const existing = cur.actionItem.eventIds ?? (cur.actionItem.eventId ? [cur.actionItem.eventId] : []);
+                  const next = Array.from(new Set([...existing, targetEventId]));
+                  await railway.updateMaintenanceActionItem(woId, { eventIds: next });
+                } catch (err) {
+                  console.error('[EventModal] link work order failed:', woId, err);
+                }
+              })
             )
           );
         }

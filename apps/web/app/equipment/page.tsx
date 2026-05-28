@@ -788,14 +788,20 @@ function WorkOrdersList({
   // Bucketing — items into week days + priority columns.
   //
   // Day-of-placement depends on status:
-  //   • done items   → completedAt (the day the work actually
-  //                    finished — that's what "what did we do
-  //                    Tuesday" means). Falls back to scheduledDate
-  //                    when completedAt is missing (legacy / imported
-  //                    rows that pre-date the field).
-  //   • everything else → scheduledDate (when we plan to do it).
+  //   • done items     → completedAt (the day the work actually
+  //                      finished — that's what "what did we do
+  //                      Tuesday" means). Falls back to scheduledDate
+  //                      when completedAt is missing (legacy / imported
+  //                      rows that pre-date the field).
+  //   • everything else → UNION of (scheduledDate, every linked event's
+  //                      start date). Under multi-link a single WO can
+  //                      ride multiple shop days — we want it on every
+  //                      one. De-duped per (item, day) so a same-day
+  //                      schedule+link doesn't render twice.
   //
   // Done items never appear in the backlog — they're settled.
+  // Non-done items land in backlog ONLY when no day-source matched
+  // any visible week column (no schedule + no link anchors here).
   const { weekItems, backlogByPriority } = useMemo(() => {
     const weekKeys = new Set(week.map(d => d.key));
     const weekMap: Record<string, typeof resolved> = {};
@@ -804,17 +810,34 @@ function WorkOrdersList({
       urgent: [], high: [], normal: [], low: [],
     };
     for (const r of resolved) {
-      // Where on the calendar grid does this row land?
-      const dayKey = r.status === 'done'
-        ? (r.completedAt
-            ? dateKeyOf(new Date(r.completedAt))   // ← completion day
-            : r.scheduledDate ?? null)
-        : (r.scheduledDate ?? null);
-      if (dayKey && weekKeys.has(dayKey)) {
-        weekMap[dayKey].push(r);
-      } else if (r.status !== 'done') {
-        backlog[r.priority].push(r);
+      if (r.status === 'done') {
+        const dayKey = r.completedAt
+          ? dateKeyOf(new Date(r.completedAt))
+          : r.scheduledDate ?? null;
+        if (dayKey && weekKeys.has(dayKey)) weekMap[dayKey].push(r);
+        continue;
       }
+      // Non-done: union of scheduledDate + every linked event's day.
+      // Set<dayKey> de-dupes the same-day collision (e.g. user
+      // scheduled the WO for Tuesday AND linked it to Tuesday's
+      // event — only one card on Tuesday).
+      const days = new Set<string>();
+      if (r.scheduledDate) days.add(r.scheduledDate);
+      for (const ev of r.linkedEvents ?? []) {
+        // linkedEvents[].start is a full ISO timestamp; strip to the
+        // day key in browser local tz, matching the rest of this
+        // file's week-key math.
+        const d = dateKeyOf(new Date(ev.start));
+        days.add(d);
+      }
+      let placed = false;
+      for (const d of days) {
+        if (weekKeys.has(d)) {
+          weekMap[d].push(r);
+          placed = true;
+        }
+      }
+      if (!placed) backlog[r.priority].push(r);
     }
     // Within a day column: not-done first, then done (so the
     // dispatcher's eyes land on actionable items first). Tiebreak

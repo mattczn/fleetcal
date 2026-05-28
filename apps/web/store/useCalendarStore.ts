@@ -1280,13 +1280,24 @@ export const useCalendarStore = create<CalendarStore>()(
           // ghost uuid that didn't exist on the server. Fire-and-forget
           // — failure is non-fatal; the user can re-link from the
           // maintenance side.
+          //
+          // Multi-link semantics: each WO might already be linked to
+          // other shop days, so we ADD created.id to its existing
+          // eventIds set rather than replacing. We pull current state
+          // first to preserve those other links.
           const linkIds = options?.linkWorkOrderIds;
           if (linkIds && linkIds.length > 0) {
             void Promise.all(
-              linkIds.map((woId) =>
-                railway.updateMaintenanceActionItem(woId, { eventId: created.id })
-                  .catch((err) => console.error('[addEvent] link work order failed:', woId, err)),
-              ),
+              linkIds.map(async (woId) => {
+                try {
+                  const cur = await railway.getMaintenanceActionItem(woId);
+                  const existing = cur.actionItem.eventIds ?? (cur.actionItem.eventId ? [cur.actionItem.eventId] : []);
+                  const next = Array.from(new Set([...existing, created.id]));
+                  await railway.updateMaintenanceActionItem(woId, { eventIds: next });
+                } catch (err) {
+                  console.error('[addEvent] link work order failed:', woId, err);
+                }
+              }),
             );
           }
         })

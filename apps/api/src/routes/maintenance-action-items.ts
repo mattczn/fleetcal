@@ -55,6 +55,107 @@ actionItems.use("*", requireModule("maintenance"), requireCapability("maintenanc
 const PHOTO_BUCKET = "maintenance-photos";
 const PHOTO_URL_TTL_SECONDS = 60 * 60;
 
+// ── Linked-events helper (M:N join) ─────────────────────────────────────
+//
+// Each work order can link to many calendar events and vice-versa via
+// maintenance_action_item_events. We fetch + denormalize start dates
+// here so the LIST endpoint can attach `linkedEvents: [{id,start},…]`
+// onto every row in one batch, and the maintenance board can position
+// the WO on each linked day without a second round-trip.
+//
+// Pre-migration safety: if either the join table or the join column
+// is missing (deploy beat the SQL), we log once and return an empty
+// map. Older single-link rows still surface via the rowToActionItem's
+// legacy `eventId` hint.
+
+interface ActionItemEventJoinRow {
+  action_item_id: string;
+  event_id:       string;
+  events: { id: string; start: string } | null;
+}
+
+/** The join table is post-typegen — cast the client to `any` for
+ *  these queries until the generated types catch up. Same pattern
+ *  the rest of the codebase uses for fresh tables (closeout, fuel
+ *  transactions, etc. all cast inserts/updates `as any`). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const supabaseAny: any = supabase;
+
+async function fetchLinkedEventsMap(
+  actionItemIds: string[],
+): Promise<Map<string, Array<{ id: string; start: string }>>> {
+  const out = new Map<string, Array<{ id: string; start: string }>>();
+  if (actionItemIds.length === 0) return out;
+  const { data, error } = await supabaseAny
+    .from("maintenance_action_item_events")
+    .select("action_item_id, event_id, events:event_id (id, start)")
+    .in("action_item_id", actionItemIds);
+  if (error) {
+    if (/relation .* does not exist/i.test(error.message ?? "")) {
+      console.warn("[fetchLinkedEventsMap] join table missing — apply 20260601_maintenance_action_item_events migration");
+      return out;
+    }
+    console.error("[fetchLinkedEventsMap] join query failed:", error);
+    return out;
+  }
+  const rows = (data ?? []) as unknown as ActionItemEventJoinRow[];
+  for (const r of rows) {
+    if (!r.events) continue; // event deleted — skip orphan join (defensive; FK cascade should prevent)
+    const arr = out.get(r.action_item_id) ?? [];
+    arr.push({ id: r.events.id, start: r.events.start });
+    out.set(r.action_item_id, arr);
+  }
+  // Sort each list oldest-first so calendar bucketing has a stable order.
+  for (const arr of out.values()) arr.sort((a, b) => a.start.localeCompare(b.start));
+  return out;
+}
+
+/** Replace the entire set of linked events for one work order. Used
+ *  by PATCH to honor `eventIds`. Returns the new linked-events list
+ *  (with start dates) for embedding into the response, OR null if the
+ *  join table is missing pre-migration (caller falls back to the
+ *  legacy event_id column write). */
+async function replaceLinkedEvents(
+  actionItemId: string,
+  eventIds: string[],
+): Promise<Array<{ id: string; start: string }> | null> {
+  // Deduplicate defensively — repeated id in the request shouldn't
+  // upset the PK.
+  const wanted = Array.from(new Set(eventIds));
+
+  // Delete-all-then-insert keeps the implementation simple and matches
+  // the "replace entire set" semantics in the API contract. A diff-based
+  // approach (compute add/remove) would shave a query but the join is
+  // tiny per WO.
+  const { error: delErr } = await supabaseAny
+    .from("maintenance_action_item_events")
+    .delete()
+    .eq("action_item_id", actionItemId);
+  if (delErr) {
+    if (/relation .* does not exist/i.test(delErr.message ?? "")) {
+      console.warn("[replaceLinkedEvents] join table missing — write skipped");
+      return null;
+    }
+    console.error("[replaceLinkedEvents] delete failed:", delErr);
+    throw delErr;
+  }
+
+  if (wanted.length === 0) return [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const insertRows = wanted.map(id => ({ action_item_id: actionItemId, event_id: id })) as any[];
+  const { error: insErr } = await supabaseAny
+    .from("maintenance_action_item_events")
+    .insert(insertRows);
+  if (insErr) {
+    console.error("[replaceLinkedEvents] insert failed:", insErr);
+    throw insErr;
+  }
+
+  // Re-fetch with event start dates for the response.
+  return (await fetchLinkedEventsMap([actionItemId])).get(actionItemId) ?? [];
+}
+
 interface ActionItemPhotoRow {
   id:             string;
   action_item_id: string;
@@ -213,8 +314,22 @@ actionItems.post("/", requireCapability("maintenance.edit"), async (c) => {
     });
     return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
+  // Mirror the pre-link into the join table so listings by-event
+  // include this freshly-created WO right away. Best-effort —
+  // failures here don't roll back the row insert; the denormalized
+  // event_id column already captured the relationship.
+  const newRow = data as unknown as MaintenanceActionItemRow;
+  let createdLinkedEvents: Array<{ id: string; start: string }> | undefined;
+  if (body.eventId) {
+    try {
+      const written = await replaceLinkedEvents(newRow.id, [body.eventId]);
+      if (written !== null) createdLinkedEvents = written;
+    } catch (joinErr) {
+      console.error("[POST /v1/maintenance-action-items] join mirror failed:", joinErr);
+    }
+  }
   const res: CreateMaintenanceActionItemResponse = {
-    actionItem: rowToActionItem(data as unknown as MaintenanceActionItemRow),
+    actionItem: rowToActionItem(newRow, createdLinkedEvents),
   };
   return c.json(res);
 });
@@ -256,14 +371,41 @@ actionItems.get("/", async (c) => {
     if (trailerRaw) q = q.eq("trailer_id", Number(trailerRaw));
     if (scheduledFrom) q = q.gte("scheduled_date", scheduledFrom);
     if (scheduledTo)   q = q.lt("scheduled_date",  scheduledTo);
-    // Calendar-side query: "give me every work order linked to this
-    // event." Powers the Linked Work Orders section on a non-revenue
-    // maintenance block. Falls through silently on the legacy-cols
-    // retry because event_id isn't in ACTION_ITEM_COLS_LEGACY — the
-    // server returns an empty list rather than 500, which is the
-    // right behavior pre-migration (nothing CAN be linked yet).
-    if (eventIdRaw)    q = q.eq("event_id", eventIdRaw);
     return q.range(offset, offset + limit - 1);
+  };
+
+  // Calendar-side query: "give me every work order linked to this
+  // event." Powers the Linked Work Orders section on a non-revenue
+  // maintenance block. Under M:N, the linkage lives in the join
+  // table, so we look up the action_item_ids there first, then add
+  // them as an `in()` filter on the main query. Empty result short-
+  // circuits before we even hit the items table.
+  let eventLinkedIds: string[] | null = null;
+  if (eventIdRaw) {
+    const { data: joinData, error: joinErr } = await supabaseAny
+      .from("maintenance_action_item_events")
+      .select("action_item_id")
+      .eq("event_id", eventIdRaw);
+    if (joinErr && !/relation .* does not exist/i.test(joinErr.message ?? "")) {
+      console.error("[GET /v1/maintenance-action-items?eventId] join lookup failed:", joinErr);
+      return c.json({ error: "fetch_failed", detail: joinErr.message } satisfies ApiErrorResponse, 500);
+    }
+    eventLinkedIds = ((joinData ?? []) as Array<{ action_item_id: string }>).map(r => r.action_item_id);
+    // Pre-migration safety: fall back to the legacy event_id column
+    // so callers don't see an empty list right after deploy.
+    if (joinErr && /relation .* does not exist/i.test(joinErr.message ?? "")) {
+      console.warn("[GET .../action-items?eventId] join missing — falling back to legacy event_id column");
+      eventLinkedIds = null; // signal legacy-column fallback below
+    }
+  }
+  const applyEventFilter = (q: ReturnType<typeof build>) => {
+    if (!eventIdRaw) return q;
+    if (eventLinkedIds !== null) {
+      if (eventLinkedIds.length === 0) return q.eq("id", "00000000-0000-0000-0000-000000000000"); // empty result sentinel
+      return q.in("id", eventLinkedIds);
+    }
+    // Legacy fallback path
+    return q.eq("event_id", eventIdRaw);
   };
 
   // First attempt: full schema. If it fails because the *_by_name
@@ -271,23 +413,27 @@ actionItems.get("/", async (c) => {
   // back to the legacy SELECT so the dispatcher's board still loads.
   // Without this guard the UI sees an empty array on every fresh
   // deploy until the operator manually applies the migration.
-  let { data, error, count } = await build(ACTION_ITEM_COLS);
+  let { data, error, count } = await applyEventFilter(build(ACTION_ITEM_COLS));
   if (error && isMissingColumnError(error)) {
     console.warn("[GET /v1/maintenance-action-items] new columns missing — retrying with legacy schema. Apply the 20260530_maintenance_action_items_created_by_name migration to silence this.");
-    ({ data, error, count } = await build(ACTION_ITEM_COLS_LEGACY));
+    ({ data, error, count } = await applyEventFilter(build(ACTION_ITEM_COLS_LEGACY)));
   }
   if (error) {
     console.error("[GET /v1/maintenance-action-items] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   const rows = (data ?? []) as unknown as MaintenanceActionItemRow[];
-  // Embed dispatcher-uploaded photos on each item so the board /
-  // modal don't have to round-trip per work order. Pre-migration
-  // envs return an empty map and the board still renders.
-  const photosByItem = await fetchActionItemPhotosMap(rows.map(r => r.id));
+  // Embed dispatcher-uploaded photos + linked events on each item so
+  // the board / modal don't have to round-trip per work order. Pre-
+  // migration envs return empty maps and the board still renders.
+  const ids = rows.map(r => r.id);
+  const [photosByItem, linkedByItem] = await Promise.all([
+    fetchActionItemPhotosMap(ids),
+    fetchLinkedEventsMap(ids),
+  ]);
   const res: ListMaintenanceActionItemsResponse = {
     actionItems: rows.map(r => ({
-      ...rowToActionItem(r),
+      ...rowToActionItem(r, linkedByItem.get(r.id)),
       photos: photosByItem.get(r.id) ?? [],
     })),
     total:       count ?? rows.length,
@@ -310,10 +456,13 @@ actionItems.get("/:id", async (c) => {
     .maybeSingle();
   if (error) return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
-  const photosByItem = await fetchActionItemPhotosMap([id]);
+  const [photosByItem, linkedByItem] = await Promise.all([
+    fetchActionItemPhotosMap([id]),
+    fetchLinkedEventsMap([id]),
+  ]);
   const res: GetMaintenanceActionItemResponse = {
     actionItem: {
-      ...rowToActionItem(data as unknown as MaintenanceActionItemRow),
+      ...rowToActionItem(data as unknown as MaintenanceActionItemRow, linkedByItem.get(id)),
       photos: photosByItem.get(id) ?? [],
     },
   };
@@ -380,10 +529,26 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
   if ("vendor"        in body) update.vendor         = body.vendor ?? null;
   if ("estimatedCost" in body) update.estimated_cost = body.estimatedCost ?? null;
   if ("actualCost"    in body) update.actual_cost    = body.actualCost    ?? null;
-  // Link / unlink the calendar event. null = unlink; string = link
-  // (or re-link). Field absence leaves the link unchanged, same
-  // semantics as every other "in body" field above.
-  if ("eventId"       in body) update.event_id      = body.eventId      ?? null;
+  // Link / unlink calendar events. Two-tier field:
+  //   • `eventIds: string[]` (preferred, multi-link) → REPLACES the
+  //     join set. We compute the desired set here and call
+  //     replaceLinkedEvents(...) AFTER the row update lands.
+  //   • `eventId: string|null` (legacy 1:1)
+  //         null   → clear all links.
+  //         string → replace set with just this id.
+  // `event_id` column on the row is also updated as the
+  // denormalized "primary" pointer (set to the first id in the
+  // desired set, or null when empty). `eventIds` takes precedence
+  // when both are present.
+  let desiredEventIds: string[] | undefined; // undefined = leave unchanged
+  if ("eventIds" in body && Array.isArray(body.eventIds)) {
+    desiredEventIds = Array.from(new Set(body.eventIds.filter(x => typeof x === 'string' && x.length > 0)));
+  } else if ("eventId" in body) {
+    desiredEventIds = body.eventId ? [body.eventId] : [];
+  }
+  if (desiredEventIds !== undefined) {
+    update.event_id = desiredEventIds[0] ?? null;
+  }
   if ("completedBy"   in body) {
     update.completed_by      = body.completedBy ?? null;
     // Mirror the free-text name into completed_by_name so the
@@ -427,8 +592,29 @@ actionItems.patch("/:id", requireCapability("maintenance.edit"), async (c) => {
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  // Apply the multi-link join AFTER the row update — that way we
+  // don't orphan join rows on a failed row update, and the response
+  // reflects the freshly-written state. Best-effort: a join failure
+  // is logged but doesn't fail the whole PATCH (the denormalized
+  // event_id column already captured the primary link). Skips
+  // gracefully when the join table is missing pre-migration.
+  let freshLinkedEvents: Array<{ id: string; start: string }> | undefined;
+  if (desiredEventIds !== undefined) {
+    try {
+      const written = await replaceLinkedEvents(id, desiredEventIds);
+      if (written !== null) freshLinkedEvents = written;
+    } catch (joinErr) {
+      console.error("[PATCH /v1/maintenance-action-items/:id] join write failed:", joinErr);
+    }
+  } else {
+    // No link change — still want to surface the current join state
+    // in the response so consumers stay in sync.
+    freshLinkedEvents = (await fetchLinkedEventsMap([id])).get(id);
+  }
+
   const res: UpdateMaintenanceActionItemResponse = {
-    actionItem: rowToActionItem(data as unknown as MaintenanceActionItemRow),
+    actionItem: rowToActionItem(data as unknown as MaintenanceActionItemRow, freshLinkedEvents),
   };
   return c.json(res);
 });

@@ -1184,12 +1184,24 @@ export interface MaintenanceActionItem {
   /** Source report, when this item was created from a driver submission. */
   reportId?:     string;
 
-  /** Linked calendar event, when this work order is scheduled into a
-   *  non-revenue maintenance block. Many work orders can share one
-   *  event (e.g. "in the shop Tuesday" covering brakes + DOT
-   *  inspection at the same time). Cleared automatically if the
-   *  event is deleted — the work order survives, just unscheduled. */
+  /** Linked calendar event — denormalized "primary / most-recently-
+   *  linked" hint for back-compat. The canonical multi-link list is
+   *  `eventIds` below. Many work orders can share one event ("in the
+   *  shop Tuesday" covering brakes + DOT + trans flush), and now one
+   *  work order can also span multiple events (deferred from
+   *  Tuesday's block into Friday's). Cleared automatically when the
+   *  underlying event is deleted — the WO survives, just unscheduled. */
   eventId?:      string;
+  /** Full set of linked event ids. Populated server-side from the
+   *  maintenance_action_item_events join table. Empty (or absent) =
+   *  not scheduled into any block. Read by the calendar bucketing on
+   *  the maintenance board so a WO can sit on multiple days. */
+  eventIds?:     string[];
+  /** Same set as `eventIds` but denormalized with each event's start
+   *  timestamp so the maintenance board can position the WO on the
+   *  right day(s) without a second fetch. Sorted oldest-first.
+   *  Server-side join — UI treats it as read-only. */
+  linkedEvents?: Array<{ id: string; start: string }>;
 
   completedAt?:     string;
   completedBy?:     string;

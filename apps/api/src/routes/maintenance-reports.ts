@@ -126,7 +126,15 @@ export function rowToPhoto(r: MaintenanceReportPhotoRow, signedUrl?: string): Ma
   };
 }
 
-export function rowToActionItem(r: MaintenanceActionItemRow): MaintenanceActionItem {
+export function rowToActionItem(
+  r: MaintenanceActionItemRow,
+  /** Optional denormalized linked-events list (id + start) from the
+   *  maintenance_action_item_events join. Callers that already
+   *  bulk-fetched the join pass it in; callers that don't (legacy
+   *  paths) omit and the consumer falls back to the single `eventId`
+   *  hint on the row. */
+  linkedEvents?: Array<{ id: string; start: string }>,
+): MaintenanceActionItem {
   return {
     id:              r.id,
     orgId:           r.org_id,
@@ -148,6 +156,8 @@ export function rowToActionItem(r: MaintenanceActionItemRow): MaintenanceActionI
     estimatedCost:   r.estimated_cost != null ? Number(r.estimated_cost) : undefined,
     actualCost:      r.actual_cost    != null ? Number(r.actual_cost)    : undefined,
     eventId:         r.event_id       ?? undefined,
+    eventIds:        linkedEvents?.map(e => e.id),
+    linkedEvents,
     createdBy:       r.created_by,
     createdByName:   r.created_by_name ?? undefined,
     createdAt:       r.created_at,
