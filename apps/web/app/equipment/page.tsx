@@ -785,10 +785,17 @@ function WorkOrdersList({
     return days;
   }, [weekOffset]);
 
-  // Bucketing — items into week days + priority columns. Done items
-  // appear in the week if their scheduledDate falls inside it; they
-  // do NOT appear in the backlog (they're settled — backlog is for
-  // "what should I worry about?").
+  // Bucketing — items into week days + priority columns.
+  //
+  // Day-of-placement depends on status:
+  //   • done items   → completedAt (the day the work actually
+  //                    finished — that's what "what did we do
+  //                    Tuesday" means). Falls back to scheduledDate
+  //                    when completedAt is missing (legacy / imported
+  //                    rows that pre-date the field).
+  //   • everything else → scheduledDate (when we plan to do it).
+  //
+  // Done items never appear in the backlog — they're settled.
   const { weekItems, backlogByPriority } = useMemo(() => {
     const weekKeys = new Set(week.map(d => d.key));
     const weekMap: Record<string, typeof resolved> = {};
@@ -797,8 +804,14 @@ function WorkOrdersList({
       urgent: [], high: [], normal: [], low: [],
     };
     for (const r of resolved) {
-      if (r.scheduledDate && weekKeys.has(r.scheduledDate)) {
-        weekMap[r.scheduledDate].push(r);
+      // Where on the calendar grid does this row land?
+      const dayKey = r.status === 'done'
+        ? (r.completedAt
+            ? dateKeyOf(new Date(r.completedAt))   // ← completion day
+            : r.scheduledDate ?? null)
+        : (r.scheduledDate ?? null);
+      if (dayKey && weekKeys.has(dayKey)) {
+        weekMap[dayKey].push(r);
       } else if (r.status !== 'done') {
         backlog[r.priority].push(r);
       }
@@ -1527,8 +1540,8 @@ function AssetGroup({
 // ─── History section ──────────────────────────────────────────────────
 //
 // Lives at the bottom of the maintenance board — a collapsible
-// archive of every done work order, grouped by equipment the same
-// way the backlog clusters its columns. Two use cases:
+// archive of every done work order, rendered as a flat sortable
+// table. Two use cases:
 //
 //   1. Audit ("when did we last replace the brakes on CT-2023?")
 //   2. Pattern-spotting ("this truck is in the shop every 3 weeks")
@@ -1536,10 +1549,13 @@ function AssetGroup({
 // Default collapsed so the live work above stays the focus. When
 // an equipment filter is active upstream, `items` is already
 // narrowed to that asset — the dispatcher can drill in via the
-// filter select OR by clicking an asset name anywhere, then expand
-// History to see the full repair record for that truck. Newest
-// completion floats to the top of each group; the most-active
-// group floats to the top of the section.
+// filter selects OR by clicking an asset name anywhere on the
+// board, then expand History to see the full repair record.
+//
+// Table style matches PayrollView / QueueTable / LoadsReport —
+// 11px uppercase header in gc-text-3, 13px body, row stripe on
+// hover, no zebra. Asset cell stays clickable (drills the board
+// to that truck). Title cell opens the work-order modal.
 
 function HistorySection({
   items, onItemClick, onFilterClick,
@@ -1548,14 +1564,13 @@ function HistorySection({
   onItemClick:   (item: MaintenanceActionItem) => void;
   /** Receives the filter key directly ("a:42" / "t:7") — the parent
    *  passes it straight into setEquipFilter, mirroring the backlog
-   *  wiring. Omitted for the no-equipment bucket. */
+   *  wiring. Omitted for the no-equipment row. */
   onFilterClick: (filterKey: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  // Sort within each equipment group: newest completion at top,
-  // falling back to scheduledDate then createdAt for items that
-  // somehow ended up done without a completedAt stamp (legacy /
-  // imported rows).
+  // Newest completion first. Falls back to scheduledDate then
+  // createdAt for legacy/imported rows that somehow ended up done
+  // without a completedAt stamp.
   const sorted = useMemo(() => {
     const arr = [...items];
     arr.sort((a, b) => {
@@ -1565,7 +1580,6 @@ function HistorySection({
     });
     return arr;
   }, [items]);
-  const groups = useMemo(() => groupByEquipment(sorted), [sorted]);
 
   return (
     <section>
@@ -1590,40 +1604,131 @@ function HistorySection({
       </button>
       {open && (
         <div
-          className="rounded-lg flex flex-col p-2 gap-1"
+          className="rounded-lg overflow-hidden"
           style={{
             background: 'var(--gc-surface)',
             border:     '1px solid var(--gc-border-light)',
-            minHeight:  120,
           }}>
-          {groups.length === 0 ? (
+          {sorted.length === 0 ? (
             <div
               className="text-[13px] font-medium text-center py-6"
               style={{ color: 'var(--gc-text-3)' }}>
               No completed work orders yet.
             </div>
           ) : (
-            groups.map(g => (
-              <AssetGroup
-                key={g.key}
-                label={g.label}
-                color={g.color}
-                items={g.items}
-                // Per-group default-open: when there's only one or
-                // two groups (typical when the board is filtered to
-                // a single truck), expand them so the history is
-                // immediately visible. Otherwise keep collapsed —
-                // the dispatcher will pop open whichever truck they
-                // want to inspect.
-                defaultOpen={groups.length <= 2}
-                onItemClick={onItemClick}
-                onFilterClick={
-                  g.key === '_none'
-                    ? undefined
-                    : () => onFilterClick(g.key.replace('-', ':'))
-                }
-              />
-            ))
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                    {['Completed', 'Asset', 'Work order', 'Priority', 'Category', 'By'].map(h => (
+                      <th
+                        key={h}
+                        className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide"
+                        style={{ color: 'var(--gc-text-3)' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((it, idx) => {
+                    const isLast = idx === sorted.length - 1;
+                    // "Completed" cell prefers completedAt (full
+                    // datetime), falls back to scheduledDate (just a
+                    // YYYY-MM-DD). Format: "Mon, May 27" — same shape
+                    // PayrollView uses for its date cell.
+                    const dateLabel = (() => {
+                      if (it.completedAt) {
+                        return new Date(it.completedAt).toLocaleDateString('en-US', {
+                          weekday: 'short', month: 'short', day: 'numeric',
+                        });
+                      }
+                      if (it.scheduledDate) {
+                        const [y, m, d] = it.scheduledDate.split('-').map(Number);
+                        return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+                          weekday: 'short', month: 'short', day: 'numeric',
+                        });
+                      }
+                      return '—';
+                    })();
+                    const pri  = PRIORITY_STYLES[it.priority];
+                    // Same key-conversion as the backlog wiring —
+                    // a-42 → a:42; _none yields no link.
+                    const equipKey =
+                      it.assetId   ? `a:${it.assetId}` :
+                      it.trailerId ? `t:${it.trailerId}` :
+                                     null;
+                    return (
+                      <tr
+                        key={it.id}
+                        style={{ borderBottom: isLast ? 'none' : '1px solid var(--gc-border-light)' }}
+                        onMouseOver={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                        onMouseOut={e => { e.currentTarget.style.background = 'transparent'; }}>
+                        {/* Completed date */}
+                        <td className="px-4 py-3 whitespace-nowrap" style={{ color: 'var(--gc-text-2)' }}>
+                          {dateLabel}
+                        </td>
+                        {/* Asset — clickable, drills the filter */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="inline-block rounded shrink-0"
+                              style={{ width: 10, height: 10, background: it._equipColor }}
+                            />
+                            {equipKey ? (
+                              <button
+                                type="button"
+                                onClick={() => onFilterClick(equipKey)}
+                                title={`Filter board to ${it._equipLabel}`}
+                                className="font-semibold hover:underline"
+                                style={{ color: 'var(--gc-text-1)' }}>
+                                {it._equipLabel}
+                              </button>
+                            ) : (
+                              <span className="font-medium" style={{ color: 'var(--gc-text-3)' }}>
+                                No equipment
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        {/* Work order title — opens the modal */}
+                        <td className="px-4 py-3 max-w-[420px]">
+                          <button
+                            type="button"
+                            onClick={() => onItemClick(it)}
+                            className="text-left truncate w-full font-medium hover:underline"
+                            style={{ color: 'var(--gc-blue)' }}
+                            title={it.title}>
+                            {it.title}
+                          </button>
+                        </td>
+                        {/* Priority — solid pill, same palette as
+                            backlog column headers. */}
+                        <td className="px-4 py-3">
+                          <span
+                            className="text-[10.5px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded"
+                            style={{
+                              background: pri.bg,
+                              color:      pri.fg,
+                              textShadow: '0 1px 1px rgba(0,0,0,0.18)',
+                            }}>
+                            {it.priority}
+                          </span>
+                        </td>
+                        {/* Category */}
+                        <td className="px-4 py-3 capitalize" style={{ color: 'var(--gc-text-2)' }}>
+                          {it.category === 'pm' ? 'PM' : it.category}
+                        </td>
+                        {/* Completed by — prefer resolved name */}
+                        <td className="px-4 py-3 whitespace-nowrap" style={{ color: 'var(--gc-text-2)' }}>
+                          {it.completedByName ?? it.completedBy ?? <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
