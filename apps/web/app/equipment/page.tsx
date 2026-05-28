@@ -966,11 +966,10 @@ function WorkOrdersList({
             style={{ color: 'var(--gc-text-1)' }}
           />
         </div>
-        {/* Equipment filter — drills the whole board (week grid +
-            backlog priority columns) to one truck or one trailer. The
-            select uses optgroups so trucks and trailers stay visually
-            separated even when the org has a lot of each. */}
-        <EquipmentFilterSelect
+        {/* Equipment filters — two adjacent selects (truck / trailer)
+            so neither feels buried. Picking one clears the other —
+            single-asset filter contract is preserved. */}
+        <EquipmentFilterSelects
           value={equipFilter}
           onChange={setEquipFilter}
           assets={assets}
@@ -1279,13 +1278,21 @@ function WorkOrdersList({
   );
 }
 
-// ─── Equipment filter select ──────────────────────────────────────────
+// ─── Equipment filter selects ─────────────────────────────────────────
 //
-// Drives the board's "show me only this truck" mode. Lists every
-// active truck and trailer the org owns, grouped via <optgroup> so
-// trucks and trailers don't intermix even on long fleets.
+// Drives the board's "show me only this asset" mode. Two adjacent
+// selects — one Truck, one Trailer — instead of one mixed picker:
+// half the org's filter intent is "show me this truck", the other
+// half is "show me this trailer", and forcing them through a single
+// dropdown with optgroups made trailers feel buried below the truck
+// list. Side-by-side, both are first-class.
+//
+// Shared single-asset filter contract: the parent owns one
+// `equipFilter` string ("all" | "a:<id>" | "t:<id>"). Picking a
+// truck clears the trailer select (and vice-versa) — there's no
+// "show me Big Red AND trailer 47" mode.
 
-function EquipmentFilterSelect({
+function EquipmentFilterSelects({
   value, onChange, assets, trailers,
 }: {
   value:    string;
@@ -1309,41 +1316,52 @@ function EquipmentFilterSelect({
     );
   }, [trailers]);
 
-  const isFiltered = value !== 'all';
+  // Which side is currently driving the filter — the other side
+  // renders its "All …" placeholder. "a:42" → trucks; "t:7" →
+  // trailers; "all" or anything else → neither.
+  const truckValue   = value.startsWith('a:') ? value : 'all';
+  const trailerValue = value.startsWith('t:') ? value : 'all';
+  const truckActive   = truckValue   !== 'all';
+  const trailerActive = trailerValue !== 'all';
+
+  const baseSelect = (active: boolean): React.CSSProperties => ({
+    border:     `1px solid ${active ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+    background: active ? 'var(--gc-blue-light)' : 'var(--gc-surface)',
+    color:      active ? 'var(--gc-blue)'       : 'var(--gc-text-1)',
+    padding:    '6px 10px',
+    fontWeight: active ? 600 : 500,
+    minWidth:   150,
+  });
 
   return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      className="rounded-md text-[13px] outline-none cursor-pointer"
-      style={{
-        border:     `1px solid ${isFiltered ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-        background: isFiltered ? 'var(--gc-blue-light)' : 'var(--gc-surface)',
-        color:      isFiltered ? 'var(--gc-blue)' : 'var(--gc-text-1)',
-        padding:    '6px 10px',
-        fontWeight: isFiltered ? 600 : 500,
-        minWidth:   170,
-      }}>
-      <option value="all">All equipment</option>
-      {truckOpts.length > 0 && (
-        <optgroup label="Trucks">
-          {truckOpts.map(a => (
-            <option key={`a-${a.id}`} value={`a:${a.id}`}>
-              {a.name}{a.unit ? ` · #${a.unit}` : ''}
-            </option>
-          ))}
-        </optgroup>
-      )}
-      {trailerOpts.length > 0 && (
-        <optgroup label="Trailers">
-          {trailerOpts.map(t => (
-            <option key={`t-${t.id}`} value={`t:${t.id}`}>
-              {t.trailerNumber ? `#${t.trailerNumber}` : t.name}
-            </option>
-          ))}
-        </optgroup>
-      )}
-    </select>
+    <div className="flex items-center gap-1.5">
+      <select
+        value={truckValue}
+        onChange={e => onChange(e.target.value)}
+        className="rounded-md text-[13px] outline-none cursor-pointer"
+        style={baseSelect(truckActive)}
+        title={truckActive ? 'Filtering board to this truck' : 'Filter board to a truck'}>
+        <option value="all">All trucks</option>
+        {truckOpts.map(a => (
+          <option key={`a-${a.id}`} value={`a:${a.id}`}>
+            {a.name}{a.unit ? ` · #${a.unit}` : ''}
+          </option>
+        ))}
+      </select>
+      <select
+        value={trailerValue}
+        onChange={e => onChange(e.target.value)}
+        className="rounded-md text-[13px] outline-none cursor-pointer"
+        style={baseSelect(trailerActive)}
+        title={trailerActive ? 'Filtering board to this trailer' : 'Filter board to a trailer'}>
+        <option value="all">All trailers</option>
+        {trailerOpts.map(t => (
+          <option key={`t-${t.id}`} value={`t:${t.id}`}>
+            {t.trailerNumber ? `#${t.trailerNumber}` : t.name}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 
