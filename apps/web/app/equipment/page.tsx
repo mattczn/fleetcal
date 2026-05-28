@@ -24,7 +24,7 @@ import { createPortal } from 'react-dom';
 import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
-  ChevronLeft, ChevronRight, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
+  ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
   Calendar, Plus,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
@@ -1186,27 +1186,159 @@ function WorkOrdersList({
                     {colItems.length}
                   </div>
                 </div>
-                <div className="flex flex-col gap-1.5 p-2">
+                <div className="flex flex-col gap-1 p-2">
                   {colItems.length === 0 ? (
                     <div className="text-[13px] font-medium text-center py-4" style={{ color: 'var(--gc-text-3)' }}>
                       Nothing here.
                     </div>
-                  ) : colItems.map(item => (
-                    <WorkOrderCard
-                      key={item.id}
-                      item={item}
-                      equipLabel={item._equipLabel}
-                      equipColor={item._equipColor}
-                      showOverdue
-                      onClick={() => onRowClick(item)}
-                    />
-                  ))}
+                  ) : (() => {
+                    // Cluster by equipment so a 45-item column collapses
+                    // into ~10 truck rows the dispatcher can scan in two
+                    // seconds. Groups are sorted by item count (the
+                    // truck with the most issues floats to the top of
+                    // the column — that's usually what you want to look
+                    // at first). When the column has 5 or fewer total,
+                    // we default-expand everything so the existing
+                    // light-list view is unchanged for sparse priorities
+                    // (urgent / high typically).
+                    const groups = groupByEquipment(colItems);
+                    const defaultOpen = colItems.length <= 5;
+                    return groups.map(g => (
+                      <AssetGroup
+                        key={g.key}
+                        label={g.label}
+                        color={g.color}
+                        items={g.items}
+                        defaultOpen={defaultOpen}
+                        onItemClick={onRowClick}
+                      />
+                    ));
+                  })()}
                 </div>
               </div>
             );
           })}
         </div>
       </section>
+    </div>
+  );
+}
+
+// ─── Asset grouping inside a priority column ───────────────────────────
+//
+// 45 work orders in the "normal" column is too many to scan as a flat
+// list. Cluster items by truck/trailer so the column collapses to one
+// row per piece of equipment; the dispatcher can drill into a specific
+// truck in one click. Mechanic mental model ("today I'm working on
+// Big Red, what does it need?") + dispatcher mental model ("how big
+// is the pile") both work without forcing a layout switch.
+
+/** Item shape after `resolved` enrichment in WorkOrdersList. Spread
+ *  back out here so AssetGroup can be self-typed without leaking the
+ *  monster inferred shape across the file. */
+type ResolvedWorkOrderItem = MaintenanceActionItem & {
+  _equipLabel: string;
+  _equipColor: string;
+  _searchBlob: string;
+};
+
+interface EquipGroup {
+  /** Stable key per group — used as React key. Combines kind +
+   *  asset/trailer id so a truck and trailer with the same number
+   *  don't collide. */
+  key:   string;
+  /** Display label — equipment name or "No equipment" when neither
+   *  asset_id nor trailer_id is set. */
+  label: string;
+  /** Accent color — the asset's own color when truck, neutral gray
+   *  otherwise (trailers/no-equip both show gray). */
+  color: string;
+  items: ResolvedWorkOrderItem[];
+}
+
+function groupByEquipment(items: ResolvedWorkOrderItem[]): EquipGroup[] {
+  const m = new Map<string, EquipGroup>();
+  for (const it of items) {
+    // Bucket key: prefer asset_id (trucks), fall back to trailer_id
+    // (trailers), final fall-through is "_none" so the no-equipment
+    // rows cluster together rather than each becoming a singleton.
+    const key =
+      it.assetId   ? `a-${it.assetId}` :
+      it.trailerId ? `t-${it.trailerId}` :
+                     "_none";
+    const label = it._equipLabel === "—" ? "No equipment" : it._equipLabel;
+    let g = m.get(key);
+    if (!g) {
+      g = { key, label, color: it._equipColor, items: [] };
+      m.set(key, g);
+    }
+    g.items.push(it);
+  }
+  // Most-loaded equipment floats to the top of the column — that's
+  // what the dispatcher's eye looks for first.
+  return Array.from(m.values()).sort((a, b) => b.items.length - a.items.length);
+}
+
+/** One collapsible truck/trailer row inside a priority column.
+ *  Header row shows chevron + asset color dot + label + count, plus
+ *  a red OOS pill when any item in the group has out_of_service set
+ *  (so an out-of-service truck reads RED at a glance even while the
+ *  group is collapsed). Cards render below when expanded. */
+function AssetGroup({
+  label, color, items, defaultOpen, onItemClick,
+}: {
+  label:       string;
+  color:       string;
+  items:       ResolvedWorkOrderItem[];
+  defaultOpen: boolean;
+  onItemClick: (item: MaintenanceActionItem) => void;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const anyOos = items.some(i => i.outOfService);
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 px-1.5 py-1.5 rounded transition-colors text-left"
+        style={{ background: open ? 'var(--gc-hover)' : 'transparent' }}
+        onMouseEnter={e => { if (!open) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+        onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}>
+        {open
+          ? <ChevronDown  size={11} style={{ color: 'var(--gc-text-3)' }} />
+          : <ChevronRight size={11} style={{ color: 'var(--gc-text-3)' }} />}
+        <span
+          className="rounded-full shrink-0"
+          style={{ width: 8, height: 8, background: color }}
+        />
+        <span className="text-[12.5px] font-bold truncate flex-1" style={{ color: 'var(--gc-text-1)' }}>
+          {label}
+        </span>
+        <span className="text-[11px] font-extrabold tabular-nums shrink-0" style={{ color: 'var(--gc-text-2)' }}>
+          {items.length}
+        </span>
+        {anyOos && (
+          <span
+            className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+            style={{ background: '#fce8e6', color: '#b91c1c' }}>
+            OOS
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1.5 pl-1.5">
+          {items.map(item => (
+            <WorkOrderCard
+              key={item.id}
+              item={item}
+              equipLabel={item._equipLabel}
+              equipColor={item._equipColor}
+              showOverdue
+              onClick={() => onItemClick(item)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
