@@ -1242,6 +1242,15 @@ function WorkOrdersList({
                         items={g.items}
                         defaultOpen={defaultOpen}
                         onItemClick={onRowClick}
+                        onFilterClick={
+                          // Convert group key (a-42 / t-7 / _none) to
+                          // filter value (a:42 / t:7). _none gets no
+                          // handler — there's nothing to drill to for
+                          // unlinked items.
+                          g.key === '_none'
+                            ? undefined
+                            : () => setEquipFilter(g.key.replace('-', ':'))
+                        }
                       />
                     ));
                   })()}
@@ -1251,6 +1260,21 @@ function WorkOrdersList({
           })}
         </div>
       </section>
+
+      {/* History — completed work orders, grouped by equipment.
+          Backlog only shows what's still open; the dispatcher also
+          needs a way to look back at what's been done (especially
+          when scoped to one truck via the equipment filter — "what
+          have we done on Big Red this year"). Default collapsed
+          so it doesn't push the live work above the fold; expanded
+          state survives the session via useState. Respects the
+          equipment filter + search via `resolved` (we filter to
+          done items from the already-filtered source). */}
+      <HistorySection
+        items={resolved.filter(i => i.status === 'done')}
+        onItemClick={onRowClick}
+        onFilterClick={(key) => setEquipFilter(key)}
+      />
     </div>
   );
 }
@@ -1382,48 +1406,87 @@ function groupByEquipment(items: ResolvedWorkOrderItem[]): EquipGroup[] {
  *  Header row shows chevron + asset color dot + label + count, plus
  *  a red OOS pill when any item in the group has out_of_service set
  *  (so an out-of-service truck reads RED at a glance even while the
- *  group is collapsed). Cards render below when expanded. */
+ *  group is collapsed). Cards render below when expanded.
+ *
+ *  The asset name is a separate click target from the row's
+ *  expand/collapse — clicking the name fires onFilterClick (drills
+ *  the whole board to this truck), clicking anywhere else toggles.
+ *  Same gesture wherever asset names show, so the dispatcher learns
+ *  it once. */
 function AssetGroup({
-  label, color, items, defaultOpen, onItemClick,
+  label, color, items, defaultOpen, onItemClick, onFilterClick,
 }: {
-  label:       string;
-  color:       string;
-  items:       ResolvedWorkOrderItem[];
-  defaultOpen: boolean;
-  onItemClick: (item: MaintenanceActionItem) => void;
+  label:         string;
+  color:         string;
+  items:         ResolvedWorkOrderItem[];
+  defaultOpen:   boolean;
+  onItemClick:   (item: MaintenanceActionItem) => void;
+  /** Optional — when provided, the asset name text becomes a
+   *  separate clickable element that fires this callback (with the
+   *  group's filter key, e.g. "a:42" or "t:7"). Omit for the "No
+   *  equipment" / unlinked group where there's nothing to filter to. */
+  onFilterClick?: () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const anyOos = items.some(i => i.outOfService);
   return (
     <div className="flex flex-col gap-1">
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-1.5 px-1.5 py-1.5 rounded transition-colors text-left"
+      <div
+        className="flex items-center gap-1.5 px-1.5 py-1.5 rounded transition-colors"
         style={{ background: open ? 'var(--gc-hover)' : 'transparent' }}
         onMouseEnter={e => { if (!open) e.currentTarget.style.background = 'var(--gc-hover)'; }}
         onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}>
-        {open
-          ? <ChevronDown  size={11} style={{ color: 'var(--gc-text-3)' }} />
-          : <ChevronRight size={11} style={{ color: 'var(--gc-text-3)' }} />}
-        <span
-          className="rounded-full shrink-0"
-          style={{ width: 8, height: 8, background: color }}
-        />
-        <span className="text-[12.5px] font-bold truncate flex-1" style={{ color: 'var(--gc-text-1)' }}>
-          {label}
-        </span>
-        <span className="text-[11px] font-extrabold tabular-nums shrink-0" style={{ color: 'var(--gc-text-2)' }}>
-          {items.length}
-        </span>
-        {anyOos && (
+        {/* Toggle area — chevron + color dot. Clicking either expands
+            or collapses the group. */}
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          className="flex items-center gap-1.5 shrink-0"
+          aria-label={open ? 'Collapse group' : 'Expand group'}>
+          {open
+            ? <ChevronDown  size={11} style={{ color: 'var(--gc-text-3)' }} />
+            : <ChevronRight size={11} style={{ color: 'var(--gc-text-3)' }} />}
           <span
-            className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-            style={{ background: '#fce8e6', color: '#b91c1c' }}>
-            OOS
+            className="rounded-full shrink-0"
+            style={{ width: 8, height: 8, background: color }}
+          />
+        </button>
+        {/* Asset name — separate click target. When onFilterClick is
+            wired, becomes an inline "filter to this truck" action.
+            Underline on hover signals the affordance. */}
+        {onFilterClick ? (
+          <button
+            type="button"
+            onClick={onFilterClick}
+            title={`Filter board to ${label}`}
+            className="text-[12.5px] font-bold truncate text-left flex-1 hover:underline"
+            style={{ color: 'var(--gc-text-1)' }}>
+            {label}
+          </button>
+        ) : (
+          <span
+            onClick={() => setOpen(v => !v)}
+            className="text-[12.5px] font-bold truncate flex-1 cursor-pointer"
+            style={{ color: 'var(--gc-text-1)' }}>
+            {label}
           </span>
         )}
-      </button>
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          className="flex items-center gap-1.5 shrink-0">
+          <span className="text-[11px] font-extrabold tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
+            {items.length}
+          </span>
+          {anyOos && (
+            <span
+              className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
+              style={{ background: '#fce8e6', color: '#b91c1c' }}>
+              OOS
+            </span>
+          )}
+        </button>
+      </div>
       {open && (
         <div className="flex flex-col gap-1.5 pl-1.5">
           {items.map(item => (
@@ -1434,11 +1497,119 @@ function AssetGroup({
               equipColor={item._equipColor}
               showOverdue
               onClick={() => onItemClick(item)}
+              onFilterClick={onFilterClick}
             />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+// ─── History section ──────────────────────────────────────────────────
+//
+// Lives at the bottom of the maintenance board — a collapsible
+// archive of every done work order, grouped by equipment the same
+// way the backlog clusters its columns. Two use cases:
+//
+//   1. Audit ("when did we last replace the brakes on CT-2023?")
+//   2. Pattern-spotting ("this truck is in the shop every 3 weeks")
+//
+// Default collapsed so the live work above stays the focus. When
+// an equipment filter is active upstream, `items` is already
+// narrowed to that asset — the dispatcher can drill in via the
+// filter select OR by clicking an asset name anywhere, then expand
+// History to see the full repair record for that truck. Newest
+// completion floats to the top of each group; the most-active
+// group floats to the top of the section.
+
+function HistorySection({
+  items, onItemClick, onFilterClick,
+}: {
+  items:         ResolvedWorkOrderItem[];
+  onItemClick:   (item: MaintenanceActionItem) => void;
+  /** Receives the filter key directly ("a:42" / "t:7") — the parent
+   *  passes it straight into setEquipFilter, mirroring the backlog
+   *  wiring. Omitted for the no-equipment bucket. */
+  onFilterClick: (filterKey: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Sort within each equipment group: newest completion at top,
+  // falling back to scheduledDate then createdAt for items that
+  // somehow ended up done without a completedAt stamp (legacy /
+  // imported rows).
+  const sorted = useMemo(() => {
+    const arr = [...items];
+    arr.sort((a, b) => {
+      const at = a.completedAt ?? a.scheduledDate ?? a.createdAt;
+      const bt = b.completedAt ?? b.scheduledDate ?? b.createdAt;
+      return bt.localeCompare(at);
+    });
+    return arr;
+  }, [items]);
+  const groups = useMemo(() => groupByEquipment(sorted), [sorted]);
+
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between mb-2.5 cursor-pointer group"
+        aria-expanded={open}>
+        <div className="flex items-center gap-2">
+          {open
+            ? <ChevronDown  size={16} style={{ color: 'var(--gc-text-2)' }} />
+            : <ChevronRight size={16} style={{ color: 'var(--gc-text-2)' }} />}
+          <h3
+            className="text-[17px] font-bold group-hover:underline"
+            style={{ color: 'var(--gc-text-1)' }}>
+            History
+          </h3>
+        </div>
+        <span className="text-[13px] font-medium" style={{ color: 'var(--gc-text-2)' }}>
+          {items.length} completed work order{items.length === 1 ? '' : 's'}
+        </span>
+      </button>
+      {open && (
+        <div
+          className="rounded-lg flex flex-col p-2 gap-1"
+          style={{
+            background: 'var(--gc-surface)',
+            border:     '1px solid var(--gc-border-light)',
+            minHeight:  120,
+          }}>
+          {groups.length === 0 ? (
+            <div
+              className="text-[13px] font-medium text-center py-6"
+              style={{ color: 'var(--gc-text-3)' }}>
+              No completed work orders yet.
+            </div>
+          ) : (
+            groups.map(g => (
+              <AssetGroup
+                key={g.key}
+                label={g.label}
+                color={g.color}
+                items={g.items}
+                // Per-group default-open: when there's only one or
+                // two groups (typical when the board is filtered to
+                // a single truck), expand them so the history is
+                // immediately visible. Otherwise keep collapsed —
+                // the dispatcher will pop open whichever truck they
+                // want to inspect.
+                defaultOpen={groups.length <= 2}
+                onItemClick={onItemClick}
+                onFilterClick={
+                  g.key === '_none'
+                    ? undefined
+                    : () => onFilterClick(g.key.replace('-', ':'))
+                }
+              />
+            ))
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1450,7 +1621,7 @@ function AssetGroup({
 // header (i.e. inside a day column in the week grid).
 
 function WorkOrderCard({
-  item, equipLabel, equipColor, compact, onClick, onDragStart, onDragEnd, draggable, showOverdue,
+  item, equipLabel, equipColor, compact, onClick, onDragStart, onDragEnd, draggable, showOverdue, onFilterClick,
 }: {
   item: MaintenanceActionItem;
   equipLabel: string;
@@ -1468,6 +1639,11 @@ function WorkOrderCard({
    *  tells you the date. Only backlog cards (where the missed date
    *  isn't otherwise visible) get the badge. */
   showOverdue?: boolean;
+  /** Optional — when wired, the asset name inside the card becomes
+   *  its own click target that fires this callback (typically:
+   *  drill the board to this truck) instead of opening the card.
+   *  We stopPropagation so the outer card-button doesn't also fire. */
+  onFilterClick?: () => void;
 }) {
   const cs = getCardStatus(item);
   const sp = STATUS_PALETTE[cs];
@@ -1535,17 +1711,40 @@ function WorkOrderCard({
           {item.title}
         </div>
       </div>
-      {/* Vehicle row — dark, semibold, easy to read */}
+      {/* Vehicle row — dark, semibold, easy to read. When
+          onFilterClick is wired, the name itself is a separate
+          click target that drills the board to this truck;
+          stopPropagation keeps the card's own onClick from also
+          firing and opening the modal. */}
       <div className="flex items-center gap-1.5">
         <span
           className="inline-block rounded shrink-0"
           style={{ width: 10, height: 10, background: equipColor }}
         />
-        <span
-          className={`${compact ? 'text-[13px]' : 'text-[13.5px]'} font-semibold truncate`}
-          style={{ color: 'var(--gc-text-1)' }}>
-          {equipLabel}
-        </span>
+        {onFilterClick ? (
+          <span
+            role="button"
+            tabIndex={0}
+            title={`Filter board to ${equipLabel}`}
+            onClick={(e) => { e.stopPropagation(); onFilterClick(); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onFilterClick();
+              }
+            }}
+            className={`${compact ? 'text-[13px]' : 'text-[13.5px]'} font-semibold truncate hover:underline cursor-pointer`}
+            style={{ color: 'var(--gc-text-1)' }}>
+            {equipLabel}
+          </span>
+        ) : (
+          <span
+            className={`${compact ? 'text-[13px]' : 'text-[13.5px]'} font-semibold truncate`}
+            style={{ color: 'var(--gc-text-1)' }}>
+            {equipLabel}
+          </span>
+        )}
       </div>
       {/* Footer row — status pill (left) + category + maybe overdue */}
       <div className="flex items-center justify-between gap-1.5 mt-0.5">
