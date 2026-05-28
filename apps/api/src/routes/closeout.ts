@@ -141,6 +141,49 @@ function buildDeliveryEndMap(rows: Array<{ end?: string | null; load?: { id?: st
   return m;
 }
 
+/** Collapse event rows down to one row per load — the pickup leg
+ *  wins when both legs are present. Standalone events without a
+ *  load are kept as-is (defensive; shouldn't happen for revenue
+ *  events but the API contract doesn't strictly forbid it).
+ *
+ *  The closeout queue returns events because each relay leg can have
+ *  its own driver/asset, but the dispatcher UI is per-load (POD
+ *  verification, flag, release all act on the load). Doing this
+ *  dedup server-side means pagination math reflects loads, not
+ *  legs — a page of 50 always shows 50 loads, never 25 because half
+ *  the events were paired legs of the same load. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function dedupEventsByLoad<T extends { load?: { id?: string | null } | null; relay_role?: string | null }>(rows: T[]): T[] {
+  const pickupByLoadId = new Map<string, T>();
+  const otherByLoadId  = new Map<string, T>();
+  const standalone:     T[] = [];
+  for (const r of rows) {
+    const id = r.load?.id;
+    if (!id) { standalone.push(r); continue; }
+    if (r.relay_role === 'pickup' && !pickupByLoadId.has(id)) {
+      pickupByLoadId.set(id, r);
+    } else if (!otherByLoadId.has(id)) {
+      otherByLoadId.set(id, r);
+    }
+  }
+  // Walk the input ORDER to preserve sort. Skip a row if a pickup
+  // leg for the same load has already been emitted (or will be — we
+  // emit the first row per load we encounter, but prefer pickup if
+  // we see one later).
+  const seen = new Set<string>();
+  const out:  T[] = [];
+  for (const r of rows) {
+    const id = r.load?.id;
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    // Prefer the pickup leg if it exists in this set; otherwise
+    // take whatever leg we have (delivery, or single-leg non-relay).
+    out.push(pickupByLoadId.get(id) ?? otherByLoadId.get(id) ?? r);
+  }
+  return [...out, ...standalone];
+}
+
 type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all" | "released_all";
 
 closeout.get("/queue", async (c) => {
@@ -235,16 +278,30 @@ closeout.get("/queue", async (c) => {
   const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged" || tab === "all");
 
   if (!searching && !wideCandidatePath) {
-    const { data, error, count } = await buildBaseQuery(true)
+    // released_all (and the legacy verified/invoiced/paid filters)
+    // were DB-paginated at the event level — fine when each load is
+    // one event, broken when a relay's pickup+delivery legs split
+    // the page in half. Switch to fetch-cap + in-memory dedup so the
+    // page is always over LOADS, not events. 5000 covers any
+    // reasonable carrier's released history; we log if we hit the
+    // cap so the operator catches it before users see drifted counts.
+    const NARROW_CAP = 5000;
+    const { data, error } = await buildBaseQuery(false)
       .order("priority", { ascending: false })
       .order("end",      { ascending: true })
-      .range(offset, offset + limit - 1);
+      .range(0, NARROW_CAP - 1);
     if (error) {
       console.error("[GET /v1/closeout/queue] failed:", error);
       return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
     }
-    rawRows    = (data ?? []) as unknown[] as typeof rawRows;
-    totalCount = count ?? rawRows.length;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const all = (data ?? []) as any[];
+    if (all.length >= NARROW_CAP) {
+      console.warn(`[GET /v1/closeout/queue] narrow-cap hit (${NARROW_CAP}) for org=${orgId} tab=${tab} — totals may undercount`);
+    }
+    const deduped = dedupEventsByLoad(all);
+    totalCount = deduped.length;
+    rawRows    = deduped.slice(offset, offset + limit);
   } else if (wideCandidatePath) {
     // Fetch up to 2000 candidate events that COULD belong to
     // pending/flagged/all (billing_status IN ['pending', 'on_hold']).
@@ -303,13 +360,18 @@ closeout.get("/queue", async (c) => {
       return tab === "flagged" ? flagged : !flagged;
     });
 
-    // Count UNIQUE loads (deduped by load_id). Relays are two events
-    // for one load — the bucket tile should reflect "one load" so the
-    // count matches what the user sees in the table (also deduped).
+    // Server-side dedup by load — one row per load (pickup leg wins).
+    // Previously the client did this; doing it here means the page
+    // slice contains 50 unique loads, not 50 events (which deduped
+    // to 25 on relay-heavy pages).
+    const dedupedFiltered = dedupEventsByLoad(filtered);
+    // Count UNIQUE loads. aggregateByLoad still computes the dollar
+    // total properly even if we feed it the deduped set (it dedups
+    // again internally, but on a smaller input).
     const agg = aggregateByLoad(filtered);
     totalCount = agg.count;
     totalLoadValue = agg.value;
-    rawRows = filtered.slice(offset, offset + limit);
+    rawRows = dedupedFiltered.slice(offset, offset + limit);
   } else {
     // ── Search path: two parallel queries, merged + paginated in JS.
     // Mirrors the pattern used by /v1/loads/search since PostgREST's
@@ -407,12 +469,14 @@ closeout.get("/queue", async (c) => {
         return tab === "flagged" ? flagged : !flagged;
       });
     }
-    // Same dedup as the wide-candidate path so the count matches
-    // what's in the deduped table render.
+    // Server-side dedup so the page contains one row per load
+    // (pickup leg wins). Without this, a relay-heavy search result
+    // shows 25 rows on a 50-row page.
+    const dedupedFinal = dedupEventsByLoad(finalRows);
     const agg = aggregateByLoad(finalRows);
     totalCount = agg.count;
     totalLoadValue = agg.value;
-    rawRows = finalRows.slice(offset, offset + limit);
+    rawRows = dedupedFinal.slice(offset, offset + limit);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

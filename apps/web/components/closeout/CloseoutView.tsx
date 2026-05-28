@@ -48,17 +48,12 @@ const API_TAB: Record<Tab, 'pending' | 'flagged' | 'all' | 'released_all'> = {
   released: 'released_all',
 };
 
-// Server returns events (one row per relay leg). Client-side dedup
-// below collapses pickup+delivery into one row per load. A relay-
-// heavy page of 50 events becomes 25 loads after dedup — exactly
-// what was making the visible page look half-full. Doubling the
-// fetch guarantees ≥50 loads per page regardless of relay density;
-// a non-relay-heavy page still shows up to 100. Cleaner long-term
-// fix lives server-side (return loads, not events), but bumping the
-// event budget here is a small win that doesn't require any API
-// work. Pagination math below still operates on events because
-// the server's `total` is an event count too.
-const PAGE_SIZE = 100;
+// Server dedups by load_id (one event per load returned, pickup leg
+// preferred). totalCount is also a load count, so pagination math is
+// load-based. The client-side dedup memo below is now a defensive
+// no-op — kept so a stale-server response (mid-deploy) doesn't
+// double-render a load.
+const PAGE_SIZE = 50;
 
 interface CacheEntry {
   loads: CalendarEvent[];
