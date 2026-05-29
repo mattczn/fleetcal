@@ -713,7 +713,7 @@ function AccountingPageInner() {
           can claim the remaining space and scroll INSIDE its own box.
           Outer page padding lives here; the table itself has no margin. */}
       <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
-        <div className="mx-auto w-full min-h-0 flex-1 flex flex-col gap-4" style={{ maxWidth: 1800 }}>
+        <div className="w-full min-h-0 flex-1 flex flex-col gap-4">
 
           {/* Purpose hint */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>

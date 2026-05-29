@@ -413,7 +413,7 @@ export default function DriversView() {
   return (
     <AppShell title="Drivers" icon={Gauge}>
       <div className="flex-1 min-h-0 flex flex-col" style={{ background: 'var(--gc-surface)' }}>
-        <div className="mx-auto w-full px-6 py-5 flex flex-col gap-4 flex-1 min-h-0" style={{ maxWidth: 1600 }}>
+        <div className="w-full px-6 py-5 flex flex-col gap-4 flex-1 min-h-0">
           {/* Period strip */}
           <div className="flex items-center gap-3 flex-wrap">
             <PeriodSelector

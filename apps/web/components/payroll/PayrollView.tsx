@@ -1458,7 +1458,7 @@ export default function PayrollView() {
           </div>
         )}
 
-        <div className="max-w-[1600px] mx-auto space-y-5">
+        <div className="w-full space-y-5">
 
           {/* Title row */}
           <div className="flex items-start justify-between">

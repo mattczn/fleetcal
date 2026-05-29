@@ -679,7 +679,7 @@ export default function DashboardView() {
             </div>
           </div>
         )}
-        <div className="max-w-[1600px] mx-auto space-y-5">
+        <div className="w-full space-y-5">
 
           {/* Page title + period selector. Fuel KPIs moved to
               /equipment > Fuel so this dashboard is purely the
