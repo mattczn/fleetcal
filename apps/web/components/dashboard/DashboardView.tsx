@@ -389,7 +389,11 @@ export default function DashboardView() {
   // (currently gated on view === 'performance') stays valid without
   // a sweeping refactor.
   const view = 'performance' as const;
-  const [period, setPeriod] = useState<Period>('month');
+  // Default to the current payroll week (Sat → Fri) — same window the
+  // Payroll page and the Revenue Breakdown bar use for "right now" so
+  // the first thing a dispatcher sees on /dashboard agrees with what
+  // they'd see on /payroll without changing the period.
+  const [period, setPeriod] = useState<Period>('week');
   const [fetching, setFetching] = useState(false);
   const [weekSort, setWeekSort] = useState<{ field: WeekSortField; dir: 'asc' | 'desc' }>({ field: 'pickupDate', dir: 'asc' });
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
