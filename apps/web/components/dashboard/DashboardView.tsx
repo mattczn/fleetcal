@@ -351,7 +351,15 @@ export default function DashboardView() {
   // numbers always agree.
   const kpis = useMemo(() => {
     if (loadSummaries) {
-      const revenue = loadSummaries.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+      // Revenue = rate-con price + billable accessorials. Matches
+      // LoadsReport's "Total" column footer and Payroll's headline tile;
+      // non-billable accessorials (driver per-diem, lumper reimbursements)
+      // are excluded by design.
+      const revenue = loadSummaries.reduce((s, l) => {
+        const accessorials = (l.accessorials ?? [])
+          .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
+        return s + (l.loadPrice ?? 0) + accessorials;
+      }, 0);
       const loads   = loadSummaries.length;
       // Delivery side reflects the load's final state — the leg whose
       // status is "delivered" is the one that physically delivered.

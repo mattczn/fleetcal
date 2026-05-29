@@ -1463,6 +1463,12 @@ export default function PayrollView() {
   // tile agrees with the Dashboard's Total Revenue card exactly. One
   // server, one filter, one sum.
   //
+  // Revenue = rate-con price + billable accessorials. Same shape as
+  // LoadsReport's "Total" column footer — accessorials that the
+  // dispatcher flagged as billable to the broker are part of the
+  // revenue we booked. Non-billable accessorials (lumper reimbursements,
+  // driver per-diem) are excluded by design.
+  //
   // While the request is in flight we fall back to the events-store
   // estimate so the tile doesn't render blank on the first paint —
   // same pattern Dashboard's KPI useMemo uses.
@@ -1474,9 +1480,17 @@ export default function PayrollView() {
   }, [weekLoadSummaries, weekEvents]);
   const totalRevenue = useMemo(() => {
     if (weekLoadSummaries) {
-      return weekLoadSummaries.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+      return weekLoadSummaries.reduce((s, l) => {
+        const accessorials = (l.accessorials ?? [])
+          .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
+        return s + (l.loadPrice ?? 0) + accessorials;
+      }, 0);
     }
     // Fallback: events-store, dedupe by loadId, take max loadPrice.
+    // Skip accessorials in fallback — events store doesn't carry the
+    // billable flag uniformly; the tile only flashes this value for
+    // a fraction of a second before snapping to the canonical
+    // weekLoadSummaries number above.
     const byLoad = new Map<string, number>();
     for (const ev of weekEvents) {
       const key = ev.loadId ?? ev.id;
