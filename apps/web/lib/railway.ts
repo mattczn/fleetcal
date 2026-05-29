@@ -536,6 +536,17 @@ class RailwayClient {
       'GET', `/v1/movements?${qs.toString()}`,
     );
   }
+  /** Fleet-wide ELD mileage in [from, to] — `max(odometer_miles) -
+   *  min(...)` per asset that has motive_vehicle_id set, summed.
+   *  Used by the dashboard Total Miles tile. */
+  odometerSummary(from: string, to: string) {
+    const qs = new URLSearchParams({ from, to });
+    return this.req<{
+      totalMiles:    number;
+      eldAssetCount: number;
+      perAsset:      Record<string, number>;
+    }>('GET', `/v1/movements/odometer-summary?${qs.toString()}`);
+  }
   /** Time series of daily odometer snapshots for one vehicle. */
   listOdometer(vehicleId: string | number, from?: string, to?: string) {
     const qs = new URLSearchParams({ vehicleId: String(vehicleId) });

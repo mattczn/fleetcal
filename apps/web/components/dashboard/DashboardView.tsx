@@ -201,6 +201,130 @@ function Empty({ label }: { label: string }) {
   );
 }
 
+/**
+ * Cost-breakdown bar — horizontal stacked bar where the FULL width
+ * represents period revenue and each segment shows a major cost
+ * bucket eating into it. Whatever's left at the right side is
+ * margin. Hover a segment to see the dollar / % detail.
+ *
+ * If costs exceed revenue (negative margin), segments are scaled to
+ * sum to 100% width — the bar still fills — but the margin segment
+ * collapses to 0px and its legend row turns red with the deficit.
+ */
+function CostBar({
+  revenue, segments,
+}: {
+  revenue: number;
+  segments: Array<{ label: string; amount: number; color: string }>;
+}) {
+  const [hovered, setHovered] = useState<number | null>(null);
+
+  const totalCost = segments.reduce((s, x) => s + x.amount, 0);
+  const margin    = revenue - totalCost;
+  const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0;
+  const negative  = margin < 0;
+
+  // Scale: when costs exceed revenue we'd overflow 100%. Clamp so the
+  // bar still renders cleanly inside the card. Honest figures live in
+  // the legend below.
+  const totalForScale = Math.max(revenue, totalCost);
+  const widthOf = (amount: number) => (totalForScale > 0 ? (amount / totalForScale) * 100 : 0);
+
+  const marginSeg = {
+    label: negative ? 'Deficit' : 'Margin',
+    amount: margin,
+    color:  negative ? '#c5221f' : '#1e8e3e',
+  };
+  const allSegs = [...segments, marginSeg];
+
+  return (
+    <div>
+      <div
+        className="relative h-12 flex rounded-md overflow-hidden"
+        style={{ border: '1px solid var(--gc-border)' }}
+      >
+        {allSegs.map((s, i) => {
+          const w = widthOf(Math.max(0, s.amount));
+          if (w <= 0) return null;
+          const pct = revenue > 0 ? (s.amount / revenue) * 100 : 0;
+          return (
+            <div
+              key={s.label}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              style={{
+                width: `${w}%`,
+                backgroundColor: s.color,
+                opacity: hovered != null && hovered !== i ? 0.55 : 1,
+                transition: 'opacity 150ms',
+                cursor: 'pointer',
+              }}
+              className="flex items-center justify-center text-white text-[11px] font-semibold tracking-wide"
+              title={`${s.label}: ${fmtFull(s.amount)} (${pct.toFixed(1)}% of revenue)`}
+            >
+              {w >= 10 ? (
+                <span className="px-2 truncate">
+                  {s.label} · {pct.toFixed(0)}%
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend / detail row — switches between summary and the
+          currently-hovered segment's detail. */}
+      {hovered != null && allSegs[hovered] ? (
+        <div className="mt-3 flex items-center gap-2 text-[13px]">
+          <span
+            className="inline-block rounded-sm"
+            style={{ width: 12, height: 12, backgroundColor: allSegs[hovered].color }}
+          />
+          <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            {allSegs[hovered].label}
+          </span>
+          <span style={{ color: 'var(--gc-text-1)' }}>
+            {fmtFull(allSegs[hovered].amount)}
+          </span>
+          <span style={{ color: 'var(--gc-text-3)' }}>
+            ({revenue > 0 ? ((allSegs[hovered].amount / revenue) * 100).toFixed(1) : '0.0'}% of revenue)
+          </span>
+        </div>
+      ) : (
+        <div className="mt-3 flex items-center gap-x-5 gap-y-2 flex-wrap text-[12px]">
+          {allSegs.map((s) => {
+            const pct = revenue > 0 ? (s.amount / revenue) * 100 : 0;
+            const isMarginRow = s.label === 'Margin' || s.label === 'Deficit';
+            return (
+              <div key={s.label} className="flex items-center gap-1.5">
+                <span
+                  className="inline-block rounded-sm"
+                  style={{ width: 10, height: 10, backgroundColor: s.color }}
+                />
+                <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                  {s.label}
+                </span>
+                <span style={{ color: isMarginRow && negative ? '#c5221f' : 'var(--gc-text-2)' }}>
+                  {fmtFull(s.amount)} ({pct.toFixed(1)}%)
+                </span>
+              </div>
+            );
+          })}
+          {revenue > 0 ? (
+            <div className="ml-auto text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+              Total revenue: <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtFull(revenue)}</span>
+              {' · '}
+              <span style={{ color: negative ? '#c5221f' : '#1e8e3e' }}>
+                {negative ? '−' : ''}{Math.abs(marginPct).toFixed(1)}% margin
+              </span>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KpiCard({
   label, value, sub, icon, accent,
 }: {
@@ -400,10 +524,16 @@ export default function DashboardView() {
 
   // ── ELD miles (period total) ──────────────────────────────────────────
   //
-  // Sum of MovementCard.miles across every vehicle in /v1/movements.
-  // Movements are sourced from Motive ELDs, so trucks without ELDs are
-  // naturally excluded — no per-asset filter needed. listMovements takes
-  // ISO timestamps (not date-only).
+  // Sourced from `/v1/movements/odometer-summary` — server-side
+  // aggregate over motive_odometer_readings (daily snapshots),
+  // computing `max - min` per asset that has motive_vehicle_id set.
+  //
+  // The previous version summed raw MovementCard.miles from
+  // listMovements, which is the WRONG table for a fleet mileage
+  // total — Motive fragments long trips into many sub-mile
+  // driving_periods (one per traffic light / duty status change),
+  // many with miles=null, which is why the tile under-counted
+  // badly (e.g. 156 mi for a whole week of operation).
   const [eldMiles, setEldMiles] = useState<number | null>(null);
   useEffect(() => {
     if (!dbReady) return;
@@ -414,17 +544,13 @@ export default function DashboardView() {
         const endOfDay = new Date(pEnd);
         endOfDay.setHours(23, 59, 59, 999);
         const toIso = endOfDay.toISOString();
-        const { byVehicle } = await fetchWithRetry(
-          () => railway.listMovements(fromIso, toIso),
+        const { totalMiles } = await fetchWithRetry(
+          () => railway.odometerSummary(fromIso, toIso),
         );
         if (cancelled) return;
-        let total = 0;
-        for (const movements of Object.values(byVehicle)) {
-          for (const m of movements) total += m.miles ?? 0;
-        }
-        setEldMiles(total);
+        setEldMiles(totalMiles);
       } catch (err) {
-        console.error('[DashboardView] listMovements failed:', err);
+        console.error('[DashboardView] odometerSummary failed:', err);
         if (!cancelled) setEldMiles(0);
       }
     })();
@@ -896,6 +1022,27 @@ export default function DashboardView() {
               accent="#a142f4"
             />
           </div>
+
+          {/* Revenue → cost breakdown bar. Full bar width represents
+              period revenue; chunks consume the chunk's share. What's
+              left at the right is margin. Maintenance can slot in as a
+              4th chunk later once WO actualCost is consistently set. */}
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <CardTitle>Revenue Breakdown</CardTitle>
+            </div>
+            {kpis.revenue > 0 ? (
+              <CostBar
+                revenue={kpis.revenue}
+                segments={[
+                  { label: 'Payroll', amount: payrollTotal ?? 0, color: '#5e35b1' },
+                  { label: 'Fuel',    amount: fuelSpend   ?? 0, color: '#ea4335' },
+                ]}
+              />
+            ) : (
+              <Empty label="No revenue in this period" />
+            )}
+          </Card>
 
           {/* Revenue by Asset + Revenue by Broker */}
           <div className="grid grid-cols-2 gap-4">
