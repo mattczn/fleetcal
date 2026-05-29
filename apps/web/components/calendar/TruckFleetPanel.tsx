@@ -26,9 +26,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Truck, Search, Pencil, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, Truck, Search, Pencil, Eye, EyeOff, ChevronDown, ChevronRight, GripVertical } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
+import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import AssetsModal from '@/components/sidebar/AssetsModal';
 import type { Asset } from '@/lib/types';
 
@@ -39,9 +40,26 @@ interface Props {
 const PANEL_WIDTH = 420;
 
 export default function TruckFleetPanel({ onClose }: Props) {
-  const { assets, toggleAssetVisibility, unassignedAssetId } = useCalendarStore();
+  const { assets, toggleAssetVisibility, reorderAssets, unassignedAssetId } = useCalendarStore();
   const { can } = usePermissions();
   const canEdit = can('assets.edit');
+
+  // Drag-state — track the asset being dragged by id (NOT array index,
+  // since the visible list is a filtered + searched subset of the
+  // store's full assets array). reorderAssets persists via railway.
+  const dragId = useRef<number | null>(null);
+  const [overAssetId, setOverAssetId] = useState<number | null>(null);
+  const handleDragStart = (id: number) => { dragId.current = id; };
+  const handleDragOver  = (e: React.DragEvent, id: number) => {
+    e.preventDefault();
+    if (dragId.current !== null && dragId.current !== id) setOverAssetId(id);
+  };
+  const handleDrop = (id: number) => {
+    if (dragId.current !== null && dragId.current !== id) reorderAssets(dragId.current, id);
+    dragId.current = null;
+    setOverAssetId(null);
+  };
+  const handleDragEnd = () => { dragId.current = null; setOverAssetId(null); };
 
   // Local search + which-section-is-open state.
   const [query, setQuery]                = useState('');
@@ -60,8 +78,14 @@ export default function TruckFleetPanel({ onClose }: Props) {
   }, [onClose]);
 
   // Filter + partition into active / hidden. Drop the Unassigned
-  // placeholder asset — it's a dispatcher-side scaffold, not a real
-  // truck the user can edit.
+  // placeholder asset (it's a dispatcher-side scaffold, not a real
+  // truck the user can edit) and any RETIRED asset (lifecycle's
+  // activeTo is in the past). Order follows the store's `assets`
+  // array verbatim — that's the canonical sort the user controls
+  // via drag-to-reorder, and it must match the calendar grid's
+  // column order so the same truck shows in the same position
+  // on both surfaces.
+  const today = dateKeyOf(new Date());
   const { activeTrucks, hiddenTrucks } = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matches = (a: Asset) => {
@@ -72,7 +96,8 @@ export default function TruckFleetPanel({ onClose }: Props) {
     const real = assets.filter(a =>
       a.id !== unassignedAssetId &&
       a.name !== 'Unassigned' &&
-      a.type !== 'Unassigned'
+      a.type !== 'Unassigned' &&
+      isActiveOn(a, today)
     );
     const active: Asset[] = [];
     const hidden: Asset[] = [];
@@ -81,11 +106,9 @@ export default function TruckFleetPanel({ onClose }: Props) {
       if (a.hidden) hidden.push(a);
       else active.push(a);
     }
-    const sortKey = (a: Asset) => `${a.name ?? ''}`.toLowerCase();
-    active.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
-    hidden.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+    // Intentionally no alpha sort — store order is the truth.
     return { activeTrucks: active, hiddenTrucks: hidden };
-  }, [assets, query, unassignedAssetId]);
+  }, [assets, query, unassignedAssetId, today]);
 
   // When the embedded AssetsModal closes, we don't auto-close the
   // tray — the user may want to edit a few in a row. Just clear the
@@ -188,6 +211,15 @@ export default function TruckFleetPanel({ onClose }: Props) {
                   key={a.id}
                   asset={a}
                   canEdit={canEdit}
+                  // Drag affordances only when the search box is empty
+                  // — reordering a filtered view would silently scramble
+                  // positions of trucks the user can't currently see.
+                  isOver={overAssetId === a.id}
+                  draggable={canEdit && !query}
+                  onDragStart={() => handleDragStart(a.id)}
+                  onDragOver={(e) => handleDragOver(e, a.id)}
+                  onDrop={() => handleDrop(a.id)}
+                  onDragEnd={handleDragEnd}
                   onEdit={() => setEditingId(a.id)}
                   onToggleHide={() => toggleAssetVisibility(a.id)}
                 />
@@ -214,6 +246,12 @@ export default function TruckFleetPanel({ onClose }: Props) {
                       key={a.id}
                       asset={a}
                       canEdit={canEdit}
+                      isOver={false}
+                      // Hidden trucks aren't draggable — they don't have
+                      // a calendar column to move around among, and
+                      // hidden vs active is the only ordering that
+                      // matters once a truck is hidden.
+                      draggable={false}
                       onEdit={() => setEditingId(a.id)}
                       onToggleHide={() => toggleAssetVisibility(a.id)}
                     />
@@ -244,19 +282,48 @@ export default function TruckFleetPanel({ onClose }: Props) {
 // ── Row ────────────────────────────────────────────────────────────
 
 function TruckRow({
-  asset, canEdit, onEdit, onToggleHide,
+  asset, canEdit, isOver, draggable,
+  onDragStart, onDragOver, onDrop, onDragEnd,
+  onEdit, onToggleHide,
 }: {
   asset: Asset;
   canEdit: boolean;
+  /** True while a drag is happening AND this row is the current
+   *  drop target. Highlight gives the user a clear "drop here" cue. */
+  isOver: boolean;
+  draggable: boolean;
+  onDragStart?: () => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: () => void;
+  onDragEnd?: () => void;
   onEdit: () => void;
   onToggleHide: () => void;
 }) {
   const isHidden = !!asset.hidden;
   return (
     <div
-      className="flex items-center gap-3 px-4 py-2.5 transition-colors"
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+      className="flex items-center gap-2.5 px-4 py-2.5 transition-colors"
+      draggable={draggable}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragOver={draggable ? onDragOver : undefined}
+      onDrop={draggable ? onDrop : undefined}
+      onDragEnd={draggable ? onDragEnd : undefined}
+      style={{
+        background: isOver ? 'var(--gc-blue-light)' : 'transparent',
+        cursor: draggable ? 'grab' : 'default',
+        boxShadow: isOver ? 'inset 0 -2px 0 var(--gc-blue)' : 'none',
+      }}
+      onMouseEnter={e => { if (!isOver) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!isOver) e.currentTarget.style.background = 'transparent'; }}>
+      {/* Drag handle — only shown when reorder is allowed. Tiny
+          dot-grip mirrors the AssetSidebar's left rail. */}
+      {draggable && (
+        <div
+          className="shrink-0 flex items-center justify-center"
+          style={{ color: 'var(--gc-text-3)', width: 14 }}>
+          <GripVertical size={12} />
+        </div>
+      )}
       {/* Truck icon — plain, colored by asset.color. Matches the
           AssetSidebar's left-rail rendering exactly so the same
           truck reads identically on both surfaces. */}
