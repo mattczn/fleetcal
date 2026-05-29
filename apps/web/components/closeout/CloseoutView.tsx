@@ -20,13 +20,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, ChevronLeft, ChevronRight, Star, X, MessageSquare, Search } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, Star, X, MessageSquare, Search } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
 import Link from 'next/link';
 import type { Load, CalendarEvent } from '@/lib/types';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import { displayBrokerName } from '@/lib/customerMatch';
 import ReviewQueue from './ReviewQueue';
 import { FlagModal, type FlagReason } from './FlagModal';
@@ -49,11 +49,19 @@ const API_TAB: Record<Tab, 'pending' | 'flagged' | 'all' | 'released_all'> = {
 };
 
 // Server dedups by load_id (one event per load returned, pickup leg
-// preferred). totalCount is also a load count, so pagination math is
-// load-based. The client-side dedup memo below is now a defensive
+// preferred). The client-side dedup memo below is now a defensive
 // no-op — kept so a stale-server response (mid-deploy) doesn't
 // double-render a load.
-const PAGE_SIZE = 50;
+//
+// The page fetches the whole bucket in one go (BUCKET_LIMIT) and lets
+// OpsTable paginate at PAGE_SIZE locally. That way the Customer /
+// Driver / Delivered filter chips operate across every load, not just
+// the 50 on screen. BUCKET_LIMIT matches the API's in-memory
+// candidate caps (CANDIDATE_CAP=2000 for pending/flagged/all,
+// NARROW_CAP=5000 for released_all) so a single request covers the
+// full bucket.
+const PAGE_SIZE     = 50;
+const BUCKET_LIMIT  = 5000;
 
 interface CacheEntry {
   loads: CalendarEvent[];
@@ -128,10 +136,6 @@ export default function CloseoutView() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
 
   const [tab, setTab] = useState<Tab>('pending');
-  // Per-tab page state — switching tabs preserves where you were.
-  const [pageByTab, setPageByTab] = useState<Record<Tab, number>>({
-    pending: 0, flagged: 0, all: 0, released: 0,
-  });
   // Live counts shown on bucket tiles. Pre-fetched on mount and
   // refreshed alongside the main queue fetch — keeps the inactive
   // tile's number accurate without forcing a tab switch.
@@ -143,8 +147,6 @@ export default function CloseoutView() {
   // released view is a history surface for dispatchers WITHOUT
   // accounting access, so we don't pre-aggregate billing $ on it.
   const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0, released: 0 });
-  const page = pageByTab[tab];
-  const setPage = (next: number) => setPageByTab(p => ({ ...p, [tab]: next }));
 
   // Search across all loads in the current tab (not just the page on
   // screen). Live input lives in `searchInput`; the debounced value
@@ -160,10 +162,6 @@ export default function CloseoutView() {
     const t = setTimeout(() => setSearchQuery(effective), 250);
     return () => clearTimeout(t);
   }, [searchInput]);
-  // New search → reset to page 0 in the active tab; the user expects
-  // results to start from the top, not from wherever they were
-  // paginated to before searching.
-  useEffect(() => { setPage(0); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [searchQuery]);
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<QueueRow[]>([]);
@@ -194,15 +192,16 @@ export default function CloseoutView() {
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
   const openEditModal = useCalendarStore(s => s.openEditModal);
 
-  // In-memory cache keyed by `${tab}:${page}`. Tab switches and page
-  // changes show cached data instantly while a background refetch
-  // updates it. Cleared per-tab when an action mutates that tab's
-  // contents (verify / flag / etc).
+  // In-memory cache keyed by `${tab}:${searchQuery}`. Tab switches
+  // show cached data instantly while a background refetch updates it.
+  // Cleared per-tab when an action mutates that tab's contents
+  // (verify / flag / etc). Pagination is OpsTable-local now, so the
+  // cache key no longer needs a page index.
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
 
   // Cache key includes the search query so search results don't trip
   // over plain-queue results in the cache (and vice versa).
-  const cacheKey = `${tab}:${page}:${searchQuery}`;
+  const cacheKey = `${tab}:${searchQuery}`;
 
   const renderFromCache = (key: string): boolean => {
     const cached = cacheRef.current.get(key);
@@ -217,29 +216,27 @@ export default function CloseoutView() {
     if (showSpinner) setLoading(true);
     setError(null);
     try {
-      const offset = page * PAGE_SIZE;
+      // Pull the whole bucket so OpsTable's filter chips (Customer /
+      // Driver / Delivered) operate across every load, not just the
+      // 50 currently visible. BUCKET_LIMIT matches the API's
+      // in-memory candidate caps so a single request covers the
+      // bucket without a second page fetch.
       const { loads, docCounts, total } = await railway.listCloseoutQueue(API_TAB[tab], {
-        limit:  PAGE_SIZE,
-        offset,
-        q:      searchQuery || undefined,
+        limit: BUCKET_LIMIT,
+        q:     searchQuery || undefined,
       });
       const entry: CacheEntry = { loads, docCounts, total, fetchedAt: Date.now() };
-      cacheRef.current.set(`${tab}:${page}:${searchQuery}`, entry);
-      // Only update view state if user is still on this tab/page —
-      // background refetches for previous pages shouldn't clobber the
-      // current view.
-      if (tab === tab && page === page) {
-        setRows(loads as QueueRow[]);
-        setDocCounts(docCounts ?? {});
-        setTotal(total ?? loads.length);
-      }
+      cacheRef.current.set(`${tab}:${searchQuery}`, entry);
+      setRows(loads as QueueRow[]);
+      setDocCounts(docCounts ?? {});
+      setTotal(total ?? loads.length);
       mergeEvents(loads as QueueRow[]);
     } catch (err) {
       setError((err as Error).message ?? 'Failed to load queue');
     } finally {
       setLoading(false);
     }
-  }, [tab, page, searchQuery, mergeEvents]);
+  }, [tab, searchQuery, mergeEvents]);
 
   // Invalidate every cached page for the active tab — call after any
   // action that mutates membership (verify, flag, reopen). Search
@@ -846,12 +843,11 @@ export default function CloseoutView() {
   const rowKey = useCallback((r: QueueRow) => r.id, []);
 
   return (
-    <div className="flex-1 flex flex-col h-full min-w-0" style={{ background: 'var(--gc-bg)' }}>
-      <ManagementHeader title="Closeout" icon={FileCheck2} />
+    <AppShell title="Closeout" icon={FileCheck2}>
       {/* Fixed-height content area — table claims the remaining space
           and scrolls inside its own viewport. Outer padding lives here. */}
       <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
-        <div className="mx-auto w-full min-h-0 flex-1 flex flex-col gap-4" style={{ maxWidth: 1800 }}>
+        <div className="w-full min-h-0 flex-1 flex flex-col gap-4">
 
           {/* Purpose hint — keeps the split between Closeout and
               Accounting visible while users are still building muscle
@@ -968,10 +964,10 @@ export default function CloseoutView() {
           )}
 
           {/* Body — OpsTable owns filter chips, column picker, sort,
-              selection, and pagination. We turn its built-in pager
-              off because the server paginates upstream — the visible
-              data is one page of 50 rows; OpsTable's filters / sort
-              operate on that page only.
+              selection, AND pagination now. The page fetches the
+              whole bucket up front (BUCKET_LIMIT) so OpsTable's
+              filter chips (Customer / Driver / Delivered) operate
+              across every load, not just the 50 currently visible.
               key={tab}-bound resetKey flushes OpsTable's selection
               state across tab/search changes. */}
           {error ? (
@@ -979,7 +975,7 @@ export default function CloseoutView() {
               {error}
             </div>
           ) : (
-            <div className="flex-1 min-h-0 min-w-0 flex flex-col gap-3">
+            <div className="flex-1 min-h-0 min-w-0 flex">
               <OpsTable<QueueRow>
                 key={`closeout-${tab}-${selectionResetKey}`}
                 data={visible}
@@ -994,7 +990,8 @@ export default function CloseoutView() {
                 persistKey={`closeout-${tab}`}
                 selectable
                 onSelectionChange={setSelectedIds}
-                paginated={false}
+                paginated
+                pageSize={PAGE_SIZE}
                 fillHeight
                 emptyLabel={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
                 bulkActions={({ selectedIds: ids, clearSelection }) => (
@@ -1037,48 +1034,6 @@ export default function CloseoutView() {
                   </div>
                 )}
               />
-              {/* Server-pagination footer. OpsTable's internal pager
-                  is disabled (paginated=false) because the server is
-                  the source of truth — we render our own bar that
-                  matches the bucket-page mental model dispatchers
-                  already have. */}
-              {total > PAGE_SIZE && (
-                <div className="flex items-center justify-between px-1">
-                  <div className="text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-                    Page <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{page + 1}</span>
-                    {' '}of <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{Math.max(1, Math.ceil(total / PAGE_SIZE))}</span>
-                    {' '}· <span>{total.toLocaleString()} total</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <button type="button"
-                      onClick={() => setPage(Math.max(0, page - 1))}
-                      disabled={page === 0}
-                      className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg"
-                      style={{
-                        border:     '1px solid var(--gc-border)',
-                        background: 'var(--gc-surface)',
-                        color:      page === 0 ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
-                        opacity:    page === 0 ? 0.5 : 1,
-                        cursor:     page === 0 ? 'not-allowed' : 'pointer',
-                      }}>
-                      <ChevronLeft size={13} /> Prev
-                    </button>
-                    <button type="button"
-                      onClick={() => setPage(page + 1)}
-                      disabled={(page + 1) * PAGE_SIZE >= total}
-                      className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg"
-                      style={{
-                        border:     '1px solid var(--gc-border)',
-                        background: 'var(--gc-surface)',
-                        color:      (page + 1) * PAGE_SIZE >= total ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
-                        opacity:    (page + 1) * PAGE_SIZE >= total ? 0.5 : 1,
-                        cursor:     (page + 1) * PAGE_SIZE >= total ? 'not-allowed' : 'pointer',
-                      }}>
-                      Next <ChevronRight size={13} />
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -1150,7 +1105,7 @@ export default function CloseoutView() {
           onSaved={async () => { await refresh(); }}
         />
       )}
-    </div>
+    </AppShell>
   );
 }
 
