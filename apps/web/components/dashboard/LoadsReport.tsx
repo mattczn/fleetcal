@@ -4,7 +4,6 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { railway } from '@/lib/railway';
 import type { LoadSummary } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
@@ -56,19 +55,22 @@ function billableTotal(load: LoadSummary): number {
   return (load.loadPrice ?? 0) + billableAccessorials(load);
 }
 
-/** Build an ISO timestamp at the start (or end) of a calendar day,
- *  anchored to the org's dispatch timezone — NOT the viewer's
- *  device-local zone. Without the org anchor, a dispatcher in PT
- *  viewing a CT-based org would have their cutoff drift by 2 hours
- *  and slurp in a load picked up at 1am Saturday CT into a "Sat-Fri"
- *  pickup range. parseNaiveIsoInTz handles the conversion (and the
- *  DST transition hour) cleanly. Falls back to native parsing when
- *  no timezone is configured. */
-function orgStartOfDayIso(yyyymmdd: string, tz: string | undefined): string {
-  return new Date(parseNaiveIsoInTz(`${yyyymmdd}T00:00:00`, tz)).toISOString();
+/** Build a NAIVE org-local cutoff string ("YYYY-MM-DDTHH:mm:ss.SSS",
+ *  no Z, no offset). The /v1/reports/loads endpoint string-compares
+ *  pickupFrom/To against pickupAt, and pickupAt is stored as a naive
+ *  org-local string itself ("2026-05-30T01:00:00"). The lexicographic
+ *  comparison only matches the user's intuition when both sides live
+ *  in the same TZ semantics — i.e. naive on both ends.
+ *
+ *  Earlier this helper converted to a Z-suffixed UTC ISO, which
+ *  broke ordering: a naive "01:00:00" lex-compares LESS than a UTC
+ *  "04:59:59.999Z", so a load at 1am Sat CT slid under a "Sat-Fri"
+ *  pickup-end cutoff (the screenshot bug). */
+function orgStartOfDayNaive(yyyymmdd: string): string {
+  return `${yyyymmdd}T00:00:00.000`;
 }
-function orgEndOfDayIso(yyyymmdd: string, tz: string | undefined): string {
-  return new Date(parseNaiveIsoInTz(`${yyyymmdd}T23:59:59.999`, tz)).toISOString();
+function orgEndOfDayNaive(yyyymmdd: string): string {
+  return `${yyyymmdd}T23:59:59.999`;
 }
 
 
@@ -315,7 +317,7 @@ interface Props {
 }
 
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
-  const { customers, drivers, assets, openEditModal, dbReady, calendarTimezone } = useCalendarStore();
+  const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
   const { can } = usePermissions();
   // Hide the Driver Pay column entirely for users without
   // loads.view_driver_pay. The role matrix excludes Dispatcher and
@@ -445,14 +447,12 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     setError(null);
     setLoading(true);
     try {
-      // Hit the load-shaped report endpoint. One row per load, relays
-      // collapsed server-side, date filter applied server-side.
-      // Cutoffs anchored to the org's dispatch zone so "May 23 → May 29"
-      // means Sat 00:00 CT → Fri 23:59 CT regardless of where the
-      // dispatcher's laptop happens to be (otherwise a viewer in PT
-      // would over-include loads picked up early Saturday morning CT).
-      const fromIso = orgStartOfDayIso(from, calendarTimezone);
-      const toIso   = orgEndOfDayIso(to,   calendarTimezone);
+      // Naive cutoffs ("YYYY-MM-DDTHH:mm:ss") since the server's
+      // pickupAt/deliveryAt columns are naive org-local strings and
+      // the filter is a lexicographic compare. See orgStartOfDayNaive
+      // above for the why.
+      const fromIso = orgStartOfDayNaive(from);
+      const toIso   = orgEndOfDayNaive(to);
       const query: Record<string, string> = dateMode === 'delivery'
         ? { deliveryFrom: fromIso, deliveryTo: toIso }
         : { pickupFrom:   fromIso, pickupTo:   toIso };

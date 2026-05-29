@@ -412,22 +412,38 @@ export default function DashboardView() {
     [period, customStart, customEnd],
   );
 
-  // ISO timestamps anchored to the org's dispatch zone — used by every
-  // KPI fetch + loadSummaries fetch below. Without this anchor a
-  // dispatcher in PT viewing a CT-based org would have their period
-  // boundaries drift 2 hours and the "This Week" tile would slurp in
-  // loads picked up early Saturday morning CT (the exact bug surfaced
-  // on /dashboard's Custom Loads Report).
+  // Period boundaries in every flavor the various API endpoints need.
   //
-  // Recomputes only when the period dates or the org TZ changes.
+  // - reports.ts (loadSummaries) string-compares pickupFrom/To
+  //   against pickupAt, which is stored as a **naive** org-local
+  //   string ("2026-05-30T01:00:00", no offset). To make the
+  //   lexicographic comparison meaningful, we send naive strings
+  //   too — anchored to the same wall-clock as the stored value.
+  //   Sending a Z-suffixed UTC ISO was the wrong shape (a UTC
+  //   string and a naive string have different lexical ordering
+  //   for the same wall-clock moment).
+  //
+  // - fuel-transactions / payroll-records take date-only filters
+  //   ("YYYY-MM-DD"). Same date keys; no TZ math involved.
+  //
+  // - movements.odometer-summary compares `captured_at` (a real
+  //   timestamptz column) so it needs a UTC ISO anchored to the
+  //   org's wall-clock at the boundary moment.
   const periodIso = useMemo(() => {
     const fromKey = dateKeyOf(pStart);
     const toKey   = dateKeyOf(pEnd);
     return {
-      fromIso: new Date(parseNaiveIsoInTz(`${fromKey}T00:00:00`,     calendarTimezone)).toISOString(),
-      toIso:   new Date(parseNaiveIsoInTz(`${toKey}T23:59:59.999`,   calendarTimezone)).toISOString(),
-      fromDate: fromKey, // YYYY-MM-DD for endpoints that take date-only
-      toDate:   toKey,
+      // Naive org-local ISO ("YYYY-MM-DDTHH:mm:ss.SSS", no offset)
+      // for naive string-compare endpoints.
+      fromNaive: `${fromKey}T00:00:00.000`,
+      toNaive:   `${toKey}T23:59:59.999`,
+      // UTC ISO anchored to the org's wall-clock — for endpoints
+      // that compare real timestamps.
+      fromUtc:   new Date(parseNaiveIsoInTz(`${fromKey}T00:00:00`,   calendarTimezone)).toISOString(),
+      toUtc:     new Date(parseNaiveIsoInTz(`${toKey}T23:59:59.999`, calendarTimezone)).toISOString(),
+      // Date-only for endpoints with `date` columns.
+      fromDate:  fromKey,
+      toDate:    toKey,
     };
   }, [pStart, pEnd, calendarTimezone]);
 
@@ -453,10 +469,11 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
-        // Boundaries anchored to org TZ — see `periodIso` above.
+        // pickupAt on the server is a NAIVE org-local string and the
+        // filter is a lexicographic compare — send naive strings.
         const { loads } = await railway.listLoadSummaries({
-          pickupFrom: periodIso.fromIso,
-          pickupTo:   periodIso.toIso,
+          pickupFrom: periodIso.fromNaive,
+          pickupTo:   periodIso.toNaive,
         });
         if (!cancelled) setLoadSummaries(loads);
       } catch (err) {
@@ -649,9 +666,9 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
-        // Org-anchored window — see `periodIso`.
+        // captured_at is timestamptz — needs real UTC ISO.
         const { totalMiles } = await fetchWithRetry(
-          () => railway.odometerSummary(periodIso.fromIso, periodIso.toIso),
+          () => railway.odometerSummary(periodIso.fromUtc, periodIso.toUtc),
         );
         if (cancelled) return;
         setEldMiles(totalMiles);
