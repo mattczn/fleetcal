@@ -187,6 +187,20 @@ export class RailwayError extends Error {
 
 class RailwayClient {
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+    // First-paint auth race: if a component fires a request BEFORE
+    // RailwayClientProvider's mount-time useEffect has registered the
+    // token provider (this happens easily for early calendar /
+    // dashboard fetches), the request would otherwise go out with no
+    // Authorization header and 401. Poll briefly for the provider
+    // before falling back — this turns a flaky "you have to hard-
+    // refresh sometimes" symptom into a guaranteed authenticated
+    // first call. 2s cap is generous; in practice the provider is
+    // ready within 1-2 frames.
+    if (!_getToken) {
+      for (let i = 0; i < 20 && !_getToken; i++) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
     const token = _getToken ? await _getToken() : null;
     // FormData bodies: let the browser set Content-Type (with boundary)
     // and pass through unchanged. JSON bodies get the explicit header
