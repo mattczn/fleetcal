@@ -81,7 +81,7 @@ export type OpsColumn<T> = {
   subRender?: (row: T) => ReactNode;
   /** Explicit width — number = px, string = CSS dimension or "1fr". */
   width?: number | string;
-  align?: 'left' | 'right';
+  align?: 'left' | 'right' | 'center';
   sortable?: boolean;
   /** Comparator value when the cell renders something non-comparable. */
   sortValue?: (row: T) => string | number;
@@ -751,7 +751,10 @@ export function OpsTable<T>({
                   className="flex items-center gap-1 select-none transition-colors"
                   style={{
                     textAlign:  col.align ?? 'left',
-                    justifyContent: col.align === 'right' ? 'flex-end' : 'flex-start',
+                    justifyContent:
+                      col.align === 'right'  ? 'flex-end'    :
+                      col.align === 'center' ? 'center'      :
+                                               'flex-start',
                     color:      'var(--gc-text-3)',
                     fontSize:   11,
                     fontWeight: 600,

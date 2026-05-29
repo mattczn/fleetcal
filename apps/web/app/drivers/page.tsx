@@ -3,11 +3,30 @@
 /**
  * /drivers — driver performance scorecards.
  *
- * Per-driver activity metrics over a chosen period: loads delivered,
- * miles driven, inspection submission compliance, POD-on-time rate,
- * stop check-in rate, trailer-reporting rate, plus counts of fuel
- * and maintenance reports submitted. Click a driver row → side panel
- * with per-load drill-down.
+ * Per-driver activity metrics over a chosen period (default: This Week).
+ * Click a driver row → side panel with per-load drill-down.
+ *
+ * Metric definitions:
+ *   - Loads:        Count of legs this driver was assigned in the period
+ *                   (pickup-leg starts ∈ window). Each leg of a relay
+ *                   counts independently.
+ *   - Loaded Miles: Sum of leg.loadedMiles for THIS driver's legs.
+ *                   Deadhead miles are NOT included; relay loads only
+ *                   credit each driver for their own leg's loaded miles.
+ *   - Inspections:  Count of DVIRs submitted in the period (with
+ *                   sub-line for inspections that flagged defects).
+ *   - Insp %:       Days an inspection was submitted ÷ days the driver
+ *                   had a non-cancelled load SCHEDULED in the period.
+ *   - POD %:        Delivered loads where the POD doc was uploaded
+ *                   within 24h of deliveryAt ÷ delivered loads in the
+ *                   period. Cancelled + TONU loads excluded.
+ *   - Stops %:      Stops on this driver's legs where arrivedAt was
+ *                   populated (driver checked in) ÷ all of their stops.
+ *   - Trailer %:    Driver's legs where trailerId was set ÷ all legs.
+ *                   Reports how often the driver self-reported their
+ *                   trailer.
+ *   - Fuel:         Count of fuel reports submitted in the period.
+ *   - Maint:        Count of maintenance reports submitted in the period.
  *
  * Phase 1 is client-side aggregation: hit each of the four list
  * endpoints (loads, inspections, fuels, maintenance reports) once

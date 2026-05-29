@@ -57,9 +57,12 @@ export interface DriverScorecardRow {
   trailerReportedPct: number | null;
 }
 
-// Default 30d window — long enough that quiet weeks don't blank out
-// the page; short enough that the recent-performance signal is hot.
-const DEFAULT_PERIOD: Period = '30d';
+// Default period: "This week" (Saturday → Friday, matches the rest
+// of the app). Dispatchers look at the scorecard most often as a
+// "how's the team doing right now" snapshot, so the current week
+// is the natural starting view — they can widen to 30d / month
+// from the period selector when they need to see further back.
+const DEFAULT_PERIOD: Period = 'week';
 
 export default function DriversView() {
   const [period, setPeriod] = useState<Period>(DEFAULT_PERIOD);
@@ -200,11 +203,17 @@ export default function DriversView() {
       const driverLoads = loadsByDriver.get(driverId) ?? [];
       const driverInsps = inspectionsByDriver.get(driverId) ?? [];
 
-      // Inspection-compliance days: distinct YMDs the driver submitted
-      // an inspection / distinct YMDs the driver had a load running.
+      // Inspection compliance = days an inspection was submitted
+      // ÷ days the driver had a load SCHEDULED. We walk each load
+      // pickup-day → delivery-day inclusive (the period of time the
+      // driver is responsible for the truck), but skip cancelled
+      // loads — those don't count as "scheduled" for compliance
+      // purposes. Per-day distinct so a 3-day OTR run with one
+      // inspection counts as 1/3, not 1/many.
       const inspDays = new Set(driverInsps.map(r => r.inspectionDate));
       const loadDays = new Set<string>();
       for (const l of driverLoads) {
+        if (l.pickupStatus === 'cancelled') continue;
         const startDay = l.pickupAt.slice(0, 10);
         const endDay   = l.deliveryAt.slice(0, 10);
         // Walk inclusive. Most loads are 1-3 days; even an OTR run
@@ -222,33 +231,25 @@ export default function DriversView() {
         ? null
         : Math.round((inspDays.size / loadDays.size) * 100);
 
-      // POD-on-time. Requires the load to have a delivery in the past
-      // (we can't measure on-time-ness for upcoming deliveries) AND
-      // a POD upload. The first version uses an approximation —
-      // documentCounts.pod > 0 — until we expose per-doc uploadedAt
-      // on LoadSummary. So this is really "POD eventually submitted"
-      // for now; we'll tighten to 24h once the field is there.
+      // POD on-time = % of delivered loads whose POD doc was
+      // uploaded within 24 hours of deliveryAt. Server-side
+      // podUploadedAt = max(uploaded_at) for kind='pod' on this
+      // load. Eligible denominator: only loads whose delivery is in
+      // the past (we can't grade on-time-ness for future deliveries).
+      // Missing podUploadedAt counts AGAINST the driver — uploading
+      // late or not at all both fail the metric.
       let podOnTimeNum = 0, podOnTimeOf = 0;
       const nowMs = Date.now();
       const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
       for (const l of driverLoads) {
+        if (l.pickupStatus === 'cancelled' || l.isTonu) continue;
         const deliveredMs = new Date(`${l.deliveryAt}Z`).getTime();
         if (!Number.isFinite(deliveredMs) || deliveredMs > nowMs) continue;
         podOnTimeOf++;
-        const podCount = l.documentCounts?.pod ?? 0;
-        if (podCount > 0) {
-          // Approximation: if a POD exists and the load was delivered
-          // > 24h ago, count it as on-time (it had time to land). We
-          // can't see uploadedAt yet, so this avoids penalizing loads
-          // whose POD upload may have happened the same day.
-          const sinceDeliveryMs = nowMs - deliveredMs;
-          if (sinceDeliveryMs < TWENTY_FOUR_HOURS) {
-            podOnTimeNum++; // recent delivery, POD exists — credit
-          } else {
-            podOnTimeNum++; // POD exists, period — once uploadedAt is
-                            // available we'll narrow to <=24h here.
-          }
-        }
+        if (!l.podUploadedAt) continue;
+        const uploadedMs = new Date(l.podUploadedAt).getTime();
+        if (!Number.isFinite(uploadedMs)) continue;
+        if (uploadedMs - deliveredMs <= TWENTY_FOUR_HOURS) podOnTimeNum++;
       }
       const podOnTimePct = podOnTimeOf === 0 ? null
         : Math.round((podOnTimeNum / podOnTimeOf) * 100);
@@ -307,6 +308,10 @@ export default function DriversView() {
   }, [drivers, loads, inspections, fuels, maintenance]);
 
   // ── Columns ─────────────────────────────────────────────────────
+  // Every numeric / percent column is centered (both header AND cell)
+  // so the column reads as a single visual line down the table. The
+  // Driver name column stays left-aligned — long names need a left
+  // anchor or they look unmoored.
   const columns = useMemo<OpsColumn<DriverScorecardRow>[]>(() => [
     {
       key: 'driverName', header: 'Driver', width: 200,
@@ -319,24 +324,27 @@ export default function DriversView() {
       ),
     },
     {
-      key: 'loads', header: 'Loads', width: 80, align: 'right',
+      key: 'loads', header: 'Loads', width: 80, align: 'center',
       sortable: true,
       render: r => (
         <span className="font-semibold tabular-nums">{r.loads}</span>
       ),
     },
     {
-      key: 'miles', header: 'Miles', width: 100, align: 'right',
+      // Miles = sum of pickup-leg loaded_miles for THIS driver's legs
+      // (so each driver of a relay only gets credit for their share,
+      // not the full load). Deadhead miles are NOT included.
+      key: 'miles', header: 'Loaded Miles', width: 110, align: 'center',
       sortable: true,
       render: r => (
         <span className="tabular-nums">{r.miles.toLocaleString()}</span>
       ),
     },
     {
-      key: 'inspections', header: 'Inspections', width: 110, align: 'right',
+      key: 'inspections', header: 'Inspections', width: 110, align: 'center',
       sortable: true,
       render: r => (
-        <div className="text-right">
+        <div>
           <div className="tabular-nums font-semibold">{r.inspections}</div>
           {r.inspectionsWithDefects > 0 && (
             <div className="text-[10.5px] tabular-nums" style={{ color: '#b06000' }}>
@@ -347,36 +355,48 @@ export default function DriversView() {
       ),
     },
     {
-      key: 'inspectionCompliancePct', header: 'Insp %', width: 90, align: 'right',
+      // Inspection % = days an inspection was submitted ÷ days the
+      // driver had a (non-cancelled) load scheduled, in the period.
+      key: 'inspectionCompliancePct', header: 'Insp %', width: 90, align: 'center',
       sortable: true,
       sortValue: r => r.inspectionCompliancePct ?? -1,
       render: r => <PctCell value={r.inspectionCompliancePct} thresholds={{ ok: 90, warn: 70 }} />,
     },
     {
-      key: 'podOnTimePct', header: 'POD %', width: 90, align: 'right',
+      // POD % = delivered loads where the POD was uploaded within
+      // 24 hours of deliveryAt ÷ delivered loads in the period.
+      // Cancelled + TONU loads excluded from the denominator.
+      key: 'podOnTimePct', header: 'POD %', width: 90, align: 'center',
       sortable: true,
       sortValue: r => r.podOnTimePct ?? -1,
       render: r => <PctCell value={r.podOnTimePct} thresholds={{ ok: 90, warn: 70 }} suffix={r.podOnTimeOf > 0 ? `/${r.podOnTimeOf}` : undefined} />,
     },
     {
-      key: 'stopCheckInPct', header: 'Stops %', width: 95, align: 'right',
+      // Stops % = stops the driver checked into (arrivedAt populated)
+      // ÷ all stops on this driver's legs.
+      key: 'stopCheckInPct', header: 'Stops %', width: 95, align: 'center',
       sortable: true,
       sortValue: r => r.stopCheckInPct ?? -1,
       render: r => <PctCell value={r.stopCheckInPct} thresholds={{ ok: 90, warn: 70 }} suffix={r.stopCheckInOf > 0 ? `/${r.stopCheckInOf}` : undefined} />,
     },
     {
-      key: 'trailerReportedPct', header: 'Trailer %', width: 95, align: 'right',
+      // Trailer % = legs where a trailerId was set ÷ all of this
+      // driver's legs. Reports the driver-reported trailer rate.
+      key: 'trailerReportedPct', header: 'Trailer %', width: 95, align: 'center',
       sortable: true,
       sortValue: r => r.trailerReportedPct ?? -1,
       render: r => <PctCell value={r.trailerReportedPct} thresholds={{ ok: 95, warn: 80 }} />,
     },
     {
-      key: 'fuelReports', header: 'Fuel', width: 70, align: 'right',
+      // Fuel = count of fuel reports the driver submitted in the period.
+      key: 'fuelReports', header: 'Fuel', width: 70, align: 'center',
       sortable: true,
       render: r => <span className="tabular-nums">{r.fuelReports}</span>,
     },
     {
-      key: 'maintenanceReports', header: 'Maint', width: 70, align: 'right',
+      // Maintenance = count of maintenance reports the driver
+      // submitted in the period.
+      key: 'maintenanceReports', header: 'Maint', width: 70, align: 'center',
       sortable: true,
       render: r => <span className="tabular-nums">{r.maintenanceReports}</span>,
     },

@@ -1593,6 +1593,13 @@ export interface LoadSummary {
    *  shape the /v1/closeout/queue endpoint returns in its docCounts
    *  side dictionary. */
   documentCounts?:  Record<string, number>;
+  /** Latest POD upload timestamp for this load (max(uploaded_at) over
+   *  load_documents WHERE kind='pod'). Used by the drivers scorecard
+   *  to compute "POD within 24h of delivery." Undefined if no POD has
+   *  been uploaded — consumers should treat that as "not yet" and only
+   *  count the load as on-time when this is set AND ≤ 24h after
+   *  deliveryAt. */
+  podUploadedAt?:   string;
 
   // Audit
   auditLog?:        LoadAuditEntry[];

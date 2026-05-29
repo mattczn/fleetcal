@@ -452,12 +452,46 @@ reports.get("/loads", async (c) => {
     }
   }
 
+  // ── Stage 3.5: latest POD upload time per load ────────────────────
+  // Used by the drivers scorecard to compute "POD within 24h of
+  // delivery." We pull max(uploaded_at) WHERE kind='pod' for the
+  // loads in this report window — one query in BATCH chunks,
+  // grouped client-side. Cheap enough to include in every list
+  // response; only the drivers page reads it today, but it's a
+  // natural extension of documentCounts which other report
+  // consumers might want later.
+  const podUploadedAtByLoad = new Map<string, string>();
+  for (let i = 0; i < loadIds.length; i += BATCH) {
+    const slice = loadIds.slice(i, i + BATCH);
+    if (slice.length === 0) continue;
+    const { data: podRows, error: podErr } = await supabase
+      .from("load_documents")
+      .select("load_id, uploaded_at")
+      .eq("org_id", orgId)
+      .eq("kind", "pod")
+      .in("load_id", slice)
+      .order("uploaded_at", { ascending: false });
+    if (podErr) {
+      console.warn("[GET /v1/reports/loads] POD upload times query failed (non-fatal):", podErr.message);
+      break; // skip enrichment; consumers see undefined and fall back gracefully
+    }
+    for (const r of (podRows ?? []) as Array<{ load_id: string | null; uploaded_at: string }>) {
+      if (!r.load_id) continue;
+      // First row per load wins (ordered desc by uploaded_at).
+      if (!podUploadedAtByLoad.has(r.load_id)) {
+        podUploadedAtByLoad.set(r.load_id, r.uploaded_at);
+      }
+    }
+  }
+
   // ── Stage 4: build LoadSummary[] ───────────────────────────────────
   let summaries: LoadSummary[] = [];
   for (const load of allLoads) {
     const evs = eventsByLoad.get(load.id) ?? [];
     if (evs.length === 0) continue; // orphan load with no events — skip
-    summaries.push(buildLoadSummary(load, evs, stopsByEvent));
+    const s = buildLoadSummary(load, evs, stopsByEvent);
+    s.podUploadedAt = podUploadedAtByLoad.get(load.id);
+    summaries.push(s);
   }
 
   // ── Stage 5: post-fetch filters on per-leg fields ──────────────────
