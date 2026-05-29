@@ -205,6 +205,40 @@ export default function EquipmentPage() {
   const [fuelDataVersion, setFuelDataVersion] = useState(0);
   const bumpFuelData = useCallback(() => setFuelDataVersion(v => v + 1), []);
 
+  // Deep-link handler: when the page mounts with ?inspection=<id> in
+  // the URL (e.g. the Drivers detail panel's "open this DVIR" jump),
+  // switch to the Inspections tab and pop the InspectionDetail panel
+  // for that report. The detail panel re-fetches by id, so we hold a
+  // minimal InspectionRow stub in panel state to satisfy PanelData's
+  // discriminator — panel.row is never actually read in this file
+  // (it's write-only state). Strip the param so refresh/back doesn't
+  // re-pop.
+  const pageRouter = useRouter();
+  const inspectionDeepLinkConsumed = useRef(false);
+  useEffect(() => {
+    if (inspectionDeepLinkConsumed.current) return;
+    const inspId = searchParams?.get('inspection');
+    if (!inspId) return;
+    inspectionDeepLinkConsumed.current = true;
+    setTab('inspections');
+    setPanel({
+      kind: 'inspection',
+      id: inspId,
+      row: {
+        id: inspId, driverId: 0, driverName: '',
+        assetId: null, assetName: null,
+        trailerId: null, trailerName: null,
+        inspectionDate: '', hasDefects: false,
+        defectCount: 0, itemCount: 0, photoCount: 0,
+        durationSeconds: null, submittedAt: '', signedBy: '',
+      } as InspectionRow,
+    });
+    const next = new URLSearchParams(searchParams?.toString() ?? '');
+    next.delete('inspection');
+    const q = next.toString();
+    pageRouter.replace(`/equipment${q ? `?${q}` : ''}`);
+  }, [searchParams, pageRouter]);
+
   return (
     // h-screen (not min-h-screen) so the outer column has a FIXED
     // height equal to the viewport. Without that bound, the flex-1

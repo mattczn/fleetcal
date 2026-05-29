@@ -84,7 +84,7 @@ export default function DriversView() {
   // build below.
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [loads, setLoads] = useState<LoadSummary[]>([]);
-  const [inspections, setInspections] = useState<Array<{ driverId: number; submittedAt: string; hasDefects: boolean; inspectionDate: string }>>([]);
+  const [inspections, setInspections] = useState<Array<{ id: string; driverId: number; submittedAt: string; hasDefects: boolean; inspectionDate: string }>>([]);
   const [fuels, setFuels] = useState<FuelReport[]>([]);
   const [maintenance, setMaintenance] = useState<MaintenanceReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,6 +123,7 @@ export default function DriversView() {
         setDrivers(driverRes.drivers);
         setLoads(loadRes.loads);
         setInspections(inspRes.inspections.map(r => ({
+          id:             r.id,
           driverId:       r.driverId,
           submittedAt:    r.submittedAt,
           hasDefects:     r.hasDefects,
@@ -326,16 +327,17 @@ export default function DriversView() {
     {
       key: 'loads', header: 'Loads', width: 80, align: 'center',
       sortable: true,
+      headerTooltip:
+        'Count of legs assigned to this driver whose pickup falls inside the period. Relay loads count each leg separately.',
       render: r => (
         <span className="font-semibold tabular-nums">{r.loads}</span>
       ),
     },
     {
-      // Miles = sum of pickup-leg loaded_miles for THIS driver's legs
-      // (so each driver of a relay only gets credit for their share,
-      // not the full load). Deadhead miles are NOT included.
       key: 'miles', header: 'Loaded Miles', width: 110, align: 'center',
       sortable: true,
+      headerTooltip:
+        'Sum of loadedMiles for this driver\'s legs only. Excludes deadhead. On relays, each driver gets only their leg.',
       render: r => (
         <span className="tabular-nums">{r.miles.toLocaleString()}</span>
       ),
@@ -343,6 +345,8 @@ export default function DriversView() {
     {
       key: 'inspections', header: 'Inspections', width: 110, align: 'center',
       sortable: true,
+      headerTooltip:
+        'Count of DVIRs submitted in the period. Sub-line counts how many of those flagged defects.',
       render: r => (
         <div>
           <div className="tabular-nums font-semibold">{r.inspections}</div>
@@ -355,49 +359,49 @@ export default function DriversView() {
       ),
     },
     {
-      // Inspection % = days an inspection was submitted ÷ days the
-      // driver had a (non-cancelled) load scheduled, in the period.
       key: 'inspectionCompliancePct', header: 'Insp %', width: 90, align: 'center',
       sortable: true,
       sortValue: r => r.inspectionCompliancePct ?? -1,
+      headerTooltip:
+        'Days the driver submitted an inspection ÷ days they had a non-cancelled load scheduled (pickup-day through delivery-day inclusive).',
       render: r => <PctCell value={r.inspectionCompliancePct} thresholds={{ ok: 90, warn: 70 }} />,
     },
     {
-      // POD % = delivered loads where the POD was uploaded within
-      // 24 hours of deliveryAt ÷ delivered loads in the period.
-      // Cancelled + TONU loads excluded from the denominator.
       key: 'podOnTimePct', header: 'POD %', width: 90, align: 'center',
       sortable: true,
       sortValue: r => r.podOnTimePct ?? -1,
+      headerTooltip:
+        'Delivered loads where a POD doc was uploaded within 24h of deliveryAt ÷ delivered loads in the period. Cancelled + TONU loads excluded.',
       render: r => <PctCell value={r.podOnTimePct} thresholds={{ ok: 90, warn: 70 }} suffix={r.podOnTimeOf > 0 ? `/${r.podOnTimeOf}` : undefined} />,
     },
     {
-      // Stops % = stops the driver checked into (arrivedAt populated)
-      // ÷ all stops on this driver's legs.
       key: 'stopCheckInPct', header: 'Stops %', width: 95, align: 'center',
       sortable: true,
       sortValue: r => r.stopCheckInPct ?? -1,
+      headerTooltip:
+        'Stops on this driver\'s legs where arrivedAt was populated (driver checked in) ÷ all of their stops.',
       render: r => <PctCell value={r.stopCheckInPct} thresholds={{ ok: 90, warn: 70 }} suffix={r.stopCheckInOf > 0 ? `/${r.stopCheckInOf}` : undefined} />,
     },
     {
-      // Trailer % = legs where a trailerId was set ÷ all of this
-      // driver's legs. Reports the driver-reported trailer rate.
       key: 'trailerReportedPct', header: 'Trailer %', width: 95, align: 'center',
       sortable: true,
       sortValue: r => r.trailerReportedPct ?? -1,
+      headerTooltip:
+        'Driver\'s legs where a trailerId was set ÷ all of their legs in the period. How often the driver self-reported their trailer.',
       render: r => <PctCell value={r.trailerReportedPct} thresholds={{ ok: 95, warn: 80 }} />,
     },
     {
-      // Fuel = count of fuel reports the driver submitted in the period.
       key: 'fuelReports', header: 'Fuel', width: 70, align: 'center',
       sortable: true,
+      headerTooltip:
+        'Count of fuel reports submitted by this driver in the period.',
       render: r => <span className="tabular-nums">{r.fuelReports}</span>,
     },
     {
-      // Maintenance = count of maintenance reports the driver
-      // submitted in the period.
       key: 'maintenanceReports', header: 'Maint', width: 70, align: 'center',
       sortable: true,
+      headerTooltip:
+        'Count of maintenance reports submitted by this driver in the period.',
       render: r => <span className="tabular-nums">{r.maintenanceReports}</span>,
     },
   ], []);

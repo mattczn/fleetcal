@@ -82,6 +82,11 @@ export type OpsColumn<T> = {
   /** Explicit width — number = px, string = CSS dimension or "1fr". */
   width?: number | string;
   align?: 'left' | 'right' | 'center';
+  /** Optional hover tooltip surfaced on the column header. Use this
+   *  to explain a metric's formula (e.g. "POD uploaded within 24h of
+   *  delivery ÷ delivered loads") so the table is self-documenting
+   *  without requiring a help icon next to every column. */
+  headerTooltip?: string;
   sortable?: boolean;
   /** Comparator value when the cell renders something non-comparable. */
   sortValue?: (row: T) => string | number;
@@ -748,6 +753,7 @@ export function OpsTable<T>({
                   type="button"
                   disabled={!canSort}
                   onClick={canSort && h ? () => h.column.toggleSorting() : undefined}
+                  title={col.headerTooltip}
                   className="flex items-center gap-1 select-none transition-colors"
                   style={{
                     textAlign:  col.align ?? 'left',

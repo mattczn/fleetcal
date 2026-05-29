@@ -15,8 +15,10 @@
 
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { X, Truck, ClipboardCheck, Fuel as FuelIcon, Wrench, MapPin, FileCheck2 } from 'lucide-react';
 import type { LoadSummary } from '@fleetcal/types';
+import { useCalendarStore } from '@/store/useCalendarStore';
 import type { DriverScorecardRow } from './DriversView';
 
 interface Props {
@@ -27,7 +29,7 @@ interface Props {
    *  the panel doesn't need to know about period/driver-id matching. */
   loads: LoadSummary[];
   /** Pre-filtered inspections. Same shape as the parent's flat list. */
-  inspections: Array<{ submittedAt: string; hasDefects: boolean; inspectionDate: string }>;
+  inspections: Array<{ id: string; submittedAt: string; hasDefects: boolean; inspectionDate: string }>;
   /** Display string for the period (e.g. "2026-05-01 → 2026-05-31"). */
   period: string;
   onClose: () => void;
@@ -35,6 +37,8 @@ interface Props {
 
 export default function DriverDetailPanel({ row, loads, inspections, period, onClose }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const openEditModal = useCalendarStore(s => s.openEditModal);
   // Esc to close — same convention as the rest of the modal stack.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -43,6 +47,21 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
   }, [onClose]);
 
   if (!row) return null;
+
+  // Open the calendar's event modal in edit mode on a specific load.
+  // Same handoff the broker profile uses (BrokerProfileModal:148-151);
+  // the calendar page mounts the EventModal which loads the load by id.
+  const openLoad = (loadId: string) => {
+    openEditModal(loadId);
+    router.push('/calendar');
+  };
+
+  // Open the equipment page's inspection panel by id. Equipment has a
+  // ?inspection=<id> deep-link handler that fetches the report and
+  // pops the right-side InspectionDetail panel.
+  const openInspection = (inspectionId: string) => {
+    router.push(`/equipment?tab=inspections&inspection=${encodeURIComponent(inspectionId)}`);
+  };
 
   const content = (
     <div
@@ -106,13 +125,20 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
                 {loads.slice(0, 50).map((l, i) => {
                   const podCount = l.documentCounts?.pod ?? 0;
                   return (
-                    <div key={l.loadId}
-                      className="flex items-center gap-3 px-3 py-2.5 text-[13px]"
+                    <button
+                      key={l.loadId}
+                      type="button"
+                      onClick={() => openLoad(l.loadId)}
+                      title="Open this load on the calendar"
+                      className="flex items-center gap-3 px-3 py-2.5 text-[13px] text-left w-full transition-colors"
                       style={{
                         borderTop: i === 0 ? 'none' : '1px solid var(--gc-border-light)',
                         background: 'var(--gc-surface)',
-                      }}>
-                      <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', minWidth: 64 }}>
+                        cursor: 'pointer',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+                      <span className="font-semibold tabular-nums hover:underline" style={{ color: 'var(--gc-blue)', minWidth: 64 }}>
                         {l.loadNum ? `#${l.loadNum}` : `#${l.internalLoadId}`}
                       </span>
                       <span className="flex-1 truncate" style={{ color: 'var(--gc-text-2)' }}>
@@ -129,7 +155,7 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
                         }}>
                         {podCount > 0 ? 'POD' : 'no POD'}
                       </span>
-                    </div>
+                    </button>
                   );
                 })}
                 {loads.length > 50 && (
@@ -151,13 +177,20 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
                   .sort((a, b) => b.inspectionDate.localeCompare(a.inspectionDate))
                   .slice(0, 50)
                   .map((r, i) => (
-                  <div key={`${r.inspectionDate}-${i}`}
-                    className="flex items-center gap-3 px-3 py-2.5 text-[13px]"
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => openInspection(r.id)}
+                    title="Open this DVIR on the equipment page"
+                    className="flex items-center gap-3 px-3 py-2.5 text-[13px] text-left w-full transition-colors"
                     style={{
                       borderTop: i === 0 ? 'none' : '1px solid var(--gc-border-light)',
                       background: 'var(--gc-surface)',
-                    }}>
-                    <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', minWidth: 100 }}>
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+                    <span className="font-semibold tabular-nums hover:underline" style={{ color: 'var(--gc-blue)', minWidth: 100 }}>
                       {r.inspectionDate}
                     </span>
                     <span className="flex-1" style={{ color: 'var(--gc-text-3)' }}>
@@ -174,7 +207,7 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
                         clear
                       </span>
                     )}
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
