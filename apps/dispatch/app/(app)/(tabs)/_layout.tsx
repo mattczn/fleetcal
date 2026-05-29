@@ -1,6 +1,6 @@
 import React from "react";
 import { Tabs } from "expo-router";
-import { Home, CalendarDays, Map as MapIcon } from "lucide-react-native";
+import { Home, CalendarDays, Map as MapIcon, Wrench } from "lucide-react-native";
 
 export default function TabsLayout() {
   return (
@@ -46,6 +46,15 @@ export default function TabsLayout() {
           title: "Map",
           tabBarIcon: ({ color, focused }) => (
             <MapIcon size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="maintenance"
+        options={{
+          title: "Maintenance",
+          tabBarIcon: ({ color, focused }) => (
+            <Wrench size={22} color={color} strokeWidth={focused ? 2.4 : 2} />
           ),
         }}
       />

@@ -189,7 +189,12 @@ type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all" | "r
 closeout.get("/queue", async (c) => {
   const orgId = c.get("orgId");
   const tab = ((c.req.query("tab") ?? "pending") as Tab);
-  const limit  = Math.min(Math.max(Number(c.req.query("limit") ?? "50"), 1), 200);
+  // Cap matches the in-memory candidate buffers below (CANDIDATE_CAP /
+  // NARROW_CAP) so a single request can cover the whole bucket — the
+  // /closeout client now fetches the full set and paginates locally
+  // so its filter chips (Customer / Driver / Delivered) operate across
+  // every load, not just the page on screen.
+  const limit  = Math.min(Math.max(Number(c.req.query("limit") ?? "50"), 1), 5000);
   const offset = Math.max(Number(c.req.query("offset") ?? "0"), 0);
   // Search query — empty / <2 chars disables search. When active, we
   // also lift the date filter on the pending tab so the search reaches

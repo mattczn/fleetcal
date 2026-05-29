@@ -46,6 +46,15 @@ import type {
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
   GetEventResponse,
   ListRecentStopsResponse,
+  ListMaintenanceReportsQuery, ListMaintenanceReportsResponse,
+  GetMaintenanceReportResponse,
+  UpdateMaintenanceReportRequest, UpdateMaintenanceReportResponse,
+  ConvertMaintenanceReportRequest, ConvertMaintenanceReportResponse,
+  ListMaintenanceActionItemsQuery, ListMaintenanceActionItemsResponse,
+  GetMaintenanceActionItemResponse,
+  CreateMaintenanceActionItemRequest, CreateMaintenanceActionItemResponse,
+  UpdateMaintenanceActionItemRequest, UpdateMaintenanceActionItemResponse,
+  UploadMaintenanceActionItemPhotoResponse, DeleteMaintenanceActionItemPhotoResponse,
 } from "@fleetcal/types";
 
 import { env } from "./env";
@@ -275,6 +284,105 @@ class RailwayClient {
   }
   deleteCheckCall(id: string) {
     return this.req<void>("DELETE", `/v1/check-calls/${id}`);
+  }
+
+  // ── Maintenance reports (driver-submitted) ───────────────────────────
+  listMaintenanceReports(query: ListMaintenanceReportsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)    qs.set("status",    query.status);
+    if (query.assetId)   qs.set("assetId",   String(query.assetId));
+    if (query.trailerId) qs.set("trailerId", String(query.trailerId));
+    if (query.driverId)  qs.set("driverId",  String(query.driverId));
+    if (query.from)      qs.set("from",      query.from);
+    if (query.to)        qs.set("to",        query.to);
+    if (query.limit)     qs.set("limit",     String(query.limit));
+    if (query.offset)    qs.set("offset",    String(query.offset));
+    const s = qs.toString();
+    return this.req<ListMaintenanceReportsResponse>("GET", `/v1/maintenance-reports${s ? `?${s}` : ""}`);
+  }
+  getMaintenanceReport(id: string) {
+    return this.req<GetMaintenanceReportResponse>("GET", `/v1/maintenance-reports/${id}`);
+  }
+  updateMaintenanceReport(id: string, body: UpdateMaintenanceReportRequest) {
+    return this.req<UpdateMaintenanceReportResponse>("PATCH", `/v1/maintenance-reports/${id}`, body);
+  }
+  convertMaintenanceReport(id: string, body: ConvertMaintenanceReportRequest = {}) {
+    return this.req<ConvertMaintenanceReportResponse>("POST", `/v1/maintenance-reports/${id}/convert`, body);
+  }
+
+  // ── Maintenance action items (work orders) ───────────────────────────
+  listMaintenanceActionItems(query: ListMaintenanceActionItemsQuery = {}) {
+    const qs = new URLSearchParams();
+    if (query.status)        qs.set("status",        query.status);
+    if (query.priority)      qs.set("priority",      query.priority);
+    if (query.category)      qs.set("category",      query.category);
+    if (query.outOfService != null) qs.set("outOfService", String(query.outOfService));
+    if (query.assetId)       qs.set("assetId",       String(query.assetId));
+    if (query.trailerId)     qs.set("trailerId",     String(query.trailerId));
+    if (query.scheduledFrom) qs.set("scheduledFrom", query.scheduledFrom);
+    if (query.scheduledTo)   qs.set("scheduledTo",   query.scheduledTo);
+    if (query.eventId)       qs.set("eventId",       query.eventId);
+    if (query.limit)         qs.set("limit",         String(query.limit));
+    if (query.offset)        qs.set("offset",        String(query.offset));
+    const s = qs.toString();
+    return this.req<ListMaintenanceActionItemsResponse>("GET", `/v1/maintenance-action-items${s ? `?${s}` : ""}`);
+  }
+  getMaintenanceActionItem(id: string) {
+    return this.req<GetMaintenanceActionItemResponse>("GET", `/v1/maintenance-action-items/${id}`);
+  }
+  createMaintenanceActionItem(body: CreateMaintenanceActionItemRequest) {
+    return this.req<CreateMaintenanceActionItemResponse>("POST", "/v1/maintenance-action-items", body);
+  }
+  updateMaintenanceActionItem(id: string, body: UpdateMaintenanceActionItemRequest) {
+    return this.req<UpdateMaintenanceActionItemResponse>("PATCH", `/v1/maintenance-action-items/${id}`, body);
+  }
+  deleteMaintenanceActionItem(id: string) {
+    return this.req<void>("DELETE", `/v1/maintenance-action-items/${id}`);
+  }
+  /**
+   * Multipart upload — one photo per call. React Native's fetch handles
+   * FormData with `{ uri, name, type }` parts natively; we bypass `req()`
+   * here so we can set the body without its JSON Content-Type header.
+   * The expo-image-picker URI comes in as `file://…` on iOS and
+   * `content://…` on Android — fetch accepts both transparently.
+   */
+  async uploadMaintenanceActionItemPhoto(
+    actionItemId: string,
+    fileUri: string,
+    fileName: string,
+    mimeType: string,
+  ) {
+    const token = _getToken ? await _getToken() : null;
+    const form = new FormData();
+    // React Native typings disagree about FormData's `append` overload;
+    // the `{ uri, name, type }` object is what RN actually accepts.
+    form.append("file", { uri: fileUri, name: fileName, type: mimeType } as unknown as Blob);
+
+    const res = await fetch(
+      `${BASE_URL}/v1/maintenance-action-items/${actionItemId}/photos`,
+      {
+        method: "POST",
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: form,
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      let detail: unknown = text;
+      try { detail = JSON.parse(text); } catch { /* keep raw text */ }
+      throw new RailwayError(
+        res.status,
+        detail,
+        `POST /v1/maintenance-action-items/${actionItemId}/photos → ${res.status}`,
+      );
+    }
+    return res.json() as Promise<UploadMaintenanceActionItemPhotoResponse>;
+  }
+  deleteMaintenanceActionItemPhoto(photoId: string) {
+    return this.req<DeleteMaintenanceActionItemPhotoResponse>(
+      "DELETE",
+      `/v1/maintenance-action-items/photos/${photoId}`,
+    );
   }
 
   /** Public health check — no auth. Useful for smoke testing. */

@@ -410,19 +410,29 @@ export default function MapScreen() {
     [locations, assets],
   );
 
-  // Auto-focus when entering with assetId param (from home asset picker)
+  // Auto-focus when entering with assetId param (from home asset picker).
+  //
+  // Always re-snap to the param's asset — no guards on the existing
+  // selection. The previous version only fired when nothing was
+  // selected yet, which meant arriving with a NEW assetId on a
+  // still-mounted map screen (kept alive by the tab navigator) left
+  // the camera stuck on the asset from the previous visit.
+  //
+  // After applying, we consume the param via router.setParams so that
+  // re-navigating to the SAME asset later — after a manual truck click
+  // changed selectedVehicleId — counts as a fresh null → assetId
+  // transition and re-fires the effect.
   React.useEffect(() => {
-    if (!focusAssetId) return;
+    if (focusAssetId == null) return;
     const asset = assets.find((a) => a.id === focusAssetId);
+    // Bail until assets have loaded — without this we'd consume the
+    // param before we have the motiveVehicleId to snap to.
     if (!asset) return;
-    if (asset.motiveVehicleId && !selectedVehicleId) {
-      setSelectedVehicleId(asset.motiveVehicleId);
-    }
-    if (!focusedLoadId) {
-      const load = activeLoadsByAsset.get(focusAssetId);
-      if (load) setFocusedLoadId(load.id);
-    }
-  }, [focusAssetId, assets, activeLoadsByAsset, focusedLoadId, selectedVehicleId]);
+    setSelectedVehicleId(asset.motiveVehicleId ?? null);
+    const load = activeLoadsByAsset.get(focusAssetId);
+    setFocusedLoadId(load?.id ?? null);
+    router.setParams({ assetId: undefined });
+  }, [focusAssetId, assets, activeLoadsByAsset, router]);
 
   // When the user arrives at the map screen via "Zoom to truck"
   // (or switches to a different truck while already here), reset
