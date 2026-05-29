@@ -5,7 +5,9 @@ import Link from 'next/link';
 import {
   TrendingUp, Truck, CheckCircle2, DollarSign,
   BarChart2, AlertCircle, Loader2,
+  Wallet, Fuel, Route, Gauge,
 } from 'lucide-react';
+import { fetchWithRetry } from '@/lib/fetchWithRetry';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
@@ -51,6 +53,12 @@ function fmtFull(n: number): string {
     style: 'currency', currency: 'USD',
     minimumFractionDigits: 0, maximumFractionDigits: 0,
   }).format(n);
+}
+
+/** "12,345 mi" — period mileage formatter. Whole miles; locale-grouped
+ *  thousands so the value is glanceable on the KPI tile. */
+function fmtMiles(n: number): string {
+  return `${Math.round(n).toLocaleString('en-US')} mi`;
 }
 
 function parseEventDate(start: string): Date {
@@ -305,6 +313,69 @@ export default function DashboardView() {
       } catch (err) {
         console.error('[DashboardView] listLoadSummaries failed:', err);
         if (!cancelled) setLoadSummaries([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dbReady, pStart, pEnd]);
+
+  // ── Fuel spend (period total) ─────────────────────────────────────────
+  //
+  // Sourced from /v1/fuel-transactions, filtered by transaction_date in
+  // the period. Mirrors the equipment-fuel-tab fetch pattern: dates as
+  // YYYY-MM-DD (no time portion — Mudflap receipts are date-only) and
+  // a generous limit since this is a sum, not a paged display.
+  const [fuelSpend, setFuelSpend] = useState<number | null>(null);
+  useEffect(() => {
+    if (!dbReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const fromDate = pStart.toISOString().slice(0, 10);
+        const endOfDay = new Date(pEnd);
+        endOfDay.setHours(23, 59, 59, 999);
+        const toDate = endOfDay.toISOString().slice(0, 10);
+        const { fuelTransactions } = await fetchWithRetry(
+          () => railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 5000 }),
+        );
+        if (cancelled) return;
+        const sum = fuelTransactions.reduce((s, t) => s + (t.totalCharged ?? 0), 0);
+        setFuelSpend(sum);
+      } catch (err) {
+        console.error('[DashboardView] listFuelTransactions failed:', err);
+        if (!cancelled) setFuelSpend(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dbReady, pStart, pEnd]);
+
+  // ── ELD miles (period total) ──────────────────────────────────────────
+  //
+  // Sum of MovementCard.miles across every vehicle in /v1/movements.
+  // Movements are sourced from Motive ELDs, so trucks without ELDs are
+  // naturally excluded — no per-asset filter needed. listMovements takes
+  // ISO timestamps (not date-only).
+  const [eldMiles, setEldMiles] = useState<number | null>(null);
+  useEffect(() => {
+    if (!dbReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const fromIso = pStart.toISOString();
+        const endOfDay = new Date(pEnd);
+        endOfDay.setHours(23, 59, 59, 999);
+        const toIso = endOfDay.toISOString();
+        const { byVehicle } = await fetchWithRetry(
+          () => railway.listMovements(fromIso, toIso),
+        );
+        if (cancelled) return;
+        let total = 0;
+        for (const movements of Object.values(byVehicle)) {
+          for (const m of movements) total += m.miles ?? 0;
+        }
+        setEldMiles(total);
+      } catch (err) {
+        console.error('[DashboardView] listMovements failed:', err);
+        if (!cancelled) setEldMiles(0);
       }
     })();
     return () => { cancelled = true; };
@@ -711,8 +782,12 @@ export default function DashboardView() {
 
           {/* Performance view — existing revenue/loads dashboard. */}
           {view === 'performance' && <>
-          {/* KPI row */}
+          {/* KPI grid — 8 cards in two rows of four. Row 1 covers the
+              top-line financials (revenue + costs); row 2 covers the
+              operational volume (miles + loads). The grid wraps to 2×4
+              on lg, 4×2 on smaller screens. */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Row 1 ─ financials */}
             <KpiCard
               label="Total Revenue"
               value={fmt(kpis.revenue)}
@@ -721,18 +796,47 @@ export default function DashboardView() {
               accent="#1a73e8"
             />
             <KpiCard
-              label="Total Loads"
-              value={String(kpis.loads)}
-              sub="loads dispatched this period"
-              icon={<Truck size={17} />}
-              accent="#1e8e3e"
-            />
-            <KpiCard
               label="Avg Revenue / Asset"
               value={kpis.activeAssets > 0 ? fmt(kpis.avgRevPerAsset) : '—'}
               sub={`across ${kpis.activeAssets} active asset${kpis.activeAssets !== 1 ? 's' : ''}`}
               icon={<CheckCircle2 size={17} />}
               accent="#f9ab00"
+            />
+            <KpiCard
+              label="Total Payroll"
+              value={fmt(kpis.driverPay)}
+              sub="driver pay across all legs"
+              icon={<Wallet size={17} />}
+              accent="#5e35b1"
+            />
+            <KpiCard
+              label="Total Fuel Spend"
+              value={fuelSpend == null ? '—' : fmt(fuelSpend)}
+              sub="across all fuel transactions"
+              icon={<Fuel size={17} />}
+              accent="#ea4335"
+            />
+            {/* Row 2 ─ volume */}
+            <KpiCard
+              label="Total Loaded Miles"
+              value={fmtMiles(kpis.miles)}
+              sub="sum of leg loaded miles"
+              icon={<Route size={17} />}
+              accent="#00838f"
+            />
+            <KpiCard
+              label="Total Miles"
+              value={eldMiles == null ? '—' : fmtMiles(eldMiles)}
+              sub="ELD-equipped trucks only"
+              icon={<Gauge size={17} />}
+              accent="#0288d1"
+            />
+            <KpiCard
+              label="Total Loads"
+              value={String(kpis.loads)}
+              sub="loads dispatched this period"
+              icon={<Truck size={17} />}
+              accent="#1e8e3e"
             />
             <KpiCard
               label="Avg Revenue / Load"
