@@ -482,10 +482,23 @@ class RailwayClient {
   }
   deletePayrollAdjustment(id: string)        { return this.req<void>('DELETE', `/v1/payroll/adjustments/${id}`); }
 
-  listPayrollRecords(query: { driverName: string; weekStart?: string }) {
-    const qs = new URLSearchParams({ driverName: query.driverName });
-    if (query.weekStart) qs.set('weekStart', query.weekStart);
-    return this.req<ListPayrollRecordsResponse>('GET', `/v1/payroll/records?${qs.toString()}`);
+  /** Every filter is optional. Omitting them all returns every
+   *  finalized record for the org. Use weekStartFrom/To to scope to
+   *  a date range (server-side filter, much cheaper than fetching all
+   *  and filtering client-side). */
+  listPayrollRecords(query: {
+    driverName?:    string;
+    weekStart?:     string;
+    weekStartFrom?: string;
+    weekStartTo?:   string;
+  } = {}) {
+    const qs = new URLSearchParams();
+    if (query.driverName)    qs.set('driverName',    query.driverName);
+    if (query.weekStart)     qs.set('weekStart',     query.weekStart);
+    if (query.weekStartFrom) qs.set('weekStartFrom', query.weekStartFrom);
+    if (query.weekStartTo)   qs.set('weekStartTo',   query.weekStartTo);
+    const s = qs.toString();
+    return this.req<ListPayrollRecordsResponse>('GET', `/v1/payroll/records${s ? `?${s}` : ''}`);
   }
   upsertPayrollRecord(body: UpsertPayrollRecordRequest) {
     return this.req<UpsertPayrollRecordResponse>('POST', '/v1/payroll/records', body);

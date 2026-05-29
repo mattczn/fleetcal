@@ -348,6 +348,56 @@ export default function DashboardView() {
     return () => { cancelled = true; };
   }, [dbReady, pStart, pEnd]);
 
+  // ── Payroll (finalized records, Friday-in-range) ──────────────────────
+  //
+  // A payroll period is identified by its weekStart (Saturday). The
+  // period's Friday is weekStart + 6 days. A record counts toward the
+  // dashboard total iff its Friday falls within [pStart, pEnd]. We
+  // ask the server for weekStarts spanning [pStart-6, pEnd-6] so it
+  // pre-filters as much as it can; the precise Friday-in-range check
+  // happens client-side for clarity.
+  //
+  // Sourced from PayrollRecord (finalized) — NOT the per-load
+  // driverPay sum on LoadSummary, which over- or under-counts when
+  // adjustments / deferrals are involved.
+  const [payrollTotal, setPayrollTotal] = useState<number | null>(null);
+  useEffect(() => {
+    if (!dbReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // ISO date math without crossing midnight in any TZ — pull the
+        // YYYY-MM-DD off the period dates and step by 6 days.
+        const periodStartKey = dateKeyOf(pStart);
+        const periodEndKey   = dateKeyOf(pEnd);
+        const shiftKey = (dateKey: string, days: number): string => {
+          const d = new Date(`${dateKey}T12:00:00`); // noon = TZ-safe
+          d.setDate(d.getDate() + days);
+          return d.toISOString().slice(0, 10);
+        };
+        const weekStartFrom = shiftKey(periodStartKey, -6);
+        const weekStartTo   = shiftKey(periodEndKey,   -6);
+
+        const { records } = await fetchWithRetry(
+          () => railway.listPayrollRecords({ weekStartFrom, weekStartTo }),
+        );
+        if (cancelled) return;
+        // Belt-and-suspenders Friday check (server already filtered
+        // on week_start, but defensive in case anything slipped).
+        const sum = records.reduce((s, r) => {
+          const friday = shiftKey(r.weekStart, 6);
+          if (friday < periodStartKey || friday > periodEndKey) return s;
+          return s + (r.totalPay ?? 0);
+        }, 0);
+        setPayrollTotal(sum);
+      } catch (err) {
+        console.error('[DashboardView] listPayrollRecords failed:', err);
+        if (!cancelled) setPayrollTotal(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dbReady, pStart, pEnd]);
+
   // ── ELD miles (period total) ──────────────────────────────────────────
   //
   // Sum of MovementCard.miles across every vehicle in /v1/movements.
@@ -804,8 +854,8 @@ export default function DashboardView() {
             />
             <KpiCard
               label="Total Payroll"
-              value={fmt(kpis.driverPay)}
-              sub="driver pay across all legs"
+              value={payrollTotal == null ? '—' : fmt(payrollTotal)}
+              sub="finalized weeks ending in period"
               icon={<Wallet size={17} />}
               accent="#5e35b1"
             />

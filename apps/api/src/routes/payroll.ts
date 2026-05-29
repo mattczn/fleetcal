@@ -155,19 +155,29 @@ payroll.delete("/adjustments/:id", requireCapability("payroll.adjust"), async (c
 payroll.get("/records", async (c) => {
   const orgId = c.get("orgId");
   const url = new URL(c.req.url);
-  const driverName = url.searchParams.get("driverName");
-  const weekStart  = url.searchParams.get("weekStart");
-  if (!driverName) {
-    return c.json({ error: "validation_failed", errors: ["driverName required"] } satisfies ApiErrorResponse, 400);
-  }
+  // All filters are optional. Omitting every filter returns every
+  // finalized record for the org, ordered newest-first — used by the
+  // dashboard's Total Payroll KPI to sum across whatever weeks fall
+  // inside the selected period.
+  //
+  // Filters compose:
+  //   - driverName            single driver
+  //   - weekStart             single specific week (YYYY-MM-DD Saturday)
+  //   - weekStartFrom/To      range of week-start dates (inclusive)
+  const driverName     = url.searchParams.get("driverName");
+  const weekStart      = url.searchParams.get("weekStart");
+  const weekStartFrom  = url.searchParams.get("weekStartFrom");
+  const weekStartTo    = url.searchParams.get("weekStartTo");
 
   let q = supabase
     .from("payroll_records")
     .select(REC_COLS)
     .eq("org_id", orgId)
-    .eq("driver_name", driverName)
     .order("week_start", { ascending: false });
-  if (weekStart) q = q.eq("week_start", weekStart);
+  if (driverName)    q = q.eq("driver_name", driverName);
+  if (weekStart)     q = q.eq("week_start", weekStart);
+  if (weekStartFrom) q = q.gte("week_start", weekStartFrom);
+  if (weekStartTo)   q = q.lte("week_start", weekStartTo);
 
   const { data, error } = await q;
   if (error) {
