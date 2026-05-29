@@ -13,6 +13,8 @@ import {
 } from '@/lib/db';
 import { parseDate, fmtDate, fmtDateFull, fmtMoney, printPayroll, type PrintDriver } from '@/lib/payrollPdf';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { railway } from '@/lib/railway';
+import type { LoadSummary } from '@fleetcal/types';
 import DataLoader from '@/components/DataLoader';
 import AppShell from '@/components/nav/AppShell';
 import type { CalendarEvent } from '@/lib/types';
@@ -1266,6 +1268,42 @@ export default function PayrollView() {
     });
   }, [orgId, weekStart]); // eslint-disable-line
 
+  // Pull the canonical week load set from the same server endpoint the
+  // Dashboard uses (/v1/reports/loads via listLoadSummaries). That's
+  // our source of truth for "how much revenue did we book this week
+  // and how many loads is it" — driven by the loads table directly,
+  // with the same pickupAt window the rest of the reporting surfaces
+  // already use. Using this instead of the events-store keeps Payroll
+  // and Dashboard agreeing by construction; previously each side
+  // computed its own filter over its own data source and they kept
+  // disagreeing on boundary loads (Unassigned-asset rules, parseDate
+  // timezone quirks, zombie events, etc.).
+  //
+  // Falls back to null while in-flight; the KPI tile shows the local
+  // events-store estimate until the canonical value arrives.
+  const [weekLoadSummaries, setWeekLoadSummaries] = useState<LoadSummary[] | null>(null);
+  useEffect(() => {
+    if (!dbReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // pStart = Saturday LOCAL midnight; pEnd = Friday LOCAL end-of-day.
+        // Same shape Dashboard uses, so the server filter is identical.
+        const pStart = new Date(sat.getFullYear(), sat.getMonth(), sat.getDate());
+        const pEnd   = new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 23, 59, 59, 999);
+        const { loads } = await railway.listLoadSummaries({
+          pickupFrom: pStart.toISOString(),
+          pickupTo:   pEnd.toISOString(),
+        });
+        if (!cancelled) setWeekLoadSummaries(loads);
+      } catch (err) {
+        console.error('[PayrollView] listLoadSummaries failed:', err);
+        if (!cancelled) setWeekLoadSummaries([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dbReady, sat, fri]);
+
   // Filter events to the selected week.
   //
   // Asset filtering: a load sitting on the "Unassigned" truck
@@ -1420,23 +1458,25 @@ export default function PayrollView() {
   // their leg, so summing every event's driverPay is the correct
   // "what did we pay drivers this week" answer.
   const totalPay = driverGroups.reduce((s, g) => s + g.loads.reduce((ss, l) => ss + (l.driverPay ?? 0), 0), 0);
-  // Total LOADS — dedupe by loadId so a relay (two legs sharing a
-  // load_id) counts once. Without this, a week with three relays would
-  // read "6 loads" when it's really three.
+  // Total LOADS and Total REVENUE — both come from the canonical
+  // /v1/reports/loads server endpoint (weekLoadSummaries) so this
+  // tile agrees with the Dashboard's Total Revenue card exactly. One
+  // server, one filter, one sum.
+  //
+  // While the request is in flight we fall back to the events-store
+  // estimate so the tile doesn't render blank on the first paint —
+  // same pattern Dashboard's KPI useMemo uses.
   const totalLoads = useMemo(() => {
+    if (weekLoadSummaries) return weekLoadSummaries.length;
     const seen = new Set<string>();
-    for (const ev of weekEvents) {
-      seen.add(ev.loadId ?? ev.id);
-    }
+    for (const ev of weekEvents) seen.add(ev.loadId ?? ev.id);
     return seen.size;
-  }, [weekEvents]);
-  // Total load revenue — dedupe by loadId AND take the MAX loadPrice
-  // across legs, same logic legRevenue uses per row. Relays often
-  // duplicate the load price on every leg; without dedupe + max we
-  // either double-count or miss the value depending on which leg
-  // happens to carry the canonical price. This is "gross revenue
-  // we booked this week," which is what the % calc below wants.
+  }, [weekLoadSummaries, weekEvents]);
   const totalRevenue = useMemo(() => {
+    if (weekLoadSummaries) {
+      return weekLoadSummaries.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+    }
+    // Fallback: events-store, dedupe by loadId, take max loadPrice.
     const byLoad = new Map<string, number>();
     for (const ev of weekEvents) {
       const key = ev.loadId ?? ev.id;
@@ -1446,7 +1486,7 @@ export default function PayrollView() {
     let total = 0;
     for (const v of byLoad.values()) total += v;
     return total;
-  }, [weekEvents]);
+  }, [weekLoadSummaries, weekEvents]);
   // Payroll as % of revenue — the headline labor-cost ratio. Null
   // when revenue is zero (we'd be dividing by 0) so the UI can render
   // an em-dash instead of "Infinity%".
