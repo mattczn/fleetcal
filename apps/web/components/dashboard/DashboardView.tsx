@@ -326,10 +326,14 @@ function CostBar({
 }
 
 function KpiCard({
-  label, value, sub, icon, accent,
+  label, value, sub, icon, accent, badge,
 }: {
   label: string; value: string; sub: string;
   icon: React.ReactNode; accent: string;
+  /** Optional status pill rendered next to the value — used by the
+   *  payroll tile to signal whether the period's weeks are finalized,
+   *  partial, or still pending. */
+  badge?: { text: string; color: string };
 }) {
   return (
     <Card>
@@ -347,8 +351,18 @@ function KpiCard({
           {icon}
         </div>
       </div>
-      <div className="text-[26px] font-semibold leading-none mb-1.5" style={{ color: 'var(--gc-text-1)' }}>
-        {value}
+      <div className="flex items-baseline gap-2 mb-1.5">
+        <span className="text-[26px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+          {value}
+        </span>
+        {badge ? (
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+            style={{ background: badge.color + '22', color: badge.color }}
+          >
+            {badge.text}
+          </span>
+        ) : null}
       </div>
       <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
     </Card>
@@ -472,26 +486,37 @@ export default function DashboardView() {
     return () => { cancelled = true; };
   }, [dbReady, pStart, pEnd]);
 
-  // ── Payroll (finalized records, Friday-in-range) ──────────────────────
+  // ── Payroll (finalized records, with fallback to per-load pay) ────────
   //
-  // A payroll period is identified by its weekStart (Saturday). The
-  // period's Friday is weekStart + 6 days. A record counts toward the
-  // dashboard total iff its Friday falls within [pStart, pEnd]. We
-  // ask the server for weekStarts spanning [pStart-6, pEnd-6] so it
-  // pre-filters as much as it can; the precise Friday-in-range check
-  // happens client-side for clarity.
+  // Each payroll period is Saturday→Friday. A week W counts toward
+  // the dashboard total iff its Friday (weekStart + 6 days) falls
+  // within [pStart, pEnd].
   //
-  // Sourced from PayrollRecord (finalized) — NOT the per-load
-  // driverPay sum on LoadSummary, which over- or under-counts when
-  // adjustments / deferrals are involved.
-  const [payrollTotal, setPayrollTotal] = useState<number | null>(null);
+  // For each such week:
+  //   • If any PayrollRecord exists for W on the server, use the sum
+  //     of those records — finalized totals include adjustments
+  //     (bonuses / deferrals).
+  //   • Otherwise fall back to the per-load driver pay sum from
+  //     loadSummaries — every leg whose pickup date falls inside W
+  //     contributes its totalDriverPay. This lets the tile show a
+  //     reasonable in-progress estimate before the dispatcher
+  //     finalizes payroll for the week.
+  //
+  // The badge below the value reflects coverage:
+  //   • Green "Finalized"  → every week's records exist.
+  //   • Amber "Partial"    → some weeks finalized, others computed.
+  //   • Gray  "Pending"    → no records exist; everything is from
+  //                          load-summary fallback.
+  const [payrollData, setPayrollData] = useState<{
+    total:           number;
+    finalizedWeeks:  number;
+    totalWeeks:      number;
+  } | null>(null);
   useEffect(() => {
     if (!dbReady) return;
     let cancelled = false;
     (async () => {
       try {
-        // ISO date math without crossing midnight in any TZ — pull the
-        // YYYY-MM-DD off the period dates and step by 6 days.
         const periodStartKey = dateKeyOf(pStart);
         const periodEndKey   = dateKeyOf(pEnd);
         const shiftKey = (dateKey: string, days: number): string => {
@@ -499,28 +524,99 @@ export default function DashboardView() {
           d.setDate(d.getDate() + days);
           return d.toISOString().slice(0, 10);
         };
-        const weekStartFrom = shiftKey(periodStartKey, -6);
-        const weekStartTo   = shiftKey(periodEndKey,   -6);
 
+        // Enumerate every Saturday whose Friday (Sat + 6 days) falls
+        // within [pStart, pEnd]. For a single-week period there's
+        // exactly one; for a quarter there are ~13.
+        const weekStarts: string[] = [];
+        const searchStart = shiftKey(periodStartKey, -6);
+        const searchEnd   = shiftKey(periodEndKey,   -6);
+        let cursor = searchStart;
+        while (cursor <= searchEnd) {
+          const d = new Date(`${cursor}T12:00:00`);
+          if (d.getDay() === 6 /* Saturday */) weekStarts.push(cursor);
+          cursor = shiftKey(cursor, 1);
+        }
+
+        if (weekStarts.length === 0) {
+          if (!cancelled) setPayrollData({ total: 0, finalizedWeeks: 0, totalWeeks: 0 });
+          return;
+        }
+
+        // Server-side range filter on weekStart. Belt-and-suspenders
+        // Friday check happens later when we enumerate.
         const { records } = await fetchWithRetry(
-          () => railway.listPayrollRecords({ weekStartFrom, weekStartTo }),
+          () => railway.listPayrollRecords({
+            weekStartFrom: weekStarts[0],
+            weekStartTo:   weekStarts[weekStarts.length - 1],
+          }),
         );
         if (cancelled) return;
-        // Belt-and-suspenders Friday check (server already filtered
-        // on week_start, but defensive in case anything slipped).
-        const sum = records.reduce((s, r) => {
-          const friday = shiftKey(r.weekStart, 6);
-          if (friday < periodStartKey || friday > periodEndKey) return s;
-          return s + (r.totalPay ?? 0);
-        }, 0);
-        setPayrollTotal(sum);
+
+        // Sum finalized records by weekStart so we can resolve each
+        // week independently.
+        const finalizedByWeek = new Map<string, number>();
+        for (const r of records) {
+          finalizedByWeek.set(
+            r.weekStart,
+            (finalizedByWeek.get(r.weekStart) ?? 0) + (r.totalPay ?? 0),
+          );
+        }
+
+        // Per-week resolution. If a week has any finalized records,
+        // use that sum; otherwise fall back to load-summary driver
+        // pay for loads whose pickup falls in [weekStart, weekStart+6].
+        let total = 0;
+        let finalizedCount = 0;
+        for (const ws of weekStarts) {
+          const finalizedSum = finalizedByWeek.get(ws);
+          if (finalizedSum != null && finalizedSum > 0) {
+            total += finalizedSum;
+            finalizedCount++;
+            continue;
+          }
+          const weekEnd = shiftKey(ws, 6);
+          if (loadSummaries) {
+            const weekSum = loadSummaries.reduce((s, l) => {
+              const key = l.pickupAt?.slice(0, 10);
+              if (!key) return s;
+              if (key < ws || key > weekEnd) return s;
+              return s + (l.totalDriverPay ?? 0);
+            }, 0);
+            total += weekSum;
+          }
+        }
+
+        setPayrollData({
+          total,
+          finalizedWeeks: finalizedCount,
+          totalWeeks:     weekStarts.length,
+        });
       } catch (err) {
-        console.error('[DashboardView] listPayrollRecords failed:', err);
-        if (!cancelled) setPayrollTotal(0);
+        console.error('[DashboardView] payroll fetch failed:', err);
+        if (!cancelled) setPayrollData({ total: 0, finalizedWeeks: 0, totalWeeks: 0 });
       }
     })();
     return () => { cancelled = true; };
-  }, [dbReady, pStart, pEnd]);
+  }, [dbReady, pStart, pEnd, loadSummaries]);
+  // Convenience selectors for the tile + cost-bar consumers.
+  const payrollTotal = payrollData?.total ?? null;
+  const payrollBadge: { text: string; color: string } | undefined = (() => {
+    if (!payrollData || payrollData.totalWeeks === 0) return undefined;
+    const { finalizedWeeks, totalWeeks } = payrollData;
+    if (finalizedWeeks === 0)         return { text: 'Pending',   color: '#9aa0a6' };
+    if (finalizedWeeks === totalWeeks) return { text: 'Finalized', color: '#1e8e3e' };
+    return { text: `${finalizedWeeks}/${totalWeeks} finalized`, color: '#f9ab00' };
+  })();
+  const payrollSub = !payrollData
+    ? 'loading…'
+    : payrollData.totalWeeks === 0
+      ? 'no payroll weeks in period'
+      : payrollData.finalizedWeeks === payrollData.totalWeeks
+        ? `${payrollData.totalWeeks} week${payrollData.totalWeeks !== 1 ? 's' : ''} finalized`
+        : payrollData.finalizedWeeks === 0
+          ? `${payrollData.totalWeeks} week${payrollData.totalWeeks !== 1 ? 's' : ''} pending — estimate`
+          : `${payrollData.finalizedWeeks} of ${payrollData.totalWeeks} weeks finalized`;
 
   // ── ELD miles (period total) ──────────────────────────────────────────
   //
@@ -981,7 +1077,8 @@ export default function DashboardView() {
             <KpiCard
               label="Total Payroll"
               value={payrollTotal == null ? '—' : fmt(payrollTotal)}
-              sub="finalized weeks ending in period"
+              sub={payrollSub}
+              badge={payrollBadge}
               icon={<Wallet size={17} />}
               accent="#5e35b1"
             />
