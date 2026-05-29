@@ -860,6 +860,20 @@ export function OpsTable<T>({
                         zIndex: stickyStyle.position === 'sticky' ? 1 : 0,
                         paddingLeft: idx === 0 && !selectable ? 16 : 0,
                         paddingRight: idx === visibleColumns.length - 1 ? 16 : 12,
+                        // Horizontal alignment of the cell's content
+                        // mirrors the header — without this the flex
+                        // wrapper defaulted to flex-start (left), so
+                        // a column marked `align: 'center'` would
+                        // show a centered HEADER over LEFT-leaning
+                        // values. textAlign alone doesn't help
+                        // because the rendered cells are usually
+                        // inline-block spans or divs that don't
+                        // honor it through the flex layout.
+                        justifyContent:
+                          col.align === 'right'  ? 'flex-end'    :
+                          col.align === 'center' ? 'center'      :
+                                                   'flex-start',
+                        textAlign: col.align ?? 'left',
                       }}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </div>
