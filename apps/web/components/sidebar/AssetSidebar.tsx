@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Plus, Layers, Truck, Users, Pencil, GripVertical, Menu, Settings } from 'lucide-react';
+import { Plus, Layers, Truck, Users, Pencil, GripVertical, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import { buildBrokerRules } from '@/lib/customerMatch';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import EditAssetDialog from './EditAssetDialog';
@@ -13,6 +15,7 @@ import DriversModal from './DriversModal';
 import AssetsModal from './AssetsModal';
 import MiniCalendar from './MiniCalendar';
 import type { Asset } from '@/lib/types';
+import type { Capability, OrgModule } from '@fleetcal/types';
 
 function CheckboxSwatch({ color, hidden, onToggle }: { color: string; hidden: boolean; onToggle: () => void }) {
   return (
@@ -297,6 +300,17 @@ export default function AssetSidebar() {
           ))}
         </div>
 
+        {/* Cross-page navigation — the dispatcher's jump list to every
+            other surface in the app (Dashboard, Closeout, Equipment,
+            etc.). Sits between the asset list and the Manage / Settings
+            buttons so it's always visible, doesn't compete with the
+            mini calendar at the top, and the user doesn't need a
+            separate AppSidebar rail for cross-page nav while on the
+            calendar. Cap + module gates mirror AppSidebar so a role
+            without (e.g.) payroll.access doesn't see Payroll here
+            either. */}
+        <PageNavSection />
+
         {/* Manage buttons */}
         <div className="shrink-0 p-3 space-y-0.5" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
           <button
@@ -335,6 +349,84 @@ export default function AssetSidebar() {
       {showAssets  && <AssetsModal    onClose={() => setShowAssets(false)} />}
       {showDrivers && <DriversModal   onClose={() => setShowDrivers(false)} />}
     </>
+  );
+}
+
+// ── Cross-page nav section ────────────────────────────────────────────
+//
+// Mirrors AppSidebar's nav list, scoped down for the calendar's
+// AssetSidebar shell. Lives between the asset list and the Manage
+// buttons. Calendar itself is intentionally NOT in this list — you're
+// already on it, and the brand header doubles as a "you're here" cue.
+// Equipment links to the default Maintenance tab; users can switch
+// sub-tabs from inside the page.
+
+interface PageNavLink {
+  href:    string;
+  label:   string;
+  icon:    React.ComponentType<{ size?: number; style?: React.CSSProperties }>;
+  cap:     Capability;
+  module?: OrgModule;
+  /** Match by prefix when true (so /equipment?tab=fuel still highlights
+   *  the Equipment row). Default: exact pathname match. */
+  matchPrefix?: boolean;
+}
+
+const PAGE_NAV: PageNavLink[] = [
+  { href: '/dashboard',  label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
+  { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
+  { href: '/closeout',   label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
+  { href: '/accounting', label: 'Accounting',     icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
+  { href: '/equipment?tab=maintenance', label: 'Equipment', icon: Package, cap: 'maintenance.access', module: 'maintenance', matchPrefix: true },
+  { href: '/payroll',    label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },
+  { href: '/drivers',    label: 'Drivers',        icon: Gauge,           cap: 'drivers.view' },
+];
+
+function PageNavSection() {
+  const pathname = usePathname();
+  const { can, isLoading } = usePermissions();
+  const { enabled: moduleEnabled } = useModules();
+
+  // Same optimistic-render pattern AppSidebar uses — while perms are
+  // hydrating we show the full list rather than a flickering skeleton.
+  const visible = isLoading
+    ? PAGE_NAV
+    : PAGE_NAV.filter(l => can(l.cap) && (!l.module || moduleEnabled(l.module)));
+
+  if (visible.length === 0) return null;
+
+  return (
+    <div
+      className="shrink-0 p-3 space-y-0.5"
+      style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+      {visible.map(item => {
+        const Icon = item.icon;
+        const hrefPath = item.href.split('?')[0];
+        const active = item.matchPrefix
+          ? !!pathname?.startsWith(hrefPath)
+          : pathname === hrefPath;
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+            style={{
+              color:      active ? 'var(--gc-blue)'        : 'var(--gc-text-1)',
+              background: active ? 'var(--gc-blue-light)'  : 'transparent',
+              fontWeight: active ? 600 : 500,
+            }}
+            onMouseEnter={e => {
+              if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)';
+            }}
+            onMouseLeave={e => {
+              if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent';
+            }}>
+            <Icon size={16} style={{ color: active ? 'var(--gc-blue)' : 'var(--gc-text-2)' }} />
+            {item.label}
+          </Link>
+        );
+      })}
+    </div>
   );
 }
 
