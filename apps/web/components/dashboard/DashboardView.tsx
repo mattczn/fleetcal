@@ -801,16 +801,18 @@ export default function DashboardView() {
               {revenueByBroker.length === 0 ? (
                 <Empty label="No customer data for this period" />
               ) : (
-                <div className="flex-1 flex gap-6 items-center justify-center">
-                  {/* Donut chart */}
+                <div className="flex-1 flex gap-8 items-center">
+                  {/* Donut chart — fixed on the left, the ranked list
+                      stretches into the remaining width so the card
+                      doesn't waste its right half. */}
                   <div className="shrink-0" style={{ overflow: 'visible' }}>
                     <PieChart
                       size={240}
                       slices={revenueByBroker.map(b => ({ value: b.revenue, color: b.color, label: b.name }))}
                     />
                   </div>
-                  {/* Ranked list — name and price as a tight pair */}
-                  <div className="space-y-2.5">
+                  {/* Ranked list — fills the rest of the card. */}
+                  <div className="space-y-2.5 flex-1 min-w-0">
                     <div className="text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: 'var(--gc-text-3)' }}>
                       Top 10 Customers by Revenue
                     </div>
@@ -831,7 +833,7 @@ export default function DashboardView() {
                             {i + 1}
                           </span>
                           <div className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-                          <span className="text-[13px] truncate max-w-[130px]" style={{ color: 'var(--gc-text-2)' }}>
+                          <span className="text-[13px] truncate flex-1 min-w-0" style={{ color: 'var(--gc-text-2)' }}>
                             {name}
                           </span>
                           <span className="text-[13px] font-semibold shrink-0" style={{ color: 'var(--gc-text-1)' }}>
