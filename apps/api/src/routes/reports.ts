@@ -416,6 +416,15 @@ reports.get("/loads", async (c) => {
       .from("events")
       .select(EVENT_COLS)
       .eq("org_id", orgId)
+      // Exclude soft-deleted events. Without this filter, a load
+      // whose ONLY events have been deleted still surfaces in
+      // LoadSummary — buildLoadSummary picks pickupAt off the
+      // zombie event, the report includes the load, and the
+      // dashboard's revenue total over-counts. We diagnosed this
+      // against Curzon's data: 2 phantom Uber Freight loads and a
+      // chain of test loads were inflating Dashboard's count vs
+      // Payroll's. Filter here keeps both surfaces in agreement.
+      .is("deleted_at", null)
       .in("load_id", slice);
     if (evErr) {
       console.error("[GET /v1/reports/loads] events query failed:", evErr);

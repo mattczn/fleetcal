@@ -1266,12 +1266,30 @@ export default function PayrollView() {
     });
   }, [orgId, weekStart]); // eslint-disable-line
 
-  // Filter events to the selected week, excluding unassigned asset.
-  // Deferred loads: excluded from their original week, included in their target week.
+  // Filter events to the selected week.
+  //
+  // Asset filtering: a load sitting on the "Unassigned" truck
+  // placeholder STILL counts toward payroll AS LONG AS a driver is
+  // assigned — dispatchers will often pin the driver before they've
+  // decided which truck runs the load, and that driver still earns
+  // pay credit. Only a load with NEITHER a real truck NOR a driver
+  // is genuinely floating; that's the one we drop.
+  //
+  // Deferred loads: excluded from their original week, included in
+  // their target week.
   const weekEvents = useMemo(() => events.filter(e => {
-    if (unassignedAssetId !== null && e.assetId === unassignedAssetId) return false;
-    const asset = assets.find(a => a.id === e.assetId);
-    if (asset?.type === 'Unassigned' || asset?.name === 'Unassigned') return false;
+    // Determine whether this event is sitting on the Unassigned
+    // placeholder asset. Two paths: explicit unassignedAssetId
+    // sentinel (set on hydrate) OR the asset row's name/type field
+    // being literally "Unassigned" (legacy / imported orgs).
+    const onUnassignedAsset =
+      (unassignedAssetId !== null && e.assetId === unassignedAssetId) ||
+      (() => {
+        const a = assets.find(x => x.id === e.assetId);
+        return a?.type === 'Unassigned' || a?.name === 'Unassigned';
+      })();
+    const hasDriver = !!e.driverId || !!(e.driverName && e.driverName.trim());
+    if (onUnassignedAsset && !hasDriver) return false;
     // If deferred to a different week, hide from original week
     if (e.deferredToWeek && e.deferredToWeek !== weekStart) return false;
     const d = parseDate(e.start);
