@@ -1,8 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Package, Container, Gauge, Truck } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, SlidersHorizontal, Eye, Container, Truck } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -10,7 +9,6 @@ import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
 import { NotificationsBell } from '@/components/toolbar/NotificationsBell';
 import Tooltip from '@/components/ui/Tooltip';
-import { Authorize } from '@/components/Authorize';
 import DatePicker from '@/components/calendar/DatePicker';
 import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
 import TruckFleetPanel from '@/components/calendar/TruckFleetPanel';
@@ -83,14 +81,12 @@ export default function CalendarToolbar() {
   const [trashAllOpen,       setTrashAllOpen]       = useState(false);
   const [trashQuery,         setTrashQuery]         = useState('');
   const [confirmClearTrash,  setConfirmClearTrash]  = useState(false);
-  const [moreOpen,           setMoreOpen]           = useState(false);
   const [viewOpen,           setViewOpen]           = useState(false);
   const [layersOpen,         setLayersOpen]         = useState(false);
   const [confirmCancelBatch, setConfirmCancelBatch] = useState(false);
   const searchInputRef  = useRef<HTMLInputElement>(null);
   const searchContainer = useRef<HTMLDivElement>(null);
   const trashContainer  = useRef<HTMLDivElement>(null);
-  const moreContainer   = useRef<HTMLDivElement>(null);
   const viewContainer   = useRef<HTMLDivElement>(null);
   const layersContainer = useRef<HTMLDivElement>(null);
 
@@ -104,16 +100,13 @@ export default function CalendarToolbar() {
   }, [batchVisible]);
 
   useEffect(() => {
-    if (!searchOpen && !trashOpen && !moreOpen && !viewOpen && !layersOpen) return;
+    if (!searchOpen && !trashOpen && !viewOpen && !layersOpen) return;
     const handler = (e: MouseEvent) => {
       if (searchOpen && searchContainer.current && !searchContainer.current.contains(e.target as Node)) {
         setSearchOpen(false); setQuery('');
       }
       if (trashOpen && trashContainer.current && !trashContainer.current.contains(e.target as Node)) {
         setTrashOpen(false);
-      }
-      if (moreOpen && moreContainer.current && !moreContainer.current.contains(e.target as Node)) {
-        setMoreOpen(false);
       }
       if (viewOpen && viewContainer.current && !viewContainer.current.contains(e.target as Node)) {
         setViewOpen(false);
@@ -124,7 +117,7 @@ export default function CalendarToolbar() {
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [searchOpen, trashOpen, moreOpen, viewOpen, layersOpen]);
+  }, [searchOpen, trashOpen, viewOpen, layersOpen]);
 
   function daysUntilPurge(deletedAt: string): number {
     const age = Date.now() - new Date(deletedAt).getTime();
@@ -278,17 +271,9 @@ export default function CalendarToolbar() {
         />
       </div>
 
-      {/* Command Center */}
-      <Link
-        href="/board"
-        className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[13px] font-semibold transition-colors"
-        style={{ background: '#1a73e8', color: '#fff', border: '1px solid #1a73e8' }}
-        onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = '#1558d6'; (e.currentTarget as HTMLElement).style.borderColor = '#1558d6'; }}
-        onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = '#1a73e8'; (e.currentTarget as HTMLElement).style.borderColor = '#1a73e8'; }}
-      >
-        <LayoutDashboard size={14} />
-        Command Center
-      </Link>
+      {/* Command Center used to live here — it's now reachable from
+          the AssetSidebar's cross-page nav rail like every other
+          surface, so the toolbar stays purely calendar-focused. */}
 
       <div className="flex-1" />
 
@@ -893,102 +878,10 @@ export default function CalendarToolbar() {
           ))}
         </div>
 
-        {/* More menu */}
-        <div ref={moreContainer} style={{ position: 'relative' }}>
-          <button
-            onClick={() => setMoreOpen(o => !o)}
-            className="flex items-center gap-1.5 px-3 py-[7px] rounded-lg text-[13px] font-medium transition-colors"
-            style={{
-              color: moreOpen ? 'var(--gc-blue)' : 'var(--gc-text-2)',
-              border: `1px solid ${moreOpen ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-              background: moreOpen ? 'var(--gc-blue-light)' : 'transparent',
-            }}
-            onMouseOver={e => { if (!moreOpen) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-            onMouseOut={e => { if (!moreOpen) e.currentTarget.style.background = 'transparent'; }}
-          >
-            <MoreHorizontal size={14} />
-            More
-          </button>
-          {moreOpen && (
-            <div className="absolute right-0 flex flex-col overflow-hidden"
-              style={{ top: 'calc(100% + 6px)', minWidth: 180, borderRadius: 10, boxShadow: 'var(--shadow-3)', border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)', zIndex: 100 }}>
-              <Authorize cap="dashboard.access">
-                <Link href="/dashboard" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <BarChart2 size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Dashboard
-                </Link>
-              </Authorize>
-              <Authorize cap="closeout.access" module="closeout">
-                <Link href="/closeout" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <FileCheck2 size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Closeout
-                </Link>
-              </Authorize>
-              <Authorize cap="accounting.access" module="accounting">
-                <Link href="/accounting" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <Receipt size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Accounting
-                </Link>
-              </Authorize>
-              <Authorize cap="payroll.access" module="payroll">
-                <Link href="/payroll" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <Users size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Payroll
-                </Link>
-              </Authorize>
-              {/* Drivers — performance scorecards. Same cap as the
-                  Drivers page itself; ordering matches ManagementHeader
-                  (Payroll → Drivers → Equipment) so navigation feels
-                  consistent from both surfaces. */}
-              <Authorize cap="drivers.view">
-                <Link href="/drivers" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <Gauge size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Drivers
-                </Link>
-              </Authorize>
-              {/* Fuel + Maintenance consolidated into Equipment.
-                  Single entry-point here; the sub-tab is selected via
-                  ?tab= so users who click "Fuel" or "Maintenance" from
-                  a deep link land on the right view. */}
-              <Authorize cap="maintenance.access" module="maintenance">
-                <Link href="/equipment" onClick={() => setMoreOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors"
-                  style={{ color: 'var(--gc-text-1)', borderTop: '1px solid var(--gc-border-light)' }}
-                  onMouseOver={e => { (e.currentTarget as HTMLElement).style.background = 'var(--gc-hover)'; }}
-                  onMouseOut={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                >
-                  <Package size={15} style={{ color: 'var(--gc-text-3)' }} />
-                  Equipment
-                </Link>
-              </Authorize>
-            </div>
-          )}
-        </div>
+        {/* The "More" cross-page menu used to live here; that
+            navigation now lives entirely in the AssetSidebar's
+            PageNavSection rail, so the toolbar stays focused on
+            calendar-local controls. */}
 
         {/* Notifications bell — driver nudges + scheduled-push log
             for the last 48h. Sits before the org/user group so the
