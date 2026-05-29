@@ -852,8 +852,14 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                         ? <CopyChip value={load.loadNum} style={{ fontSize: 12, fontWeight: 600, color: 'var(--gc-text-2)' }} />
                         : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap tabular-nums" style={{ color: load.loadedMiles != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-                      {load.loadedMiles != null
+                    <td className="px-4 py-3 whitespace-nowrap tabular-nums" style={{ color: load.loadedMiles != null && load.eventKind !== 'non_revenue' ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+                      {/* Maintenance / non-revenue events don't have a
+                          "loaded miles" concept — they're not loads.
+                          A stale value on the column (left over from
+                          when the event briefly had coordinates) shouldn't
+                          render here. Display em-dash for any non-revenue
+                          event regardless of what the column says. */}
+                      {load.loadedMiles != null && load.eventKind !== 'non_revenue'
                         ? `${Math.round(load.loadedMiles).toLocaleString()} mi`
                         : '—'}
                     </td>

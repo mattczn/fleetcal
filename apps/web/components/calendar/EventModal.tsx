@@ -2257,12 +2257,29 @@ export default function EventModal() {
   // so reports / dashboards can pull from the column instead of re-running
   // Google Directions. Fires once per modal-open when the computed value
   // differs from what's stored (rounded to 0.1 mi to avoid noisy writes).
+  //
+  // Also clears the column when the event no longer has enough
+  // coordinates to compute miles (loadedMiles === null) but the DB
+  // still has a stale value. Without this branch, a maintenance
+  // event that briefly had geocoded stops keeps its 87-mi remnant
+  // forever, polluting per-driver tables and any miles-based
+  // analytics.
   useEffect(() => {
-    if (!isEdit || !modalEventId || loadedMiles == null) return;
+    if (!isEdit || !modalEventId) return;
     const ev = events.find(e => e.id === modalEventId);
     if (!ev) return;
     const stored = ev.loadedMiles ?? null;
-    const next   = Math.round(loadedMiles * 10) / 10;
+    // Computed null + column has stale value → clear it. Cast to any
+    // because CalendarEvent's local type is `number | undefined` but
+    // the API accepts `number | null` for an explicit clear; the
+    // store/buildEventByIdUpdate copies the field through verbatim,
+    // so null on the wire is what we need.
+    if (loadedMiles == null) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (stored != null) void updateEvent(modalEventId, { loadedMiles: null as any });
+      return;
+    }
+    const next = Math.round(loadedMiles * 10) / 10;
     if (stored != null && Math.abs(stored - next) < 0.1) return;
     void updateEvent(modalEventId, { loadedMiles: next });
   }, [loadedMiles, isEdit, modalEventId, events, updateEvent]);
