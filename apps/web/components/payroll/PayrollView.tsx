@@ -1293,13 +1293,19 @@ export default function PayrollView() {
     let cancelled = false;
     (async () => {
       try {
-        // pStart = Saturday LOCAL midnight; pEnd = Friday LOCAL end-of-day.
-        // Same shape Dashboard uses, so the server filter is identical.
-        const pStart = new Date(sat.getFullYear(), sat.getMonth(), sat.getDate());
-        const pEnd   = new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 23, 59, 59, 999);
+        // /v1/reports/loads string-compares pickupFrom/To against
+        // pickupAt, which is stored as a NAIVE org-local string
+        // ("2026-05-30T01:00:00", no Z). For the lex compare to be
+        // meaningful both sides must share TZ semantics — so we send
+        // naive cutoffs here too. Sending pStart.toISOString() (Z-
+        // suffixed UTC) was the wrong shape and caused dashboard ↔
+        // payroll disagreement after the dashboard's TZ fix landed.
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fromKey = `${sat.getFullYear()}-${pad(sat.getMonth() + 1)}-${pad(sat.getDate())}`;
+        const toKey   = `${fri.getFullYear()}-${pad(fri.getMonth() + 1)}-${pad(fri.getDate())}`;
         const { loads } = await railway.listLoadSummaries({
-          pickupFrom: pStart.toISOString(),
-          pickupTo:   pEnd.toISOString(),
+          pickupFrom: `${fromKey}T00:00:00.000`,
+          pickupTo:   `${toKey}T23:59:59.999`,
         });
         if (!cancelled) setWeekLoadSummaries(loads);
       } catch (err) {
