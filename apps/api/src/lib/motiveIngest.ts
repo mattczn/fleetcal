@@ -243,7 +243,12 @@ function rowFromMotive(p: MotiveDrivingPeriodInner, orgId: string): DrivingPerio
     driver_last_name:  p.driver?.last_name  ?? null,
     start_time:        p.start_time,
     end_time:          p.end_time,
-    duration:          p.duration,
+    // Motive occasionally returns fractional seconds for duration
+    // (observed: 24208.393951508). Our column is `integer`, so without
+    // a round the whole batch upsert crashes with `invalid input
+    // syntax for type integer` and silently kills every subsequent
+    // sync until manually retriggered.
+    duration:          p.duration != null ? Math.round(p.duration) : null,
     start_kilometers:  p.start_kilometers,
     end_kilometers:    p.end_kilometers,
     distance:          p.distance,
