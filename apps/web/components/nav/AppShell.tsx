@@ -37,8 +37,17 @@ interface Props {
 }
 
 export default function AppShell({ title, icon, rightSlot, children }: Props) {
+  // `w-full h-full flex-1` is intentionally redundant — `w-full` handles
+  // the block-parent case, `flex-1 min-w-0` handles the flex-parent
+  // case. Some of the management page.tsx wrappers wrap us in a
+  // `<div className="flex">`, which made the shell shrink to its
+  // content width without flex-1; some don't, where w-full is what
+  // expands us. Belt + braces so neither case can compress the body
+  // back into the "ton of whitespace on the right" layout the user hit.
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--gc-bg)' }}>
+    <div
+      className="flex flex-1 min-w-0 w-full h-full overflow-hidden"
+      style={{ background: 'var(--gc-bg)' }}>
       <AppSidebar />
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <AppTopBar title={title} icon={icon} rightSlot={rightSlot} />
