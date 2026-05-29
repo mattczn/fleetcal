@@ -26,7 +26,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Truck, Search, Pencil, Eye, EyeOff, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { X, Truck, Search, Pencil, Eye, EyeOff, ChevronDown, ChevronRight } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import AssetsModal from '@/components/sidebar/AssetsModal';
@@ -47,7 +47,6 @@ export default function TruckFleetPanel({ onClose }: Props) {
   const [query, setQuery]                = useState('');
   const [hiddenOpen, setHiddenOpen]      = useState(false);
   const [editingAssetId, setEditingId]   = useState<number | null>(null);
-  const [createNew, setCreateNew]        = useState(false);
 
   // Focus the search input on mount — keyboard-first feel.
   const searchRef = useRef<HTMLInputElement>(null);
@@ -93,7 +92,6 @@ export default function TruckFleetPanel({ onClose }: Props) {
   // selection so the modal mounts fresh on the next Edit click.
   const handleAssetsModalClose = () => {
     setEditingId(null);
-    setCreateNew(false);
   };
 
   const content = (
@@ -140,7 +138,7 @@ export default function TruckFleetPanel({ onClose }: Props) {
           </button>
         </div>
 
-        {/* Search + New button */}
+        {/* Search */}
         <div
           className="flex items-center gap-2 px-4 py-3"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
@@ -171,21 +169,6 @@ export default function TruckFleetPanel({ onClose }: Props) {
               </button>
             )}
           </div>
-          {canEdit && (
-            <button
-              type="button"
-              onClick={() => setCreateNew(true)}
-              title="Add a truck"
-              className="rounded-md text-[12px] font-semibold flex items-center gap-1 transition-colors"
-              style={{
-                background: 'var(--gc-blue)',
-                color: '#fff',
-                border: '1px solid var(--gc-blue)',
-                padding: '6px 10px',
-              }}>
-              <Plus size={12} /> New
-            </button>
-          )}
         </div>
 
         {/* List */}
@@ -196,7 +179,7 @@ export default function TruckFleetPanel({ onClose }: Props) {
               style={{ color: 'var(--gc-text-3)' }}>
               {query
                 ? 'No trucks match that search.'
-                : 'No trucks yet. Click + New to add one.'}
+                : 'No trucks yet.'}
             </div>
           ) : (
             <>
@@ -245,10 +228,10 @@ export default function TruckFleetPanel({ onClose }: Props) {
       {/* Edit modal — mounted ON TOP of the tray. AssetsModal accepts
           initialAssetId so it lands directly on the row the user
           clicked. */}
-      {(editingAssetId != null || createNew) && (
+      {editingAssetId != null && (
         <AssetsModal
           onClose={handleAssetsModalClose}
-          initialAssetId={editingAssetId ?? undefined}
+          initialAssetId={editingAssetId}
         />
       )}
     </>
@@ -274,15 +257,13 @@ function TruckRow({
       className="flex items-center gap-3 px-4 py-2.5 transition-colors"
       onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-      {/* Color swatch + truck icon */}
+      {/* Truck icon — plain, colored by asset.color. Matches the
+          AssetSidebar's left-rail rendering exactly so the same
+          truck reads identically on both surfaces. */}
       <div
-        className="flex items-center justify-center rounded shrink-0"
-        style={{
-          width: 28, height: 28,
-          background: isHidden ? 'transparent' : `${asset.color}1a`,
-          border: isHidden ? `1px solid var(--gc-border)` : `1px solid ${asset.color}`,
-        }}>
-        <Truck size={14} style={{ color: isHidden ? 'var(--gc-text-3)' : asset.color }} />
+        className="flex items-center justify-center shrink-0"
+        style={{ width: 22, height: 22 }}>
+        <Truck size={14} style={{ color: isHidden ? 'var(--gc-border)' : asset.color }} />
       </div>
 
       {/* Name + unit + type */}
