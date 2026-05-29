@@ -122,6 +122,14 @@ export interface CostAnalysisLoad {
   deadheadHoursBefore: number;
   deadheadHoursAfter:  number;
 
+  /** Per-bucket time breakdown — newer reports include this so the
+   *  UI can show "X hrs at shipper / Y hrs traveling / Z hrs at
+   *  receiver" instead of the lumped loadedHours number. Optional so
+   *  reports persisted before this field was added still parse. */
+  timeAtShipperHours?:  number;
+  timeTravelingHours?:  number;
+  timeAtReceiverHours?: number;
+
   revenue:             number;
   driverPay:           number;
   marginAfterDriver:   number;

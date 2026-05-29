@@ -495,18 +495,45 @@ costAnalysis.get("/loads-in-window", requireCapability("loads.view"), async (c) 
 // renders progressively as each completes. After all loads finish, the
 // frontend assembles them and calls /save to persist the bundle.
 
-const SYSTEM_PROMPT_LOAD = `You are analyzing ONE truck load for a dispatch system.
+const SYSTEM_PROMPT_LOAD = `You are reconstructing what ONE truck actually did during one load, by reading its ELD movement log.
+
+GROUND TRUTH IS THE MOVEMENT LOG. The schedule (appointment times, stop names) is what dispatch INTENDED. Real-world driving doesn't match the schedule exactly: drivers arrive early, sit at a shipper for hours, get rerouted around traffic, take 30-min breaks, etc. Your job is to interpret the movement log against the schedule and tell the dispatcher what really happened — NOT to second-guess matches because times are off by a few hours. Treat ±2-4 hour skew as normal.
 
 You will receive:
-1. ONE SCHEDULED LOAD with its stops, price, driver pay, and time window.
-2. A SET OF MOVEMENTS that happened within roughly ±6 hours of that load. Some are this load's actual loaded miles, some are deadhead positioning before, some are deadhead after (toward the next load or home), some may be unrelated.
+1. THIS LOAD with its stops, scheduled window, price, and driver pay.
+2. ALL MOVEMENTS for this truck within ±6 hours of the scheduled window. Every movement here was driven by THIS truck. Your job is to bucket each one.
+3. CONTEXT loads — the PREVIOUS load on this truck and the NEXT load on this truck, if any. Use them to attribute movements that belong to the adjacent loads (so you don't accidentally count a pre-window movement as "deadhead before this load" when it was really the previous load's deadhead-after).
 
-Your job: figure out which movements belong to which bucket FOR THIS LOAD and report the economic picture.
+How to bucket each movement:
 
-Definitions:
-- **Loaded miles/hours**: movement under this specific load (between its pickup and delivery). Match by city + time window overlap.
-- **Deadhead before**: positioning miles/hours to reach this load's pickup point.
-- **Deadhead after**: miles/hours after this delivery, toward where the truck went next.
+A) Deadhead BEFORE this load (positioning to pickup):
+   - Movements between the previous load's delivery (or yard, or start of day) and THIS load's pickup city.
+   - If the previous load's delivery city ≈ this load's pickup city, deadhead before might be ZERO.
+
+B) Time at SHIPPER (pickup dwell):
+   - Periods at the pickup city where the truck is essentially stationary (origin ≈ destination, ≤ small mileage, or no driving period at all between arrival and next move).
+   - Includes waiting at the gate + loading time.
+
+C) LOADED travel:
+   - Movements going from pickup city → delivery city under this load. May include rest stops along the route.
+
+D) Time at RECEIVER (delivery dwell):
+   - Periods at the delivery city where the truck is stationary. Waiting + unloading.
+
+E) Deadhead AFTER this load:
+   - Movements after delivery, going toward the NEXT load's pickup (or yard, or end of day).
+   - If the next load picks up at or near this load's delivery city, deadhead after might be ZERO.
+
+Output buckets (two decimal places):
+- loadedMiles                  = total LOADED travel miles (B + C + D's worth of mileage, mostly C)
+- loadedHours                  = TOTAL time engaged with this load (B + C + D, sum the three)
+- timeAtShipperHours           = time at the pickup location (B)
+- timeTravelingHours           = time spent driving under load (C)
+- timeAtReceiverHours          = time at the delivery location (D)
+- deadheadMilesBefore          = A's mileage
+- deadheadHoursBefore          = A's hours
+- deadheadMilesAfter           = E's mileage
+- deadheadHoursAfter           = E's hours
 
 Metrics (two decimal places):
 - statedRpm = revenue / loadedMiles
@@ -517,11 +544,17 @@ Metrics (two decimal places):
 - marginRpm = marginAfterDriver / total miles
 - marginRph = marginAfterDriver / total hours
 
-Rules:
-- Be conservative. Use "low" confidence when geographic or time evidence is weak.
-- A movement matches THIS load only if its start_time falls inside the load's appointment window AND its cities align with the load's pickup/delivery cities.
-- Don't claim movements that clearly belong to a different time window — those are just context.
-- Output ONLY via submit_load_analysis. No prose outside the tool.
+Confidence:
+- "high"   — geography clearly matches and the movements paint a coherent story even if times are imperfect.
+- "medium" — most movements fit but there's a gap (missing record, ambiguous attribution between this load and an adjacent one).
+- "low"    — movements don't look related to this load at all.
+Default to "high" when the cities align — be DECISIVE, not doubtful. Times drifting by a few hours is normal, not a reason to downgrade.
+
+Reasoning paragraph:
+- Tell the story: "Truck arrived at pickup at HH:MM, sat for X hours, drove Y miles to delivery, sat for Z hours, then headed toward [next load / yard]."
+- Call out unusually long dwells, suspicious deadhead routes, or any discrepancies that matter to ops.
+
+Output ONLY via submit_load_analysis. No prose outside the tool.
 `;
 
 const ANALYSIS_LOAD_TOOL: Anthropic.Tool = {
@@ -536,9 +569,13 @@ const ANALYSIS_LOAD_TOOL: Anthropic.Tool = {
       loadedMiles:         { type: "number" },
       deadheadMilesBefore: { type: "number" },
       deadheadMilesAfter:  { type: "number" },
-      loadedHours:         { type: "number" },
+      loadedHours:         { type: "number", description: "Total time engaged with this load (shipper dwell + traveling + receiver dwell)." },
       deadheadHoursBefore: { type: "number" },
       deadheadHoursAfter:  { type: "number" },
+      // Per-bucket time breakdown. These three should sum to ≈ loadedHours.
+      timeAtShipperHours:  { type: "number", description: "Dwell time at the pickup location (waiting + loading)." },
+      timeTravelingHours:  { type: "number", description: "Time driving under load between pickup and delivery." },
+      timeAtReceiverHours: { type: "number", description: "Dwell time at the delivery location (waiting + unloading)." },
       revenue:             { type: "number" },
       driverPay:           { type: "number" },
       marginAfterDriver:   { type: "number" },
@@ -554,6 +591,7 @@ const ANALYSIS_LOAD_TOOL: Anthropic.Tool = {
       "loadLabel", "confidence", "matchedMovementIds",
       "loadedMiles", "deadheadMilesBefore", "deadheadMilesAfter",
       "loadedHours", "deadheadHoursBefore", "deadheadHoursAfter",
+      "timeAtShipperHours", "timeTravelingHours", "timeAtReceiverHours",
       "revenue", "driverPay", "marginAfterDriver",
       "statedRpm", "trueRpm", "statedRph", "trueRph", "marginRpm", "marginRph",
       "reasoning",
@@ -604,6 +642,66 @@ costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
   const ctxFromIso  = new Date(loadStartMs - CONTEXT_HOURS * 3_600_000).toISOString();
   const ctxToIso    = new Date(loadEndMs   + CONTEXT_HOURS * 3_600_000).toISOString();
 
+  // Adjacent loads on the SAME asset — gives the model context about
+  // where the truck was coming from and where it's heading next, so
+  // it can attribute pre/post-window deadhead correctly instead of
+  // wondering whether a movement 4 hours before pickup belongs to
+  // this load or the previous one.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: prevEvents } = await (supabase as any)
+    .from("events")
+    .select("id, title, start, \"end\", asset_id")
+    .eq("org_id", orgId)
+    .eq("asset_id", event.asset_id)
+    .lt("end", event.start)
+    .order("end", { ascending: false })
+    .limit(1);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const prevEvent = (prevEvents ?? [])[0] as { id: string; title: string; start: string; end: string } | undefined;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: nextEvents } = await (supabase as any)
+    .from("events")
+    .select("id, title, start, \"end\", asset_id")
+    .eq("org_id", orgId)
+    .eq("asset_id", event.asset_id)
+    .gt("start", event.end)
+    .order("start", { ascending: true })
+    .limit(1);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nextEvent = (nextEvents ?? [])[0] as { id: string; title: string; start: string; end: string } | undefined;
+
+  // Pull stops for both adjacent events so the model can see their
+  // pickup/delivery cities (used to figure out "where was the truck
+  // coming from / where is it heading"). Single batched query.
+  const adjacentIds = [prevEvent?.id, nextEvent?.id].filter(Boolean) as string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: adjStops } = adjacentIds.length > 0
+    ? await (supabase as any)
+        .from("stops")
+        .select("event_id, sequence, type, city, state")
+        .in("event_id", adjacentIds)
+        .order("sequence", { ascending: true })
+    : { data: [] };
+  const stopsByEventId = new Map<string, Array<{ type: string | null; city: string | null; state: string | null }>>();
+  for (const s of (adjStops ?? []) as Array<{ event_id: string; type: string | null; city: string | null; state: string | null }>) {
+    const arr = stopsByEventId.get(s.event_id) ?? [];
+    arr.push({ type: s.type, city: s.city, state: s.state });
+    stopsByEventId.set(s.event_id, arr);
+  }
+  const summarizeAdjLoad = (
+    e: { id: string; title: string; start: string; end: string } | undefined,
+    label: string,
+  ): string => {
+    if (!e) return `(no ${label} load on record)`;
+    const stops = stopsByEventId.get(e.id) ?? [];
+    const pickup   = stops.find(s => s.type === "pickup");
+    const delivery = [...stops].reverse().find(s => s.type === "delivery" || s.type === "drop" || s.type === "drop_hook");
+    const pickupCity   = pickup   ? `${pickup.city   ?? "?"}, ${pickup.state   ?? "?"}` : "?";
+    const deliveryCity = delivery ? `${delivery.city ?? "?"}, ${delivery.state ?? "?"}` : "?";
+    return `${label.toUpperCase()} LOAD: ${e.title ?? "(no title)"}\n  Window: ${e.start} → ${e.end}\n  Route: ${pickupCity} → ${deliveryCity}`;
+  };
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: movements, error: mErr } = await (supabase as any)
     .from("motive_driving_periods")
@@ -645,10 +743,15 @@ costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
       }).join("\n");
 
   const userMessage = [
-    `# Load`,
+    `# THIS load`,
     loadBlock,
     ``,
+    `# Adjacent loads on this truck (context for attributing pre/post-window deadhead)`,
+    summarizeAdjLoad(prevEvent, "previous"),
+    summarizeAdjLoad(nextEvent, "next"),
+    ``,
     `# Movements in the ±${CONTEXT_HOURS}h context window`,
+    `(these are ALL movements this truck made in the window — every one belongs to a bucket below)`,
     movementsBlock,
     ``,
     `Submit your analysis for THIS load via submit_load_analysis.`,
