@@ -9,7 +9,7 @@ import { sanitizeTimezone, parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import MapDrawer from './MapDrawer';
 import CopyChip from '@/components/ui/CopyChip';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import WindowTimeline from '@/components/ui/WindowTimeline';
 import Tooltip from '@/components/ui/Tooltip';
 
@@ -793,16 +793,14 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
   }, [handleClose]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--gc-bg)', overflow: 'hidden' }}>
+    <AppShell title="Command Center" icon={LayoutDashboard}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--gc-bg)', overflow: 'hidden' }}>
 
-      {/* Header */}
+      {/* Header row 2 — window navigation + ELD controls. The old
+          ManagementHeader's "back to Calendar" button is gone (the
+          sidebar carries that affordance now); the rest of this
+          page-level controls strip stays. */}
       <div style={{ flexShrink: 0 }}>
-        <ManagementHeader
-          title="Command Center"
-          icon={LayoutDashboard}
-          onBack={handleClose}
-        />
-
         {/* Row 2: window navigation + ELD controls */}
         <div style={{
           height: 36, display: 'flex', alignItems: 'center', gap: 10, padding: '0 20px',
@@ -909,5 +907,6 @@ export default function DispatchBoard({ onClose }: { onClose?: () => void }) {
       })()}
 
     </div>
+    </AppShell>
   );
 }

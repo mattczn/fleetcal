@@ -14,7 +14,7 @@ import {
 import { parseDate, fmtDate, fmtDateFull, fmtMoney, printPayroll, type PrintDriver } from '@/lib/payrollPdf';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import DataLoader from '@/components/DataLoader';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import type { CalendarEvent } from '@/lib/types';
 
 // ─── Week helpers ─────────────────────────────────────────────────────────────
@@ -1441,11 +1441,8 @@ export default function PayrollView() {
   const weekLabel  = weekOptions[weekIdx].label;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-hidden" style={{ background: 'var(--gc-bg)' }}>
+    <AppShell title="Payroll" icon={Users}>
       <DataLoader />
-
-      {/* ── Header ── */}
-      <ManagementHeader title="Payroll" icon={Users} />
 
       {/* ── Content ── */}
       <div className="flex-1 overflow-y-auto p-6 relative">
@@ -1585,6 +1582,6 @@ export default function PayrollView() {
 
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

@@ -15,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Gauge, Loader2 } from 'lucide-react';
 import { railway } from '@/lib/railway';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import { OpsTable, type OpsColumn } from '@/components/ui/OpsTable';
 import { type Period, getPeriodRange, defaultCustomRangeISO } from '@/lib/periodRange';
@@ -411,9 +411,8 @@ export default function DriversView() {
     : `${range.start} → ${range.end}`;
 
   return (
-    <div className="h-screen flex flex-col" style={{ background: 'var(--gc-surface)' }}>
-      <ManagementHeader title="Drivers" icon={Gauge} />
-      <div className="flex-1 min-h-0 flex flex-col">
+    <AppShell title="Drivers" icon={Gauge}>
+      <div className="flex-1 min-h-0 flex flex-col" style={{ background: 'var(--gc-surface)' }}>
         <div className="mx-auto w-full px-6 py-5 flex flex-col gap-4 flex-1 min-h-0" style={{ maxWidth: 1600 }}>
           {/* Period strip */}
           <div className="flex items-center gap-3 flex-wrap">
@@ -474,7 +473,7 @@ export default function DriversView() {
           onClose={() => setOpenDriverId(null)}
         />
       )}
-    </div>
+    </AppShell>
   );
 }
 

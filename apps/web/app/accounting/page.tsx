@@ -26,7 +26,7 @@ import {
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw,
 } from 'lucide-react';
 import { useAuth, useUser } from '@clerk/nextjs';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
 import EventModal from '@/components/calendar/EventModal';
 import { railway, RailwayError } from '@/lib/railway';
@@ -706,9 +706,8 @@ function AccountingPageInner() {
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <div className="flex-1 flex flex-col h-full" style={{ background: 'var(--gc-bg)' }}>
+    <AppShell title="Accounting" icon={Receipt}>
       <DataLoader />
-      <ManagementHeader title="Accounting" icon={Receipt} />
 
       {/* The content area is a fixed-height flex column so the table
           can claim the remaining space and scroll INSIDE its own box.
@@ -926,7 +925,7 @@ function AccountingPageInner() {
           onClose={() => setNotesTarget(null)}
           onSaved={async () => { setNotesTarget(null); await refresh(); }} />
       )}
-    </div>
+    </AppShell>
   );
 }
 

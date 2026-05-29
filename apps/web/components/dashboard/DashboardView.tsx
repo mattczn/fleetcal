@@ -11,7 +11,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
 import DataLoader from '@/components/DataLoader';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import { relayLegShare } from '@/lib/legMiles';
 import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
 import { type Period, PERIODS, getPeriodRange } from '@/lib/periodRange';
@@ -656,7 +656,7 @@ export default function DashboardView() {
   );
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-hidden" style={{ background: 'var(--gc-bg)' }}>
+    <AppShell title="Dashboard" icon={BarChart2}>
       <DataLoader />
 
       {brokerProfileId && (
@@ -665,9 +665,6 @@ export default function DashboardView() {
           onClose={() => setBrokerProfileId(null)}
         />
       )}
-
-      {/* ── Toolbar ── */}
-      <ManagementHeader title="Dashboard" icon={BarChart2} />
 
       {/* ── Content ── */}
       <div className="flex-1 overflow-y-auto p-6 relative">
@@ -991,7 +988,7 @@ export default function DashboardView() {
 
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 

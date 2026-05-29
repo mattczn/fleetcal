@@ -28,7 +28,7 @@ import {
   Calendar, Plus,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
-import ManagementHeader from '@/components/nav/ManagementHeader';
+import AppShell from '@/components/nav/AppShell';
 import type { Driver, Asset } from '@/lib/types';
 import type {
   MaintenanceReport, FuelReport, FuelTransaction, MaintenanceReportPhoto,
@@ -252,8 +252,8 @@ export default function EquipmentPage() {
     // float on the surface rather than sitting in cards on a tinted
     // background — feels closer to a real ops dashboard than a
     // glorified settings panel.
-    <div className="h-screen flex flex-col" style={{ background: 'var(--gc-surface)' }}>
-      <ManagementHeader title="Equipment" icon={Package} />
+    <AppShell title="Equipment" icon={Package}>
+      <div className="flex-1 min-h-0 flex flex-col" style={{ background: 'var(--gc-surface)' }}>
 
       {/* Fixtures-load error banner — shown when drivers/assets/
           trailers fail to load after retries. The most common cause
@@ -361,7 +361,8 @@ export default function EquipmentPage() {
           onCloseSideMedia={() => setSideMedia(null)}
         />
       )}
-    </div>
+      </div>
+    </AppShell>
   );
 }
 
