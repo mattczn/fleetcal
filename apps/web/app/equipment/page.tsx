@@ -115,6 +115,18 @@ export default function EquipmentPage() {
     return t === 'fuel' || t === 'maintenance' || t === 'inspections' ? t : 'maintenance';
   })();
   const [tab, setTab] = useState<Tab>(initialTab);
+  // Keep tab state in sync with the URL on subsequent navigations.
+  // The sidebar's Equipment sub-items push /equipment?tab=fuel etc.;
+  // Next.js doesn't remount the page (we're already on /equipment),
+  // so the local `tab` state would stay stuck at whatever was read
+  // on first mount without this effect. Same pattern works for any
+  // future deep link that switches tabs while the page is mounted.
+  useEffect(() => {
+    const t = searchParams?.get('tab');
+    if (t === 'fuel' || t === 'maintenance' || t === 'inspections') {
+      setTab(t);
+    }
+  }, [searchParams]);
 
   // Page-level filters retired — OpsTable owns its own filter chips
   // now (search + select dropdowns scoped to each tab's data). The
