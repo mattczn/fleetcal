@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Package, Container, Gauge } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, BarChart2, Users, LayoutDashboard, MoreHorizontal, SlidersHorizontal, FileCheck2, Receipt, Eye, Package, Container, Gauge, Truck } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz } from '@/lib/time-utils';
@@ -13,6 +13,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import { Authorize } from '@/components/Authorize';
 import DatePicker from '@/components/calendar/DatePicker';
 import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
+import TruckFleetPanel from '@/components/calendar/TruckFleetPanel';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -75,6 +76,7 @@ export default function CalendarToolbar() {
   const [query,              setQuery]              = useState('');
   const [trashOpen,          setTrashOpen]          = useState(false);
   const [trailerFleetOpen,   setTrailerFleetOpen]   = useState(false);
+  const [truckFleetOpen,     setTruckFleetOpen]     = useState(false);
   // Hide the button when no trailers — keeps the toolbar clean for
   // orgs that don't use trailers yet. Retired trailers don't count.
   const hasActiveTrailers = trailers.some(t => !t.activeTo);
@@ -793,6 +795,24 @@ export default function CalendarToolbar() {
           )}
         </div>
 
+        {/* Truck fleet — opens a right-side tray with the truck list,
+            search, and per-row Edit / Hide actions. Replaces the
+            always-on AssetSidebar left rail for users who prefer
+            more horizontal grid space; the rail can still be left
+            mounted by the page if you want both. Sits just left of
+            the trailer container icon so the two equipment-side
+            controls are visually grouped. */}
+        <Tooltip content="Trucks" placement="bottom">
+          <button
+            onClick={() => setTruckFleetOpen(true)}
+            className="flex items-center justify-center w-9 h-9 rounded-full transition-colors"
+            style={{ color: 'var(--gc-text-2)' }}
+            onMouseOver={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+            onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
+            <Truck size={16} />
+          </button>
+        </Tooltip>
+
         {/* Trailer fleet — one-click open of the fleet-wide trailer
             map. Sits just right of the layers eye so trailer status
             lives next to the other "what am I looking at" controls.
@@ -1000,6 +1020,7 @@ export default function CalendarToolbar() {
       </div>
     </header>
     {trailerFleetOpen && <TrailerFleetMapPanel onClose={() => setTrailerFleetOpen(false)} />}
+    {truckFleetOpen && <TruckFleetPanel onClose={() => setTruckFleetOpen(false)} />}
     </>
   );
 }
