@@ -1,56 +1,26 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Plus, Layers, Truck, Users, Pencil, GripVertical, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
+import { Plus, Layers, Truck, Users, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
-import { buildBrokerRules } from '@/lib/customerMatch';
-import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
-import EditAssetDialog from './EditAssetDialog';
 import DriversModal from './DriversModal';
 import AssetsModal from './AssetsModal';
 import MiniCalendar from './MiniCalendar';
-import type { Asset } from '@/lib/types';
 import type { Capability, OrgModule } from '@fleetcal/types';
 
-function CheckboxSwatch({ color, hidden, onToggle }: { color: string; hidden: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={e => { e.stopPropagation(); onToggle(); }}
-      className="w-4 h-4 rounded shrink-0 flex items-center justify-center transition-all"
-      style={{ backgroundColor: hidden ? 'transparent' : color, border: hidden ? `2px solid ${color}` : 'none' }}
-      title={hidden ? 'Show column' : 'Hide column'}
-    >
-      {!hidden && (
-        <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
-          <path d="M1 4l3 3 5-6" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      )}
-    </button>
-  );
-}
-
 export default function AssetSidebar() {
-  const { assets: allAssets, reorderAssets, openCreateModal, sidebarOpen, toggleSidebar, toggleAssetVisibility, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, unassignedAssetId, showUnassigned, dbReady } = useCalendarStore();
-  const { can: canDo } = usePermissions();
-  // Maintenance has assets.view but not assets.edit; reorder + edit
-  // affordances on rows fire railway.updateAsset / railway.reorderAssets
-  // which the API would 403. Hide them at the UI tier.
-  const canEditAssets = canDo('assets.edit');
-  // Active trucks only — the calendar sidebar mirrors the column set
-  // that's drawn on the calendar view for today. Retired trucks are
-  // filtered out entirely (still visible in the Asset directory modal
-  // with a 'Retired' pill so dispatch can audit / restore from there).
-  const today = dateKeyOf(new Date());
-  const assets = allAssets.filter(a =>
-    a.id !== unassignedAssetId && isActiveOn(a, today),
-  );
-  const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
+  // The truck/asset list itself has moved to the right-hand TruckFleetPanel
+  // (opened from the toolbar Truck icon). This sidebar still owns the
+  // dispatcher's daily tools — New Load / Batch, MiniCalendar, category
+  // filter chips — plus the cross-page nav rail that used to live in
+  // AppSidebar. The Manage Assets / Manage Drivers / Settings buttons
+  // at the bottom remain the doorway into the directory modals.
+  const { openCreateModal, sidebarOpen, toggleSidebar, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables } = useCalendarStore();
   const { organization } = useOrganization();
   const [showDrivers, setShowDrivers] = useState(false);
   const [showAssets,  setShowAssets]  = useState(false);
@@ -115,22 +85,6 @@ export default function AssetSidebar() {
       }
     }
   };
-
-  // Drag state — tracked by asset ID to avoid index mismatch with filtered list
-  const dragId = useRef<number | null>(null);
-  const [overAssetId, setOverAssetId] = useState<number | null>(null);
-
-  const handleDragStart = (id: number) => { dragId.current = id; };
-  const handleDragOver  = (e: React.DragEvent, id: number) => {
-    e.preventDefault();
-    if (dragId.current !== null && dragId.current !== id) setOverAssetId(id);
-  };
-  const handleDrop = (id: number) => {
-    if (dragId.current !== null && dragId.current !== id) reorderAssets(dragId.current, id);
-    dragId.current = null;
-    setOverAssetId(null);
-  };
-  const handleDragEnd = () => { dragId.current = null; setOverAssetId(null); };
 
   return (
     <>
@@ -261,54 +215,14 @@ export default function AssetSidebar() {
           </div>
         )}
 
-        {/* Asset list — flat + draggable */}
-        <div className="flex-1 overflow-y-auto py-1">
-          {unassignedAsset && (
-            <UnassignedRow asset={unassignedAsset} />
-          )}
-          {assets.length === 0 && !unassignedAsset && !dbReady && (
-            <div className="flex flex-col gap-1 px-2 py-2">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-2 px-2 py-2 rounded-md">
-                  <div className="skeleton-pulse rounded-full" style={{ width: 26, height: 26 }} />
-                  <div className="flex-1 flex flex-col gap-1.5">
-                    <div className="skeleton-pulse rounded" style={{ height: 9, width: '60%' }} />
-                    <div className="skeleton-pulse rounded" style={{ height: 7, width: '38%' }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {assets.length === 0 && !unassignedAsset && dbReady && (
-            <div className="flex flex-col items-center gap-3 py-10" style={{ color: 'var(--gc-text-3)' }}>
-              <Truck size={26} style={{ opacity: 0.35 }} />
-              <span className="text-sm">No assets yet</span>
-            </div>
-          )}
-          {assets.filter(a => activeCategoryFilter === null || a.type === activeCategoryFilter).map((asset) => (
-            <AssetRow
-              key={asset.id}
-              asset={asset}
-              isOver={overAssetId === asset.id}
-              onDragStart={() => handleDragStart(asset.id)}
-              onDragOver={e => handleDragOver(e, asset.id)}
-              onDrop={() => handleDrop(asset.id)}
-              onDragEnd={handleDragEnd}
-              onToggleVisibility={() => toggleAssetVisibility(asset.id)}
-              canEdit={canEditAssets}
-            />
-          ))}
-        </div>
-
         {/* Cross-page navigation — the dispatcher's jump list to every
             other surface in the app (Dashboard, Closeout, Equipment,
-            etc.). Sits between the asset list and the Manage / Settings
-            buttons so it's always visible, doesn't compete with the
-            mini calendar at the top, and the user doesn't need a
-            separate AppSidebar rail for cross-page nav while on the
-            calendar. Cap + module gates mirror AppSidebar so a role
-            without (e.g.) payroll.access doesn't see Payroll here
-            either. */}
+            etc.). The truck list that used to occupy this slot now
+            lives in the right-hand TruckFleetPanel (toolbar Truck
+            icon), so this rail is the calendar's primary nav surface
+            and there's no separate AppSidebar mounted on /calendar.
+            Cap + module gates mirror AppSidebar so a role without
+            (e.g.) payroll.access doesn't see Payroll here either. */}
         <PageNavSection />
 
         {/* Manage buttons */}
@@ -355,8 +269,10 @@ export default function AssetSidebar() {
 // ── Cross-page nav section ────────────────────────────────────────────
 //
 // Mirrors AppSidebar's nav list, scoped down for the calendar's
-// AssetSidebar shell. Lives between the asset list and the Manage
-// buttons. Calendar itself is intentionally NOT in this list — you're
+// AssetSidebar shell. Takes the main flex-1 slot (where the truck
+// list used to live, before that moved into TruckFleetPanel) so the
+// dispatcher can jump to every other surface without a second left
+// rail. Calendar itself is intentionally NOT in this list — you're
 // already on it, and the brand header doubles as a "you're here" cue.
 // Equipment links to the default Maintenance tab; users can switch
 // sub-tabs from inside the page.
@@ -397,8 +313,7 @@ function PageNavSection() {
 
   return (
     <div
-      className="shrink-0 p-3 space-y-0.5"
-      style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+      className="flex-1 overflow-y-auto p-3 space-y-0.5">
       {visible.map(item => {
         const Icon = item.icon;
         const hrefPath = item.href.split('?')[0];
@@ -430,122 +345,3 @@ function PageNavSection() {
   );
 }
 
-interface RowProps {
-  asset: Asset;
-  isOver: boolean;
-  onDragStart: () => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: () => void;
-  onDragEnd: () => void;
-  onToggleVisibility: () => void;
-  canEdit: boolean;
-}
-
-function AssetRow({ asset, isOver, onDragStart, onDragOver, onDrop, onDragEnd, onToggleVisibility, canEdit }: RowProps) {
-  const [hovered, setHovered] = useState(false);
-  const [editing, setEditing] = useState(false);
-
-  return (
-    <>
-      <div
-        draggable={canEdit}
-        onDragStart={canEdit ? onDragStart : undefined}
-        onDragOver={canEdit ? onDragOver : undefined}
-        onDrop={canEdit ? onDrop : undefined}
-        onDragEnd={canEdit ? onDragEnd : undefined}
-        className="flex items-center gap-2 px-2 py-2 transition-colors select-none"
-        style={{
-          background: hovered ? 'var(--gc-hover)' : 'transparent',
-          cursor: 'default',
-          borderTop: isOver ? '2px solid var(--gc-blue)' : '2px solid transparent',
-        }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        {canEdit && (
-          <div className="shrink-0 flex items-center" style={{ color: hovered ? 'var(--gc-text-3)' : 'transparent', cursor: 'grab' }}>
-            <GripVertical size={14} />
-          </div>
-        )}
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 truncate">
-            <button
-              type="button"
-              onClick={onToggleVisibility}
-              title={asset.hidden ? 'Show on calendar' : 'Hide from calendar'}
-              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', flexShrink: 0 }}
-            >
-              <Truck size={14} style={{ color: asset.hidden ? 'var(--gc-border)' : asset.color }} />
-            </button>
-            <span className="text-sm truncate" style={{ color: asset.hidden ? 'var(--gc-text-3)' : 'var(--gc-text-1)' }}>
-              {asset.name}{asset.unit ? <span style={{ color: 'var(--gc-text-3)', fontWeight: 500 }}> #{asset.unit}</span> : null}
-            </span>
-          </div>
-          <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)', paddingLeft: 22 }}>
-            {asset.type}
-          </div>
-        </div>
-
-        {hovered && canEdit && (
-          <button
-            onClick={() => setEditing(true)}
-            className="p-1 rounded-full transition-colors shrink-0"
-            style={{ color: 'var(--gc-text-3)' }}
-            onMouseEnter={e => { e.stopPropagation(); e.currentTarget.style.color = 'var(--gc-blue)'; e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}
-            title={`Edit ${asset.name}`}
-          >
-            <Pencil size={13} />
-          </button>
-        )}
-      </div>
-      {editing && <EditAssetDialog asset={asset} onClose={() => setEditing(false)} />}
-    </>
-  );
-}
-
-function UnassignedRow({ asset }: { asset: import('@/lib/types').Asset }) {
-  const [hovered, setHovered] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const { can } = usePermissions();
-  const canEdit = can('assets.edit');
-  return (
-    <>
-      <div
-        className="flex items-center gap-2 px-2 py-2 transition-colors select-none"
-        style={{ background: hovered ? 'var(--gc-hover)' : 'transparent', cursor: 'default' }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        <div className="shrink-0" style={{ width: 14 }} />
-        <div className="w-4 h-4 rounded shrink-0" style={{ backgroundColor: asset.color }} />
-        <div className="flex-1 min-w-0">
-          <div className="text-sm truncate" style={{ color: 'var(--gc-text-1)' }}>{asset.name}</div>
-          {hovered ? (
-            <div className="text-[10px] truncate" style={{ color: 'var(--gc-blue)' }}>
-              Turn Off Placeholder in Settings
-            </div>
-          ) : (
-            <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-              {asset.unit ? `#${asset.unit}` : ''}{asset.unit ? ' · ' : ''}Unassigned
-            </div>
-          )}
-        </div>
-        {hovered && canEdit && (
-          <button
-            onClick={() => setEditing(true)}
-            className="p-1 rounded-full transition-colors shrink-0"
-            style={{ color: 'var(--gc-text-3)' }}
-            onMouseEnter={e => { e.currentTarget.style.color = 'var(--gc-blue)'; e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
-            onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}
-            title="Edit Unassigned"
-          >
-            <Pencil size={13} />
-          </button>
-        )}
-      </div>
-      {editing && <EditAssetDialog asset={asset} onClose={() => setEditing(false)} />}
-    </>
-  );
-}
