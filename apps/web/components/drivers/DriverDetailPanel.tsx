@@ -48,17 +48,21 @@ export default function DriverDetailPanel({ row, loads, inspections, period, onC
 
   if (!row) return null;
 
-  // Open the calendar's event modal in edit mode on a specific load.
-  // Same handoff the broker profile uses (BrokerProfileModal:148-151);
-  // the calendar page mounts the EventModal which loads the load by id.
+  // Open the load's event modal IN PLACE — the drivers page mounts
+  // EventModal at the route level (mirrors the accounting page), so
+  // openEditModal pops it right over this surface without a route
+  // change. The modal's own form-init effect will refetch the event
+  // by id if the local cache is cold, so a load from outside the
+  // hydrated window still opens correctly.
   const openLoad = (loadId: string) => {
     openEditModal(loadId);
-    router.push('/calendar');
   };
 
-  // Open the equipment page's inspection panel by id. Equipment has a
-  // ?inspection=<id> deep-link handler that fetches the report and
-  // pops the right-side InspectionDetail panel.
+  // For now inspections still hand off to the equipment page (the
+  // InspectionDetail render is tightly coupled to that page's media
+  // sidebar). The ?inspection=<id> deep link there pops the panel on
+  // mount; we keep this hop until we extract the detail to a shared
+  // modal component.
   const openInspection = (inspectionId: string) => {
     router.push(`/equipment?tab=inspections&inspection=${encodeURIComponent(inspectionId)}`);
   };

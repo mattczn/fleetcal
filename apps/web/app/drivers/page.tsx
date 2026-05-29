@@ -41,13 +41,23 @@
  * the Calendar (assignments) than from a scorecard.
  */
 
+import DataLoader from '@/components/DataLoader';
 import DriversView from '@/components/drivers/DriversView';
+import EventModal from '@/components/calendar/EventModal';
 import RequireCap from '@/components/auth/RequireCap';
 
 export default function DriversPage() {
+  // DataLoader + EventModal mounted at the page level so a driver-tray
+  // row click can pop the load modal INLINE over this page instead of
+  // routing to /calendar (which was landing on an empty modal — the
+  // calendar's own DataLoader hadn't hydrated the event by the time the
+  // modal opened, and the form-init effect bailed silently). Same
+  // pattern the accounting page uses for its "open this load" handoff.
   return (
     <RequireCap cap="drivers.view">
+      <DataLoader />
       <DriversView />
+      <EventModal />
     </RequireCap>
   );
 }
