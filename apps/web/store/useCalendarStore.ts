@@ -1361,10 +1361,21 @@ export const useCalendarStore = create<CalendarStore>()(
 
     // Apply driver resolution to the event-level updates so the API receives
     // the resolved driver_id when one was needed.
+    //
+    // When the user EXPLICITLY clears the driver ("— No driver —"), we
+    // need to send null (not undefined). JSON.stringify strips
+    // undefined values, so an undefined here arrives at the server as
+    // "field not present" — the API's PATCH handler then leaves the
+    // existing driver in place, and the form springs back to the
+    // previously-assigned driver. Sending null routes through the
+    // server's `update.driver_name = body.driverName ?? null` (and
+    // same for driver_id) and actually clears the column.
     const resolvedUpdates: typeof updates = { ...updates };
     if ('driverId' in updates || 'driverName' in updates) {
-      resolvedUpdates.driverId = resolved.driverId ?? undefined;
-      resolvedUpdates.driverName = resolved.driverName ?? undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (resolvedUpdates as any).driverId   = resolved.driverId   ?? null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (resolvedUpdates as any).driverName = resolved.driverName ?? null;
     }
 
     const isNonRevenue = ev.eventKind === 'non_revenue';
