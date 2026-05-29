@@ -8,6 +8,7 @@ import {
   Wallet, Fuel, Route, Gauge,
 } from 'lucide-react';
 import { fetchWithRetry } from '@/lib/fetchWithRetry';
+import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { railway } from '@/lib/railway';
@@ -372,7 +373,7 @@ function KpiCard({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function DashboardView() {
-  const { events, assets, loadedStart, loadedEnd, dbReady, extendLoadedRange, unassignedAssetId, customers, openEditModal } = useCalendarStore();
+  const { events, assets, loadedStart, loadedEnd, dbReady, extendLoadedRange, unassignedAssetId, customers, openEditModal, calendarTimezone } = useCalendarStore();
   const { organization } = useOrganization();
   // Driver-pay visibility — gates the export's Driver Pay column.
   // Dispatcher and Maintenance never see what we paid drivers.
@@ -411,6 +412,25 @@ export default function DashboardView() {
     [period, customStart, customEnd],
   );
 
+  // ISO timestamps anchored to the org's dispatch zone — used by every
+  // KPI fetch + loadSummaries fetch below. Without this anchor a
+  // dispatcher in PT viewing a CT-based org would have their period
+  // boundaries drift 2 hours and the "This Week" tile would slurp in
+  // loads picked up early Saturday morning CT (the exact bug surfaced
+  // on /dashboard's Custom Loads Report).
+  //
+  // Recomputes only when the period dates or the org TZ changes.
+  const periodIso = useMemo(() => {
+    const fromKey = dateKeyOf(pStart);
+    const toKey   = dateKeyOf(pEnd);
+    return {
+      fromIso: new Date(parseNaiveIsoInTz(`${fromKey}T00:00:00`,     calendarTimezone)).toISOString(),
+      toIso:   new Date(parseNaiveIsoInTz(`${toKey}T23:59:59.999`,   calendarTimezone)).toISOString(),
+      fromDate: fromKey, // YYYY-MM-DD for endpoints that take date-only
+      toDate:   toKey,
+    };
+  }, [pStart, pEnd, calendarTimezone]);
+
   // Extend the loaded window whenever the selected period reaches beyond what's cached
   useEffect(() => {
     if (!dbReady) return;
@@ -433,19 +453,10 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
-        // pEnd from getPeriodRange is at MIDNIGHT local on the last
-        // day (e.g. Friday 00:00 local for a Sat→Fri week). Sending
-        // that as pickupTo would exclude every load picked up after
-        // midnight on the closing day — i.e. all of Friday. Extend
-        // to end-of-day local so the filter includes the entire
-        // closing day, same shape LoadsReport uses.
-        const fromIso = pStart.toISOString();
-        const endOfDay = new Date(pEnd);
-        endOfDay.setHours(23, 59, 59, 999);
-        const toIso = endOfDay.toISOString();
+        // Boundaries anchored to org TZ — see `periodIso` above.
         const { loads } = await railway.listLoadSummaries({
-          pickupFrom: fromIso,
-          pickupTo:   toIso,
+          pickupFrom: periodIso.fromIso,
+          pickupTo:   periodIso.toIso,
         });
         if (!cancelled) setLoadSummaries(loads);
       } catch (err) {
@@ -454,7 +465,7 @@ export default function DashboardView() {
       }
     })();
     return () => { cancelled = true; };
-  }, [dbReady, pStart, pEnd]);
+  }, [dbReady, periodIso]);
 
   // ── Fuel spend (period total) ─────────────────────────────────────────
   //
@@ -468,12 +479,10 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
-        const fromDate = pStart.toISOString().slice(0, 10);
-        const endOfDay = new Date(pEnd);
-        endOfDay.setHours(23, 59, 59, 999);
-        const toDate = endOfDay.toISOString().slice(0, 10);
+        // Date-only filter for the API; use the org-anchored dates so
+        // a 1am Sat CT load doesn't bleed into Friday's period.
         const { fuelTransactions } = await fetchWithRetry(
-          () => railway.listFuelTransactions({ from: fromDate, to: toDate, limit: 5000 }),
+          () => railway.listFuelTransactions({ from: periodIso.fromDate, to: periodIso.toDate, limit: 5000 }),
         );
         if (cancelled) return;
         const sum = fuelTransactions.reduce((s, t) => s + (t.totalCharged ?? 0), 0);
@@ -484,7 +493,7 @@ export default function DashboardView() {
       }
     })();
     return () => { cancelled = true; };
-  }, [dbReady, pStart, pEnd]);
+  }, [dbReady, periodIso]);
 
   // ── Payroll (finalized records, with fallback to per-load pay) ────────
   //
@@ -517,8 +526,12 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
-        const periodStartKey = dateKeyOf(pStart);
-        const periodEndKey   = dateKeyOf(pEnd);
+        // dateKey form of the period bounds — used for Friday-in-range
+        // detection. We pull them off periodIso so the week enumeration
+        // stays aligned with the same anchored window every other
+        // fetch uses.
+        const periodStartKey = periodIso.fromDate;
+        const periodEndKey   = periodIso.toDate;
         const shiftKey = (dateKey: string, days: number): string => {
           const d = new Date(`${dateKey}T12:00:00`); // noon = TZ-safe
           d.setDate(d.getDate() + days);
@@ -598,7 +611,7 @@ export default function DashboardView() {
       }
     })();
     return () => { cancelled = true; };
-  }, [dbReady, pStart, pEnd, loadSummaries]);
+  }, [dbReady, periodIso, loadSummaries]);
   // Convenience selectors for the tile + cost-bar consumers.
   const payrollTotal = payrollData?.total ?? null;
   const payrollBadge: { text: string; color: string } | undefined = (() => {
@@ -636,12 +649,9 @@ export default function DashboardView() {
     let cancelled = false;
     (async () => {
       try {
-        const fromIso = pStart.toISOString();
-        const endOfDay = new Date(pEnd);
-        endOfDay.setHours(23, 59, 59, 999);
-        const toIso = endOfDay.toISOString();
+        // Org-anchored window — see `periodIso`.
         const { totalMiles } = await fetchWithRetry(
-          () => railway.odometerSummary(fromIso, toIso),
+          () => railway.odometerSummary(periodIso.fromIso, periodIso.toIso),
         );
         if (cancelled) return;
         setEldMiles(totalMiles);
@@ -651,7 +661,7 @@ export default function DashboardView() {
       }
     })();
     return () => { cancelled = true; };
-  }, [dbReady, pStart, pEnd]);
+  }, [dbReady, periodIso]);
 
   // Filter to period — based on each event's start date; exclude placeholder unassigned asset
   const filtered = useMemo(

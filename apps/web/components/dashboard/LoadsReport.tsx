@@ -4,6 +4,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { railway } from '@/lib/railway';
 import type { LoadSummary } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
@@ -55,16 +56,19 @@ function billableTotal(load: LoadSummary): number {
   return (load.loadPrice ?? 0) + billableAccessorials(load);
 }
 
-/** Build an ISO timestamp at the start of a calendar day in the user's
- *  local timezone, so date filters compare correctly against UTC-stored
- *  events (an event picked up at 8pm local on May 8 has a UTC start of
- *  May 9 — if we sent the raw "2026-05-09" string without tz, the API
- *  would treat it as UTC midnight and INCLUDE that event). */
-function localStartOfDayIso(yyyymmdd: string): string {
-  return new Date(`${yyyymmdd}T00:00:00`).toISOString();
+/** Build an ISO timestamp at the start (or end) of a calendar day,
+ *  anchored to the org's dispatch timezone — NOT the viewer's
+ *  device-local zone. Without the org anchor, a dispatcher in PT
+ *  viewing a CT-based org would have their cutoff drift by 2 hours
+ *  and slurp in a load picked up at 1am Saturday CT into a "Sat-Fri"
+ *  pickup range. parseNaiveIsoInTz handles the conversion (and the
+ *  DST transition hour) cleanly. Falls back to native parsing when
+ *  no timezone is configured. */
+function orgStartOfDayIso(yyyymmdd: string, tz: string | undefined): string {
+  return new Date(parseNaiveIsoInTz(`${yyyymmdd}T00:00:00`, tz)).toISOString();
 }
-function localEndOfDayIso(yyyymmdd: string): string {
-  return new Date(`${yyyymmdd}T23:59:59.999`).toISOString();
+function orgEndOfDayIso(yyyymmdd: string, tz: string | undefined): string {
+  return new Date(parseNaiveIsoInTz(`${yyyymmdd}T23:59:59.999`, tz)).toISOString();
 }
 
 
@@ -311,7 +315,7 @@ interface Props {
 }
 
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
-  const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
+  const { customers, drivers, assets, openEditModal, dbReady, calendarTimezone } = useCalendarStore();
   const { can } = usePermissions();
   // Hide the Driver Pay column entirely for users without
   // loads.view_driver_pay. The role matrix excludes Dispatcher and
@@ -442,12 +446,13 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
     setLoading(true);
     try {
       // Hit the load-shaped report endpoint. One row per load, relays
-      // collapsed server-side, date filter applied server-side. Local-tz
-      // ISO so "May 9" means May 9 in the user's wall-clock time, not
-      // UTC. The user picks which date column drives the filter via the
-      // Filter-by toggle; the backend supports both shapes.
-      const fromIso = localStartOfDayIso(from);
-      const toIso   = localEndOfDayIso(to);
+      // collapsed server-side, date filter applied server-side.
+      // Cutoffs anchored to the org's dispatch zone so "May 23 → May 29"
+      // means Sat 00:00 CT → Fri 23:59 CT regardless of where the
+      // dispatcher's laptop happens to be (otherwise a viewer in PT
+      // would over-include loads picked up early Saturday morning CT).
+      const fromIso = orgStartOfDayIso(from, calendarTimezone);
+      const toIso   = orgEndOfDayIso(to,   calendarTimezone);
       const query: Record<string, string> = dateMode === 'delivery'
         ? { deliveryFrom: fromIso, deliveryTo: toIso }
         : { pickupFrom:   fromIso, pickupTo:   toIso };
