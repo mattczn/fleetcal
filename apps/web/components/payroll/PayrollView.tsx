@@ -1292,9 +1292,16 @@ export default function PayrollView() {
     if (onUnassignedAsset && !hasDriver) return false;
     // If deferred to a different week, hide from original week
     if (e.deferredToWeek && e.deferredToWeek !== weekStart) return false;
-    const d = parseDate(e.start);
-    // Show if start falls in this week, OR if explicitly deferred to this week
-    return (d >= sat && d <= fri) || e.deferredToWeek === weekStart;
+    // Compare actual timestamps against a Sat-00:00 → Fri-23:59:59.999
+    // local-time window. The old parseDate path extracted the UTC date
+    // string off e.start and reconstructed it as local midnight, which
+    // mis-classified events landing in early UTC hours of Saturday
+    // (e.g. Friday May 22 7-11pm Mountain → UTC date "2026-05-23")
+    // as if they were Saturday events. Same fix as DashboardView.
+    const winStart = new Date(sat.getFullYear(), sat.getMonth(), sat.getDate()).getTime();
+    const winEnd   = new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 23, 59, 59, 999).getTime();
+    const t = new Date(e.start).getTime();
+    return (t >= winStart && t <= winEnd) || e.deferredToWeek === weekStart;
   }), [events, assets, sat, fri, weekStart, unassignedAssetId]);
 
   // Group by driver — IDENTITY-based, not name-based. Loads carrying

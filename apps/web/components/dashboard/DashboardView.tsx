@@ -310,13 +310,25 @@ export default function DashboardView() {
     return () => { cancelled = true; };
   }, [dbReady, pStart, pEnd]);
 
-  // Filter to period — based on each event's start date; exclude placeholder unassigned asset
+  // Filter to period. Compares actual timestamps against the same
+  // local-midnight → end-of-day window the server's listLoadSummaries
+  // call uses (pickupFrom = pStart.toISOString(), pickupTo = pEnd
+  // 23:59:59.999 local). The previous version used parseEventDate
+  // which extracts the UTC DATE STRING from e.start and reconstructs
+  // it as local midnight — that mis-classified events that fall in
+  // the early UTC hours of the period's first day (e.g. Friday May 22
+  // 7-11pm Mountain → UTC date "2026-05-23") as if they were Saturday
+  // events, inflating the fallback by ~$3k against the server.
   const filtered = useMemo(
-    () => events.filter(e => {
-      if (unassignedAssetId !== null && e.assetId === unassignedAssetId) return false;
-      const d = parseEventDate(e.start);
-      return d >= pStart && d <= pEnd;
-    }),
+    () => {
+      const winStart = pStart.getTime();
+      const winEnd   = new Date(pEnd.getFullYear(), pEnd.getMonth(), pEnd.getDate(), 23, 59, 59, 999).getTime();
+      return events.filter(e => {
+        if (unassignedAssetId !== null && e.assetId === unassignedAssetId) return false;
+        const t = new Date(e.start).getTime();
+        return t >= winStart && t <= winEnd;
+      });
+    },
     [events, pStart, pEnd, unassignedAssetId],
   );
 
