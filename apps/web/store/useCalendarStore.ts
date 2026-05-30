@@ -386,6 +386,14 @@ interface CalendarStore extends ModalState {
   movementsByVehicle: Record<string, import('@/lib/railway').MovementCard[]>;
   /** True while a fetchMovements call is in flight. UI shows a spinner. */
   movementsLoading: boolean;
+  /** Error message from the last fetch attempt — surfaced as a small
+   *  banner on the calendar header so transient failures stop being
+   *  invisible. Cleared on a successful fetch. */
+  movementsError: string | null;
+  /** Monotonically-increasing id for the most recent fetch call. Used
+   *  to discard stale responses when the user navigates rapidly (the
+   *  older request finishes after the newer one). */
+  movementsRequestId: number;
   /** Fetch the movements window covering at least [start,end] (ISO).
    *  Backed by /v1/movements; results merge into movementsByVehicle. */
   fetchMovements: (start: string, end: string) => Promise<void>;
@@ -704,24 +712,64 @@ export const useCalendarStore = create<CalendarStore>()(
   setCalendarMode: (mode) => set({ calendarMode: mode }),
   movementsByVehicle: {},
   movementsLoading: false,
+  movementsError: null,
+  movementsRequestId: 0,
   fetchMovements: async (start, end) => {
-    set({ movementsLoading: true });
-    try {
-      const { railway } = await import('@/lib/railway');
-      // Expand the YYYY-MM-DD inputs to a UTC window that covers the
-      // whole calendar day regardless of org tz (overshoots by ±12h —
-      // MovementCard already filters down to visible periods on the
-      // current day, so over-fetching is harmless).
-      const dayMs = 86_400_000;
-      const fromIso = new Date(new Date(`${start}T00:00:00Z`).getTime() - dayMs / 2).toISOString();
-      const toIso   = new Date(new Date(`${end}T00:00:00Z`).getTime()   + 1.5 * dayMs).toISOString();
-      const res = await railway.listMovements(fromIso, toIso);
-      set({ movementsByVehicle: res.byVehicle ?? {} });
-    } catch (err) {
-      console.error('[useCalendarStore] fetchMovements:', err);
-    } finally {
-      set({ movementsLoading: false });
+    // Stamp this call so a stale response from a previous date can't
+    // overwrite the data for the date the user is currently looking at.
+    // The race fires reliably when navigating between days quickly
+    // (which is exactly when users say "movements disappeared").
+    const requestId = useCalendarStore.getState().movementsRequestId + 1;
+    set({ movementsRequestId: requestId, movementsLoading: true, movementsError: null });
+
+    // Expand the YYYY-MM-DD inputs to a UTC window that covers the
+    // whole calendar day regardless of org tz (overshoots by ±12h —
+    // MovementCard already filters down to visible periods on the
+    // current day, so over-fetching is harmless).
+    const dayMs = 86_400_000;
+    const fromIso = new Date(new Date(`${start}T00:00:00Z`).getTime() - dayMs / 2).toISOString();
+    const toIso   = new Date(new Date(`${end}T00:00:00Z`).getTime()   + 1.5 * dayMs).toISOString();
+
+    // Retry up to 3× with backoff (500ms, 1500ms) on transient errors —
+    // Railway cold-starts, brief network blips, the auth-token race
+    // beating the provider's first useEffect. The biggest source of
+    // "Motive movements disappear sometimes" was a single 401/502 on
+    // first paint silently swallowing the response.
+    const { railway } = await import('@/lib/railway');
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await railway.listMovements(fromIso, toIso);
+
+        // Check whether a NEWER fetch has fired in the meantime; if so
+        // this response is stale, drop it on the floor.
+        if (useCalendarStore.getState().movementsRequestId !== requestId) return;
+
+        set({
+          movementsByVehicle: res.byVehicle ?? {},
+          movementsLoading:   false,
+          movementsError:     null,
+        });
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) {
+          // Backoff before the next retry.
+          await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
+        }
+      }
     }
+
+    // Out of retries — record the error but DON'T wipe the existing
+    // movementsByVehicle. Showing the last known data + an error
+    // banner is strictly better than going blank, especially when
+    // the failure is transient (the next nav will refetch cleanly).
+    if (useCalendarStore.getState().movementsRequestId !== requestId) return;
+    console.error('[useCalendarStore] fetchMovements failed after 3 attempts:', lastErr);
+    set({
+      movementsLoading: false,
+      movementsError:   lastErr instanceof Error ? lastErr.message : 'Failed to load movements',
+    });
   },
 
   cardFields: DEFAULT_CARD_FIELDS,

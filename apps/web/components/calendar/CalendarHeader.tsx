@@ -97,7 +97,7 @@ function useMotiveLocations(hasMotiveAssets: boolean) {
 }
 
 export default function CalendarHeader() {
-  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, calendarMode, setCalendarMode, movementsLoading } = useCalendarStore();
+  const { assets: allAssets, resourceWidth: rw, activeCategoryFilter, showUnassigned, unassignedAssetId, calendarTimezone, currentDate, viewMode, calendarMode, setCalendarMode, movementsLoading, movementsError, fetchMovements } = useCalendarStore();
   const unassignedAsset = showUnassigned && unassignedAssetId !== null ? allAssets.find(a => a.id === unassignedAssetId) ?? null : null;
   // Date range that matches the calendar grid below — same logic +
   // same org-tz interpretation, so header chips align with columns.
@@ -186,6 +186,21 @@ export default function CalendarHeader() {
               }
             </button>
           )}
+          {/* Movements error indicator — silent failures used to leave
+              the calendar blank with no signal. Now a red dot appears
+              next to the toggle when the fetch failed and a Retry
+              button restarts the fetch without a full page refresh. */}
+          {calendarMode === 'movements' && movementsError ? (
+            <button
+              onClick={() => fetchMovements(viewRange.start, viewRange.end)}
+              title={`Movements failed to load: ${movementsError} — click to retry`}
+              className="text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded flex items-center gap-1"
+              style={{ background: '#fce8e6', color: '#c5221f' }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#c5221f' }} />
+              Retry
+            </button>
+          ) : null}
         </div>
 
         {/* Timezone label */}
