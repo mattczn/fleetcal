@@ -681,57 +681,154 @@ timeline.delete("/links/:movementId", requireCapability("loads.edit"), async (c)
   return c.json({ link: rowToLink(inserted as MovementLinkRow) });
 });
 
-// ── POST /assets/:assetId/auto-link — Claude classifies movements ──
+// ── POST /assets/:assetId/auto-link — Claude classifies CLUSTERS ──
 //
-// Walks every movement on the truck in [from, to], builds a focused
-// prompt with the day's loads + stops + adjacent context, asks Claude
-// to tag each one (role + event refs + confidence + reasoning), and
-// writes the results as new link facts (source='ai_v1'). Movements
-// whose CURRENT link has source='manual' are skipped — the dispatcher's
-// edits are sticky.
+// Pipeline:
+//   1. Fetch raw movements in window.
+//   2. Coalesce them into CLUSTERS (mirrors the calendar's logic —
+//      see clusterTimelineMovements in apps/web/lib/timelineClusters.ts).
+//      Motive splits a single trip into many sub-mile driving periods;
+//      asking the AI to classify each fragment wastes context and
+//      produces inconsistent calls across fragments of the same trip.
+//   3. Build a prompt where the unit of classification is the CLUSTER,
+//      not the raw movement. The cluster prompt also includes the
+//      org's saved_locations so geographic addresses resolve to known
+//      names (the yard, the shop, recurring customer sites).
+//   4. Claude returns one (role + event refs + confidence + reasoning)
+//      per cluster.
+//   5. The server fans the cluster's role out to every member
+//      movement — writes a link fact per member so the existing
+//      per-movement DB schema is preserved and downstream readers
+//      (analytics, dashboards) don't need to know about clusters.
 //
-// The prompt is intentionally narrower than the cost-analysis prompt:
-// no economic computation, no rate math, just classification + linking.
-// That keeps the model decisive and the output schema simple.
+// Clusters whose CURRENT links include any 'manual' source are skipped —
+// the dispatcher's edits stay sticky.
 
-const AUTO_LINK_SYSTEM_PROMPT = `You classify driving-period records from a truck's ELD log.
+const SHORT_MS_AI          = 30 * 60_000;
+const MERGE_GAP_MS_AI      = 15 * 60_000;
+const MIN_CLUSTER_MILES_AI = 1.0;
 
-Each movement REALLY HAPPENED — the GPS log is the ground truth. Your job is to tag each movement with a role and link it to the load(s) it relates to. Real-world driving doesn't match dispatch schedules exactly; treat ±2-4 hours of time drift as normal and don't downgrade confidence over it.
+interface MovementForCluster {
+  id: string;
+  start_time: string;
+  end_time: string | null;
+  miles: number | null;
+  duration_min: number | null;
+  origin: string | null;
+  destination: string | null;
+  origin_lat?: number | null;
+  origin_lon?: number | null;
+  destination_lat?: number | null;
+  destination_lon?: number | null;
+}
+
+interface ServerCluster {
+  id:            string;     // synthetic — 'C0', 'C1', ... — referenced in the AI tool output
+  startTime:     string;
+  endTime:       string;
+  miles:         number;
+  durationMin:   number;
+  origin:        string | null;
+  destination:   string | null;
+  members:       MovementForCluster[];
+}
+
+function periodMsAi(m: MovementForCluster): number {
+  if (!m.end_time) return 0;
+  return new Date(m.end_time).getTime() - new Date(m.start_time).getTime();
+}
+
+function intervalsOverlapAi(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return new Date(aStart).getTime() < new Date(bEnd).getTime()
+      && new Date(bStart).getTime() < new Date(aEnd).getTime();
+}
+
+function clusterMovementsForAi(movements: MovementForCluster[]): ServerCluster[] {
+  if (movements.length === 0) return [];
+  const sorted = [...movements].sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const result: ServerCluster[] = [];
+
+  for (const m of sorted) {
+    const mEnd   = m.end_time ?? m.start_time;
+    const mShort = periodMsAi(m) < SHORT_MS_AI;
+    const last   = result[result.length - 1];
+
+    let merge = false;
+    if (last) {
+      if (intervalsOverlapAi(last.startTime, last.endTime, m.start_time, mEnd)) {
+        merge = true;
+      } else {
+        const lastMember = last.members[last.members.length - 1];
+        const lastShort  = periodMsAi(lastMember) < SHORT_MS_AI;
+        const gapMs      = new Date(m.start_time).getTime() - new Date(last.endTime).getTime();
+        if (mShort && lastShort && gapMs <= MERGE_GAP_MS_AI) merge = true;
+      }
+    }
+
+    if (merge && last) {
+      const newEndMs = Math.max(new Date(last.endTime).getTime(), new Date(mEnd).getTime());
+      last.endTime     = new Date(newEndMs).toISOString();
+      last.miles       += m.miles ?? 0;
+      last.durationMin += m.duration_min ?? 0;
+      if (m.destination) last.destination = m.destination;
+      last.members.push(m);
+    } else {
+      result.push({
+        id:          "",        // assigned below after filtering
+        startTime:   m.start_time,
+        endTime:     mEnd,
+        miles:       m.miles ?? 0,
+        durationMin: m.duration_min ?? 0,
+        origin:      m.origin,
+        destination: m.destination,
+        members:     [m],
+      });
+    }
+  }
+
+  const filtered = result.filter((c) => c.miles >= MIN_CLUSTER_MILES_AI);
+  filtered.forEach((c, i) => { c.id = `C${i}`; });
+  return filtered;
+}
+
+const AUTO_LINK_SYSTEM_PROMPT = `You classify CLUSTERS of driving from a truck's ELD log.
+
+Each cluster represents one logical trip. Motive's API splits trips into many sub-mile fragments; the server has already coalesced overlapping and adjacent-short fragments into clusters so you don't waste your context on yard-jiggle GPS noise. A cluster is the unit of classification.
 
 You will receive:
-1. THIS DAY'S LOADS on the truck (each with stops + scheduled window).
-2. ADJACENT CONTEXT — the load BEFORE this day's first load and the load AFTER this day's last load on this truck. Use them to attribute the first/last deadhead correctly.
-3. MOVEMENTS — every ELD-recorded driving period for the truck in the window. Each has an opaque uuid; refer to movements by that uuid exactly.
+1. SAVED LOCATIONS — the org's named places (yard, shop, recurring customer sites). When a cluster's origin or destination matches one of these by address or coordinates, refer to it by NAME in your reasoning (e.g. "started at the yard" rather than "started at 1795 Milestone Dr").
+2. THIS DAY'S LOADS on the truck (each with stops + scheduled window).
+3. ADJACENT CONTEXT — the load BEFORE this day's first load and the load AFTER this day's last load on this truck. Use them to attribute the first/last deadhead correctly.
+4. CLUSTERS — every logical driving trip in the window. Each has an opaque id like "C0", "C1". Refer to clusters by that id exactly.
 
-Roles (pick exactly one per movement):
+Roles (pick exactly one per cluster):
 
-- loaded     — truck was driving WITH a load on board. Set loaded_event_id.
-- transition — truck was driving EMPTY between loads. Set from_event_id and/or to_event_id. Either can be omitted: start-of-day from yard has no from; end-of-day to yard/home has no to.
-- dwell      — truck was effectively STATIONARY at a load's pickup or delivery location (origin ≈ destination at that city, or a sub-mile blip at a known stop). Set loaded_event_id.
-- rest       — long stationary period NOT at a load location (HOS break at a truck stop, overnight at home / yard). No event refs.
-- unrelated  — yard shuffle, personal conveyance, weird sub-mile blip that doesn't fit any load story. No event refs.
+- loaded     — cluster represents driving WITH a load on board. Set loaded_event_id.
+- transition — cluster represents driving EMPTY between loads (a.k.a. deadhead). Set from_event_id and/or to_event_id. Either can be omitted: start-of-day from a saved location (yard / home) has no from; end-of-day to a saved location has no to.
+- rest       — cluster represents the truck SHUFFLING IN PLACE at a rest area / overnight stop / hotel (rare — most rest periods are GAPS between clusters, not clusters themselves). No event refs.
+- unrelated  — cluster doesn't fit any load story (personal conveyance to somewhere off-route, weird small loop far from any load geography). No event refs.
+
+DO NOT use 'dwell' for clusters. Dwell is the GAP between clusters when the truck is stationary at a load location — it doesn't appear as a cluster in your input. If a cluster is at a load's pickup/delivery city, classify it as 'loaded' for that load (it's the drive that brought cargo in/out of the stop).
 
 How to decide:
 
-• loaded vs transition: did the truck have cargo? It HAD cargo from the moment it left a pickup stop until it reached the delivery stop. Movements between those endpoints with cities that align with the load's route are 'loaded'.
-• transition vs unrelated: a transition CONNECTS two loads (or one load + yard/start/end of day). If you can identify the from/to load with reasonable confidence, it's a transition. If the movement is far from any load's geography and short, it's unrelated.
-• dwell vs rest: dwell happens AT a load's pickup or delivery city. Rest happens elsewhere (a truck stop, a hotel, the driver's home).
+• loaded vs transition: did the cluster have cargo? It HAD cargo from the moment the truck left a pickup stop until it reached the delivery stop. Clusters whose route aligns with that segment of a load are 'loaded'. Clusters that connect a delivery to the next pickup (or yard to a pickup) are 'transition'.
+• transition vs unrelated: a transition CONNECTS two loads (or a saved location + a load, or a load + a saved location). If you can identify the from/to load (or saved location) with reasonable confidence, it's a transition.
+• Real-world driving doesn't match dispatch schedules exactly — treat ±2-4 hours of time drift as normal and don't downgrade confidence over it.
 
 Confidence:
 
-- high   — the geography clearly matches, even if times drift by hours.
-- medium — there's an ambiguity (a movement could plausibly belong to two adjacent loads, or one of the load's cities matches but the time is way off).
+- high   — geography clearly matches the load route or a saved location.
+- medium — ambiguous (could plausibly belong to two adjacent loads, or only one endpoint of the cluster aligns).
 - low    — no clear match. Use 'unrelated' as the role.
 
-Default to 'high' when cities align. Don't be doubtful just because Motive's GPS data fragments a trip into many short driving periods — that's normal and expected.
+For each cluster, output one entry in the submit_cluster_links tool call. The clusterId must match exactly. The reasoning field gets 1-2 sentences: which cities/saved-locations/loads/times drove the call.
 
-For each movement, output one entry in the submit_movement_links tool call. Include the movement's uuid EXACTLY as provided. The reasoning field gets 1-2 sentences explaining the call (which cities, which load, what made it the right bucket).
-
-Output ONLY via submit_movement_links — no prose outside the tool call.`;
+Output ONLY via submit_cluster_links — no prose outside the tool call.`;
 
 const AUTO_LINK_TOOL: Anthropic.Tool = {
-  name: "submit_movement_links",
-  description: "Submit role + link classifications for every movement provided.",
+  name: "submit_cluster_links",
+  description: "Submit role + link classifications for every cluster provided.",
   input_schema: {
     type: "object",
     properties: {
@@ -740,15 +837,15 @@ const AUTO_LINK_TOOL: Anthropic.Tool = {
         items: {
           type: "object",
           properties: {
-            movementId:     { type: "string", description: "Movement uuid, exactly as given." },
-            role:           { type: "string", enum: ["loaded", "transition", "dwell", "rest", "unrelated"] },
-            loadedEventId:  { type: "string", description: "Required when role is 'loaded' or 'dwell'." },
-            fromEventId:    { type: "string", description: "Required (or toEventId) when role is 'transition'. Omit for start-of-day transitions from yard." },
-            toEventId:      { type: "string", description: "Required (or fromEventId) when role is 'transition'. Omit for end-of-day transitions to yard." },
+            clusterId:      { type: "string", description: "Cluster id exactly as given (e.g. 'C0')." },
+            role:           { type: "string", enum: ["loaded", "transition", "rest", "unrelated"] },
+            loadedEventId:  { type: "string", description: "Required when role is 'loaded'." },
+            fromEventId:    { type: "string", description: "For 'transition'. Omit when leaving from a saved location (yard, home)." },
+            toEventId:      { type: "string", description: "For 'transition'. Omit when arriving at a saved location (yard, home)." },
             confidence:     { type: "string", enum: ["high", "medium", "low"] },
-            reasoning:      { type: "string", description: "1-2 sentences: which cities/loads/times drove the call." },
+            reasoning:      { type: "string", description: "1-2 sentences: which cities/saved-locations/loads drove the call." },
           },
-          required: ["movementId", "role", "confidence", "reasoning"],
+          required: ["clusterId", "role", "confidence", "reasoning"],
         },
       },
     },
@@ -756,9 +853,9 @@ const AUTO_LINK_TOOL: Anthropic.Tool = {
   },
 };
 
-interface AILinkProposal {
-  movementId:     string;
-  role:           "loaded" | "transition" | "dwell" | "rest" | "unrelated";
+interface AIClusterProposal {
+  clusterId:      string;
+  role:           "loaded" | "transition" | "rest" | "unrelated";
   loadedEventId?: string;
   fromEventId?:   string;
   toEventId?:     string;
@@ -873,48 +970,75 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
     adjStopsByEvent.set(s.event_id, arr);
   }
 
-  // ── Fetch movements in window ──────────────────────────────────
+  // ── Fetch saved locations (the org's named places) ──────────────
+  // Used by the AI to recognize the yard, the shop, recurring sites
+  // so a movement starting/ending at a saved address resolves to a
+  // name rather than a raw street string.
+  const { data: savedLocRows } = await sb
+    .from("saved_locations")
+    .select("id, name, address, lat, lng")
+    .eq("org_id", orgId);
+  const savedLocations = (savedLocRows ?? []) as Array<{
+    id: string; name: string; address: string | null;
+    lat: number | null; lng: number | null;
+  }>;
+
+  // ── Fetch movements in window (incl. lat/lng for saved-loc match) ─
   const { data: movementRows } = await sb
     .from("movements")
-    .select("id, start_time, end_time, miles, duration_min, origin, destination")
+    .select("id, start_time, end_time, miles, duration_min, origin, destination, origin_lat, origin_lon, destination_lat, destination_lon")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
     .gte("start_time", from)
     .lt("start_time", to)
     .order("start_time", { ascending: true });
-  const movements = (movementRows ?? []) as Array<{
-    id: string; start_time: string; end_time: string | null;
-    miles: number | null; duration_min: number | null;
-    origin: string | null; destination: string | null;
-  }>;
+  const movements = (movementRows ?? []) as MovementForCluster[];
 
   if (movements.length === 0) {
     return c.json({ ok: true, linksWritten: 0, manualSkipped: 0, totalMovements: 0, message: "No movements in window." });
   }
 
-  // ── Skip movements with current manual links ────────────────────
-  const movementIds = movements.map((m) => m.id);
+  // ── Cluster movements (same algorithm as the timeline UI) ───────
+  // The AI classifies CLUSTERS, not raw fragments. After this step,
+  // sub-mile yard-noise clusters are dropped and short adjacent
+  // fragments are merged so each unit represents one logical trip.
+  const clusters = clusterMovementsForAi(movements);
+
+  if (clusters.length === 0) {
+    return c.json({
+      ok: true,
+      linksWritten: 0,
+      manualSkipped: 0,
+      totalMovements: movements.length,
+      message: "No clusters survived coalescing (all under 1mi / too short).",
+    });
+  }
+
+  // ── Skip clusters whose any member already has a manual link ────
+  const allMovementIds = movements.map((m) => m.id);
   const { data: currentLinks } = await sb
     .from("movement_links")
     .select("movement_id, source")
     .eq("org_id", orgId)
-    .in("movement_id", movementIds)
+    .in("movement_id", allMovementIds)
     .is("superseded_at", null);
   const manualMovementIds = new Set(
     ((currentLinks ?? []) as Array<{ movement_id: string; source: string }>)
       .filter((l) => l.source === "manual")
       .map((l) => l.movement_id),
   );
-  const targetMovements = movements.filter((m) => !manualMovementIds.has(m.id));
+  const targetClusters = clusters.filter(
+    (c) => !c.members.some((m) => manualMovementIds.has(m.id)),
+  );
 
-  if (targetMovements.length === 0) {
+  if (targetClusters.length === 0) {
     return c.json({
       ok: true,
       linksWritten: 0,
       manualSkipped: manualMovementIds.size,
       totalMovements: movements.length,
-      message: "Every movement already has a manual link — nothing for AI to do.",
+      message: "Every cluster has at least one manual link — nothing for AI to do.",
     });
   }
 
@@ -943,9 +1067,30 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
     return `${label.toUpperCase()} ${e.id}: "${e.title ?? "(no title)"}"\n  Window: ${e.start} → ${e.end}\n  Route: ${route}`;
   };
 
+  const fmtSavedLocBlock = () => {
+    if (savedLocations.length === 0) return "(no saved locations on file)";
+    return savedLocations.map((l) => {
+      const parts: string[] = [];
+      if (l.address) parts.push(l.address);
+      if (l.lat != null && l.lng != null) parts.push(`coords ${l.lat.toFixed(4)}, ${l.lng.toFixed(4)}`);
+      const tail = parts.length > 0 ? ` — ${parts.join(" · ")}` : "";
+      return `• ${l.name}${tail}`;
+    }).join("\n");
+  };
+
+  const fmtClusterBlock = (cl: ServerCluster) => {
+    const miles = `${cl.miles.toFixed(1)} mi`;
+    const dur   = `${cl.durationMin} min`;
+    const memberCount = cl.members.length === 1 ? "1 fragment" : `${cl.members.length} fragments`;
+    return `${cl.id}: ${cl.startTime} → ${cl.endTime} | ${miles} · ${dur} | ${cl.origin ?? "??"} → ${cl.destination ?? "??"} (${memberCount})`;
+  };
+
   const userMessage = [
     `# Asset`,
     `Truck #${assetId}: ${asset.name}${asset.unit ? ` (#${asset.unit})` : ""}`,
+    ``,
+    `# Saved locations (the org's named places — recognize these in cluster origin/destination)`,
+    fmtSavedLocBlock(),
     ``,
     `# This day's loads on this truck`,
     eventList.length === 0
@@ -956,14 +1101,10 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
     fmtAdjBlock(prevEvent, "previous"),
     fmtAdjBlock(nextEvent, "next"),
     ``,
-    `# Movements to classify (${targetMovements.length} of ${movements.length}; ${manualMovementIds.size} skipped due to manual links)`,
-    targetMovements.map((m) => {
-      const miles = m.miles != null ? `${m.miles.toFixed(1)} mi` : "?? mi";
-      const dur   = m.duration_min != null ? `${m.duration_min} min` : "?? min";
-      return `${m.id}: ${m.start_time} → ${m.end_time ?? "??"} | ${miles} · ${dur} | ${m.origin ?? "??"} → ${m.destination ?? "??"}`;
-    }).join("\n"),
+    `# Clusters to classify (${targetClusters.length} of ${clusters.length}; ${manualMovementIds.size > 0 ? `${manualMovementIds.size} movements have manual links → their clusters are skipped` : "no manual overrides"})`,
+    targetClusters.map(fmtClusterBlock).join("\n"),
     ``,
-    `Classify every movement above via submit_movement_links.`,
+    `Classify every cluster above via submit_cluster_links.`,
   ].join("\n");
 
   // ── Call Claude ─────────────────────────────────────────────────
@@ -974,7 +1115,7 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
       max_tokens: 8000,
       system:     [{ type: "text", text: AUTO_LINK_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
       tools:      [AUTO_LINK_TOOL],
-      tool_choice: { type: "tool", name: "submit_movement_links" },
+      tool_choice: { type: "tool", name: "submit_cluster_links" },
       messages:   [{ role: "user", content: userMessage }],
     });
   } catch (err) {
@@ -987,10 +1128,10 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
     return c.json({ error: "no_tool_use" } satisfies ApiErrorResponse, 500);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const proposed = ((toolUse.input as any)?.links ?? []) as AILinkProposal[];
+  const proposed = ((toolUse.input as any)?.links ?? []) as AIClusterProposal[];
 
-  // ── Write link facts ────────────────────────────────────────────
-  const targetIds = new Set(targetMovements.map((m) => m.id));
+  // ── Write link facts (fan cluster decision out to every member) ──
+  const clusterById = new Map(targetClusters.map((cl) => [cl.id, cl]));
   const validEventIds = new Set([
     ...eventList.map((e) => e.id),
     ...(prevEvent ? [prevEvent.id] : []),
@@ -998,65 +1139,76 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
   ]);
 
   let written = 0;
+  let clustersWritten = 0;
   for (const p of proposed) {
-    if (!targetIds.has(p.movementId)) continue;        // safety: AI hallucinated an id
-    // Validate event references against the asset's event set so an
-    // AI hallucination can't accidentally link a movement to some
-    // other org's event id.
+    const cl = clusterById.get(p.clusterId);
+    if (!cl) continue;                                                  // safety: AI hallucinated an id
+    // Validate event references — AI hallucination can't sneak a
+    // foreign org's event id into the link.
     const loadedOk = !p.loadedEventId || validEventIds.has(p.loadedEventId);
     const fromOk   = !p.fromEventId   || validEventIds.has(p.fromEventId);
     const toOk     = !p.toEventId     || validEventIds.has(p.toEventId);
     if (!loadedOk || !fromOk || !toOk) continue;
-    // Validate role-refs combo matches the DB CHECK constraint so we
-    // don't 500 the whole batch on one bad row.
+    // Validate role-refs combo matches the DB CHECK constraint.
     const roleOk =
       (p.role === "loaded"      && !!p.loadedEventId) ||
       (p.role === "transition"  && (!!p.fromEventId || !!p.toEventId)) ||
-      (p.role === "dwell"       && !!p.loadedEventId) ||
       (p.role === "rest" || p.role === "unrelated");
     if (!roleOk) continue;
 
-    const { data: inserted, error: insErr } = await sb
-      .from("movement_links")
-      .insert({
-        org_id:           orgId,
-        movement_id:      p.movementId,
-        role:             p.role,
-        loaded_event_id:  p.loadedEventId ?? null,
-        from_event_id:    p.fromEventId   ?? null,
-        to_event_id:      p.toEventId     ?? null,
-        source:           "ai_v1",
-        source_user:      null,
-        confidence:       p.confidence ?? null,
-        reasoning:        p.reasoning  ?? null,
-      })
-      .select("id")
-      .single();
-    if (insErr || !inserted) {
-      console.error("[timeline auto-link] insert failed for movement", p.movementId, insErr);
-      continue;
+    let clusterTouched = false;
+    for (const member of cl.members) {
+      // Skip the rare individually-overridden member inside an
+      // otherwise unmanaged cluster (the cluster-level skip would
+      // have caught a full manual override; this guards the edge).
+      if (manualMovementIds.has(member.id)) continue;
+
+      const { data: inserted, error: insErr } = await sb
+        .from("movement_links")
+        .insert({
+          org_id:           orgId,
+          movement_id:      member.id,
+          role:             p.role,
+          loaded_event_id:  p.loadedEventId ?? null,
+          from_event_id:    p.fromEventId   ?? null,
+          to_event_id:      p.toEventId     ?? null,
+          source:           "ai_v1",
+          source_user:      null,
+          confidence:       p.confidence ?? null,
+          reasoning:        p.reasoning
+            ? `[cluster ${p.clusterId}] ${p.reasoning}`
+            : `Cluster ${p.clusterId} (${cl.members.length} fragments).`,
+        })
+        .select("id")
+        .single();
+      if (insErr || !inserted) {
+        console.error("[timeline auto-link] insert failed for movement", member.id, insErr);
+        continue;
+      }
+
+      await sb
+        .from("movement_links")
+        .update({ superseded_at: new Date().toISOString(), superseded_by: (inserted as { id: string }).id })
+        .eq("org_id", orgId)
+        .eq("movement_id", member.id)
+        .is("superseded_at", null)
+        .neq("id", (inserted as { id: string }).id);
+
+      written++;
+      clusterTouched = true;
     }
-
-    // Supersede any prior current link (always — ai_v1 is the new
-    // truth for non-manual rows).
-    await sb
-      .from("movement_links")
-      .update({ superseded_at: new Date().toISOString(), superseded_by: (inserted as { id: string }).id })
-      .eq("org_id", orgId)
-      .eq("movement_id", p.movementId)
-      .is("superseded_at", null)
-      .neq("id", (inserted as { id: string }).id);
-
-    written++;
+    if (clusterTouched) clustersWritten++;
   }
 
   return c.json({
-    ok:             true,
-    linksWritten:   written,
-    manualSkipped:  manualMovementIds.size,
-    totalMovements: movements.length,
-    proposedCount:  proposed.length,
-    triggeredBy:    userId,
+    ok:               true,
+    linksWritten:     written,
+    clustersWritten,
+    manualSkipped:    manualMovementIds.size,
+    totalMovements:   movements.length,
+    totalClusters:    clusters.length,
+    proposedCount:    proposed.length,
+    triggeredBy:      userId,
   });
 });
 

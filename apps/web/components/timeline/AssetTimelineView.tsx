@@ -28,9 +28,10 @@ import {
 import AppShell from '@/components/nav/AppShell';
 import {
   railway,
-  type TimelinePayload, type TimelineEvent, type TimelineMovement, type TimelineLink,
+  type TimelinePayload, type TimelineEvent, type TimelineLink,
   type TimelineLinkRole, type AssertLinkRequest, type CreateMovementRequest,
 } from '@/lib/railway';
+import { clusterTimelineMovements, type TimelineCluster } from '@/lib/timelineClusters';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 
@@ -184,11 +185,16 @@ const SOURCE_BADGE: Record<string, { fg: string; label: string }> = {
   derived: { fg: '#a142f4', label: 'Derived' },
 };
 
-// ── Selection state for the side panel ───────────────────────────────
+// ── Selection state for the detail column ────────────────────────────
+//
+// Movements are clustered before display, so the unit a dispatcher can
+// click on is a CLUSTER (one logical trip), not a raw Motive fragment.
+// The link looked up for a cluster is the link on any one of its
+// members — they're written identically by the AI / cluster-level edit.
 
 type Selection =
-  | { kind: 'event';    event:    TimelineEvent }
-  | { kind: 'movement'; movement: TimelineMovement; link?: TimelineLink }
+  | { kind: 'event';   event:   TimelineEvent }
+  | { kind: 'cluster'; cluster: TimelineCluster; link?: TimelineLink }
   | null;
 
 // ── Main view ─────────────────────────────────────────────────────────
@@ -324,11 +330,31 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     });
   }, [data?.movements, dayKey, tz]);
 
+  // Coalesce raw Motive fragments into logical-trip clusters using the
+  // SAME rules the calendar's Movements column uses (see
+  // clusterTimelineMovements). After this, sub-mile yard noise is gone,
+  // adjacent short fragments of one trip are merged, and the displayed
+  // unit matches what the AI auto-link reasons about.
+  const visibleClusters = useMemo(
+    () => clusterTimelineMovements(visibleMovements),
+    [visibleMovements],
+  );
+
+  // A cluster's link is the link on any of its members — the AI writes
+  // identical links to every member, so the first one with a link wins.
+  const linkForCluster = (cl: TimelineCluster): TimelineLink | undefined => {
+    for (const m of cl.members) {
+      const l = linkByMovementId.get(m.id);
+      if (l) return l;
+    }
+    return undefined;
+  };
+
   const asset = data?.asset;
 
   return (
     <AppShell>
-      <div className="max-w-[1400px] mx-auto px-6 py-4">
+      <div className="max-w-[1800px] mx-auto px-6 py-4">
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <Link
@@ -449,132 +475,155 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </button>
         </div>
 
-        {/* Body */}
-        {loading ? (
-          <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
-            Loading timeline…
-          </div>
-        ) : error ? (
-          <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-red)' }}>
-            {error}
-          </div>
-        ) : (
-          <div
-            className="rounded-lg overflow-hidden"
-            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
-          >
-            {/* Column headers */}
-            <div className="grid grid-cols-[60px_1fr_1fr] border-b" style={{ borderColor: 'var(--gc-border)' }}>
-              <div className="px-2 py-2 text-[10px] uppercase font-semibold tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-                Time
+        {/* Body + inline detail column. The detail column is a sticky
+            right-side pane that replaces the old fixed overlay — content
+            on the left no longer gets covered by an open panel. */}
+        <div className="flex gap-4 items-start">
+          <div className="flex-1 min-w-0">
+            {loading ? (
+              <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
+                Loading timeline…
               </div>
-              <div className="px-3 py-2 text-[10px] uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)' }}>
-                Scheduled · {visibleEvents.length} event{visibleEvents.length !== 1 ? 's' : ''}
+            ) : error ? (
+              <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-red)' }}>
+                {error}
               </div>
-              <div className="px-3 py-2 text-[10px] uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)' }}>
-                Actual · {visibleMovements.length} movement{visibleMovements.length !== 1 ? 's' : ''}
-              </div>
-            </div>
-
-            {/* Time-axis body */}
-            <div className="grid grid-cols-[60px_1fr_1fr] relative" style={{ height: TOTAL_HEIGHT }}>
-              {/* Hour ruler */}
-              <div className="relative" style={{ background: 'var(--gc-surface-2)' }}>
-                {Array.from({ length: 24 }, (_, h) => {
-                  const hh   = h % 12 || 12;
-                  const ampm = h >= 12 ? 'PM' : 'AM';
-                  return (
-                    <div
-                      key={h}
-                      className="absolute left-0 right-0 px-2"
-                      style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
-                    >
-                      <span className="text-[10px] font-medium" style={{ color: 'var(--gc-text-3)' }}>
-                        {hh}{h === 0 ? '' : ` ${ampm}`}
+            ) : (
+              <div
+                className="rounded-lg overflow-hidden"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
+              >
+                {/* Column headers */}
+                <div className="grid grid-cols-[60px_1fr_1fr] border-b" style={{ borderColor: 'var(--gc-border)' }}>
+                  <div className="px-2 py-2 text-[10px] uppercase font-semibold tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                    Time
+                  </div>
+                  <div className="px-3 py-2 text-[10px] uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)' }}>
+                    Scheduled · {visibleEvents.length} event{visibleEvents.length !== 1 ? 's' : ''}
+                  </div>
+                  <div className="px-3 py-2 text-[10px] uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)' }}>
+                    Actual · {visibleClusters.length} trip{visibleClusters.length !== 1 ? 's' : ''}
+                    {visibleMovements.length !== visibleClusters.length ? (
+                      <span className="ml-1 normal-case font-normal" style={{ color: 'var(--gc-text-3)' }}>
+                        ({visibleMovements.length} raw fragments)
                       </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Events column */}
-              <div className="relative border-l" style={{ borderColor: 'var(--gc-border)' }}>
-                {Array.from({ length: 24 }, (_, h) => (
-                  <div
-                    key={h}
-                    className="absolute left-0 right-0"
-                    style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
-                  />
-                ))}
-                {visibleEvents.length === 0 ? (
-                  <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                    No scheduled events
+                    ) : null}
                   </div>
-                ) : (
-                  visibleEvents.map((e) => (
-                    <EventBlock
-                      key={e.id}
-                      event={e}
-                      dayKey={dayKey}
-                      color={assetColor}
-                      onClick={() => setSelection({ kind: 'event', event: e })}
-                      isSelected={selection?.kind === 'event' && selection.event.id === e.id}
-                    />
-                  ))
-                )}
-                <NowLine dayKey={dayKey} tz={tz} />
-              </div>
+                </div>
 
-              {/* Movements column */}
-              <div className="relative border-l" style={{ borderColor: 'var(--gc-border)' }}>
-                {Array.from({ length: 24 }, (_, h) => (
-                  <div
-                    key={h}
-                    className="absolute left-0 right-0"
-                    style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
-                  />
-                ))}
-                {visibleMovements.length === 0 ? (
-                  <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                    No movements
+                {/* Time-axis body */}
+                <div className="grid grid-cols-[60px_1fr_1fr] relative" style={{ height: TOTAL_HEIGHT }}>
+                  {/* Hour ruler */}
+                  <div className="relative" style={{ background: 'var(--gc-surface-2)' }}>
+                    {Array.from({ length: 24 }, (_, h) => {
+                      const hh   = h % 12 || 12;
+                      const ampm = h >= 12 ? 'PM' : 'AM';
+                      return (
+                        <div
+                          key={h}
+                          className="absolute left-0 right-0 px-2"
+                          style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
+                        >
+                          <span className="text-[10px] font-medium" style={{ color: 'var(--gc-text-3)' }}>
+                            {hh}{h === 0 ? '' : ` ${ampm}`}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-                ) : (
-                  visibleMovements.map((m) => {
-                    const link = linkByMovementId.get(m.id);
-                    return (
-                      <MovementBlock
-                        key={m.id}
-                        movement={m}
-                        link={link}
-                        eventLookup={eventById}
-                        dayKey={dayKey}
-                        tz={tz}
-                        onClick={() => setSelection({ kind: 'movement', movement: m, link })}
-                        isSelected={selection?.kind === 'movement' && selection.movement.id === m.id}
+
+                  {/* Events column */}
+                  <div className="relative border-l" style={{ borderColor: 'var(--gc-border)' }}>
+                    {Array.from({ length: 24 }, (_, h) => (
+                      <div
+                        key={h}
+                        className="absolute left-0 right-0"
+                        style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
                       />
-                    );
-                  })
-                )}
-                <NowLine dayKey={dayKey} tz={tz} />
+                    ))}
+                    {visibleEvents.length === 0 ? (
+                      <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                        No scheduled events
+                      </div>
+                    ) : (
+                      visibleEvents.map((e) => (
+                        <EventBlock
+                          key={e.id}
+                          event={e}
+                          dayKey={dayKey}
+                          color={assetColor}
+                          onClick={() => setSelection({ kind: 'event', event: e })}
+                          isSelected={selection?.kind === 'event' && selection.event.id === e.id}
+                        />
+                      ))
+                    )}
+                    <NowLine dayKey={dayKey} tz={tz} />
+                  </div>
+
+                  {/* Movements column — renders CLUSTERS (one chip per
+                      logical trip), not raw Motive fragments. */}
+                  <div className="relative border-l" style={{ borderColor: 'var(--gc-border)' }}>
+                    {Array.from({ length: 24 }, (_, h) => (
+                      <div
+                        key={h}
+                        className="absolute left-0 right-0"
+                        style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
+                      />
+                    ))}
+                    {visibleClusters.length === 0 ? (
+                      <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                        No movements
+                      </div>
+                    ) : (
+                      visibleClusters.map((cl) => {
+                        const link = linkForCluster(cl);
+                        return (
+                          <ClusterBlock
+                            key={cl.id}
+                            cluster={cl}
+                            link={link}
+                            eventLookup={eventById}
+                            dayKey={dayKey}
+                            tz={tz}
+                            onClick={() => setSelection({ kind: 'cluster', cluster: cl, link })}
+                            isSelected={selection?.kind === 'cluster' && selection.cluster.id === cl.id}
+                          />
+                        );
+                      })
+                    )}
+                    <NowLine dayKey={dayKey} tz={tz} />
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        )}
+
+          {/* Persistent detail column — always rendered, with an empty
+              state when nothing is selected. No more covering the
+              calendar with an overlay tray. */}
+          <div
+            className="w-[400px] flex-shrink-0 rounded-lg overflow-hidden sticky top-4"
+            style={{
+              background: 'var(--gc-surface)',
+              border: '1px solid var(--gc-border)',
+              maxHeight: 'calc(100vh - 32px)',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <DetailPanel
+              selection={selection}
+              tz={tz}
+              assetColor={assetColor}
+              events={data?.events ?? []}
+              eventLookup={eventById}
+              onClose={() => setSelection(null)}
+              onMutated={() => setRefreshTick((t) => t + 1)}
+            />
+          </div>
+        </div>
 
       </div>
-
-      {/* Side panel */}
-      {selection ? (
-        <DetailPanel
-          selection={selection}
-          tz={tz}
-          assetColor={assetColor}
-          events={data?.events ?? []}
-          eventLookup={eventById}
-          onClose={() => setSelection(null)}
-          onMutated={() => setRefreshTick((t) => t + 1)}
-        />
-      ) : null}
 
       {/* Manual movement create modal */}
       {showCreateMovement && effectiveAssetId != null ? (
@@ -679,12 +728,16 @@ function stopLabel(type: string): string {
   }
 }
 
-// ── MovementBlock ──────────────────────────────────────────────────────
+// ── ClusterBlock ──────────────────────────────────────────────────────
+//
+// Renders one chip per logical trip (coalesced cluster of Motive
+// fragments). Uses displayEndTime so 5-min sub-trips still hit the
+// 30-min visual minimum without overlapping the next cluster.
 
-function MovementBlock({
-  movement, link, eventLookup, dayKey, tz, onClick, isSelected,
+function ClusterBlock({
+  cluster, link, eventLookup, dayKey, tz, onClick, isSelected,
 }: {
-  movement: TimelineMovement;
+  cluster: TimelineCluster;
   link: TimelineLink | undefined;
   eventLookup: Map<string, TimelineEvent>;
   dayKey: string;
@@ -692,12 +745,18 @@ function MovementBlock({
   onClick: () => void;
   isSelected: boolean;
 }) {
-  const pos = positionForMovement(movement.startTime, movement.endTime, dayKey, tz);
+  // Render against displayEndTime so short clusters paint as 30min
+  // even if the real driving was 5 minutes.
+  const pos = positionForMovement(cluster.startTime, cluster.displayEndTime, dayKey, tz);
   const role = link ? ROLE_COLORS[link.role] : null;
-  const source = SOURCE_BADGE[movement.source];
-  const isTall = pos.heightPx >= 56;     // shows the long-form layout
-  const isMed  = pos.heightPx >= 36;     // shows two stacked lines
-  // Single-line minimal for very short chips.
+  // Source label — if the cluster mixes motive + manual fragments it
+  // shows "Mixed" so the dispatcher knows part of this trip was hand-
+  // entered. Practically almost always 'motive' alone.
+  const sourceLabel = cluster.sources.length === 1
+    ? SOURCE_BADGE[cluster.sources[0]]
+    : { fg: '#5f6368', label: 'Mixed' };
+  const isTall = pos.heightPx >= 56;
+  const isMed  = pos.heightPx >= 36;
 
   const linkLabel = (() => {
     if (!link) return null;
@@ -717,6 +776,8 @@ function MovementBlock({
     return role?.label ?? null;
   })();
 
+  // Time label uses the REAL endTime (not the padded display end) so
+  // dispatchers see the actual trip times, not the display fudge.
   return (
     <button
       type="button"
@@ -732,19 +793,15 @@ function MovementBlock({
         padding:    isTall ? 8 : isMed ? 6 : 3,
       }}
     >
-      {/* Always-shown summary line — the only thing rendered for very
-          short chips. Click opens the side panel for full details. */}
       <div className="flex items-center gap-1.5 text-[11px] leading-tight">
         <Clock size={10} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
         <span className="font-semibold tabular-nums truncate" style={{ color: 'var(--gc-text-1)' }}>
-          {fmtUtcTimeInTz(movement.startTime, tz)}
-          {movement.endTime ? `–${fmtUtcTimeInTz(movement.endTime, tz)}` : ''}
+          {fmtUtcTimeInTz(cluster.startTime, tz)}
+          {cluster.endTime ? `–${fmtUtcTimeInTz(cluster.endTime, tz)}` : ''}
         </span>
-        {typeof movement.miles === 'number' ? (
-          <span className="tabular-nums text-[10px]" style={{ color: 'var(--gc-text-2)' }}>
-            · {movement.miles.toFixed(1)}mi
-          </span>
-        ) : null}
+        <span className="tabular-nums text-[10px]" style={{ color: 'var(--gc-text-2)' }}>
+          · {cluster.miles.toFixed(1)}mi
+        </span>
         {role ? (
           <span
             className="ml-auto px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wide flex-shrink-0"
@@ -762,24 +819,25 @@ function MovementBlock({
         )}
       </div>
 
-      {/* Medium chips also show source + link label. */}
       {isMed ? (
         <div className="flex items-center gap-1.5 mt-0.5 text-[10px] truncate" style={{ color: 'var(--gc-text-2)' }}>
-          {source ? (
-            <span className="uppercase tracking-wider font-semibold" style={{ color: source.fg }}>
-              {source.label}
+          <span className="uppercase tracking-wider font-semibold" style={{ color: sourceLabel.fg }}>
+            {sourceLabel.label}
+          </span>
+          {cluster.members.length > 1 ? (
+            <span className="text-[9px]" style={{ color: 'var(--gc-text-3)' }}>
+              · {cluster.members.length} fragments
             </span>
           ) : null}
           {linkLabel ? <span className="truncate">· {linkLabel}</span> : null}
         </div>
       ) : null}
 
-      {/* Tall chips get the origin → destination row too. */}
-      {isTall && (movement.origin || movement.destination) ? (
+      {isTall && (cluster.origin || cluster.destination) ? (
         <div className="flex items-start gap-1 mt-1 truncate text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
           <MapPin size={10} style={{ marginTop: 1, flexShrink: 0 }} />
           <span className="truncate">
-            {(movement.origin ?? '—').split(',')[0]} → {(movement.destination ?? '—').split(',')[0]}
+            {(cluster.origin ?? '—').split(',')[0]} → {(cluster.destination ?? '—').split(',')[0]}
           </span>
         </div>
       ) : null}
@@ -787,12 +845,17 @@ function MovementBlock({
   );
 }
 
-// ── Side panel ────────────────────────────────────────────────────────
+// ── Detail panel (inline right-side column) ──────────────────────────
+//
+// Always rendered as part of the page grid (no longer a fixed overlay).
+// Accepts a nullable selection and shows an empty state when nothing is
+// selected so the right column doesn't pop in and out as the user clicks
+// around.
 
 function DetailPanel({
   selection, tz, assetColor, events, eventLookup, onClose, onMutated,
 }: {
-  selection: NonNullable<Selection>;
+  selection: Selection;
   tz: string;
   assetColor: string;
   events: TimelineEvent[];
@@ -801,25 +864,34 @@ function DetailPanel({
   onMutated: () => void;
 }) {
   return (
-    <div
-      className="fixed top-0 right-0 bottom-0 w-[420px] z-30 shadow-xl overflow-y-auto"
-      style={{ background: 'var(--gc-surface)', borderLeft: '1px solid var(--gc-border)' }}
-    >
-      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border)' }}>
+    <>
+      <div
+        className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+        style={{ borderBottom: '1px solid var(--gc-border)' }}
+      >
         <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-          {selection.kind === 'event' ? 'Scheduled event' : 'Movement'}
+          {selection == null
+            ? 'Details'
+            : selection.kind === 'event' ? 'Scheduled event' : 'Trip'}
         </span>
-        <button onClick={onClose} className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5">
-          <X size={16} />
-        </button>
+        {selection != null ? (
+          <button onClick={onClose} className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5" title="Clear selection">
+            <X size={16} />
+          </button>
+        ) : null}
       </div>
 
-      <div className="p-4 space-y-3">
-        {selection.kind === 'event' ? (
+      <div className="p-4 space-y-3 overflow-y-auto" style={{ flex: 1 }}>
+        {selection == null ? (
+          <div className="text-center py-12 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+            <div className="mb-1 font-semibold uppercase tracking-wider text-[10px]">No selection</div>
+            <div>Click a scheduled event or a trip in the timeline to see details and edit its link here.</div>
+          </div>
+        ) : selection.kind === 'event' ? (
           <EventDetail event={selection.event} color={assetColor} />
         ) : (
-          <MovementDetail
-            movement={selection.movement}
+          <ClusterDetail
+            cluster={selection.cluster}
             link={selection.link}
             tz={tz}
             events={events}
@@ -828,7 +900,7 @@ function DetailPanel({
           />
         )}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -904,10 +976,10 @@ function EventDetail({ event, color }: { event: TimelineEvent; color: string }) 
   );
 }
 
-function MovementDetail({
-  movement, link, tz, events, eventLookup, onMutated,
+function ClusterDetail({
+  cluster, link, tz, events, eventLookup, onMutated,
 }: {
-  movement: TimelineMovement;
+  cluster: TimelineCluster;
   link: TimelineLink | undefined;
   tz: string;
   events: TimelineEvent[];
@@ -917,44 +989,41 @@ function MovementDetail({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const role = link ? ROLE_COLORS[link.role] : null;
-  const source = SOURCE_BADGE[movement.source];
+  const sourceLabel = cluster.sources.length === 1
+    ? SOURCE_BADGE[cluster.sources[0]]
+    : { fg: '#5f6368', label: 'Mixed' };
   return (
     <>
       <div className="flex items-center gap-2">
         <Clock size={16} style={{ color: 'var(--gc-text-2)' }} />
         <h2 className="text-[16px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-          {fmtUtcTimeInTz(movement.startTime, tz)}
-          {movement.endTime ? ` – ${fmtUtcTimeInTz(movement.endTime, tz)}` : ''}
+          {fmtUtcTimeInTz(cluster.startTime, tz)}
+          {cluster.endTime ? ` – ${fmtUtcTimeInTz(cluster.endTime, tz)}` : ''}
         </h2>
       </div>
       <div className="flex items-center gap-3 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
-        {typeof movement.miles === 'number' ? (
-          <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{movement.miles.toFixed(1)}</span> mi</span>
-        ) : null}
-        {movement.durationMin != null ? (
-          <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{movement.durationMin}</span> min</span>
-        ) : null}
-        {source ? (
-          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold" style={{ color: source.fg }}>
-            {source.label}
-          </span>
-        ) : null}
+        <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{cluster.miles.toFixed(1)}</span> mi</span>
+        <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{cluster.durationMin}</span> min</span>
+        <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold" style={{ color: sourceLabel.fg }}>
+          {sourceLabel.label}
+        </span>
       </div>
-      {movement.origin || movement.destination ? (
+      {cluster.origin || cluster.destination ? (
         <div className="text-[12px]">
           <div className="flex items-start gap-1.5 mb-1" style={{ color: 'var(--gc-text-2)' }}>
             <MapPin size={12} style={{ color: '#16a34a', marginTop: 2 }} />
-            <span>{movement.origin ?? '—'}</span>
+            <span>{cluster.origin ?? '—'}</span>
           </div>
           <div className="flex items-start gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
             <MapPin size={12} style={{ color: '#dc2626', marginTop: 2 }} />
-            <span>{movement.destination ?? '—'}</span>
+            <span>{cluster.destination ?? '—'}</span>
           </div>
         </div>
       ) : null}
-      {movement.notes ? (
-        <div className="text-[12px] p-2 rounded" style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}>
-          {movement.notes}
+      {cluster.members.length > 1 ? (
+        <div className="text-[11px] p-2 rounded" style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+          Coalesced from <strong style={{ color: 'var(--gc-text-2)' }}>{cluster.members.length}</strong> Motive fragments
+          {' '}— short adjacent driving periods get merged here the same way the calendar's Movements column merges them.
         </div>
       ) : null}
 
@@ -975,7 +1044,7 @@ function MovementDetail({
         </div>
         {editing ? (
           <LinkEditor
-            movementId={movement.id}
+            memberIds={cluster.members.map((m) => m.id)}
             current={link}
             events={events}
             busy={busy}
@@ -1040,7 +1109,11 @@ function MovementDetail({
               onClick={async () => {
                 setBusy(true);
                 try {
-                  await railway.clearMovementLink(movement.id);
+                  // Cluster-level clear → fan out to every member so the
+                  // link history stays consistent across fragments.
+                  for (const m of cluster.members) {
+                    await railway.clearMovementLink(m.id);
+                  }
                   onMutated();
                 } finally {
                   setBusy(false);
@@ -1063,12 +1136,16 @@ function MovementDetail({
   );
 }
 
-// ── Link editor (used in MovementDetail) ──────────────────────────────
+// ── Link editor (used in ClusterDetail) ───────────────────────────────
+//
+// Writes the same link to every member of the cluster — that's what
+// "this trip was a loaded run to Denver" means: every Motive fragment
+// inside the cluster carries the same role/event refs.
 
 function LinkEditor({
-  movementId, current, events, busy, setBusy, onDone,
+  memberIds, current, events, busy, setBusy, onDone,
 }: {
-  movementId: string;
+  memberIds: string[];
   current: TimelineLink | undefined;
   events: TimelineEvent[];
   busy: boolean;
@@ -1087,25 +1164,31 @@ function LinkEditor({
   );
 
   async function save() {
-    const body: AssertLinkRequest = {
-      movementId, role, source: 'manual',
-      reasoning: reasoning.trim() || undefined,
-    };
-    if (role === 'loaded' || role === 'dwell') body.loadedEventId = loadedEventId || undefined;
-    if (role === 'transition') {
-      body.fromEventId = fromEventId || undefined;
-      body.toEventId   = toEventId   || undefined;
-    }
-    // Validate the role-refs combo client-side for instant feedback.
-    if (role === 'loaded' && !body.loadedEventId) { alert('Pick a load for this loaded movement.'); return; }
-    if (role === 'dwell'  && !body.loadedEventId) { alert('Pick a load for this dwell.'); return; }
-    if (role === 'transition' && !body.fromEventId && !body.toEventId) {
-      alert('Pick a From or To load for this transition.'); return;
+    // Validate role-refs combo client-side for instant feedback before
+    // we fan out the write across cluster members.
+    if (role === 'loaded' && !loadedEventId) { alert('Pick a load for this loaded trip.'); return; }
+    if (role === 'dwell'  && !loadedEventId) { alert('Pick a load for this dwell.'); return; }
+    if (role === 'transition' && !fromEventId && !toEventId) {
+      alert('Pick a From or To load for this deadhead.'); return;
     }
 
     setBusy(true);
     try {
-      await railway.assertMovementLink(body);
+      // Cluster-level save → identical link written to every member
+      // movement. Each member ends up with its own row in movement_links
+      // so per-movement readers (analytics, dashboards) stay accurate.
+      for (const movementId of memberIds) {
+        const body: AssertLinkRequest = {
+          movementId, role, source: 'manual',
+          reasoning: reasoning.trim() || undefined,
+        };
+        if (role === 'loaded' || role === 'dwell') body.loadedEventId = loadedEventId || undefined;
+        if (role === 'transition') {
+          body.fromEventId = fromEventId || undefined;
+          body.toEventId   = toEventId   || undefined;
+        }
+        await railway.assertMovementLink(body);
+      }
       onDone(true);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Save failed');
