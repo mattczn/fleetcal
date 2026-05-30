@@ -108,6 +108,128 @@ export interface MovementCard {
   destinationLon: number | null;
 }
 
+// ── Asset timeline (movements + links graph) ─────────────────────────
+//
+// Wire shapes for the new `/v1/timeline` endpoints. These are the
+// canonical types for the asset-timeline page and any downstream
+// agent that consumes movement-link facts.
+
+export type TimelineMovementSource = "motive" | "manual" | "derived";
+export type TimelineLinkRole = "loaded" | "transition" | "dwell" | "rest" | "unrelated";
+
+export interface TimelineMovement {
+  id:               string;
+  assetId:          number;
+  driverId?:        number;
+  source:           TimelineMovementSource;
+  motivePeriodId?:  number;
+  startTime:        string;
+  endTime?:         string;
+  durationMin?:     number;
+  miles?:           number;
+  origin?:          string;
+  destination?:     string;
+  originLat?:       number;
+  originLon?:       number;
+  destinationLat?:  number;
+  destinationLon?:  number;
+  notes?:           string;
+  createdBy:        string;
+  createdAt:        string;
+  updatedAt:        string;
+}
+
+export interface TimelineLink {
+  id:               string;
+  movementId:       string;
+  role:             TimelineLinkRole;
+  loadedEventId?:   string;
+  fromEventId?:     string;
+  toEventId?:       string;
+  dwellStopId?:     string;
+  source:           string;             // 'ai_v1' | 'manual' | 'rule_xxx'
+  sourceUser?:      string;
+  confidence?:      "high" | "medium" | "low";
+  reasoning?:       string;
+  assertedAt:       string;
+}
+
+export interface TimelineEvent {
+  id:               string;
+  title:            string | null;
+  start:            string;
+  end:              string;
+  status:           string | null;
+  eventKind:        string | null;
+  nonRevenueType:   string | null;
+  loadPrice:        number | null;
+  driverName:       string | null;
+  stops: Array<{
+    id:             string;
+    sequence:       number;
+    type:           string | null;
+    facilityName:   string | null;
+    address:        string | null;
+    city:           string | null;
+    state:          string | null;
+    apptStart:      string | null;
+    apptEnd:        string | null;
+    lat:            number | null;
+    lng:            number | null;
+  }>;
+}
+
+export interface TimelinePayload {
+  asset:      { id: number; name: string; unit: string | null };
+  windowFrom: string;
+  windowTo:   string;
+  events:     TimelineEvent[];
+  movements:  TimelineMovement[];
+  links:      TimelineLink[];
+}
+
+export interface CreateMovementRequest {
+  assetId:         number;
+  driverId?:       number;
+  startTime:       string;
+  endTime?:        string;
+  durationMin?:    number;
+  miles?:          number;
+  origin?:         string;
+  destination?:    string;
+  originLat?:      number;
+  originLon?:      number;
+  destinationLat?: number;
+  destinationLon?: number;
+  notes?:          string;
+}
+
+export interface UpdateMovementRequest {
+  startTime?:      string;
+  endTime?:        string | null;
+  durationMin?:    number | null;
+  miles?:          number | null;
+  origin?:         string | null;
+  destination?:    string | null;
+  originLat?:      number | null;
+  originLon?:      number | null;
+  destinationLat?: number | null;
+  destinationLon?: number | null;
+  notes?:          string | null;
+}
+
+export interface AssertLinkRequest {
+  movementId:      string;
+  role:            TimelineLinkRole;
+  loadedEventId?:  string;
+  fromEventId?:    string;
+  toEventId?:      string;
+  dwellStopId?:    string;
+  source?:         string;            // defaults to 'manual'
+  confidence?:     "high" | "medium" | "low";
+  reasoning?:      string;
+}
+
 export interface CostAnalysisLoad {
   loadId:              string;
   loadLabel:           string;
@@ -540,6 +662,32 @@ class RailwayClient {
   }
   updateOrgSettings(body: UpdateOrgSettingsRequest) {
     return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
+  }
+
+  // ── Asset timeline (movements + links graph) ──────────────────────────
+  //
+  // New source-agnostic movement system. Distinct from `/v1/movements`
+  // below, which is the legacy Motive-only calendar feed kept around
+  // for the existing calendar UI. New code should consume `/v1/timeline`.
+
+  getAssetTimeline(assetId: number, from: string, to: string) {
+    const qs = new URLSearchParams({ from, to });
+    return this.req<TimelinePayload>('GET', `/v1/timeline/assets/${assetId}?${qs.toString()}`);
+  }
+  createManualMovement(body: CreateMovementRequest) {
+    return this.req<{ movement: TimelineMovement }>('POST', '/v1/timeline/movements', body);
+  }
+  updateManualMovement(id: string, body: UpdateMovementRequest) {
+    return this.req<{ movement: TimelineMovement }>('PATCH', `/v1/timeline/movements/${id}`, body);
+  }
+  deleteManualMovement(id: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/timeline/movements/${id}`);
+  }
+  assertMovementLink(body: AssertLinkRequest) {
+    return this.req<{ link: TimelineLink }>('POST', '/v1/timeline/links', body);
+  }
+  clearMovementLink(movementId: string) {
+    return this.req<{ link: TimelineLink }>('DELETE', `/v1/timeline/links/${movementId}`);
   }
 
   // ── Movements (Motive driving-periods feed) ───────────────────────────
