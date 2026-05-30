@@ -42,7 +42,7 @@
 
 CREATE TABLE IF NOT EXISTS movements (
   id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id             uuid        NOT NULL,
+  org_id             text        NOT NULL,
   asset_id           bigint      NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
 
   -- Driver attribution where known. Always nullable — Motive doesn't
@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_movements_motive_period
 
 CREATE TABLE IF NOT EXISTS movement_links (
   id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  org_id             uuid        NOT NULL,
+  org_id             text        NOT NULL,
   movement_id        uuid        NOT NULL REFERENCES movements(id) ON DELETE CASCADE,
 
   -- Five-way classification. Keep this as text + CHECK rather than a
