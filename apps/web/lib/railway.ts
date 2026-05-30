@@ -689,6 +689,21 @@ class RailwayClient {
   clearMovementLink(movementId: string) {
     return this.req<{ link: TimelineLink }>('DELETE', `/v1/timeline/links/${movementId}`);
   }
+  /** Runs Claude over every movement on the asset in [from, to] and
+   *  writes link facts with source='ai_v1'. Skips movements whose
+   *  current link source='manual' so dispatcher edits survive
+   *  re-runs. Returns counts so the UI can show what landed. */
+  autoLinkAssetTimeline(assetId: number, from: string, to: string) {
+    const qs = new URLSearchParams({ from, to });
+    return this.req<{
+      ok:             true;
+      linksWritten:   number;
+      manualSkipped:  number;
+      totalMovements: number;
+      proposedCount?: number;
+      message?:       string;
+    }>('POST', `/v1/timeline/assets/${assetId}/auto-link?${qs.toString()}`);
+  }
 
   // ── Movements (Motive driving-periods feed) ───────────────────────────
   /** Trigger a manual Motive sync. mode='backfill' pulls the last N

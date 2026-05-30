@@ -23,7 +23,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, ArrowLeft,
-  Truck, MapPin, Clock, Sparkles, X, Plus, Pencil, Trash2,
+  Truck, MapPin, Clock, Sparkles, X, Plus, Pencil, Trash2, Loader2,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import {
@@ -240,6 +240,30 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   const [refreshTick, setRefreshTick] = useState(0);
 
   const [showCreateMovement, setShowCreateMovement] = useState(false);
+  const [autoLinking, setAutoLinking] = useState(false);
+  const [autoLinkResult, setAutoLinkResult] = useState<{
+    linksWritten: number; manualSkipped: number; totalMovements: number; message?: string;
+  } | null>(null);
+
+  async function runAutoLink() {
+    if (effectiveAssetId == null) return;
+    setAutoLinking(true);
+    setAutoLinkResult(null);
+    try {
+      const result = await railway.autoLinkAssetTimeline(effectiveAssetId, fetchWindow.from, fetchWindow.to);
+      setAutoLinkResult({
+        linksWritten:   result.linksWritten,
+        manualSkipped:  result.manualSkipped,
+        totalMovements: result.totalMovements,
+        message:        result.message,
+      });
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Auto-link failed');
+    } finally {
+      setAutoLinking(false);
+    }
+  }
 
   // Window: 6h before day start → 6h after day end, in UTC.
   const fetchWindow = useMemo(() => {
@@ -338,17 +362,53 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             </select>
           </div>
 
-          {/* Add manual movement button — for non-ELD trucks or gap-filling. */}
+          {/* Header actions */}
           {effectiveAssetId != null ? (
-            <button
-              onClick={() => setShowCreateMovement(true)}
-              className="ml-auto text-[12px] font-semibold px-3 py-1.5 rounded flex items-center gap-1.5"
-              style={{ background: 'var(--gc-blue)', color: '#fff' }}
-            >
-              <Plus size={14} /> Add manual movement
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={runAutoLink}
+                disabled={autoLinking}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded flex items-center gap-1.5"
+                style={{
+                  background: autoLinking ? 'var(--gc-surface-2)' : 'var(--gc-purple, #a142f4)',
+                  color: autoLinking ? 'var(--gc-text-3)' : '#fff',
+                }}
+                title="Claude classifies each movement on this day's window (skips manually-linked rows)"
+              >
+                {autoLinking ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {autoLinking ? 'Linking…' : 'Re-link with AI'}
+              </button>
+              <button
+                onClick={() => setShowCreateMovement(true)}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded flex items-center gap-1.5"
+                style={{ background: 'var(--gc-blue)', color: '#fff' }}
+              >
+                <Plus size={14} /> Add manual movement
+              </button>
+            </div>
           ) : null}
         </div>
+
+        {/* Auto-link result banner */}
+        {autoLinkResult ? (
+          <div
+            className="mb-3 px-3 py-2 rounded-lg text-[12px] flex items-center gap-2"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
+          >
+            <Sparkles size={14} style={{ color: '#a142f4' }} />
+            <span>
+              {autoLinkResult.message ?? `Wrote ${autoLinkResult.linksWritten} link${autoLinkResult.linksWritten === 1 ? '' : 's'}`}
+              {autoLinkResult.manualSkipped > 0 ? `; skipped ${autoLinkResult.manualSkipped} manual` : ''}
+              {' '}({autoLinkResult.totalMovements} movement{autoLinkResult.totalMovements === 1 ? '' : 's'} in window)
+            </span>
+            <button
+              onClick={() => setAutoLinkResult(null)}
+              className="ml-auto w-5 h-5 rounded flex items-center justify-center hover:bg-black/5"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : null}
 
         {/* Day nav */}
         <div
@@ -501,11 +561,6 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </div>
         )}
 
-        {/* Footer hints */}
-        <div className="mt-3 flex items-center gap-2 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-          <Sparkles size={14} />
-          AI auto-link, manual movement creation, and link editing land in PR 3.
-        </div>
       </div>
 
       {/* Side panel */}

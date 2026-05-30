@@ -32,11 +32,20 @@
  *        supersede; the movement stays, the relationship goes).
  */
 import { Hono } from "hono";
+import Anthropic from "@anthropic-ai/sdk";
 import type { ApiErrorResponse } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { env } from "../lib/env.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
+
+// Anthropic client for the AI auto-link endpoint. Same model as the
+// cost-analysis route — Opus is overkill for "classify N movements"
+// but it keeps the link reasoning quality high, and the per-call
+// volume is low (one per day, per truck, on demand).
+const anthropic = new Anthropic({ apiKey: env.anthropicApiKey });
+const AI_MODEL = "claude-opus-4-5";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
@@ -667,6 +676,378 @@ timeline.delete("/links/:movementId", requireCapability("loads.edit"), async (c)
   }
 
   return c.json({ link: rowToLink(inserted as MovementLinkRow) });
+});
+
+// ── POST /assets/:assetId/auto-link — Claude classifies movements ──
+//
+// Walks every movement on the truck in [from, to], builds a focused
+// prompt with the day's loads + stops + adjacent context, asks Claude
+// to tag each one (role + event refs + confidence + reasoning), and
+// writes the results as new link facts (source='ai_v1'). Movements
+// whose CURRENT link has source='manual' are skipped — the dispatcher's
+// edits are sticky.
+//
+// The prompt is intentionally narrower than the cost-analysis prompt:
+// no economic computation, no rate math, just classification + linking.
+// That keeps the model decisive and the output schema simple.
+
+const AUTO_LINK_SYSTEM_PROMPT = `You classify driving-period records from a truck's ELD log.
+
+Each movement REALLY HAPPENED — the GPS log is the ground truth. Your job is to tag each movement with a role and link it to the load(s) it relates to. Real-world driving doesn't match dispatch schedules exactly; treat ±2-4 hours of time drift as normal and don't downgrade confidence over it.
+
+You will receive:
+1. THIS DAY'S LOADS on the truck (each with stops + scheduled window).
+2. ADJACENT CONTEXT — the load BEFORE this day's first load and the load AFTER this day's last load on this truck. Use them to attribute the first/last deadhead correctly.
+3. MOVEMENTS — every ELD-recorded driving period for the truck in the window. Each has an opaque uuid; refer to movements by that uuid exactly.
+
+Roles (pick exactly one per movement):
+
+- loaded     — truck was driving WITH a load on board. Set loaded_event_id.
+- transition — truck was driving EMPTY between loads. Set from_event_id and/or to_event_id. Either can be omitted: start-of-day from yard has no from; end-of-day to yard/home has no to.
+- dwell      — truck was effectively STATIONARY at a load's pickup or delivery location (origin ≈ destination at that city, or a sub-mile blip at a known stop). Set loaded_event_id.
+- rest       — long stationary period NOT at a load location (HOS break at a truck stop, overnight at home / yard). No event refs.
+- unrelated  — yard shuffle, personal conveyance, weird sub-mile blip that doesn't fit any load story. No event refs.
+
+How to decide:
+
+• loaded vs transition: did the truck have cargo? It HAD cargo from the moment it left a pickup stop until it reached the delivery stop. Movements between those endpoints with cities that align with the load's route are 'loaded'.
+• transition vs unrelated: a transition CONNECTS two loads (or one load + yard/start/end of day). If you can identify the from/to load with reasonable confidence, it's a transition. If the movement is far from any load's geography and short, it's unrelated.
+• dwell vs rest: dwell happens AT a load's pickup or delivery city. Rest happens elsewhere (a truck stop, a hotel, the driver's home).
+
+Confidence:
+
+- high   — the geography clearly matches, even if times drift by hours.
+- medium — there's an ambiguity (a movement could plausibly belong to two adjacent loads, or one of the load's cities matches but the time is way off).
+- low    — no clear match. Use 'unrelated' as the role.
+
+Default to 'high' when cities align. Don't be doubtful just because Motive's GPS data fragments a trip into many short driving periods — that's normal and expected.
+
+For each movement, output one entry in the submit_movement_links tool call. Include the movement's uuid EXACTLY as provided. The reasoning field gets 1-2 sentences explaining the call (which cities, which load, what made it the right bucket).
+
+Output ONLY via submit_movement_links — no prose outside the tool call.`;
+
+const AUTO_LINK_TOOL: Anthropic.Tool = {
+  name: "submit_movement_links",
+  description: "Submit role + link classifications for every movement provided.",
+  input_schema: {
+    type: "object",
+    properties: {
+      links: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            movementId:     { type: "string", description: "Movement uuid, exactly as given." },
+            role:           { type: "string", enum: ["loaded", "transition", "dwell", "rest", "unrelated"] },
+            loadedEventId:  { type: "string", description: "Required when role is 'loaded' or 'dwell'." },
+            fromEventId:    { type: "string", description: "Required (or toEventId) when role is 'transition'. Omit for start-of-day transitions from yard." },
+            toEventId:      { type: "string", description: "Required (or fromEventId) when role is 'transition'. Omit for end-of-day transitions to yard." },
+            confidence:     { type: "string", enum: ["high", "medium", "low"] },
+            reasoning:      { type: "string", description: "1-2 sentences: which cities/loads/times drove the call." },
+          },
+          required: ["movementId", "role", "confidence", "reasoning"],
+        },
+      },
+    },
+    required: ["links"],
+  },
+};
+
+interface AILinkProposal {
+  movementId:     string;
+  role:           "loaded" | "transition" | "dwell" | "rest" | "unrelated";
+  loadedEventId?: string;
+  fromEventId?:   string;
+  toEventId?:     string;
+  confidence:     "high" | "medium" | "low";
+  reasoning:      string;
+}
+
+timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const userId = c.get("userId");
+  const assetId = Number(c.req.param("assetId"));
+  const from = c.req.query("from");
+  const to   = c.req.query("to");
+
+  if (!Number.isFinite(assetId)) {
+    return c.json({ error: "validation_failed", errors: ["assetId must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  if (!from || !to) {
+    return c.json({ error: "validation_failed", errors: ["from and to required (ISO)"] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Confirm the asset belongs to the org.
+  const { data: asset } = await sb
+    .from("assets")
+    .select("id, name, unit")
+    .eq("id", assetId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!asset) {
+    return c.json({ error: "asset_not_found" } satisfies ApiErrorResponse, 404);
+  }
+
+  // ── Fetch events on this truck in window (with stops) ───────────
+  const { data: events } = await sb
+    .from("events")
+    .select("id, title, start, \"end\", event_kind, non_revenue_type")
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .lt("start", to)
+    .gt("end",   from)
+    .order("start", { ascending: true });
+  const eventList = (events ?? []) as Array<{
+    id: string; title: string | null; start: string; end: string;
+    event_kind: string | null; non_revenue_type: string | null;
+  }>;
+  const eventIds = eventList.map((e) => e.id);
+
+  const { data: stops } = eventIds.length > 0
+    ? await sb
+        .from("stops")
+        .select("id, event_id, sequence, type, facility_name, city, state, appt_start, appt_end")
+        .in("event_id", eventIds)
+        .order("sequence", { ascending: true })
+    : { data: [] };
+  const stopsByEvent = new Map<string, Array<{
+    id: string; sequence: number | null; type: string | null;
+    facility_name: string | null; city: string | null; state: string | null;
+    appt_start: string | null; appt_end: string | null;
+  }>>();
+  for (const s of (stops ?? []) as Array<{
+    id: string; event_id: string; sequence: number | null; type: string | null;
+    facility_name: string | null; city: string | null; state: string | null;
+    appt_start: string | null; appt_end: string | null;
+  }>) {
+    const arr = stopsByEvent.get(s.event_id) ?? [];
+    arr.push(s);
+    stopsByEvent.set(s.event_id, arr);
+  }
+
+  // ── Adjacent context loads (prev + next on this asset) ──────────
+  const { data: prevEvents } = await sb
+    .from("events")
+    .select("id, title, start, \"end\"")
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .lt("end", from)
+    .order("end", { ascending: false })
+    .limit(1);
+  const prevEvent = ((prevEvents ?? []) as Array<{ id: string; title: string | null; start: string; end: string }>)[0];
+
+  const { data: nextEvents } = await sb
+    .from("events")
+    .select("id, title, start, \"end\"")
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .gt("start", to)
+    .order("start", { ascending: true })
+    .limit(1);
+  const nextEvent = ((nextEvents ?? []) as Array<{ id: string; title: string | null; start: string; end: string }>)[0];
+
+  const adjacentIds = [prevEvent?.id, nextEvent?.id].filter(Boolean) as string[];
+  const { data: adjStops } = adjacentIds.length > 0
+    ? await sb
+        .from("stops")
+        .select("event_id, sequence, type, city, state")
+        .in("event_id", adjacentIds)
+        .order("sequence", { ascending: true })
+    : { data: [] };
+  const adjStopsByEvent = new Map<string, Array<{ type: string | null; city: string | null; state: string | null }>>();
+  for (const s of (adjStops ?? []) as Array<{
+    event_id: string; type: string | null; city: string | null; state: string | null;
+  }>) {
+    const arr = adjStopsByEvent.get(s.event_id) ?? [];
+    arr.push({ type: s.type, city: s.city, state: s.state });
+    adjStopsByEvent.set(s.event_id, arr);
+  }
+
+  // ── Fetch movements in window ──────────────────────────────────
+  const { data: movementRows } = await sb
+    .from("movements")
+    .select("id, start_time, end_time, miles, duration_min, origin, destination")
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .is("deleted_at", null)
+    .gte("start_time", from)
+    .lt("start_time", to)
+    .order("start_time", { ascending: true });
+  const movements = (movementRows ?? []) as Array<{
+    id: string; start_time: string; end_time: string | null;
+    miles: number | null; duration_min: number | null;
+    origin: string | null; destination: string | null;
+  }>;
+
+  if (movements.length === 0) {
+    return c.json({ ok: true, linksWritten: 0, manualSkipped: 0, totalMovements: 0, message: "No movements in window." });
+  }
+
+  // ── Skip movements with current manual links ────────────────────
+  const movementIds = movements.map((m) => m.id);
+  const { data: currentLinks } = await sb
+    .from("movement_links")
+    .select("movement_id, source")
+    .eq("org_id", orgId)
+    .in("movement_id", movementIds)
+    .is("superseded_at", null);
+  const manualMovementIds = new Set(
+    ((currentLinks ?? []) as Array<{ movement_id: string; source: string }>)
+      .filter((l) => l.source === "manual")
+      .map((l) => l.movement_id),
+  );
+  const targetMovements = movements.filter((m) => !manualMovementIds.has(m.id));
+
+  if (targetMovements.length === 0) {
+    return c.json({
+      ok: true,
+      linksWritten: 0,
+      manualSkipped: manualMovementIds.size,
+      totalMovements: movements.length,
+      message: "Every movement already has a manual link — nothing for AI to do.",
+    });
+  }
+
+  // ── Build user message ──────────────────────────────────────────
+  const fmtEventBlock = (e: { id: string; title: string | null; start: string; end: string; event_kind?: string | null; non_revenue_type?: string | null }, label: string) => {
+    const stopsHere = stopsByEvent.get(e.id) ?? [];
+    const lines = [
+      `${label} ${e.id}: "${e.title ?? "(no title)"}"${e.event_kind === "non_revenue" ? ` [${e.non_revenue_type ?? "non-revenue"}]` : ""}`,
+      `  Window: ${e.start} → ${e.end}`,
+    ];
+    if (stopsHere.length > 0) {
+      lines.push("  Stops:");
+      for (const s of stopsHere) {
+        lines.push(`    ${s.sequence ?? "?"}. ${s.type ?? "stop"} — ${s.city ?? "?"}, ${s.state ?? "?"}${s.facility_name ? ` (${s.facility_name})` : ""}${s.appt_start ? ` appt ${s.appt_start}${s.appt_end ? "→" + s.appt_end : ""}` : ""}`);
+      }
+    }
+    return lines.join("\n");
+  };
+
+  const fmtAdjBlock = (e: { id: string; title: string | null; start: string; end: string } | undefined, label: string) => {
+    if (!e) return `(no ${label} load on record)`;
+    const stopsHere = adjStopsByEvent.get(e.id) ?? [];
+    const pickup   = stopsHere.find((s) => s.type === "pickup");
+    const delivery = [...stopsHere].reverse().find((s) => s.type === "delivery" || s.type === "drop" || s.type === "drop_hook");
+    const route = `${pickup ? `${pickup.city ?? "?"}, ${pickup.state ?? "?"}` : "?"} → ${delivery ? `${delivery.city ?? "?"}, ${delivery.state ?? "?"}` : "?"}`;
+    return `${label.toUpperCase()} ${e.id}: "${e.title ?? "(no title)"}"\n  Window: ${e.start} → ${e.end}\n  Route: ${route}`;
+  };
+
+  const userMessage = [
+    `# Asset`,
+    `Truck #${assetId}: ${asset.name}${asset.unit ? ` (#${asset.unit})` : ""}`,
+    ``,
+    `# This day's loads on this truck`,
+    eventList.length === 0
+      ? "(no scheduled events in window)"
+      : eventList.map((e) => fmtEventBlock(e, "LOAD")).join("\n\n"),
+    ``,
+    `# Adjacent context (so you can attribute pre/post-window transitions correctly)`,
+    fmtAdjBlock(prevEvent, "previous"),
+    fmtAdjBlock(nextEvent, "next"),
+    ``,
+    `# Movements to classify (${targetMovements.length} of ${movements.length}; ${manualMovementIds.size} skipped due to manual links)`,
+    targetMovements.map((m) => {
+      const miles = m.miles != null ? `${m.miles.toFixed(1)} mi` : "?? mi";
+      const dur   = m.duration_min != null ? `${m.duration_min} min` : "?? min";
+      return `${m.id}: ${m.start_time} → ${m.end_time ?? "??"} | ${miles} · ${dur} | ${m.origin ?? "??"} → ${m.destination ?? "??"}`;
+    }).join("\n"),
+    ``,
+    `Classify every movement above via submit_movement_links.`,
+  ].join("\n");
+
+  // ── Call Claude ─────────────────────────────────────────────────
+  let response;
+  try {
+    response = await anthropic.messages.create({
+      model:      AI_MODEL,
+      max_tokens: 8000,
+      system:     [{ type: "text", text: AUTO_LINK_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+      tools:      [AUTO_LINK_TOOL],
+      tool_choice: { type: "tool", name: "submit_movement_links" },
+      messages:   [{ role: "user", content: userMessage }],
+    });
+  } catch (err) {
+    console.error("[timeline auto-link] anthropic call failed:", err);
+    return c.json({ error: "ai_failed", detail: (err as Error).message } satisfies ApiErrorResponse, 500);
+  }
+
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") {
+    return c.json({ error: "no_tool_use" } satisfies ApiErrorResponse, 500);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const proposed = ((toolUse.input as any)?.links ?? []) as AILinkProposal[];
+
+  // ── Write link facts ────────────────────────────────────────────
+  const targetIds = new Set(targetMovements.map((m) => m.id));
+  const validEventIds = new Set([
+    ...eventList.map((e) => e.id),
+    ...(prevEvent ? [prevEvent.id] : []),
+    ...(nextEvent ? [nextEvent.id] : []),
+  ]);
+
+  let written = 0;
+  for (const p of proposed) {
+    if (!targetIds.has(p.movementId)) continue;        // safety: AI hallucinated an id
+    // Validate event references against the asset's event set so an
+    // AI hallucination can't accidentally link a movement to some
+    // other org's event id.
+    const loadedOk = !p.loadedEventId || validEventIds.has(p.loadedEventId);
+    const fromOk   = !p.fromEventId   || validEventIds.has(p.fromEventId);
+    const toOk     = !p.toEventId     || validEventIds.has(p.toEventId);
+    if (!loadedOk || !fromOk || !toOk) continue;
+    // Validate role-refs combo matches the DB CHECK constraint so we
+    // don't 500 the whole batch on one bad row.
+    const roleOk =
+      (p.role === "loaded"      && !!p.loadedEventId) ||
+      (p.role === "transition"  && (!!p.fromEventId || !!p.toEventId)) ||
+      (p.role === "dwell"       && !!p.loadedEventId) ||
+      (p.role === "rest" || p.role === "unrelated");
+    if (!roleOk) continue;
+
+    const { data: inserted, error: insErr } = await sb
+      .from("movement_links")
+      .insert({
+        org_id:           orgId,
+        movement_id:      p.movementId,
+        role:             p.role,
+        loaded_event_id:  p.loadedEventId ?? null,
+        from_event_id:    p.fromEventId   ?? null,
+        to_event_id:      p.toEventId     ?? null,
+        source:           "ai_v1",
+        source_user:      null,
+        confidence:       p.confidence ?? null,
+        reasoning:        p.reasoning  ?? null,
+      })
+      .select("id")
+      .single();
+    if (insErr || !inserted) {
+      console.error("[timeline auto-link] insert failed for movement", p.movementId, insErr);
+      continue;
+    }
+
+    // Supersede any prior current link (always — ai_v1 is the new
+    // truth for non-manual rows).
+    await sb
+      .from("movement_links")
+      .update({ superseded_at: new Date().toISOString(), superseded_by: (inserted as { id: string }).id })
+      .eq("org_id", orgId)
+      .eq("movement_id", p.movementId)
+      .is("superseded_at", null)
+      .neq("id", (inserted as { id: string }).id);
+
+    written++;
+  }
+
+  return c.json({
+    ok:             true,
+    linksWritten:   written,
+    manualSkipped:  manualMovementIds.size,
+    totalMovements: movements.length,
+    proposedCount:  proposed.length,
+    triggeredBy:    userId,
+  });
 });
 
 export default timeline;
