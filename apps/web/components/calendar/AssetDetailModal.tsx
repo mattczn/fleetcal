@@ -462,7 +462,7 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
                   movements side-by-side). Opens in a new tab so the
                   current modal context isn't disrupted. */}
               <a
-                href={`/assets/${asset.id}/timeline`}
+                href={`/timeline?assetId=${asset.id}`}
                 target="_blank"
                 rel="noreferrer"
                 className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ml-1 flex items-center gap-1"

@@ -20,12 +20,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, ArrowLeft,
-  Truck, MapPin, Clock, Sparkles, X,
+  Truck, MapPin, Clock, Sparkles, X, Plus, Pencil, Trash2,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
-import { railway, type TimelinePayload, type TimelineEvent, type TimelineMovement, type TimelineLink } from '@/lib/railway';
+import {
+  railway,
+  type TimelinePayload, type TimelineEvent, type TimelineMovement, type TimelineLink,
+  type TimelineLinkRole, type AssertLinkRequest, type CreateMovementRequest,
+} from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 
@@ -188,16 +193,38 @@ type Selection =
 
 // ── Main view ─────────────────────────────────────────────────────────
 
-export default function AssetTimelineView({ assetId }: { assetId: number }) {
+export default function AssetTimelineView({ assetId }: { assetId: number | null }) {
+  const router = useRouter();
   const { calendarTimezone, assets } = useCalendarStore();
   const tz = calendarTimezone || 'America/Denver';
 
-  // Asset color from the calendar store — same one painted on event
-  // cards in the main calendar, so the timeline reads as the same
-  // truck visually. Falls back to GC blue when the store hasn't
-  // hydrated yet.
-  const storeAsset = assets.find((a) => a.id === assetId);
+  // Truck picker — visible-and-active assets sorted by store order.
+  // The URL drives the selection (router.replace on change), so back/
+  // forward + bookmarking work and the dispatcher can deep-link to a
+  // specific truck-day.
+  const truckOptions = useMemo(
+    () => assets.filter((a) => !a.hidden).sort((a, b) => a.sortOrder - b.sortOrder),
+    [assets],
+  );
+  const fallbackAssetId = truckOptions[0]?.id ?? null;
+  const effectiveAssetId = assetId ?? fallbackAssetId;
+
+  const storeAsset = effectiveAssetId != null
+    ? assets.find((a) => a.id === effectiveAssetId)
+    : undefined;
   const assetColor = storeAsset?.color ?? '#1a73e8';
+
+  // When the URL has no assetId and we picked a fallback, replace the
+  // URL so the truck picker reflects what's actually being shown.
+  useEffect(() => {
+    if (assetId == null && fallbackAssetId != null) {
+      router.replace(`/timeline?assetId=${fallbackAssetId}`);
+    }
+  }, [assetId, fallbackAssetId, router]);
+
+  function switchAsset(newId: number) {
+    router.replace(`/timeline?assetId=${newId}`);
+  }
 
   const todayKey = utcDateKeyInTz(new Date().toISOString(), tz);
   const [dayKey, setDayKey] = useState<string>(todayKey);
@@ -207,6 +234,12 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
   const [error, setError]     = useState<string | null>(null);
 
   const [selection, setSelection] = useState<Selection>(null);
+  // Bump to force a refetch after editing links / creating manual
+  // movements. Cheaper than threading invalidate calls through every
+  // child editor.
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const [showCreateMovement, setShowCreateMovement] = useState(false);
 
   // Window: 6h before day start → 6h after day end, in UTC.
   const fetchWindow = useMemo(() => {
@@ -220,15 +253,23 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
   }, [dayKey, tz]);
 
   useEffect(() => {
+    if (effectiveAssetId == null) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setSelection(null);
-    railway.getAssetTimeline(assetId, fetchWindow.from, fetchWindow.to)
+    // Don't clear selection on refresh — preserves the open side panel
+    // after a link edit. Reset only on truck/day change.
+    railway.getAssetTimeline(effectiveAssetId, fetchWindow.from, fetchWindow.to)
       .then((res) => { if (!cancelled) { setData(res); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [assetId, fetchWindow.from, fetchWindow.to]);
+  }, [effectiveAssetId, fetchWindow.from, fetchWindow.to, refreshTick]);
+
+  // Reset selection when switching truck or day so the panel doesn't
+  // hang around showing a stale row from the previous view.
+  useEffect(() => {
+    setSelection(null);
+  }, [effectiveAssetId, dayKey]);
 
   const linkByMovementId = useMemo(() => {
     const m = new Map<string, TimelineLink>();
@@ -273,13 +314,40 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
           >
             <ArrowLeft size={16} />
           </Link>
-          <div className="flex items-center gap-2">
+          <Truck size={20} style={{ color: assetColor }} />
+          <h1 className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>
+            Timeline
+          </h1>
+
+          {/* Truck picker — pre-filled from URL, changeable inline. */}
+          <div className="flex items-center gap-2 ml-2 px-2 py-1 rounded"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
             <div className="w-3 h-3 rounded-full" style={{ backgroundColor: assetColor }} />
-            <Truck size={20} style={{ color: assetColor }} />
-            <h1 className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>
-              {asset ? `${asset.name}${asset.unit ? ` · #${asset.unit}` : ''}` : 'Loading…'}
-            </h1>
+            <select
+              value={effectiveAssetId ?? ''}
+              onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v)) switchAsset(v); }}
+              className="text-[14px] font-semibold bg-transparent border-0 outline-none cursor-pointer"
+              style={{ color: 'var(--gc-text-1)' }}
+            >
+              {truckOptions.length === 0 ? <option value="">No trucks</option> : null}
+              {truckOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}{a.unit ? ` · #${a.unit}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Add manual movement button — for non-ELD trucks or gap-filling. */}
+          {effectiveAssetId != null ? (
+            <button
+              onClick={() => setShowCreateMovement(true)}
+              className="ml-auto text-[12px] font-semibold px-3 py-1.5 rounded flex items-center gap-1.5"
+              style={{ background: 'var(--gc-blue)', color: '#fff' }}
+            >
+              <Plus size={14} /> Add manual movement
+            </button>
+          ) : null}
         </div>
 
         {/* Day nav */}
@@ -446,8 +514,25 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
           selection={selection}
           tz={tz}
           assetColor={assetColor}
+          events={data?.events ?? []}
           eventLookup={eventById}
           onClose={() => setSelection(null)}
+          onMutated={() => setRefreshTick((t) => t + 1)}
+        />
+      ) : null}
+
+      {/* Manual movement create modal */}
+      {showCreateMovement && effectiveAssetId != null ? (
+        <CreateMovementModal
+          assetId={effectiveAssetId}
+          dayKey={dayKey}
+          tz={tz}
+          events={data?.events ?? []}
+          onClose={() => setShowCreateMovement(false)}
+          onCreated={() => {
+            setShowCreateMovement(false);
+            setRefreshTick((t) => t + 1);
+          }}
         />
       ) : null}
     </AppShell>
@@ -650,17 +735,19 @@ function MovementBlock({
 // ── Side panel ────────────────────────────────────────────────────────
 
 function DetailPanel({
-  selection, tz, assetColor, eventLookup, onClose,
+  selection, tz, assetColor, events, eventLookup, onClose, onMutated,
 }: {
   selection: NonNullable<Selection>;
   tz: string;
   assetColor: string;
+  events: TimelineEvent[];
   eventLookup: Map<string, TimelineEvent>;
   onClose: () => void;
+  onMutated: () => void;
 }) {
   return (
     <div
-      className="fixed top-0 right-0 bottom-0 w-[400px] z-30 shadow-xl overflow-y-auto"
+      className="fixed top-0 right-0 bottom-0 w-[420px] z-30 shadow-xl overflow-y-auto"
       style={{ background: 'var(--gc-surface)', borderLeft: '1px solid var(--gc-border)' }}
     >
       <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border)' }}>
@@ -680,20 +767,11 @@ function DetailPanel({
             movement={selection.movement}
             link={selection.link}
             tz={tz}
+            events={events}
             eventLookup={eventLookup}
+            onMutated={onMutated}
           />
         )}
-      </div>
-
-      <div
-        className="px-4 py-3 text-[11px] flex items-start gap-2"
-        style={{ borderTop: '1px solid var(--gc-border)', color: 'var(--gc-text-3)' }}
-      >
-        <Sparkles size={12} style={{ marginTop: 1, flexShrink: 0 }} />
-        <span>
-          Link editing, manual movement create/edit, and AI auto-link land in PR 3. This panel
-          will grow controls for all of those.
-        </span>
       </div>
     </div>
   );
@@ -772,13 +850,17 @@ function EventDetail({ event, color }: { event: TimelineEvent; color: string }) 
 }
 
 function MovementDetail({
-  movement, link, tz, eventLookup,
+  movement, link, tz, events, eventLookup, onMutated,
 }: {
   movement: TimelineMovement;
   link: TimelineLink | undefined;
   tz: string;
+  events: TimelineEvent[];
   eventLookup: Map<string, TimelineEvent>;
+  onMutated: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
   const role = link ? ROLE_COLORS[link.role] : null;
   const source = SOURCE_BADGE[movement.source];
   return (
@@ -822,10 +904,33 @@ function MovementDetail({
       ) : null}
 
       <div className="pt-2" style={{ borderTop: '1px solid var(--gc-border)' }}>
-        <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
-          Current link
+        <div className="flex items-center mb-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+            Current link
+          </span>
+          {!editing ? (
+            <button
+              onClick={() => setEditing(true)}
+              className="ml-auto text-[11px] font-semibold flex items-center gap-1 px-2 py-1 rounded"
+              style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
+            >
+              <Pencil size={11} /> {link ? 'Change' : 'Assign'}
+            </button>
+          ) : null}
         </div>
-        {link ? (
+        {editing ? (
+          <LinkEditor
+            movementId={movement.id}
+            current={link}
+            events={events}
+            busy={busy}
+            setBusy={setBusy}
+            onDone={(mutated) => {
+              setEditing(false);
+              if (mutated) onMutated();
+            }}
+          />
+        ) : link ? (
           <div className="space-y-1.5 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
             <div className="flex items-center gap-2">
               <span
@@ -876,13 +981,451 @@ function MovementDetail({
                 {link.reasoning}
               </div>
             ) : null}
+            <button
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await railway.clearMovementLink(movement.id);
+                  onMutated();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+              className="text-[11px] flex items-center gap-1 px-2 py-1 rounded mt-2"
+              style={{ background: '#fce8e6', color: '#c5221f' }}
+            >
+              <Trash2 size={11} /> Mark unrelated
+            </button>
           </div>
         ) : (
           <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-            No link yet. PR 3 will let you assign this movement to a load (or mark unrelated).
+            No link yet. Click <strong style={{ color: 'var(--gc-text-2)' }}>Assign</strong> to set one.
           </div>
         )}
       </div>
     </>
+  );
+}
+
+// ── Link editor (used in MovementDetail) ──────────────────────────────
+
+function LinkEditor({
+  movementId, current, events, busy, setBusy, onDone,
+}: {
+  movementId: string;
+  current: TimelineLink | undefined;
+  events: TimelineEvent[];
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  onDone: (mutated: boolean) => void;
+}) {
+  const [role, setRole] = useState<TimelineLinkRole>(current?.role ?? 'loaded');
+  const [loadedEventId, setLoadedEventId] = useState<string>(current?.loadedEventId ?? '');
+  const [fromEventId, setFromEventId]     = useState<string>(current?.fromEventId   ?? '');
+  const [toEventId, setToEventId]         = useState<string>(current?.toEventId     ?? '');
+  const [reasoning, setReasoning]         = useState<string>('');
+
+  const sortedEvents = useMemo(
+    () => [...events].sort((a, b) => a.start.localeCompare(b.start)),
+    [events],
+  );
+
+  async function save() {
+    const body: AssertLinkRequest = {
+      movementId, role, source: 'manual',
+      reasoning: reasoning.trim() || undefined,
+    };
+    if (role === 'loaded' || role === 'dwell') body.loadedEventId = loadedEventId || undefined;
+    if (role === 'transition') {
+      body.fromEventId = fromEventId || undefined;
+      body.toEventId   = toEventId   || undefined;
+    }
+    // Validate the role-refs combo client-side for instant feedback.
+    if (role === 'loaded' && !body.loadedEventId) { alert('Pick a load for this loaded movement.'); return; }
+    if (role === 'dwell'  && !body.loadedEventId) { alert('Pick a load for this dwell.'); return; }
+    if (role === 'transition' && !body.fromEventId && !body.toEventId) {
+      alert('Pick a From or To load for this transition.'); return;
+    }
+
+    setBusy(true);
+    try {
+      await railway.assertMovementLink(body);
+      onDone(true);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 text-[12px]">
+      <div>
+        <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+          Role
+        </label>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value as TimelineLinkRole)}
+          className="w-full px-2 py-1.5 rounded"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+        >
+          <option value="loaded">Loaded — under load</option>
+          <option value="transition">Deadhead — between loads</option>
+          <option value="dwell">Dwell — at shipper/receiver</option>
+          <option value="rest">Rest — driver break</option>
+          <option value="unrelated">Unrelated — yard shuffle / PC</option>
+        </select>
+      </div>
+
+      {(role === 'loaded' || role === 'dwell') ? (
+        <div>
+          <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+            Load
+          </label>
+          <select
+            value={loadedEventId}
+            onChange={(e) => setLoadedEventId(e.target.value)}
+            className="w-full px-2 py-1.5 rounded"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+          >
+            <option value="">— pick a load —</option>
+            {sortedEvents.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.title ?? '(no title)'} · {ev.start.slice(11, 16)}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
+      {role === 'transition' ? (
+        <>
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              From load
+            </label>
+            <select
+              value={fromEventId}
+              onChange={(e) => setFromEventId(e.target.value)}
+              className="w-full px-2 py-1.5 rounded"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+            >
+              <option value="">— yard / start of day —</option>
+              {sortedEvents.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.title ?? '(no title)'} · {ev.start.slice(11, 16)}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              To load
+            </label>
+            <select
+              value={toEventId}
+              onChange={(e) => setToEventId(e.target.value)}
+              className="w-full px-2 py-1.5 rounded"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+            >
+              <option value="">— yard / end of day —</option>
+              {sortedEvents.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.title ?? '(no title)'} · {ev.start.slice(11, 16)}</option>
+              ))}
+            </select>
+          </div>
+        </>
+      ) : null}
+
+      <div>
+        <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+          Note (optional)
+        </label>
+        <input
+          type="text"
+          value={reasoning}
+          onChange={(e) => setReasoning(e.target.value)}
+          placeholder="Why this link — short explainer for future you / agents"
+          className="w-full px-2 py-1.5 rounded text-[12px]"
+          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+        />
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={save}
+          disabled={busy}
+          className="text-[12px] font-semibold px-3 py-1.5 rounded"
+          style={{ background: 'var(--gc-blue)', color: '#fff' }}
+        >
+          {busy ? 'Saving…' : 'Save link'}
+        </button>
+        <button
+          onClick={() => onDone(false)}
+          disabled={busy}
+          className="text-[12px] px-3 py-1.5 rounded"
+          style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Create movement modal ─────────────────────────────────────────────
+
+function CreateMovementModal({
+  assetId, dayKey, tz, events, onClose, onCreated,
+}: {
+  assetId: number;
+  dayKey: string;
+  tz: string;
+  events: TimelineEvent[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  // Defaults: 8 AM → 9 AM in org TZ on the selected day. The naive
+  // strings the user types in the form represent org wall-clock.
+  const [startTime, setStartTime]   = useState<string>(`${dayKey}T08:00`);
+  const [endTime, setEndTime]       = useState<string>(`${dayKey}T09:00`);
+  const [miles, setMiles]           = useState<string>('');
+  const [origin, setOrigin]         = useState<string>('');
+  const [destination, setDestination] = useState<string>('');
+  const [notes, setNotes]           = useState<string>('');
+  const [busy, setBusy]             = useState<boolean>(false);
+
+  // Optional link to set in the same flow — saves a click for the
+  // common case of "I just deadheaded from Load A to Load B."
+  const [role, setRole]             = useState<TimelineLinkRole | ''>('');
+  const [loadedEventId, setLoadedEventId] = useState<string>('');
+  const [fromEventId, setFromEventId]     = useState<string>('');
+  const [toEventId, setToEventId]         = useState<string>('');
+
+  async function save() {
+    if (!startTime) { alert('Start time required'); return; }
+    const body: CreateMovementRequest = {
+      assetId,
+      // Convert datetime-local (naive) → UTC ISO anchored to org TZ.
+      startTime: new Date(parseNaiveIsoInTz(`${startTime}:00`, tz)).toISOString(),
+      endTime:   endTime ? new Date(parseNaiveIsoInTz(`${endTime}:00`, tz)).toISOString() : undefined,
+      miles:       miles ? Number(miles) : undefined,
+      origin:      origin.trim() || undefined,
+      destination: destination.trim() || undefined,
+      notes:       notes.trim() || undefined,
+    };
+    setBusy(true);
+    try {
+      const { movement } = await railway.createManualMovement(body);
+      // Optionally assert a link in the same go.
+      if (role) {
+        const linkBody: AssertLinkRequest = {
+          movementId: movement.id,
+          role,
+          source: 'manual',
+        };
+        if (role === 'loaded' || role === 'dwell') linkBody.loadedEventId = loadedEventId || undefined;
+        if (role === 'transition') {
+          linkBody.fromEventId = fromEventId || undefined;
+          linkBody.toEventId   = toEventId   || undefined;
+        }
+        // Server validates role/ref combo and 400s if invalid; surface
+        // that gracefully but still keep the movement we just created.
+        try { await railway.assertMovementLink(linkBody); } catch (err) {
+          alert(`Movement created, but link save failed: ${err instanceof Error ? err.message : 'unknown'}`);
+        }
+      }
+      onCreated();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const sortedEvents = useMemo(
+    () => [...events].sort((a, b) => a.start.localeCompare(b.start)),
+    [events],
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-[480px] max-h-[90vh] overflow-y-auto rounded-lg shadow-xl"
+        style={{ background: 'var(--gc-surface)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border)' }}>
+          <span className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            Add manual movement
+          </span>
+          <button onClick={onClose} className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Start (org TZ)
+              </label>
+              <input
+                type="datetime-local" value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="w-full px-2 py-1.5 rounded"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                End (org TZ)
+              </label>
+              <input
+                type="datetime-local" value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="w-full px-2 py-1.5 rounded"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              Miles
+            </label>
+            <input
+              type="number" min="0" step="0.1" value={miles}
+              onChange={(e) => setMiles(e.target.value)}
+              placeholder="e.g. 250"
+              className="w-full px-2 py-1.5 rounded"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Origin
+              </label>
+              <input
+                type="text" value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+                placeholder="Denver, CO"
+                className="w-full px-2 py-1.5 rounded"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+                Destination
+              </label>
+              <input
+                type="text" value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+                placeholder="Salt Lake City, UT"
+                className="w-full px-2 py-1.5 rounded"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
+              Notes
+            </label>
+            <input
+              type="text" value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="What is this movement? (free text)"
+              className="w-full px-2 py-1.5 rounded"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+            />
+          </div>
+
+          {/* Optional in-line link */}
+          <div className="pt-2" style={{ borderTop: '1px dashed var(--gc-border)' }}>
+            <div className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+              Link this movement (optional)
+            </div>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as TimelineLinkRole | '')}
+              className="w-full px-2 py-1.5 rounded mb-2"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+            >
+              <option value="">— skip linking, set it later —</option>
+              <option value="loaded">Loaded</option>
+              <option value="transition">Deadhead</option>
+              <option value="dwell">Dwell</option>
+              <option value="rest">Rest</option>
+              <option value="unrelated">Unrelated</option>
+            </select>
+            {(role === 'loaded' || role === 'dwell') ? (
+              <select
+                value={loadedEventId}
+                onChange={(e) => setLoadedEventId(e.target.value)}
+                className="w-full px-2 py-1.5 rounded"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+              >
+                <option value="">— pick a load —</option>
+                {sortedEvents.map((ev) => (
+                  <option key={ev.id} value={ev.id}>{ev.title ?? '(no title)'} · {ev.start.slice(11, 16)}</option>
+                ))}
+              </select>
+            ) : null}
+            {role === 'transition' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={fromEventId}
+                  onChange={(e) => setFromEventId(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+                >
+                  <option value="">From: yard / start</option>
+                  {sortedEvents.map((ev) => (
+                    <option key={ev.id} value={ev.id}>From: {ev.title ?? '(no title)'}</option>
+                  ))}
+                </select>
+                <select
+                  value={toEventId}
+                  onChange={(e) => setToEventId(e.target.value)}
+                  className="w-full px-2 py-1.5 rounded"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
+                >
+                  <option value="">To: yard / end</option>
+                  {sortedEvents.map((ev) => (
+                    <option key={ev.id} value={ev.id}>To: {ev.title ?? '(no title)'}</option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--gc-border)' }}>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="text-[13px] px-3 py-1.5 rounded"
+            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            className="text-[13px] font-semibold px-3 py-1.5 rounded"
+            style={{ background: 'var(--gc-blue)', color: '#fff' }}
+          >
+            {busy ? 'Saving…' : 'Create movement'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
