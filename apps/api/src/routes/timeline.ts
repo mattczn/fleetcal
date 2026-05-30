@@ -254,11 +254,14 @@ timeline.get("/assets/:assetId", async (c) => {
   // Events whose [start, end] intersects the window. Boundary-events
   // (a multi-day load that started before `from`) are included so the
   // timeline doesn't show partial trip endpoints with no context.
+  // Soft-deleted events excluded so the dispatcher never sees ghost
+  // loads on the timeline.
   const { data: events, error: eErr } = await sb
     .from("events")
     .select("id, title, start, \"end\", status, event_kind, non_revenue_type, driver_name, load:loads(load_price)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
+    .is("deleted_at", null)
     .lt("start", to)
     .gt("end", from)
     .order("start", { ascending: true });
@@ -789,11 +792,14 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
   }
 
   // ── Fetch events on this truck in window (with stops) ───────────
+  // Soft-deleted events excluded so the AI doesn't classify movements
+  // against ghost loads.
   const { data: events } = await sb
     .from("events")
     .select("id, title, start, \"end\", event_kind, non_revenue_type")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
+    .is("deleted_at", null)
     .lt("start", to)
     .gt("end",   from)
     .order("start", { ascending: true });
@@ -826,11 +832,14 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
   }
 
   // ── Adjacent context loads (prev + next on this asset) ──────────
+  // Same soft-delete filter — a cancelled load shouldn't anchor the
+  // model's pre/post-window deadhead attribution.
   const { data: prevEvents } = await sb
     .from("events")
     .select("id, title, start, \"end\"")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
+    .is("deleted_at", null)
     .lt("end", from)
     .order("end", { ascending: false })
     .limit(1);
@@ -841,6 +850,7 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
     .select("id, title, start, \"end\"")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
+    .is("deleted_at", null)
     .gt("start", to)
     .order("start", { ascending: true })
     .limit(1);
