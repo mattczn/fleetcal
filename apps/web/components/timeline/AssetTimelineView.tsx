@@ -4,22 +4,25 @@
  * Asset timeline — side-by-side day view of scheduled events vs.
  * actual movements for one truck.
  *
- * Time axis runs 0:00 → 24:00 in org TZ, fixed for v1 (we'll auto-fit
- * to activity later). Both columns scroll on the same axis so a
- * dispatcher can scan left↔right at any time and see "schedule said X,
- * truck actually did Y."
+ * Two columns share a 24h time axis (org TZ). Click any chip to open
+ * a side panel with full details. PR 3 adds editing controls inside
+ * that panel — for now it's read-only display.
  *
- * Display only in this PR — clicking is informational. PR 3 adds:
- *   - Click a movement → edit its link
- *   - "+ Add manual movement" — manual movement creation
- *   - "Re-link" — AI auto-link endpoint
+ * Time-axis conventions used by this view:
+ *   - Events come from the DB as NAIVE ISO strings ("YYYY-MM-DDTHH:mm:ss")
+ *     meant to be interpreted in the org's dispatch zone. They use
+ *     naive helpers below — no TZ math is needed because the value
+ *     already IS org-local.
+ *   - Movements come from the DB as proper UTC TIMESTAMPTZ ("…+00:00").
+ *     They use the TZ-aware helpers so a viewer in PT sees a CT-org
+ *     movement at the right wall-clock hour.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, ArrowLeft,
-  Truck, MapPin, Clock, Sparkles,
+  Truck, MapPin, Clock, Sparkles, X,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import { railway, type TimelinePayload, type TimelineEvent, type TimelineMovement, type TimelineLink } from '@/lib/railway';
@@ -31,11 +34,42 @@ import { parseNaiveIsoInTz } from '@/lib/time-utils';
 const HOUR_HEIGHT_PX = 60;
 const TOTAL_HEIGHT   = 24 * HOUR_HEIGHT_PX;
 
-/** Minutes-of-day for a UTC ISO timestamp, viewed in `tz`. Anchors
- *  the timeline to org wall-clock so 8am org-local lands at the same
- *  Y regardless of where the viewer is. */
-function minutesOfDayInTz(iso: string, tz: string): number {
-  // formatToParts gives us org-local hour/minute cleanly.
+// ── NAIVE helpers (for event timestamps) ───────────────────────────────
+//
+// Events in this system are stored naive in the org's dispatch zone.
+// Parsing them through `new Date()` would interpret them as device-local
+// and skew the rendered time by whatever the viewer's TZ offset is.
+// These helpers operate on the string directly.
+
+function naiveDateKey(naive: string): string {
+  return naive.slice(0, 10); // 'YYYY-MM-DD'
+}
+
+function naiveMinutesOfDay(naive: string): number {
+  const m = naive.match(/T(\d{2}):(\d{2})/);
+  if (!m) return 0;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function fmtNaiveTime(naive: string): string {
+  const m = naive.match(/T(\d{2}):(\d{2})/);
+  if (!m) return '';
+  let h = parseInt(m[1], 10);
+  const mm = m[2];
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${mm} ${ampm}`;
+}
+
+// ── TZ helpers (for UTC movement timestamps) ───────────────────────────
+
+function utcDateKeyInTz(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(iso));
+}
+
+function utcMinutesOfDayInTz(iso: string, tz: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(new Date(iso));
@@ -44,76 +78,71 @@ function minutesOfDayInTz(iso: string, tz: string): number {
   return (h === 24 ? 0 : h) * 60 + m;
 }
 
-/** Returns the org-local YYYY-MM-DD a UTC ISO falls on. */
-function dateKeyInTz(iso: string, tz: string): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date(iso));
-  return parts; // 'en-CA' yields YYYY-MM-DD directly
-}
-
-function fmtTimeInTz(iso: string, tz: string): string {
+function fmtUtcTimeInTz(iso: string, tz: string): string {
   return new Date(iso).toLocaleTimeString('en-US', {
     timeZone: tz, hour: 'numeric', minute: '2-digit',
   });
 }
 
-function fmtDateHeader(dateKey: string, tz: string): string {
-  // Build a midday timestamp for the date so the formatter doesn't slip
-  // into the prior/next day on TZ conversion.
-  const naiveMid = `${dateKey}T12:00:00`;
+// ── Header date format ────────────────────────────────────────────────
+
+function fmtDateHeader(dayKey: string, tz: string): string {
+  const naiveMid = `${dayKey}T12:00:00`;
   const epoch = parseNaiveIsoInTz(naiveMid, tz);
-  const today = dateKeyInTz(new Date().toISOString(), tz);
-  const tmrw  = (() => {
-    const d = new Date(`${today}T12:00:00`);
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
-  })();
-  const yest = (() => {
-    const d = new Date(`${today}T12:00:00`);
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
-  })();
+  const today = utcDateKeyInTz(new Date().toISOString(), tz);
+  const tmrw  = shiftDateKey(today, 1);
+  const yest  = shiftDateKey(today, -1);
   const pretty = new Date(epoch).toLocaleDateString('en-US', {
     timeZone: tz, weekday: 'short', month: 'short', day: 'numeric',
     year: new Date(epoch).getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
   });
-  if (dateKey === today) return `Today · ${pretty}`;
-  if (dateKey === tmrw)  return `Tomorrow · ${pretty}`;
-  if (dateKey === yest)  return `Yesterday · ${pretty}`;
+  if (dayKey === today) return `Today · ${pretty}`;
+  if (dayKey === tmrw)  return `Tomorrow · ${pretty}`;
+  if (dayKey === yest)  return `Yesterday · ${pretty}`;
   return pretty;
 }
 
-function shiftDateKey(dateKey: string, days: number): string {
-  const d = new Date(`${dateKey}T12:00:00`);
-  d.setDate(d.getDate() + days);
+function shiftDateKey(dayKey: string, days: number): string {
+  const d = new Date(`${dayKey}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
-// ── Block positioning ──────────────────────────────────────────────────
+// ── Block positioning ────────────────────────────────────────────────
 
-/** Vertical span in pixels for an item that may extend outside the day.
- *  If the item's day key !== current day, the top/bottom get clipped
- *  to the day edges; we mark spansBefore/After so the chip can show a
- *  "continues" hint. */
-function positionFor(startIso: string, endIso: string | undefined, dayKey: string, tz: string): {
-  topPx: number; heightPx: number; spansBefore: boolean; spansAfter: boolean;
-} {
-  const startKey = dateKeyInTz(startIso, tz);
-  const endKey   = endIso ? dateKeyInTz(endIso, tz) : startKey;
-  const spansBefore = startKey < dayKey;
-  const spansAfter  = endKey   > dayKey;
+interface Pos { topPx: number; heightPx: number; spansBefore: boolean; spansAfter: boolean; }
 
-  const topMin = spansBefore ? 0 : minutesOfDayInTz(startIso, tz);
+/** Position for a NAIVE-time event. Both endpoints interpreted as
+ *  org-local wall-clock; no TZ math involved. */
+function positionForEvent(startNaive: string, endNaive: string, dayKey: string): Pos {
+  const sk = naiveDateKey(startNaive);
+  const ek = naiveDateKey(endNaive);
+  const spansBefore = sk < dayKey;
+  const spansAfter  = ek > dayKey;
+  const topMin = spansBefore ? 0 : naiveMinutesOfDay(startNaive);
+  const botMin = spansAfter  ? 24 * 60 : naiveMinutesOfDay(endNaive);
+  const topPx    = (topMin / 60) * HOUR_HEIGHT_PX;
+  const heightPx = Math.max(28, ((botMin - topMin) / 60) * HOUR_HEIGHT_PX);
+  return { topPx, heightPx, spansBefore, spansAfter };
+}
+
+/** Position for a UTC movement timestamp. */
+function positionForMovement(startIso: string, endIso: string | undefined, dayKey: string, tz: string): Pos {
+  const sk = utcDateKeyInTz(startIso, tz);
+  const ek = endIso ? utcDateKeyInTz(endIso, tz) : sk;
+  const spansBefore = sk < dayKey;
+  const spansAfter  = ek > dayKey;
+  const topMin = spansBefore ? 0 : utcMinutesOfDayInTz(startIso, tz);
   const botMin = spansAfter
     ? 24 * 60
-    : (endIso ? minutesOfDayInTz(endIso, tz) : topMin + 30);
+    : (endIso ? utcMinutesOfDayInTz(endIso, tz) : topMin + 5);
   const topPx    = (topMin / 60) * HOUR_HEIGHT_PX;
+  // Min 24px so even a 1-min movement is clickable.
   const heightPx = Math.max(24, ((botMin - topMin) / 60) * HOUR_HEIGHT_PX);
   return { topPx, heightPx, spansBefore, spansAfter };
 }
 
-// ── Now line ───────────────────────────────────────────────────────────
+// ── Now line ─────────────────────────────────────────────────────────
 
 function NowLine({ dayKey, tz }: { dayKey: string; tz: string }) {
   const [now, setNow] = useState(new Date());
@@ -121,8 +150,8 @@ function NowLine({ dayKey, tz }: { dayKey: string; tz: string }) {
     const id = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(id);
   }, []);
-  if (dateKeyInTz(now.toISOString(), tz) !== dayKey) return null;
-  const top = (minutesOfDayInTz(now.toISOString(), tz) / 60) * HOUR_HEIGHT_PX;
+  if (utcDateKeyInTz(now.toISOString(), tz) !== dayKey) return null;
+  const top = (utcMinutesOfDayInTz(now.toISOString(), tz) / 60) * HOUR_HEIGHT_PX;
   return (
     <div
       className="absolute left-0 right-0 pointer-events-none z-10 flex items-center"
@@ -134,7 +163,7 @@ function NowLine({ dayKey, tz }: { dayKey: string; tz: string }) {
   );
 }
 
-// ── Role / source labels ───────────────────────────────────────────────
+// ── Role / source labels ──────────────────────────────────────────────
 
 const ROLE_COLORS: Record<string, { bg: string; fg: string; label: string }> = {
   loaded:     { bg: '#e6f4ea', fg: '#1e8e3e', label: 'Loaded' },
@@ -150,23 +179,37 @@ const SOURCE_BADGE: Record<string, { fg: string; label: string }> = {
   derived: { fg: '#a142f4', label: 'Derived' },
 };
 
-// ── Main view ──────────────────────────────────────────────────────────
+// ── Selection state for the side panel ───────────────────────────────
+
+type Selection =
+  | { kind: 'event';    event:    TimelineEvent }
+  | { kind: 'movement'; movement: TimelineMovement; link?: TimelineLink }
+  | null;
+
+// ── Main view ─────────────────────────────────────────────────────────
 
 export default function AssetTimelineView({ assetId }: { assetId: number }) {
-  const { calendarTimezone } = useCalendarStore();
+  const { calendarTimezone, assets } = useCalendarStore();
   const tz = calendarTimezone || 'America/Denver';
 
-  const todayKey = dateKeyInTz(new Date().toISOString(), tz);
+  // Asset color from the calendar store — same one painted on event
+  // cards in the main calendar, so the timeline reads as the same
+  // truck visually. Falls back to GC blue when the store hasn't
+  // hydrated yet.
+  const storeAsset = assets.find((a) => a.id === assetId);
+  const assetColor = storeAsset?.color ?? '#1a73e8';
+
+  const todayKey = utcDateKeyInTz(new Date().toISOString(), tz);
   const [dayKey, setDayKey] = useState<string>(todayKey);
 
   const [data, setData]       = useState<TimelinePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  // Window: 6h before day start → 6h after day end, in UTC, so we
-  // catch overflowing events/movements that the day view should still
-  // partially render. Wider than the visible 24h on purpose.
-  const window = useMemo(() => {
+  const [selection, setSelection] = useState<Selection>(null);
+
+  // Window: 6h before day start → 6h after day end, in UTC.
+  const fetchWindow = useMemo(() => {
     const startEpoch = parseNaiveIsoInTz(`${dayKey}T00:00:00`, tz);
     const endEpoch   = parseNaiveIsoInTz(`${dayKey}T23:59:59`, tz);
     const padMs = 6 * 60 * 60 * 1000;
@@ -180,41 +223,38 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    railway.getAssetTimeline(assetId, window.from, window.to)
+    setSelection(null);
+    railway.getAssetTimeline(assetId, fetchWindow.from, fetchWindow.to)
       .then((res) => { if (!cancelled) { setData(res); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [assetId, window.from, window.to]);
+  }, [assetId, fetchWindow.from, fetchWindow.to]);
 
-  // Index links by movement_id (current truth only — server already
-  // filters superseded_at IS NULL).
   const linkByMovementId = useMemo(() => {
     const m = new Map<string, TimelineLink>();
     for (const l of data?.links ?? []) m.set(l.movementId, l);
     return m;
   }, [data?.links]);
 
-  // Index events by id for link-target lookups (so a movement linked
-  // to Load X can show "→ Load X" with the load's title).
   const eventById = useMemo(() => {
     const m = new Map<string, TimelineEvent>();
     for (const e of data?.events ?? []) m.set(e.id, e);
     return m;
   }, [data?.events]);
 
-  // Filter to items that intersect the visible day.
+  // Visible items for the current day.
   const visibleEvents = useMemo(() => {
     return (data?.events ?? []).filter((e) => {
-      const sk = dateKeyInTz(e.start, tz);
-      const ek = dateKeyInTz(e.end,   tz);
+      const sk = naiveDateKey(e.start);
+      const ek = naiveDateKey(e.end);
       return sk <= dayKey && ek >= dayKey;
     });
-  }, [data?.events, dayKey, tz]);
+  }, [data?.events, dayKey]);
 
   const visibleMovements = useMemo(() => {
     return (data?.movements ?? []).filter((m) => {
-      const sk = dateKeyInTz(m.startTime, tz);
-      const ek = m.endTime ? dateKeyInTz(m.endTime, tz) : sk;
+      const sk = utcDateKeyInTz(m.startTime, tz);
+      const ek = m.endTime ? utcDateKeyInTz(m.endTime, tz) : sk;
       return sk <= dayKey && ek >= dayKey;
     });
   }, [data?.movements, dayKey, tz]);
@@ -234,7 +274,8 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
             <ArrowLeft size={16} />
           </Link>
           <div className="flex items-center gap-2">
-            <Truck size={20} style={{ color: 'var(--gc-blue)' }} />
+            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: assetColor }} />
+            <Truck size={20} style={{ color: assetColor }} />
             <h1 className="text-[20px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>
               {asset ? `${asset.name}${asset.unit ? ` · #${asset.unit}` : ''}` : 'Loading…'}
             </h1>
@@ -342,7 +383,16 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
                     No scheduled events
                   </div>
                 ) : (
-                  visibleEvents.map((e) => <EventBlock key={e.id} event={e} dayKey={dayKey} tz={tz} />)
+                  visibleEvents.map((e) => (
+                    <EventBlock
+                      key={e.id}
+                      event={e}
+                      dayKey={dayKey}
+                      color={assetColor}
+                      onClick={() => setSelection({ kind: 'event', event: e })}
+                      isSelected={selection?.kind === 'event' && selection.event.id === e.id}
+                    />
+                  ))
                 )}
                 <NowLine dayKey={dayKey} tz={tz} />
               </div>
@@ -361,16 +411,21 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
                     No movements
                   </div>
                 ) : (
-                  visibleMovements.map((m) => (
-                    <MovementBlock
-                      key={m.id}
-                      movement={m}
-                      link={linkByMovementId.get(m.id)}
-                      eventLookup={eventById}
-                      dayKey={dayKey}
-                      tz={tz}
-                    />
-                  ))
+                  visibleMovements.map((m) => {
+                    const link = linkByMovementId.get(m.id);
+                    return (
+                      <MovementBlock
+                        key={m.id}
+                        movement={m}
+                        link={link}
+                        eventLookup={eventById}
+                        dayKey={dayKey}
+                        tz={tz}
+                        onClick={() => setSelection({ kind: 'movement', movement: m, link })}
+                        isSelected={selection?.kind === 'movement' && selection.movement.id === m.id}
+                      />
+                    );
+                  })
                 )}
                 <NowLine dayKey={dayKey} tz={tz} />
               </div>
@@ -378,95 +433,132 @@ export default function AssetTimelineView({ assetId }: { assetId: number }) {
           </div>
         )}
 
-        {/* Footer hints — coming-soon affordances so the page reads
-            as "v1 of N" instead of feeling unfinished. */}
+        {/* Footer hints */}
         <div className="mt-3 flex items-center gap-2 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
           <Sparkles size={14} />
-          AI auto-link, manual movement creation, and click-to-edit links land in PR 3.
+          AI auto-link, manual movement creation, and link editing land in PR 3.
         </div>
       </div>
+
+      {/* Side panel */}
+      {selection ? (
+        <DetailPanel
+          selection={selection}
+          tz={tz}
+          assetColor={assetColor}
+          eventLookup={eventById}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
     </AppShell>
   );
 }
 
 // ── EventBlock ─────────────────────────────────────────────────────────
 
-function EventBlock({ event, dayKey, tz }: { event: TimelineEvent; dayKey: string; tz: string }) {
-  const pos = positionFor(event.start, event.end, dayKey, tz);
-  const pickup   = event.stops.find((s) => s.type === 'pickup');
-  const delivery = [...event.stops].reverse().find(
-    (s) => s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook',
-  );
+function EventBlock({
+  event, dayKey, color, onClick, isSelected,
+}: {
+  event: TimelineEvent;
+  dayKey: string;
+  color: string;
+  onClick: () => void;
+  isSelected: boolean;
+}) {
+  const pos = positionForEvent(event.start, event.end, dayKey);
   const isNonRev = event.eventKind === 'non_revenue';
 
   return (
-    <div
-      className="absolute left-1 right-1 rounded-md p-2 overflow-hidden text-[11px]"
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute left-1 right-1 rounded-md p-2 overflow-hidden text-left text-[11px] transition-shadow"
       style={{
         top:        pos.topPx,
         height:     pos.heightPx,
-        background: isNonRev ? '#fef7e0' : '#e8f0fe',
-        borderLeft: `3px solid ${isNonRev ? '#f9ab00' : '#1a73e8'}`,
+        background: isNonRev ? '#fef7e0' : color,
+        color:      isNonRev ? '#202124' : '#ffffff',
+        borderLeft: `3px solid ${isNonRev ? '#f9ab00' : '#202124'}`,
+        boxShadow:  isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
+        cursor:     'pointer',
       }}
     >
       <div className="flex items-center justify-between gap-1 mb-1">
-        <div className="font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+        <div className="font-semibold truncate">
           {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
         </div>
-        <div className="text-[10px] tabular-nums whitespace-nowrap" style={{ color: 'var(--gc-text-2)' }}>
-          {fmtTimeInTz(event.start, tz)} – {fmtTimeInTz(event.end, tz)}
+        <div className="text-[10px] tabular-nums whitespace-nowrap opacity-90">
+          {fmtNaiveTime(event.start)} – {fmtNaiveTime(event.end)}
         </div>
       </div>
       {event.driverName ? (
-        <div className="truncate" style={{ color: 'var(--gc-text-2)' }}>{event.driverName}</div>
+        <div className="truncate opacity-90">{event.driverName}</div>
       ) : null}
-      {pickup || delivery ? (
+      {/* All stops, ordered. Pickup green pin, delivery red pin, others
+          gray. The chip grows with the event's duration; for short events
+          the side panel shows the full list when clicked. */}
+      {event.stops.length > 0 ? (
         <div className="mt-1 space-y-0.5">
-          {pickup ? (
-            <div className="flex items-start gap-1.5">
-              <MapPin size={10} style={{ color: '#16a34a', marginTop: 2 }} />
-              <div className="flex-1 truncate" style={{ color: 'var(--gc-text-2)' }}>
-                <span className="font-semibold">P:</span> {pickup.city ?? '—'}{pickup.state ? `, ${pickup.state}` : ''}
-                {pickup.facilityName ? ` · ${pickup.facilityName}` : ''}
+          {event.stops.map((s, i) => {
+            const pin =
+              s.type === 'pickup'                                ? '#16a34a' :
+              s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook' ? '#dc2626' :
+                                                                   '#9ca3af';
+            return (
+              <div key={s.id ?? i} className="flex items-start gap-1.5">
+                <MapPin size={10} style={{ color: pin, marginTop: 2 }} />
+                <div className="flex-1 truncate opacity-95">
+                  <span className="font-semibold mr-1">
+                    {s.sequence != null ? `${s.sequence}.` : ''}{s.type ? ` ${stopLabel(s.type)}:` : ''}
+                  </span>
+                  {s.city ?? '—'}{s.state ? `, ${s.state}` : ''}
+                  {s.facilityName ? ` · ${s.facilityName}` : ''}
+                </div>
               </div>
-            </div>
-          ) : null}
-          {delivery ? (
-            <div className="flex items-start gap-1.5">
-              <MapPin size={10} style={{ color: '#dc2626', marginTop: 2 }} />
-              <div className="flex-1 truncate" style={{ color: 'var(--gc-text-2)' }}>
-                <span className="font-semibold">D:</span> {delivery.city ?? '—'}{delivery.state ? `, ${delivery.state}` : ''}
-                {delivery.facilityName ? ` · ${delivery.facilityName}` : ''}
-              </div>
-            </div>
-          ) : null}
+            );
+          })}
         </div>
       ) : null}
       {pos.spansBefore || pos.spansAfter ? (
-        <div className="absolute right-1 bottom-1 text-[9px] uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+        <div className="absolute right-1 bottom-1 text-[9px] uppercase tracking-wider opacity-80">
           {pos.spansBefore ? 'starts earlier' : ''}{pos.spansBefore && pos.spansAfter ? ' · ' : ''}{pos.spansAfter ? 'continues' : ''}
         </div>
       ) : null}
-    </div>
+    </button>
   );
+}
+
+function stopLabel(type: string): string {
+  switch (type) {
+    case 'pickup':    return 'Pickup';
+    case 'delivery':  return 'Delivery';
+    case 'drop':      return 'Drop';
+    case 'drop_hook': return 'Drop & hook';
+    case 'stop':      return 'Stop';
+    default:          return type.charAt(0).toUpperCase() + type.slice(1);
+  }
 }
 
 // ── MovementBlock ──────────────────────────────────────────────────────
 
 function MovementBlock({
-  movement, link, eventLookup, dayKey, tz,
+  movement, link, eventLookup, dayKey, tz, onClick, isSelected,
 }: {
   movement: TimelineMovement;
   link: TimelineLink | undefined;
   eventLookup: Map<string, TimelineEvent>;
   dayKey: string;
   tz: string;
+  onClick: () => void;
+  isSelected: boolean;
 }) {
-  const pos = positionFor(movement.startTime, movement.endTime, dayKey, tz);
+  const pos = positionForMovement(movement.startTime, movement.endTime, dayKey, tz);
   const role = link ? ROLE_COLORS[link.role] : null;
   const source = SOURCE_BADGE[movement.source];
+  const isTall = pos.heightPx >= 56;     // shows the long-form layout
+  const isMed  = pos.heightPx >= 36;     // shows two stacked lines
+  // Single-line minimal for very short chips.
 
-  // For transitions, show "From X → To Y" where possible
   const linkLabel = (() => {
     if (!link) return null;
     if (link.role === 'loaded') {
@@ -482,90 +574,315 @@ function MovementBlock({
       const ev = link.loadedEventId ? eventLookup.get(link.loadedEventId) : null;
       return `At ${ev?.title ?? 'stop'}`;
     }
-    return ROLE_COLORS[link.role]?.label ?? null;
+    return role?.label ?? null;
   })();
 
   return (
-    <div
-      className="absolute left-1 right-1 rounded-md p-2 overflow-hidden text-[11px]"
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute left-1 right-1 rounded-md overflow-hidden text-left transition-shadow"
       style={{
         top:        pos.topPx,
         height:     pos.heightPx,
         background: 'var(--gc-surface)',
         border:     '1px solid var(--gc-border)',
+        boxShadow:  isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
+        cursor:     'pointer',
+        padding:    isTall ? 8 : isMed ? 6 : 3,
       }}
     >
-      <div className="flex items-center justify-between gap-1 mb-1">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <Clock size={10} style={{ color: 'var(--gc-text-3)' }} />
-          <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-            {fmtTimeInTz(movement.startTime, tz)}
-            {movement.endTime ? `–${fmtTimeInTz(movement.endTime, tz)}` : ''}
-          </span>
-        </div>
-        {source ? (
-          <span className="text-[9px] uppercase tracking-wider" style={{ color: source.fg }}>
-            {source.label}
+      {/* Always-shown summary line — the only thing rendered for very
+          short chips. Click opens the side panel for full details. */}
+      <div className="flex items-center gap-1.5 text-[11px] leading-tight">
+        <Clock size={10} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+        <span className="font-semibold tabular-nums truncate" style={{ color: 'var(--gc-text-1)' }}>
+          {fmtUtcTimeInTz(movement.startTime, tz)}
+          {movement.endTime ? `–${fmtUtcTimeInTz(movement.endTime, tz)}` : ''}
+        </span>
+        {typeof movement.miles === 'number' ? (
+          <span className="tabular-nums text-[10px]" style={{ color: 'var(--gc-text-2)' }}>
+            · {movement.miles.toFixed(1)}mi
           </span>
         ) : null}
+        {role ? (
+          <span
+            className="ml-auto px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wide flex-shrink-0"
+            style={{ background: role.bg, color: role.fg }}
+          >
+            {role.label}
+          </span>
+        ) : (
+          <span
+            className="ml-auto px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wide flex-shrink-0"
+            style={{ background: '#f1f3f4', color: '#9aa0a6' }}
+          >
+            Unlinked
+          </span>
+        )}
       </div>
-      <div className="flex items-center gap-1.5 mb-1" style={{ color: 'var(--gc-text-2)' }}>
-        {typeof movement.miles === 'number' ? <span className="tabular-nums">{movement.miles.toFixed(1)} mi</span> : null}
-        {movement.durationMin ? <span className="tabular-nums">· {movement.durationMin} min</span> : null}
-      </div>
-      {movement.origin || movement.destination ? (
-        <div className="flex items-start gap-1 truncate" style={{ color: 'var(--gc-text-3)' }}>
-          <MapPin size={10} style={{ marginTop: 2 }} />
+
+      {/* Medium chips also show source + link label. */}
+      {isMed ? (
+        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] truncate" style={{ color: 'var(--gc-text-2)' }}>
+          {source ? (
+            <span className="uppercase tracking-wider font-semibold" style={{ color: source.fg }}>
+              {source.label}
+            </span>
+          ) : null}
+          {linkLabel ? <span className="truncate">· {linkLabel}</span> : null}
+        </div>
+      ) : null}
+
+      {/* Tall chips get the origin → destination row too. */}
+      {isTall && (movement.origin || movement.destination) ? (
+        <div className="flex items-start gap-1 mt-1 truncate text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
+          <MapPin size={10} style={{ marginTop: 1, flexShrink: 0 }} />
           <span className="truncate">
             {(movement.origin ?? '—').split(',')[0]} → {(movement.destination ?? '—').split(',')[0]}
           </span>
         </div>
       ) : null}
+    </button>
+  );
+}
 
-      {/* Link chip */}
-      {link ? (
-        <div className="mt-1.5 flex items-center gap-1 flex-wrap">
-          <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-            style={{ background: role?.bg, color: role?.fg }}
-          >
-            {role?.label ?? link.role}
-          </span>
-          {linkLabel ? (
-            <span className="truncate text-[10px]" style={{ color: 'var(--gc-text-2)' }}>
-              {linkLabel}
-            </span>
-          ) : null}
-          {link.confidence ? (
-            <span
-              className="text-[9px] uppercase tracking-wider"
-              style={{
-                color:
-                  link.confidence === 'high'   ? '#1e8e3e' :
-                  link.confidence === 'medium' ? '#b06000' :
-                                                 '#c5221f',
-              }}
-            >
-              {link.confidence}
-            </span>
-          ) : null}
-        </div>
-      ) : (
-        <div className="mt-1.5">
-          <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
-            style={{ background: '#f1f3f4', color: '#5f6368' }}
-          >
-            Unlinked
-          </span>
-        </div>
-      )}
+// ── Side panel ────────────────────────────────────────────────────────
 
-      {pos.spansBefore || pos.spansAfter ? (
-        <div className="absolute right-1 bottom-1 text-[9px] uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-          {pos.spansBefore ? 'started earlier' : ''}{pos.spansBefore && pos.spansAfter ? ' · ' : ''}{pos.spansAfter ? 'continues' : ''}
+function DetailPanel({
+  selection, tz, assetColor, eventLookup, onClose,
+}: {
+  selection: NonNullable<Selection>;
+  tz: string;
+  assetColor: string;
+  eventLookup: Map<string, TimelineEvent>;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed top-0 right-0 bottom-0 w-[400px] z-30 shadow-xl overflow-y-auto"
+      style={{ background: 'var(--gc-surface)', borderLeft: '1px solid var(--gc-border)' }}
+    >
+      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--gc-border)' }}>
+        <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+          {selection.kind === 'event' ? 'Scheduled event' : 'Movement'}
+        </span>
+        <button onClick={onClose} className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5">
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="p-4 space-y-3">
+        {selection.kind === 'event' ? (
+          <EventDetail event={selection.event} color={assetColor} />
+        ) : (
+          <MovementDetail
+            movement={selection.movement}
+            link={selection.link}
+            tz={tz}
+            eventLookup={eventLookup}
+          />
+        )}
+      </div>
+
+      <div
+        className="px-4 py-3 text-[11px] flex items-start gap-2"
+        style={{ borderTop: '1px solid var(--gc-border)', color: 'var(--gc-text-3)' }}
+      >
+        <Sparkles size={12} style={{ marginTop: 1, flexShrink: 0 }} />
+        <span>
+          Link editing, manual movement create/edit, and AI auto-link land in PR 3. This panel
+          will grow controls for all of those.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function EventDetail({ event, color }: { event: TimelineEvent; color: string }) {
+  const isNonRev = event.eventKind === 'non_revenue';
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <div className="w-3 h-3 rounded-full" style={{ background: isNonRev ? '#f9ab00' : color }} />
+        <h2 className="text-[16px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+          {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
+        </h2>
+      </div>
+      <div className="text-[12px] flex items-center gap-2" style={{ color: 'var(--gc-text-2)' }}>
+        <Clock size={12} />
+        <span className="tabular-nums">{fmtNaiveTime(event.start)} – {fmtNaiveTime(event.end)}</span>
+        {event.status ? (
+          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded"
+            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+            {event.status}
+          </span>
+        ) : null}
+      </div>
+      {event.driverName ? (
+        <div className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+          Driver: <span style={{ color: 'var(--gc-text-1)' }}>{event.driverName}</span>
         </div>
       ) : null}
-    </div>
+      {event.loadPrice != null ? (
+        <div className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+          Revenue: <span className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+            ${event.loadPrice.toLocaleString('en-US')}
+          </span>
+        </div>
+      ) : null}
+      {event.stops.length > 0 ? (
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+            Stops ({event.stops.length})
+          </div>
+          <div className="space-y-2">
+            {event.stops.map((s) => {
+              const pin =
+                s.type === 'pickup'                                ? '#16a34a' :
+                s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook' ? '#dc2626' :
+                                                                     '#9ca3af';
+              return (
+                <div key={s.id} className="text-[12px]">
+                  <div className="flex items-center gap-2">
+                    <MapPin size={12} style={{ color: pin }} />
+                    <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                      {s.sequence != null ? `${s.sequence}. ` : ''}{stopLabel(s.type ?? 'stop')}
+                    </span>
+                  </div>
+                  <div className="ml-5" style={{ color: 'var(--gc-text-2)' }}>
+                    {s.facilityName ? <div className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>{s.facilityName}</div> : null}
+                    {s.address ? <div>{s.address}</div> : null}
+                    <div>{s.city ?? '—'}{s.state ? `, ${s.state}` : ''}</div>
+                    {s.apptStart ? (
+                      <div className="mt-0.5 text-[11px]">
+                        Appt: <span className="tabular-nums">{fmtNaiveTime(s.apptStart)}</span>
+                        {s.apptEnd ? <> – <span className="tabular-nums">{fmtNaiveTime(s.apptEnd)}</span></> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function MovementDetail({
+  movement, link, tz, eventLookup,
+}: {
+  movement: TimelineMovement;
+  link: TimelineLink | undefined;
+  tz: string;
+  eventLookup: Map<string, TimelineEvent>;
+}) {
+  const role = link ? ROLE_COLORS[link.role] : null;
+  const source = SOURCE_BADGE[movement.source];
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <Clock size={16} style={{ color: 'var(--gc-text-2)' }} />
+        <h2 className="text-[16px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+          {fmtUtcTimeInTz(movement.startTime, tz)}
+          {movement.endTime ? ` – ${fmtUtcTimeInTz(movement.endTime, tz)}` : ''}
+        </h2>
+      </div>
+      <div className="flex items-center gap-3 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+        {typeof movement.miles === 'number' ? (
+          <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{movement.miles.toFixed(1)}</span> mi</span>
+        ) : null}
+        {movement.durationMin != null ? (
+          <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{movement.durationMin}</span> min</span>
+        ) : null}
+        {source ? (
+          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold" style={{ color: source.fg }}>
+            {source.label}
+          </span>
+        ) : null}
+      </div>
+      {movement.origin || movement.destination ? (
+        <div className="text-[12px]">
+          <div className="flex items-start gap-1.5 mb-1" style={{ color: 'var(--gc-text-2)' }}>
+            <MapPin size={12} style={{ color: '#16a34a', marginTop: 2 }} />
+            <span>{movement.origin ?? '—'}</span>
+          </div>
+          <div className="flex items-start gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
+            <MapPin size={12} style={{ color: '#dc2626', marginTop: 2 }} />
+            <span>{movement.destination ?? '—'}</span>
+          </div>
+        </div>
+      ) : null}
+      {movement.notes ? (
+        <div className="text-[12px] p-2 rounded" style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}>
+          {movement.notes}
+        </div>
+      ) : null}
+
+      <div className="pt-2" style={{ borderTop: '1px solid var(--gc-border)' }}>
+        <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+          Current link
+        </div>
+        {link ? (
+          <div className="space-y-1.5 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+            <div className="flex items-center gap-2">
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide"
+                style={{ background: role?.bg, color: role?.fg }}
+              >
+                {role?.label ?? link.role}
+              </span>
+              {link.confidence ? (
+                <span className="text-[10px] uppercase tracking-wider font-semibold"
+                  style={{
+                    color:
+                      link.confidence === 'high'   ? '#1e8e3e' :
+                      link.confidence === 'medium' ? '#b06000' :
+                                                     '#c5221f',
+                  }}
+                >
+                  {link.confidence}
+                </span>
+              ) : null}
+              <span className="ml-auto text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
+                {link.source}
+              </span>
+            </div>
+            {link.role === 'loaded' && link.loadedEventId ? (
+              <div>Loaded for: <span style={{ color: 'var(--gc-text-1)' }}>
+                {eventLookup.get(link.loadedEventId)?.title ?? link.loadedEventId.slice(0, 8)}
+              </span></div>
+            ) : null}
+            {link.role === 'transition' ? (
+              <div>
+                From: <span style={{ color: 'var(--gc-text-1)' }}>
+                  {link.fromEventId ? (eventLookup.get(link.fromEventId)?.title ?? link.fromEventId.slice(0, 8)) : 'yard / unknown'}
+                </span><br />
+                To: <span style={{ color: 'var(--gc-text-1)' }}>
+                  {link.toEventId ? (eventLookup.get(link.toEventId)?.title ?? link.toEventId.slice(0, 8)) : 'yard / unknown'}
+                </span>
+              </div>
+            ) : null}
+            {link.role === 'dwell' && link.loadedEventId ? (
+              <div>At stop on: <span style={{ color: 'var(--gc-text-1)' }}>
+                {eventLookup.get(link.loadedEventId)?.title ?? link.loadedEventId.slice(0, 8)}
+              </span></div>
+            ) : null}
+            {link.reasoning ? (
+              <div className="mt-2 p-2 rounded text-[11px]"
+                style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+                {link.reasoning}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+            No link yet. PR 3 will let you assign this movement to a load (or mark unrelated).
+          </div>
+        )}
+      </div>
+    </>
   );
 }
