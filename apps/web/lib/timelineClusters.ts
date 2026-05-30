@@ -186,10 +186,12 @@ export function findSavedLocation(
 // Between two consecutive driving clusters the truck is, by definition,
 // stationary. We surface that stationary time as a "dwell" chip in the
 // movements column — but only when the gap is long enough to be
-// interesting (>= 15min) and short enough to be meaningful (<= 12h).
+// interesting (> 30min) and short enough to be meaningful (<= 12h).
 // Beyond 12h is more "overnight at home" than a dwell at a load location.
+// 30min threshold matches the dispatcher's intuition for "the truck is
+// actually waiting somewhere" vs. "just a quick repositioning pause."
 
-const DWELL_MIN_MS = 15 * 60_000;
+const DWELL_MIN_MS = 30 * 60_000;
 const DWELL_MAX_MS = 12 * 60 * 60_000;
 
 export interface TimelineDwell {

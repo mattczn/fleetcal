@@ -202,6 +202,7 @@ interface TimelineEvent {
   eventKind: string | null;
   nonRevenueType: string | null;
   loadPrice: number | null;
+  loadNum: string | null;         // loads.load_num
   driverPay: number | null;       // events.driver_pay (per-leg)
   loadedMiles: number | null;     // events.loaded_miles (quoted miles)
   driverName: string | null;
@@ -299,7 +300,7 @@ timeline.get("/assets/:assetId", async (c) => {
   // loads on the timeline.
   const { data: events, error: eErr } = await sb
     .from("events")
-    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, driver_name, driver_pay, loaded_miles, load:loads(load_price)")
+    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, driver_name, driver_pay, loaded_miles, load:loads(load_price, load_num)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
@@ -347,7 +348,7 @@ timeline.get("/assets/:assetId", async (c) => {
     id: string; title: string | null; start: string; end: string;
     status: string | null; event_kind: string | null; non_revenue_type: string | null;
     driver_name: string | null; driver_pay: number | null; loaded_miles: number | null;
-    load: { load_price: number | null } | null;
+    load: { load_price: number | null; load_num: string | null } | null;
   }>).map((e) => ({
     id:             e.id,
     title:          e.title,
@@ -357,6 +358,7 @@ timeline.get("/assets/:assetId", async (c) => {
     eventKind:      e.event_kind,
     nonRevenueType: e.non_revenue_type,
     loadPrice:      e.load?.load_price ?? null,
+    loadNum:        e.load?.load_num   ?? null,
     driverPay:      e.driver_pay ?? null,
     loadedMiles:    e.loaded_miles ?? null,
     driverName:     e.driver_name,

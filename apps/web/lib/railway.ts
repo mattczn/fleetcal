@@ -163,6 +163,7 @@ export interface TimelineEvent {
   eventKind:        string | null;
   nonRevenueType:   string | null;
   loadPrice:        number | null;
+  loadNum:          string | null;     // loads.load_num
   driverPay:        number | null;     // events.driver_pay
   loadedMiles:      number | null;     // events.loaded_miles (quoted)
   driverName:       string | null;

@@ -709,6 +709,10 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
 
 // ── EventBlock ─────────────────────────────────────────────────────────
 
+// EventBlock — styled 1:1 with CalendarEvent: asset-color background,
+// white extrabold title flush with the top, supporting fields stacked
+// underneath in white at 85% opacity. Mirrors the calendar's chip so
+// the timeline reads as the same visual language.
 function EventBlock({
   event, dayKey, color, fs, onClick, isSelected,
 }: {
@@ -721,63 +725,86 @@ function EventBlock({
 }) {
   const pos = positionForEvent(event.start, event.end, dayKey);
   const isNonRev = event.eventKind === 'non_revenue';
+  const fsTitle = fs(11);
+  const fsField = fs(10);
+
+  // Same set + render order the calendar's default field config uses:
+  // time → load# → $price → loaded miles. Hidden if the chip isn't tall
+  // enough to fit (same "minHeight per row" math as CalendarEvent).
+  const fields: string[] = [];
+  const t1 = event.start.split('T')[1]?.slice(0, 5);
+  const t2 = event.end.split('T')[1]?.slice(0, 5);
+  if (t1 && t2) fields.push(`${shortTime(t1)}–${shortTime(t2)}`);
+  if (event.loadNum)            fields.push(`#${event.loadNum}`);
+  if (event.loadPrice != null)  fields.push(`$${event.loadPrice.toLocaleString()}`);
+  if (event.loadedMiles != null) fields.push(`${event.loadedMiles.toLocaleString()} mi`);
+  if (event.driverName)         fields.push(event.driverName);
 
   return (
-    <button
-      type="button"
+    <div
       onClick={onClick}
-      className="absolute left-1 right-1 rounded-md p-2 overflow-hidden text-left transition-shadow"
+      className="absolute rounded overflow-hidden z-10"
       style={{
         top:        pos.topPx,
-        height:     pos.heightPx,
+        height:     Math.max(22, pos.heightPx - 2),
+        left:       2,
+        right:      2,
         background: isNonRev ? '#fef7e0' : color,
-        color:      isNonRev ? '#202124' : '#ffffff',
-        borderLeft: `3px solid ${isNonRev ? '#f9ab00' : '#202124'}`,
+        border:     `2px solid ${isNonRev ? '#f9ab00' : color}`,
         boxShadow:  isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
         cursor:     'pointer',
-        fontSize:   fs(11),
+        userSelect: 'none',
       }}
     >
-      <div className="flex items-center justify-between gap-1 mb-1">
-        <div className="font-semibold truncate">
-          {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
+      <div className="px-1.5 pt-0.5 flex flex-col h-full overflow-hidden">
+        <div className="flex items-start gap-1">
+          <div
+            className="font-extrabold leading-tight break-words min-w-0"
+            style={{ color: isNonRev ? '#202124' : '#ffffff', fontSize: fsTitle }}
+          >
+            {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
+          </div>
         </div>
-        <div className="tabular-nums whitespace-nowrap opacity-90" style={{ fontSize: fs(10) }}>
-          {fmtNaiveTime(event.start)} – {fmtNaiveTime(event.end)}
-        </div>
+        {fields.map((line, i) => {
+          // Mirror CalendarEvent's stop-rendering-when-too-tall logic:
+          // ~14px per line plus 20px for the title.
+          const minHeight = 20 + i * 14;
+          if (pos.heightPx <= minHeight) return null;
+          return (
+            <div
+              key={i}
+              className="font-medium leading-tight truncate"
+              style={{
+                color:    isNonRev ? 'rgba(32,33,36,0.85)' : 'rgba(255,255,255,0.85)',
+                fontSize: fsField,
+              }}
+            >
+              {line}
+            </div>
+          );
+        })}
       </div>
-      {event.driverName ? (
-        <div className="truncate opacity-90">{event.driverName}</div>
-      ) : null}
-      {event.stops.length > 0 ? (
-        <div className="mt-1 space-y-0.5">
-          {event.stops.map((s, i) => {
-            const pin =
-              s.type === 'pickup'                                ? '#16a34a' :
-              s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook' ? '#dc2626' :
-                                                                   '#9ca3af';
-            return (
-              <div key={s.id ?? i} className="flex items-start gap-1.5">
-                <MapPin size={Math.max(8, fs(10))} style={{ color: pin, marginTop: 2 }} />
-                <div className="flex-1 truncate opacity-95">
-                  <span className="font-semibold mr-1">
-                    {s.sequence != null ? `${s.sequence}.` : ''}{s.type ? ` ${stopLabel(s.type)}:` : ''}
-                  </span>
-                  {s.city ?? '—'}{s.state ? `, ${s.state}` : ''}
-                  {s.facilityName ? ` · ${s.facilityName}` : ''}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
       {pos.spansBefore || pos.spansAfter ? (
-        <div className="absolute right-1 bottom-1 uppercase tracking-wider opacity-80" style={{ fontSize: fs(9) }}>
+        <div
+          className="absolute right-1 bottom-1 uppercase tracking-wider"
+          style={{
+            fontSize: fs(9),
+            color:    isNonRev ? 'rgba(32,33,36,0.7)' : 'rgba(255,255,255,0.75)',
+          }}
+        >
           {pos.spansBefore ? 'starts earlier' : ''}{pos.spansBefore && pos.spansAfter ? ' · ' : ''}{pos.spansAfter ? 'continues' : ''}
         </div>
       ) : null}
-    </button>
+    </div>
   );
+}
+
+/** Short 12h time like the calendar's "3p" / "3:45p". */
+function shortTime(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number);
+  const ampm = h >= 12 ? 'p' : 'a';
+  const h12  = h % 12 || 12;
+  return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
 }
 
 function stopLabel(type: string): string {
@@ -797,6 +824,11 @@ function stopLabel(type: string): string {
 // fragments). Uses displayEndTime so 5-min sub-trips still hit the
 // 30-min visual minimum without overlapping the next cluster.
 
+// ClusterBlock — chip styling: role-colored background with a 2px
+// wide border in the same accent (no separate left stripe). Two rows
+// of content top-aligned: the load/linked title on top, then time +
+// miles + origin→destination INLINE on the second row. Matches the
+// calendar's chip language (wide border, top-aligned text).
 function ClusterBlock({
   cluster, link, eventLookup, dayKey, tz, fs, onClick, isSelected,
 }: {
@@ -811,27 +843,18 @@ function ClusterBlock({
 }) {
   const pos = positionForMovement(cluster.startTime, cluster.displayEndTime, dayKey, tz);
   const role = link ? ROLE_COLORS[link.role] : null;
-  const isTall = pos.heightPx >= 56;
-  const isMed  = pos.heightPx >= 36;
+  const isMed  = pos.heightPx >= 32;            // enough for a 2nd row
 
-  // Pre-resolved linked events — used for the prominent in-chip load
-  // label and (eventually) the cross-column highlight.
   const loadedEv  = link?.loadedEventId ? eventLookup.get(link.loadedEventId) : null;
   const fromEv    = link?.fromEventId   ? eventLookup.get(link.fromEventId)   : null;
   const toEv      = link?.toEventId     ? eventLookup.get(link.toEventId)     : null;
 
-  // Role-based palette for the whole chip — replaces the small "role
-  // badge in a neutral chip" with a chip that IS the role color.
-  // Unlinked stays neutral white so it visually demands attention to
-  // be classified.
   const palette = role
     ? { bg: role.bg, fg: role.fg, border: role.fg, label: role.label }
     : { bg: '#ffffff', fg: 'var(--gc-text-1)', border: 'var(--gc-border)', label: 'Unlinked' };
 
-  // Main descriptive line under the time row. For 'loaded' it's the
-  // load title; for 'transition' it's "from → to" with yard/saved-loc
-  // fallbacks; for rest/unrelated it's just the role.
-  const headlineLabel: string = (() => {
+  // Headline: the load this trip is doing. Inline-only on the title row.
+  const headline: string = (() => {
     if (!link) return 'Unlinked';
     if (link.role === 'loaded')     return loadedEv?.title ?? 'Loaded';
     if (link.role === 'transition') return `${fromEv?.title ?? 'yard'} → ${toEv?.title ?? 'yard'}`;
@@ -839,79 +862,71 @@ function ClusterBlock({
     return palette.label;
   })();
 
+  const originCity = (cluster.origin ?? '').split(',')[0].trim();
+  const destCity   = (cluster.destination ?? '').split(',')[0].trim();
+  const route = (originCity || destCity)
+    ? `${originCity || '—'} → ${destCity || '—'}`
+    : '';
+
   return (
-    <button
-      type="button"
+    <div
       onClick={onClick}
-      className="absolute left-1 right-1 rounded-md overflow-hidden text-left transition-shadow"
+      className="absolute rounded overflow-hidden z-[6]"
       style={{
         top:         pos.topPx,
         height:      pos.heightPx,
+        left:        2,
+        right:       2,
         background:  palette.bg,
-        border:      `1px solid ${palette.border}`,
-        borderLeft:  `3px solid ${palette.border}`,
+        border:      `2px solid ${palette.border}`,
         boxShadow:   isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
         cursor:      'pointer',
-        padding:     isTall ? 8 : isMed ? 6 : 3,
+        userSelect:  'none',
       }}
     >
-      {/* Time row */}
-      <div className="flex items-center gap-1.5 leading-tight" style={{ fontSize: fs(11) }}>
-        <Clock size={Math.max(8, fs(10))} style={{ color: palette.fg, opacity: 0.7, flexShrink: 0 }} />
-        <span className="font-semibold tabular-nums truncate" style={{ color: palette.fg }}>
-          {fmtUtcTimeInTz(cluster.startTime, tz)}
-          {cluster.endTime ? `–${fmtUtcTimeInTz(cluster.endTime, tz)}` : ''}
-        </span>
-        <span className="tabular-nums" style={{ color: palette.fg, opacity: 0.7, fontSize: fs(10) }}>
-          · {cluster.miles.toFixed(1)}mi
-        </span>
-        <span
-          className="ml-auto font-semibold uppercase tracking-wide flex-shrink-0 px-1 rounded"
-          style={{
-            fontSize:   fs(9),
-            color:      palette.fg,
-            background: 'rgba(255,255,255,0.55)',
-          }}
-        >
-          {palette.label}
-        </span>
-      </div>
-
-      {/* Headline / linked-load label — the prominent visual cue for
-          "what is this trip about". Only renders on medium+ chips so
-          tiny chips stay legible. */}
-      {isMed ? (
-        <div
-          className="mt-0.5 truncate font-semibold"
-          style={{
-            fontSize: fs(11),
-            color:    palette.fg,
-          }}
-          title={headlineLabel}
-        >
-          {headlineLabel}
-        </div>
-      ) : null}
-
-      {/* Bottom row on tall chips: origin → destination (raw GPS),
-          source badge, fragments count. */}
-      {isTall ? (
-        <div
-          className="flex items-center gap-1.5 mt-1 truncate"
-          style={{ fontSize: fs(10), color: palette.fg, opacity: 0.85 }}
-        >
-          <MapPin size={Math.max(8, fs(10))} style={{ flexShrink: 0 }} />
-          <span className="truncate">
-            {(cluster.origin ?? '—').split(',')[0]} → {(cluster.destination ?? '—').split(',')[0]}
+      <div className="px-1.5 pt-0.5 flex flex-col h-full overflow-hidden">
+        {/* Top row: headline (load name) + role badge on the right.
+            Same flex-start alignment the calendar uses. */}
+        <div className="flex items-start gap-1">
+          <div
+            className="font-extrabold leading-tight break-words min-w-0 flex-1"
+            style={{ color: palette.fg, fontSize: fs(11) }}
+            title={headline}
+          >
+            {headline}
+          </div>
+          <span
+            className="font-semibold uppercase tracking-wide flex-shrink-0 px-1 rounded"
+            style={{
+              fontSize:   fs(9),
+              color:      palette.fg,
+              background: 'rgba(255,255,255,0.5)',
+              marginTop:  1,
+            }}
+          >
+            {palette.label}
           </span>
-          {cluster.members.length > 1 ? (
-            <span className="ml-auto flex-shrink-0" style={{ fontSize: fs(9), opacity: 0.75 }}>
-              ×{cluster.members.length}
-            </span>
-          ) : null}
         </div>
-      ) : null}
-    </button>
+
+        {/* Second row — time, miles, AND origin→destination INLINE. */}
+        {isMed ? (
+          <div
+            className="font-medium leading-tight truncate"
+            style={{ color: palette.fg, opacity: 0.85, fontSize: fs(10) }}
+          >
+            <span className="tabular-nums">
+              {fmtUtcTimeInTz(cluster.startTime, tz)}
+              {cluster.endTime ? `–${fmtUtcTimeInTz(cluster.endTime, tz)}` : ''}
+            </span>
+            <span className="tabular-nums">{' · '}{cluster.miles.toFixed(1)}mi</span>
+            {route ? <>{' · '}{route}</> : null}
+            {cluster.members.length > 1 ? (
+              <span style={{ opacity: 0.75 }}>{' · '}×{cluster.members.length}</span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -931,14 +946,13 @@ function DwellBlock({
   fs: (px: number) => number;
 }) {
   const pos = positionForMovement(dwell.startTime, dwell.endTime, dayKey, tz);
-  if (pos.heightPx < 14) return null;        // sub-14px would just be visual noise
+  if (pos.heightPx < 14) return null;
 
   const isSaved = dwell.savedLocation != null;
   const palette = isSaved
     ? { bg: '#e8f0fe', fg: '#1967d2', border: '#1967d2' }
-    : { bg: '#f1f3f4', fg: '#5f6368', border: '#dadce0' };
+    : { bg: '#f1f3f4', fg: '#5f6368', border: '#9aa0a6' };
 
-  // Duration in human form for the chip label.
   const durMs = new Date(dwell.endTime).getTime() - new Date(dwell.startTime).getTime();
   const durMin = Math.round(durMs / 60_000);
   const durLabel = durMin >= 60
@@ -950,14 +964,16 @@ function DwellBlock({
 
   return (
     <div
-      className="absolute left-2 right-2 rounded overflow-hidden flex items-center gap-1.5 px-1.5"
+      className="absolute rounded overflow-hidden flex items-center gap-1.5 px-1.5"
       style={{
-        top:         pos.topPx,
-        height:      pos.heightPx,
-        background:  palette.bg,
-        border:      `1px dashed ${palette.border}`,
-        color:       palette.fg,
-        fontSize:    fs(10),
+        top:           pos.topPx,
+        height:        pos.heightPx,
+        left:          2,
+        right:         2,
+        background:    palette.bg,
+        border:        `2px dashed ${palette.border}`,
+        color:         palette.fg,
+        fontSize:      fs(10),
         pointerEvents: 'none',
       }}
       title={`${isSaved ? 'At ' : 'Dwell at '}${label} · ${durLabel}`}
