@@ -39,6 +39,7 @@ import {
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { SavedLocation } from '@/lib/types';
+import TimelineMap from './TimelineMap';
 
 // ── Font scale helper ─────────────────────────────────────────────────
 //
@@ -508,11 +509,61 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </button>
         </div>
 
-        {/* Body + inline detail column. The detail column is a sticky
-            right-side pane that replaces the old fixed overlay — content
-            on the left no longer gets covered by an open panel. */}
-        <div className="flex gap-4 items-start">
-          <div className="flex-1 min-w-0">
+        {/* Revenue Analysis strip — pulled to the TOP of the page so the
+            day P&L is the first thing on screen. Computed server-side
+            from the AI-classified link graph with inbound attribution
+            (deadhead credited to the load it repositions toward).
+            Renders only when the payload has a profitability block. */}
+        {data?.profitability && data.profitability.loads.length > 0 ? (
+          <RevenueAnalysisStrip profitability={data.profitability} assetColor={assetColor} fs={fs} />
+        ) : null}
+
+        {/* Body: map (flex-1 with the detail panel stacked above) +
+            narrow events/movements columns on the right. Selection
+            drives what shows on the map — clicking a load draws all
+            its linked trips; clicking a trip shows just that trip. */}
+        <div className="flex gap-3 items-start mt-3">
+          {/* Map + detail column */}
+          <div className="flex-1 min-w-0 flex flex-col gap-3">
+            <div
+              className="rounded-lg overflow-hidden flex flex-col"
+              style={{
+                background: 'var(--gc-surface)',
+                border: '1px solid var(--gc-border)',
+                maxHeight: 320,                 // cap so the map below stays visible
+              }}
+            >
+              <DetailPanel
+                selection={selection}
+                tz={tz}
+                assetColor={assetColor}
+                events={data?.events ?? []}
+                eventLookup={eventById}
+                clusters={visibleClusters}
+                linkByMovementId={linkByMovementId}
+                fs={fs}
+                onClose={() => setSelection(null)}
+                onMutated={() => setRefreshTick((t) => t + 1)}
+                onSelect={(s) => setSelection(s)}
+              />
+            </div>
+
+            <TimelineMap
+              clusters={visibleClusters}
+              linkByMovementId={linkByMovementId}
+              selection={(() => {
+                if (!selection) return null;
+                if (selection.kind === 'event') return { kind: 'event', eventId: selection.event.id };
+                return { kind: 'cluster', clusterId: selection.cluster.id };
+              })()}
+              assetColor={assetColor}
+              height={560}
+            />
+          </div>
+
+          {/* Schedule / Actual columns — narrower than before so the
+              map gets the visual weight. Time ruler shrunk to 44px. */}
+          <div className="w-[520px] flex-shrink-0">
             {loading ? (
               <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
                 Loading timeline…
@@ -526,27 +577,19 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                 className="rounded-lg overflow-hidden"
                 style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
               >
-                {/* Column headers */}
-                <div className="grid grid-cols-[60px_1fr_1fr] border-b" style={{ borderColor: 'var(--gc-border)' }}>
-                  <div className="px-2 py-2 uppercase font-semibold tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
+                <div className="grid grid-cols-[44px_1fr_1fr] border-b" style={{ borderColor: 'var(--gc-border)' }}>
+                  <div className="px-1.5 py-2 uppercase font-semibold tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
                     Time
                   </div>
-                  <div className="px-3 py-2 uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)', fontSize: fs(10) }}>
-                    Scheduled · {visibleEvents.length} event{visibleEvents.length !== 1 ? 's' : ''}
+                  <div className="px-2 py-2 uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)', fontSize: fs(10) }}>
+                    Scheduled · {visibleEvents.length}
                   </div>
-                  <div className="px-3 py-2 uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)', fontSize: fs(10) }}>
-                    Actual · {visibleClusters.length} trip{visibleClusters.length !== 1 ? 's' : ''}
-                    {visibleMovements.length !== visibleClusters.length ? (
-                      <span className="ml-1 normal-case font-normal" style={{ color: 'var(--gc-text-3)' }}>
-                        ({visibleMovements.length} raw fragments)
-                      </span>
-                    ) : null}
+                  <div className="px-2 py-2 uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)', fontSize: fs(10) }}>
+                    Actual · {visibleClusters.length}
                   </div>
                 </div>
 
-                {/* Time-axis body */}
-                <div className="grid grid-cols-[60px_1fr_1fr] relative" style={{ height: TOTAL_HEIGHT }}>
-                  {/* Hour ruler */}
+                <div className="grid grid-cols-[44px_1fr_1fr] relative" style={{ height: TOTAL_HEIGHT }}>
                   <div className="relative" style={{ background: 'var(--gc-surface-2)' }}>
                     {Array.from({ length: 24 }, (_, h) => {
                       const hh   = h % 12 || 12;
@@ -554,7 +597,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                       return (
                         <div
                           key={h}
-                          className="absolute left-0 right-0 px-2"
+                          className="absolute left-0 right-0 px-1.5"
                           style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
                         >
                           <span className="font-medium" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
@@ -565,7 +608,6 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                     })}
                   </div>
 
-                  {/* Events column */}
                   <div className="relative border-l" style={{ borderColor: 'var(--gc-border)' }}>
                     {Array.from({ length: 24 }, (_, h) => (
                       <div
@@ -575,7 +617,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                       />
                     ))}
                     {visibleEvents.length === 0 ? (
-                      <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                      <div className="absolute inset-0 flex items-center justify-center" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
                         No scheduled events
                       </div>
                     ) : (
@@ -594,8 +636,6 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                     <NowLine dayKey={dayKey} tz={tz} />
                   </div>
 
-                  {/* Movements column — renders CLUSTERS (one chip per
-                      logical trip), not raw Motive fragments. */}
                   <div className="relative border-l" style={{ borderColor: 'var(--gc-border)' }}>
                     {Array.from({ length: 24 }, (_, h) => (
                       <div
@@ -605,24 +645,13 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                       />
                     ))}
                     {visibleClusters.length === 0 ? (
-                      <div className="absolute inset-0 flex items-center justify-center" style={{ color: 'var(--gc-text-3)', fontSize: fs(12) }}>
+                      <div className="absolute inset-0 flex items-center justify-center" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
                         No movements
                       </div>
                     ) : (
                       <>
-                        {/* Dwell chips fill the gaps between consecutive
-                            clusters so the truck's stationary periods are
-                            visible. Painted UNDER the clusters in z-index
-                            order — clusters can't visually overlap them
-                            because the gap math guarantees disjoint ranges. */}
                         {visibleDwells.map((d) => (
-                          <DwellBlock
-                            key={d.id}
-                            dwell={d}
-                            dayKey={dayKey}
-                            tz={tz}
-                            fs={fs}
-                          />
+                          <DwellBlock key={d.id} dwell={d} dayKey={dayKey} tz={tz} fs={fs} />
                         ))}
                         {visibleClusters.map((cl) => {
                           const link = linkForCluster(cl);
@@ -648,44 +677,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
               </div>
             )}
           </div>
-
-          {/* Persistent detail column — always rendered, with an empty
-              state when nothing is selected. No more covering the
-              calendar with an overlay tray. */}
-          <div
-            className="w-[400px] flex-shrink-0 rounded-lg overflow-hidden sticky top-4"
-            style={{
-              background: 'var(--gc-surface)',
-              border: '1px solid var(--gc-border)',
-              maxHeight: 'calc(100vh - 32px)',
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            <DetailPanel
-              selection={selection}
-              tz={tz}
-              assetColor={assetColor}
-              events={data?.events ?? []}
-              eventLookup={eventById}
-              clusters={visibleClusters}
-              linkByMovementId={linkByMovementId}
-              fs={fs}
-              onClose={() => setSelection(null)}
-              onMutated={() => setRefreshTick((t) => t + 1)}
-              onSelect={(s) => setSelection(s)}
-            />
-          </div>
         </div>
-
-        {/* Revenue Analysis strip — deterministic per-load + day P&L
-            computed server-side from the AI-classified link graph.
-            Inbound attribution: deadhead is credited to the load it's
-            repositioning toward. Renders only when the payload has a
-            profitability block (post-auto-link days). */}
-        {data?.profitability && data.profitability.loads.length > 0 ? (
-          <RevenueAnalysisStrip profitability={data.profitability} assetColor={assetColor} fs={fs} />
-        ) : null}
 
       </div>
 
@@ -971,7 +963,7 @@ function DwellBlock({
         left:          2,
         right:         2,
         background:    palette.bg,
-        border:        `2px dashed ${palette.border}`,
+        border:        `2px solid ${palette.border}`,
         color:         palette.fg,
         fontSize:      fs(10),
         pointerEvents: 'none',
@@ -1018,7 +1010,7 @@ function DetailPanel({
   return (
     <>
       <div
-        className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+        className="flex items-center gap-1 px-4 py-3 flex-shrink-0"
         style={{ borderBottom: '1px solid var(--gc-border)' }}
       >
         <span className="font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(12) }}>
@@ -1026,6 +1018,45 @@ function DetailPanel({
             ? 'Details'
             : selection.kind === 'event' ? 'Scheduled event' : 'Trip'}
         </span>
+
+        {/* Prev/next cluster navigation — only meaningful when a
+            cluster is selected, lets the user step through the day's
+            trips in time order without leaving the panel. */}
+        {selection?.kind === 'cluster' ? (() => {
+          const idx = clusters.findIndex((c) => c.id === selection.cluster.id);
+          const prev = idx > 0 ? clusters[idx - 1] : null;
+          const next = idx >= 0 && idx < clusters.length - 1 ? clusters[idx + 1] : null;
+          const linkFor = (cl: TimelineCluster): TimelineLink | undefined => {
+            for (const m of cl.members) {
+              const l = linkByMovementId.get(m.id);
+              if (l) return l;
+            }
+            return undefined;
+          };
+          return (
+            <span className="ml-3 flex items-center gap-1 tabular-nums" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+              <button
+                onClick={() => prev && onSelect({ kind: 'cluster', cluster: prev, link: linkFor(prev) })}
+                disabled={!prev}
+                className="w-6 h-6 rounded flex items-center justify-center hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed"
+                title={prev ? 'Previous trip' : 'No earlier trip'}
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span>{idx + 1} / {clusters.length}</span>
+              <button
+                onClick={() => next && onSelect({ kind: 'cluster', cluster: next, link: linkFor(next) })}
+                disabled={!next}
+                className="w-6 h-6 rounded flex items-center justify-center hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed"
+                title={next ? 'Next trip' : 'No later trip'}
+              >
+                <ChevronRight size={14} />
+              </button>
+            </span>
+          );
+        })() : null}
+
+        <span className="ml-auto" />
         {selection != null ? (
           <button onClick={onClose} className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5" title="Clear selection">
             <X size={16} />
