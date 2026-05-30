@@ -31,6 +31,7 @@
  */
 
 import type { TimelineMovement } from './railway';
+import type { SavedLocation } from '@/lib/types';
 
 const SHORT_MS          = 30 * 60_000;
 const MERGE_GAP_MS      = 15 * 60_000;
@@ -153,4 +154,73 @@ export function clusterTimelineMovements(movements: TimelineMovement[]): Timelin
   }
 
   return filtered;
+}
+
+// ── Saved location matching ───────────────────────────────────────────
+//
+// Used by the timeline to label dwell gaps ("At Yard", "At ACME DC")
+// and to surface in cluster detail when a movement starts or ends at
+// a known place. Simple substring strategy — the saved location's
+// street segment (first comma-piece) compared case-insensitively to
+// the movement's raw origin/destination string. Robust against the
+// minor formatting drift between Motive's address strings and how the
+// user typed the saved location.
+
+export function findSavedLocation(
+  rawAddress: string | null | undefined,
+  savedLocations: SavedLocation[],
+): SavedLocation | null {
+  if (!rawAddress) return null;
+  const lower = rawAddress.toLowerCase();
+  for (const loc of savedLocations) {
+    if (!loc.address) continue;
+    const street = loc.address.split(',')[0].trim().toLowerCase();
+    if (street.length < 4) continue;          // avoid matching "yard" or similar tokens
+    if (lower.includes(street)) return loc;
+  }
+  return null;
+}
+
+// ── Dwell gap detection ───────────────────────────────────────────────
+//
+// Between two consecutive driving clusters the truck is, by definition,
+// stationary. We surface that stationary time as a "dwell" chip in the
+// movements column — but only when the gap is long enough to be
+// interesting (>= 15min) and short enough to be meaningful (<= 12h).
+// Beyond 12h is more "overnight at home" than a dwell at a load location.
+
+const DWELL_MIN_MS = 15 * 60_000;
+const DWELL_MAX_MS = 12 * 60 * 60_000;
+
+export interface TimelineDwell {
+  id:                string;
+  startTime:         string;
+  endTime:           string;
+  /** Raw address-ish string of where the truck is sitting. */
+  location:          string | null;
+  /** Matched saved-location, if the address resolves to one. */
+  savedLocation:     SavedLocation | null;
+}
+
+export function computeDwells(
+  clusters: TimelineCluster[],
+  savedLocations: SavedLocation[],
+): TimelineDwell[] {
+  const out: TimelineDwell[] = [];
+  for (let i = 0; i < clusters.length - 1; i++) {
+    const prev = clusters[i];
+    const next = clusters[i + 1];
+    const gapMs = new Date(next.startTime).getTime() - new Date(prev.endTime).getTime();
+    if (gapMs < DWELL_MIN_MS || gapMs > DWELL_MAX_MS) continue;
+    const location = prev.destination ?? next.origin ?? null;
+    const savedLocation = findSavedLocation(location, savedLocations);
+    out.push({
+      id:            `dwell-${prev.id}-${next.id}`,
+      startTime:     prev.endTime,
+      endTime:       next.startTime,
+      location,
+      savedLocation,
+    });
+  }
+  return out;
 }

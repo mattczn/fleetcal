@@ -30,10 +30,24 @@ import {
   railway,
   type TimelinePayload, type TimelineEvent, type TimelineLink,
   type TimelineLinkRole, type AssertLinkRequest, type CreateMovementRequest,
+  type TimelineProfitability, type TimelineProfitabilityLoad,
 } from '@/lib/railway';
-import { clusterTimelineMovements, type TimelineCluster } from '@/lib/timelineClusters';
+import {
+  clusterTimelineMovements, computeDwells, findSavedLocation,
+  type TimelineCluster, type TimelineDwell,
+} from '@/lib/timelineClusters';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
+import type { SavedLocation } from '@/lib/types';
+
+// ── Font scale helper ─────────────────────────────────────────────────
+//
+// Matches CalendarEvent's fs() — multiplies the base px size by the
+// user's cardFontScale setting and rounds to the nearest 0.5px so the
+// rendered text stays crisp. Bound at call site, not via context.
+function makeFs(scale: number) {
+  return (basePx: number) => Math.round(basePx * scale * 2) / 2;
+}
 
 // ── Geometry ───────────────────────────────────────────────────────────
 
@@ -201,8 +215,19 @@ type Selection =
 
 export default function AssetTimelineView({ assetId }: { assetId: number | null }) {
   const router = useRouter();
-  const { calendarTimezone, assets } = useCalendarStore();
+  const { calendarTimezone, assets, savedLocations, fetchSavedLocations, cardFontScale } = useCalendarStore();
   const tz = calendarTimezone || 'America/Denver';
+  const fs = useMemo(() => makeFs(cardFontScale), [cardFontScale]);
+
+  // Saved locations are loaded lazily by the settings page — the timeline
+  // page can land cold, so fetch on mount if the store is empty.
+  // Without these the dwell chips can't resolve "At Yard" labels and
+  // fall back to raw address strings, which is fine but less useful.
+  useEffect(() => {
+    if (savedLocations.length === 0) {
+      void fetchSavedLocations();
+    }
+  }, [savedLocations.length, fetchSavedLocations]);
 
   // Truck picker — visible-and-active assets sorted by store order.
   // The URL drives the selection (router.replace on change), so back/
@@ -338,6 +363,14 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   const visibleClusters = useMemo(
     () => clusterTimelineMovements(visibleMovements),
     [visibleMovements],
+  );
+
+  // Dwell chips fill the GAPS between consecutive clusters — that's
+  // where the truck is parked at a yard / customer / hotel. Matched
+  // against saved_locations so addresses resolve to known names.
+  const visibleDwells = useMemo(
+    () => computeDwells(visibleClusters, savedLocations),
+    [visibleClusters, savedLocations],
   );
 
   // A cluster's link is the link on any of its members — the AI writes
@@ -495,13 +528,13 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
               >
                 {/* Column headers */}
                 <div className="grid grid-cols-[60px_1fr_1fr] border-b" style={{ borderColor: 'var(--gc-border)' }}>
-                  <div className="px-2 py-2 text-[10px] uppercase font-semibold tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                  <div className="px-2 py-2 uppercase font-semibold tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
                     Time
                   </div>
-                  <div className="px-3 py-2 text-[10px] uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)' }}>
+                  <div className="px-3 py-2 uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)', fontSize: fs(10) }}>
                     Scheduled · {visibleEvents.length} event{visibleEvents.length !== 1 ? 's' : ''}
                   </div>
-                  <div className="px-3 py-2 text-[10px] uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)' }}>
+                  <div className="px-3 py-2 uppercase font-semibold tracking-wider border-l" style={{ color: 'var(--gc-text-3)', borderColor: 'var(--gc-border)', fontSize: fs(10) }}>
                     Actual · {visibleClusters.length} trip{visibleClusters.length !== 1 ? 's' : ''}
                     {visibleMovements.length !== visibleClusters.length ? (
                       <span className="ml-1 normal-case font-normal" style={{ color: 'var(--gc-text-3)' }}>
@@ -524,7 +557,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                           className="absolute left-0 right-0 px-2"
                           style={{ top: h * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX, borderTop: h === 0 ? 'none' : '1px solid var(--gc-border)' }}
                         >
-                          <span className="text-[10px] font-medium" style={{ color: 'var(--gc-text-3)' }}>
+                          <span className="font-medium" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
                             {hh}{h === 0 ? '' : ` ${ampm}`}
                           </span>
                         </div>
@@ -552,6 +585,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                           event={e}
                           dayKey={dayKey}
                           color={assetColor}
+                          fs={fs}
                           onClick={() => setSelection({ kind: 'event', event: e })}
                           isSelected={selection?.kind === 'event' && selection.event.id === e.id}
                         />
@@ -571,25 +605,42 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                       />
                     ))}
                     {visibleClusters.length === 0 ? (
-                      <div className="absolute inset-0 flex items-center justify-center text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+                      <div className="absolute inset-0 flex items-center justify-center" style={{ color: 'var(--gc-text-3)', fontSize: fs(12) }}>
                         No movements
                       </div>
                     ) : (
-                      visibleClusters.map((cl) => {
-                        const link = linkForCluster(cl);
-                        return (
-                          <ClusterBlock
-                            key={cl.id}
-                            cluster={cl}
-                            link={link}
-                            eventLookup={eventById}
+                      <>
+                        {/* Dwell chips fill the gaps between consecutive
+                            clusters so the truck's stationary periods are
+                            visible. Painted UNDER the clusters in z-index
+                            order — clusters can't visually overlap them
+                            because the gap math guarantees disjoint ranges. */}
+                        {visibleDwells.map((d) => (
+                          <DwellBlock
+                            key={d.id}
+                            dwell={d}
                             dayKey={dayKey}
                             tz={tz}
-                            onClick={() => setSelection({ kind: 'cluster', cluster: cl, link })}
-                            isSelected={selection?.kind === 'cluster' && selection.cluster.id === cl.id}
+                            fs={fs}
                           />
-                        );
-                      })
+                        ))}
+                        {visibleClusters.map((cl) => {
+                          const link = linkForCluster(cl);
+                          return (
+                            <ClusterBlock
+                              key={cl.id}
+                              cluster={cl}
+                              link={link}
+                              eventLookup={eventById}
+                              dayKey={dayKey}
+                              tz={tz}
+                              fs={fs}
+                              onClick={() => setSelection({ kind: 'cluster', cluster: cl, link })}
+                              isSelected={selection?.kind === 'cluster' && selection.cluster.id === cl.id}
+                            />
+                          );
+                        })}
+                      </>
                     )}
                     <NowLine dayKey={dayKey} tz={tz} />
                   </div>
@@ -617,11 +668,24 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
               assetColor={assetColor}
               events={data?.events ?? []}
               eventLookup={eventById}
+              clusters={visibleClusters}
+              linkByMovementId={linkByMovementId}
+              fs={fs}
               onClose={() => setSelection(null)}
               onMutated={() => setRefreshTick((t) => t + 1)}
+              onSelect={(s) => setSelection(s)}
             />
           </div>
         </div>
+
+        {/* Revenue Analysis strip — deterministic per-load + day P&L
+            computed server-side from the AI-classified link graph.
+            Inbound attribution: deadhead is credited to the load it's
+            repositioning toward. Renders only when the payload has a
+            profitability block (post-auto-link days). */}
+        {data?.profitability && data.profitability.loads.length > 0 ? (
+          <RevenueAnalysisStrip profitability={data.profitability} assetColor={assetColor} fs={fs} />
+        ) : null}
 
       </div>
 
@@ -646,11 +710,12 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
 // ── EventBlock ─────────────────────────────────────────────────────────
 
 function EventBlock({
-  event, dayKey, color, onClick, isSelected,
+  event, dayKey, color, fs, onClick, isSelected,
 }: {
   event: TimelineEvent;
   dayKey: string;
   color: string;
+  fs: (px: number) => number;
   onClick: () => void;
   isSelected: boolean;
 }) {
@@ -661,7 +726,7 @@ function EventBlock({
     <button
       type="button"
       onClick={onClick}
-      className="absolute left-1 right-1 rounded-md p-2 overflow-hidden text-left text-[11px] transition-shadow"
+      className="absolute left-1 right-1 rounded-md p-2 overflow-hidden text-left transition-shadow"
       style={{
         top:        pos.topPx,
         height:     pos.heightPx,
@@ -670,22 +735,20 @@ function EventBlock({
         borderLeft: `3px solid ${isNonRev ? '#f9ab00' : '#202124'}`,
         boxShadow:  isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
         cursor:     'pointer',
+        fontSize:   fs(11),
       }}
     >
       <div className="flex items-center justify-between gap-1 mb-1">
         <div className="font-semibold truncate">
           {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
         </div>
-        <div className="text-[10px] tabular-nums whitespace-nowrap opacity-90">
+        <div className="tabular-nums whitespace-nowrap opacity-90" style={{ fontSize: fs(10) }}>
           {fmtNaiveTime(event.start)} – {fmtNaiveTime(event.end)}
         </div>
       </div>
       {event.driverName ? (
         <div className="truncate opacity-90">{event.driverName}</div>
       ) : null}
-      {/* All stops, ordered. Pickup green pin, delivery red pin, others
-          gray. The chip grows with the event's duration; for short events
-          the side panel shows the full list when clicked. */}
       {event.stops.length > 0 ? (
         <div className="mt-1 space-y-0.5">
           {event.stops.map((s, i) => {
@@ -695,7 +758,7 @@ function EventBlock({
                                                                    '#9ca3af';
             return (
               <div key={s.id ?? i} className="flex items-start gap-1.5">
-                <MapPin size={10} style={{ color: pin, marginTop: 2 }} />
+                <MapPin size={Math.max(8, fs(10))} style={{ color: pin, marginTop: 2 }} />
                 <div className="flex-1 truncate opacity-95">
                   <span className="font-semibold mr-1">
                     {s.sequence != null ? `${s.sequence}.` : ''}{s.type ? ` ${stopLabel(s.type)}:` : ''}
@@ -709,7 +772,7 @@ function EventBlock({
         </div>
       ) : null}
       {pos.spansBefore || pos.spansAfter ? (
-        <div className="absolute right-1 bottom-1 text-[9px] uppercase tracking-wider opacity-80">
+        <div className="absolute right-1 bottom-1 uppercase tracking-wider opacity-80" style={{ fontSize: fs(9) }}>
           {pos.spansBefore ? 'starts earlier' : ''}{pos.spansBefore && pos.spansAfter ? ' · ' : ''}{pos.spansAfter ? 'continues' : ''}
         </div>
       ) : null}
@@ -735,113 +798,178 @@ function stopLabel(type: string): string {
 // 30-min visual minimum without overlapping the next cluster.
 
 function ClusterBlock({
-  cluster, link, eventLookup, dayKey, tz, onClick, isSelected,
+  cluster, link, eventLookup, dayKey, tz, fs, onClick, isSelected,
 }: {
   cluster: TimelineCluster;
   link: TimelineLink | undefined;
   eventLookup: Map<string, TimelineEvent>;
   dayKey: string;
   tz: string;
+  fs: (px: number) => number;
   onClick: () => void;
   isSelected: boolean;
 }) {
-  // Render against displayEndTime so short clusters paint as 30min
-  // even if the real driving was 5 minutes.
   const pos = positionForMovement(cluster.startTime, cluster.displayEndTime, dayKey, tz);
   const role = link ? ROLE_COLORS[link.role] : null;
-  // Source label — if the cluster mixes motive + manual fragments it
-  // shows "Mixed" so the dispatcher knows part of this trip was hand-
-  // entered. Practically almost always 'motive' alone.
-  const sourceLabel = cluster.sources.length === 1
-    ? SOURCE_BADGE[cluster.sources[0]]
-    : { fg: '#5f6368', label: 'Mixed' };
   const isTall = pos.heightPx >= 56;
   const isMed  = pos.heightPx >= 36;
 
-  const linkLabel = (() => {
-    if (!link) return null;
-    if (link.role === 'loaded') {
-      const ev = link.loadedEventId ? eventLookup.get(link.loadedEventId) : null;
-      return ev?.title ?? 'Loaded';
-    }
-    if (link.role === 'transition') {
-      const fromEv = link.fromEventId ? eventLookup.get(link.fromEventId) : null;
-      const toEv   = link.toEventId   ? eventLookup.get(link.toEventId)   : null;
-      return `${fromEv?.title ?? 'yard'} → ${toEv?.title ?? 'yard'}`;
-    }
-    if (link.role === 'dwell') {
-      const ev = link.loadedEventId ? eventLookup.get(link.loadedEventId) : null;
-      return `At ${ev?.title ?? 'stop'}`;
-    }
-    return role?.label ?? null;
+  // Pre-resolved linked events — used for the prominent in-chip load
+  // label and (eventually) the cross-column highlight.
+  const loadedEv  = link?.loadedEventId ? eventLookup.get(link.loadedEventId) : null;
+  const fromEv    = link?.fromEventId   ? eventLookup.get(link.fromEventId)   : null;
+  const toEv      = link?.toEventId     ? eventLookup.get(link.toEventId)     : null;
+
+  // Role-based palette for the whole chip — replaces the small "role
+  // badge in a neutral chip" with a chip that IS the role color.
+  // Unlinked stays neutral white so it visually demands attention to
+  // be classified.
+  const palette = role
+    ? { bg: role.bg, fg: role.fg, border: role.fg, label: role.label }
+    : { bg: '#ffffff', fg: 'var(--gc-text-1)', border: 'var(--gc-border)', label: 'Unlinked' };
+
+  // Main descriptive line under the time row. For 'loaded' it's the
+  // load title; for 'transition' it's "from → to" with yard/saved-loc
+  // fallbacks; for rest/unrelated it's just the role.
+  const headlineLabel: string = (() => {
+    if (!link) return 'Unlinked';
+    if (link.role === 'loaded')     return loadedEv?.title ?? 'Loaded';
+    if (link.role === 'transition') return `${fromEv?.title ?? 'yard'} → ${toEv?.title ?? 'yard'}`;
+    if (link.role === 'dwell')      return `At ${loadedEv?.title ?? 'stop'}`;
+    return palette.label;
   })();
 
-  // Time label uses the REAL endTime (not the padded display end) so
-  // dispatchers see the actual trip times, not the display fudge.
   return (
     <button
       type="button"
       onClick={onClick}
       className="absolute left-1 right-1 rounded-md overflow-hidden text-left transition-shadow"
       style={{
-        top:        pos.topPx,
-        height:     pos.heightPx,
-        background: 'var(--gc-surface)',
-        border:     '1px solid var(--gc-border)',
-        boxShadow:  isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
-        cursor:     'pointer',
-        padding:    isTall ? 8 : isMed ? 6 : 3,
+        top:         pos.topPx,
+        height:      pos.heightPx,
+        background:  palette.bg,
+        border:      `1px solid ${palette.border}`,
+        borderLeft:  `3px solid ${palette.border}`,
+        boxShadow:   isSelected ? '0 0 0 2px var(--gc-blue)' : undefined,
+        cursor:      'pointer',
+        padding:     isTall ? 8 : isMed ? 6 : 3,
       }}
     >
-      <div className="flex items-center gap-1.5 text-[11px] leading-tight">
-        <Clock size={10} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
-        <span className="font-semibold tabular-nums truncate" style={{ color: 'var(--gc-text-1)' }}>
+      {/* Time row */}
+      <div className="flex items-center gap-1.5 leading-tight" style={{ fontSize: fs(11) }}>
+        <Clock size={Math.max(8, fs(10))} style={{ color: palette.fg, opacity: 0.7, flexShrink: 0 }} />
+        <span className="font-semibold tabular-nums truncate" style={{ color: palette.fg }}>
           {fmtUtcTimeInTz(cluster.startTime, tz)}
           {cluster.endTime ? `–${fmtUtcTimeInTz(cluster.endTime, tz)}` : ''}
         </span>
-        <span className="tabular-nums text-[10px]" style={{ color: 'var(--gc-text-2)' }}>
+        <span className="tabular-nums" style={{ color: palette.fg, opacity: 0.7, fontSize: fs(10) }}>
           · {cluster.miles.toFixed(1)}mi
         </span>
-        {role ? (
-          <span
-            className="ml-auto px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wide flex-shrink-0"
-            style={{ background: role.bg, color: role.fg }}
-          >
-            {role.label}
-          </span>
-        ) : (
-          <span
-            className="ml-auto px-1 py-px rounded text-[9px] font-semibold uppercase tracking-wide flex-shrink-0"
-            style={{ background: '#f1f3f4', color: '#9aa0a6' }}
-          >
-            Unlinked
-          </span>
-        )}
+        <span
+          className="ml-auto font-semibold uppercase tracking-wide flex-shrink-0 px-1 rounded"
+          style={{
+            fontSize:   fs(9),
+            color:      palette.fg,
+            background: 'rgba(255,255,255,0.55)',
+          }}
+        >
+          {palette.label}
+        </span>
       </div>
 
+      {/* Headline / linked-load label — the prominent visual cue for
+          "what is this trip about". Only renders on medium+ chips so
+          tiny chips stay legible. */}
       {isMed ? (
-        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] truncate" style={{ color: 'var(--gc-text-2)' }}>
-          <span className="uppercase tracking-wider font-semibold" style={{ color: sourceLabel.fg }}>
-            {sourceLabel.label}
-          </span>
-          {cluster.members.length > 1 ? (
-            <span className="text-[9px]" style={{ color: 'var(--gc-text-3)' }}>
-              · {cluster.members.length} fragments
-            </span>
-          ) : null}
-          {linkLabel ? <span className="truncate">· {linkLabel}</span> : null}
+        <div
+          className="mt-0.5 truncate font-semibold"
+          style={{
+            fontSize: fs(11),
+            color:    palette.fg,
+          }}
+          title={headlineLabel}
+        >
+          {headlineLabel}
         </div>
       ) : null}
 
-      {isTall && (cluster.origin || cluster.destination) ? (
-        <div className="flex items-start gap-1 mt-1 truncate text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
-          <MapPin size={10} style={{ marginTop: 1, flexShrink: 0 }} />
+      {/* Bottom row on tall chips: origin → destination (raw GPS),
+          source badge, fragments count. */}
+      {isTall ? (
+        <div
+          className="flex items-center gap-1.5 mt-1 truncate"
+          style={{ fontSize: fs(10), color: palette.fg, opacity: 0.85 }}
+        >
+          <MapPin size={Math.max(8, fs(10))} style={{ flexShrink: 0 }} />
           <span className="truncate">
             {(cluster.origin ?? '—').split(',')[0]} → {(cluster.destination ?? '—').split(',')[0]}
           </span>
+          {cluster.members.length > 1 ? (
+            <span className="ml-auto flex-shrink-0" style={{ fontSize: fs(9), opacity: 0.75 }}>
+              ×{cluster.members.length}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </button>
+  );
+}
+
+// ── DwellBlock ────────────────────────────────────────────────────────
+//
+// Rendered between two consecutive clusters when the truck has been
+// stationary for >= 15min. Saved-location matches render in blue
+// ("At Yard", "At ACME DC"); unmatched dwells render in a softer gray
+// with the closest available raw city string.
+
+function DwellBlock({
+  dwell, dayKey, tz, fs,
+}: {
+  dwell: TimelineDwell;
+  dayKey: string;
+  tz: string;
+  fs: (px: number) => number;
+}) {
+  const pos = positionForMovement(dwell.startTime, dwell.endTime, dayKey, tz);
+  if (pos.heightPx < 14) return null;        // sub-14px would just be visual noise
+
+  const isSaved = dwell.savedLocation != null;
+  const palette = isSaved
+    ? { bg: '#e8f0fe', fg: '#1967d2', border: '#1967d2' }
+    : { bg: '#f1f3f4', fg: '#5f6368', border: '#dadce0' };
+
+  // Duration in human form for the chip label.
+  const durMs = new Date(dwell.endTime).getTime() - new Date(dwell.startTime).getTime();
+  const durMin = Math.round(durMs / 60_000);
+  const durLabel = durMin >= 60
+    ? `${Math.floor(durMin / 60)}h${durMin % 60 ? ` ${durMin % 60}m` : ''}`
+    : `${durMin}m`;
+
+  const label = dwell.savedLocation?.name
+    ?? (dwell.location ? (dwell.location.split(',')[1]?.trim() || dwell.location.split(',')[0]) : 'Dwell');
+
+  return (
+    <div
+      className="absolute left-2 right-2 rounded overflow-hidden flex items-center gap-1.5 px-1.5"
+      style={{
+        top:         pos.topPx,
+        height:      pos.heightPx,
+        background:  palette.bg,
+        border:      `1px dashed ${palette.border}`,
+        color:       palette.fg,
+        fontSize:    fs(10),
+        pointerEvents: 'none',
+      }}
+      title={`${isSaved ? 'At ' : 'Dwell at '}${label} · ${durLabel}`}
+    >
+      <MapPin size={Math.max(8, fs(10))} style={{ flexShrink: 0 }} />
+      <span className="font-semibold truncate">
+        {isSaved ? 'At ' : ''}{label}
+      </span>
+      <span className="ml-auto tabular-nums flex-shrink-0" style={{ fontSize: fs(9), opacity: 0.75 }}>
+        {durLabel}
+      </span>
+    </div>
   );
 }
 
@@ -853,15 +981,23 @@ function ClusterBlock({
 // around.
 
 function DetailPanel({
-  selection, tz, assetColor, events, eventLookup, onClose, onMutated,
+  selection, tz, assetColor, events, eventLookup, clusters, linkByMovementId,
+  fs, onClose, onMutated, onSelect,
 }: {
   selection: Selection;
   tz: string;
   assetColor: string;
   events: TimelineEvent[];
   eventLookup: Map<string, TimelineEvent>;
+  clusters: TimelineCluster[];
+  linkByMovementId: Map<string, TimelineLink>;
+  fs: (px: number) => number;
   onClose: () => void;
   onMutated: () => void;
+  /** Jump to a different selection — used by the in-panel "linked load"
+   *  chips so the user can click through the graph without leaving the
+   *  detail column. */
+  onSelect: (s: Selection) => void;
 }) {
   return (
     <>
@@ -869,7 +1005,7 @@ function DetailPanel({
         className="flex items-center justify-between px-4 py-3 flex-shrink-0"
         style={{ borderBottom: '1px solid var(--gc-border)' }}
       >
-        <span className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+        <span className="font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(12) }}>
           {selection == null
             ? 'Details'
             : selection.kind === 'event' ? 'Scheduled event' : 'Trip'}
@@ -883,12 +1019,20 @@ function DetailPanel({
 
       <div className="p-4 space-y-3 overflow-y-auto" style={{ flex: 1 }}>
         {selection == null ? (
-          <div className="text-center py-12 text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-            <div className="mb-1 font-semibold uppercase tracking-wider text-[10px]">No selection</div>
+          <div className="text-center py-12" style={{ color: 'var(--gc-text-3)', fontSize: fs(12) }}>
+            <div className="mb-1 font-semibold uppercase tracking-wider" style={{ fontSize: fs(10) }}>No selection</div>
             <div>Click a scheduled event or a trip in the timeline to see details and edit its link here.</div>
           </div>
         ) : selection.kind === 'event' ? (
-          <EventDetail event={selection.event} color={assetColor} />
+          <EventDetail
+            event={selection.event}
+            color={assetColor}
+            clusters={clusters}
+            linkByMovementId={linkByMovementId}
+            tz={tz}
+            fs={fs}
+            onSelect={onSelect}
+          />
         ) : (
           <ClusterDetail
             cluster={selection.cluster}
@@ -896,7 +1040,9 @@ function DetailPanel({
             tz={tz}
             events={events}
             eventLookup={eventLookup}
+            fs={fs}
             onMutated={onMutated}
+            onSelect={onSelect}
           />
         )}
       </div>
@@ -904,41 +1050,125 @@ function DetailPanel({
   );
 }
 
-function EventDetail({ event, color }: { event: TimelineEvent; color: string }) {
+function EventDetail({
+  event, color, clusters, linkByMovementId, tz, fs, onSelect,
+}: {
+  event: TimelineEvent;
+  color: string;
+  clusters: TimelineCluster[];
+  linkByMovementId: Map<string, TimelineLink>;
+  tz: string;
+  fs: (px: number) => number;
+  onSelect: (s: Selection) => void;
+}) {
   const isNonRev = event.eventKind === 'non_revenue';
+
+  // Find every visible cluster whose link references THIS event — so
+  // the panel can show "this load was driven by these N trips" and
+  // jump to any of them on click. Captures all three roles where this
+  // event might appear (loaded, transition.from, transition.to).
+  const linkedClusters = useMemo(() => {
+    return clusters
+      .map((cl) => {
+        for (const m of cl.members) {
+          const l = linkByMovementId.get(m.id);
+          if (!l) continue;
+          if (
+            l.loadedEventId === event.id ||
+            l.fromEventId   === event.id ||
+            l.toEventId     === event.id
+          ) {
+            return { cluster: cl, link: l };
+          }
+        }
+        return null;
+      })
+      .filter((x): x is { cluster: TimelineCluster; link: TimelineLink } => x !== null);
+  }, [clusters, linkByMovementId, event.id]);
+
   return (
     <>
       <div className="flex items-center gap-2">
         <div className="w-3 h-3 rounded-full" style={{ background: isNonRev ? '#f9ab00' : color }} />
-        <h2 className="text-[16px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+        <h2 className="font-semibold" style={{ color: 'var(--gc-text-1)', fontSize: fs(16) }}>
           {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
         </h2>
       </div>
-      <div className="text-[12px] flex items-center gap-2" style={{ color: 'var(--gc-text-2)' }}>
-        <Clock size={12} />
+      <div className="flex items-center gap-2" style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
+        <Clock size={Math.max(10, fs(12))} />
         <span className="tabular-nums">{fmtNaiveTime(event.start)} – {fmtNaiveTime(event.end)}</span>
         {event.status ? (
-          <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded"
-            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+          <span className="ml-auto uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded"
+            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)', fontSize: fs(10) }}>
             {event.status}
           </span>
         ) : null}
       </div>
       {event.driverName ? (
-        <div className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+        <div style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
           Driver: <span style={{ color: 'var(--gc-text-1)' }}>{event.driverName}</span>
         </div>
       ) : null}
       {event.loadPrice != null ? (
-        <div className="text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+        <div style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
           Revenue: <span className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
             ${event.loadPrice.toLocaleString('en-US')}
           </span>
+          {event.driverPay != null ? (
+            <>
+              {' '}· Pay: <span className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                ${event.driverPay.toLocaleString('en-US')}
+              </span>
+            </>
+          ) : null}
+          {event.loadedMiles != null ? (
+            <>
+              {' '}· Quoted: <span className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                {event.loadedMiles.toFixed(0)}mi
+              </span>
+            </>
+          ) : null}
         </div>
       ) : null}
+
+      {/* Linked trips — clickable chips that pivot the panel to the
+          cluster. This is the back-half of the cross-column nav: from
+          a load to "what trips are doing it." */}
+      {linkedClusters.length > 0 ? (
+        <div>
+          <div className="font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+            Linked trips ({linkedClusters.length})
+          </div>
+          <div className="space-y-1.5">
+            {linkedClusters.map(({ cluster, link }) => {
+              const palette = ROLE_COLORS[link.role] ?? { bg: '#f1f3f4', fg: '#5f6368', label: link.role };
+              return (
+                <button
+                  key={cluster.id}
+                  type="button"
+                  onClick={() => onSelect({ kind: 'cluster', cluster, link })}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left"
+                  style={{ background: palette.bg, color: palette.fg, fontSize: fs(11), border: `1px solid ${palette.fg}33` }}
+                >
+                  <span className="font-semibold tabular-nums">
+                    {fmtUtcTimeInTz(cluster.startTime, tz)}
+                  </span>
+                  <span className="tabular-nums" style={{ opacity: 0.85 }}>
+                    · {cluster.miles.toFixed(1)}mi
+                  </span>
+                  <span className="ml-auto uppercase tracking-wide font-semibold" style={{ fontSize: fs(9) }}>
+                    {palette.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {event.stops.length > 0 ? (
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
             Stops ({event.stops.length})
           </div>
           <div className="space-y-2">
@@ -948,9 +1178,9 @@ function EventDetail({ event, color }: { event: TimelineEvent; color: string }) 
                 s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook' ? '#dc2626' :
                                                                      '#9ca3af';
               return (
-                <div key={s.id} className="text-[12px]">
+                <div key={s.id} style={{ fontSize: fs(12) }}>
                   <div className="flex items-center gap-2">
-                    <MapPin size={12} style={{ color: pin }} />
+                    <MapPin size={Math.max(10, fs(12))} style={{ color: pin }} />
                     <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
                       {s.sequence != null ? `${s.sequence}. ` : ''}{stopLabel(s.type ?? 'stop')}
                     </span>
@@ -960,7 +1190,7 @@ function EventDetail({ event, color }: { event: TimelineEvent; color: string }) 
                     {s.address ? <div>{s.address}</div> : null}
                     <div>{s.city ?? '—'}{s.state ? `, ${s.state}` : ''}</div>
                     {s.apptStart ? (
-                      <div className="mt-0.5 text-[11px]">
+                      <div className="mt-0.5" style={{ fontSize: fs(11) }}>
                         Appt: <span className="tabular-nums">{fmtNaiveTime(s.apptStart)}</span>
                         {s.apptEnd ? <> – <span className="tabular-nums">{fmtNaiveTime(s.apptEnd)}</span></> : null}
                       </div>
@@ -977,14 +1207,16 @@ function EventDetail({ event, color }: { event: TimelineEvent; color: string }) 
 }
 
 function ClusterDetail({
-  cluster, link, tz, events, eventLookup, onMutated,
+  cluster, link, tz, events, eventLookup, fs, onMutated, onSelect,
 }: {
   cluster: TimelineCluster;
   link: TimelineLink | undefined;
   tz: string;
   events: TimelineEvent[];
   eventLookup: Map<string, TimelineEvent>;
+  fs: (px: number) => number;
   onMutated: () => void;
+  onSelect: (s: Selection) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -992,36 +1224,56 @@ function ClusterDetail({
   const sourceLabel = cluster.sources.length === 1
     ? SOURCE_BADGE[cluster.sources[0]]
     : { fg: '#5f6368', label: 'Mixed' };
+
+  /** Inline button that jumps the panel to a linked event. Used for
+   *  the "Loaded for" / "From" / "To" references so the user can hop
+   *  from a trip into the load it belongs to and back. */
+  const EventRef = ({ eventId, fallback }: { eventId: string | undefined; fallback: string }) => {
+    if (!eventId) return <span style={{ color: 'var(--gc-text-1)' }}>{fallback}</span>;
+    const ev = eventLookup.get(eventId);
+    if (!ev) return <span style={{ color: 'var(--gc-text-1)' }}>{fallback}</span>;
+    return (
+      <button
+        type="button"
+        onClick={() => onSelect({ kind: 'event', event: ev })}
+        className="underline underline-offset-2 hover:no-underline"
+        style={{ color: 'var(--gc-blue)', fontWeight: 600 }}
+      >
+        {ev.title ?? fallback}
+      </button>
+    );
+  };
+
   return (
     <>
       <div className="flex items-center gap-2">
-        <Clock size={16} style={{ color: 'var(--gc-text-2)' }} />
-        <h2 className="text-[16px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+        <Clock size={Math.max(12, fs(16))} style={{ color: 'var(--gc-text-2)' }} />
+        <h2 className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', fontSize: fs(16) }}>
           {fmtUtcTimeInTz(cluster.startTime, tz)}
           {cluster.endTime ? ` – ${fmtUtcTimeInTz(cluster.endTime, tz)}` : ''}
         </h2>
       </div>
-      <div className="flex items-center gap-3 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+      <div className="flex items-center gap-3" style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
         <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{cluster.miles.toFixed(1)}</span> mi</span>
         <span><span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{cluster.durationMin}</span> min</span>
-        <span className="ml-auto text-[10px] uppercase tracking-wider font-semibold" style={{ color: sourceLabel.fg }}>
+        <span className="ml-auto uppercase tracking-wider font-semibold" style={{ color: sourceLabel.fg, fontSize: fs(10) }}>
           {sourceLabel.label}
         </span>
       </div>
       {cluster.origin || cluster.destination ? (
-        <div className="text-[12px]">
+        <div style={{ fontSize: fs(12) }}>
           <div className="flex items-start gap-1.5 mb-1" style={{ color: 'var(--gc-text-2)' }}>
-            <MapPin size={12} style={{ color: '#16a34a', marginTop: 2 }} />
+            <MapPin size={Math.max(10, fs(12))} style={{ color: '#16a34a', marginTop: 2 }} />
             <span>{cluster.origin ?? '—'}</span>
           </div>
           <div className="flex items-start gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
-            <MapPin size={12} style={{ color: '#dc2626', marginTop: 2 }} />
+            <MapPin size={Math.max(10, fs(12))} style={{ color: '#dc2626', marginTop: 2 }} />
             <span>{cluster.destination ?? '—'}</span>
           </div>
         </div>
       ) : null}
       {cluster.members.length > 1 ? (
-        <div className="text-[11px] p-2 rounded" style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+        <div className="p-2 rounded" style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)', fontSize: fs(11) }}>
           Coalesced from <strong style={{ color: 'var(--gc-text-2)' }}>{cluster.members.length}</strong> Motive fragments
           {' '}— short adjacent driving periods get merged here the same way the calendar's Movements column merges them.
         </div>
@@ -1029,16 +1281,16 @@ function ClusterDetail({
 
       <div className="pt-2" style={{ borderTop: '1px solid var(--gc-border)' }}>
         <div className="flex items-center mb-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+          <span className="font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
             Current link
           </span>
           {!editing ? (
             <button
               onClick={() => setEditing(true)}
-              className="ml-auto text-[11px] font-semibold flex items-center gap-1 px-2 py-1 rounded"
-              style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
+              className="ml-auto font-semibold flex items-center gap-1 px-2 py-1 rounded"
+              style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)', fontSize: fs(11) }}
             >
-              <Pencil size={11} /> {link ? 'Change' : 'Assign'}
+              <Pencil size={Math.max(10, fs(11))} /> {link ? 'Change' : 'Assign'}
             </button>
           ) : null}
         </div>
@@ -1055,17 +1307,18 @@ function ClusterDetail({
             }}
           />
         ) : link ? (
-          <div className="space-y-1.5 text-[12px]" style={{ color: 'var(--gc-text-2)' }}>
+          <div className="space-y-1.5" style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
             <div className="flex items-center gap-2">
               <span
-                className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide"
-                style={{ background: role?.bg, color: role?.fg }}
+                className="px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide"
+                style={{ background: role?.bg, color: role?.fg, fontSize: fs(10) }}
               >
                 {role?.label ?? link.role}
               </span>
               {link.confidence ? (
-                <span className="text-[10px] uppercase tracking-wider font-semibold"
+                <span className="uppercase tracking-wider font-semibold"
                   style={{
+                    fontSize: fs(10),
                     color:
                       link.confidence === 'high'   ? '#1e8e3e' :
                       link.confidence === 'medium' ? '#b06000' :
@@ -1075,33 +1328,25 @@ function ClusterDetail({
                   {link.confidence}
                 </span>
               ) : null}
-              <span className="ml-auto text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
+              <span className="ml-auto" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
                 {link.source}
               </span>
             </div>
-            {link.role === 'loaded' && link.loadedEventId ? (
-              <div>Loaded for: <span style={{ color: 'var(--gc-text-1)' }}>
-                {eventLookup.get(link.loadedEventId)?.title ?? link.loadedEventId.slice(0, 8)}
-              </span></div>
+            {link.role === 'loaded' ? (
+              <div>Loaded for: <EventRef eventId={link.loadedEventId} fallback={link.loadedEventId?.slice(0, 8) ?? '?'} /></div>
             ) : null}
             {link.role === 'transition' ? (
               <div>
-                From: <span style={{ color: 'var(--gc-text-1)' }}>
-                  {link.fromEventId ? (eventLookup.get(link.fromEventId)?.title ?? link.fromEventId.slice(0, 8)) : 'yard / unknown'}
-                </span><br />
-                To: <span style={{ color: 'var(--gc-text-1)' }}>
-                  {link.toEventId ? (eventLookup.get(link.toEventId)?.title ?? link.toEventId.slice(0, 8)) : 'yard / unknown'}
-                </span>
+                From: <EventRef eventId={link.fromEventId} fallback="yard / unknown" /><br />
+                To: <EventRef eventId={link.toEventId} fallback="yard / unknown" />
               </div>
             ) : null}
-            {link.role === 'dwell' && link.loadedEventId ? (
-              <div>At stop on: <span style={{ color: 'var(--gc-text-1)' }}>
-                {eventLookup.get(link.loadedEventId)?.title ?? link.loadedEventId.slice(0, 8)}
-              </span></div>
+            {link.role === 'dwell' ? (
+              <div>At stop on: <EventRef eventId={link.loadedEventId} fallback={link.loadedEventId?.slice(0, 8) ?? '?'} /></div>
             ) : null}
             {link.reasoning ? (
-              <div className="mt-2 p-2 rounded text-[11px]"
-                style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)' }}>
+              <div className="mt-2 p-2 rounded"
+                style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-3)', fontSize: fs(11) }}>
                 {link.reasoning}
               </div>
             ) : null}
@@ -1109,8 +1354,6 @@ function ClusterDetail({
               onClick={async () => {
                 setBusy(true);
                 try {
-                  // Cluster-level clear → fan out to every member so the
-                  // link history stays consistent across fragments.
                   for (const m of cluster.members) {
                     await railway.clearMovementLink(m.id);
                   }
@@ -1120,14 +1363,14 @@ function ClusterDetail({
                 }
               }}
               disabled={busy}
-              className="text-[11px] flex items-center gap-1 px-2 py-1 rounded mt-2"
-              style={{ background: '#fce8e6', color: '#c5221f' }}
+              className="flex items-center gap-1 px-2 py-1 rounded mt-2"
+              style={{ background: '#fce8e6', color: '#c5221f', fontSize: fs(11) }}
             >
-              <Trash2 size={11} /> Mark unrelated
+              <Trash2 size={Math.max(10, fs(11))} /> Mark unrelated
             </button>
           </div>
         ) : (
-          <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
+          <div style={{ color: 'var(--gc-text-3)', fontSize: fs(12) }}>
             No link yet. Click <strong style={{ color: 'var(--gc-text-2)' }}>Assign</strong> to set one.
           </div>
         )}
@@ -1563,6 +1806,172 @@ function CreateMovementModal({
             {busy ? 'Saving…' : 'Create movement'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Revenue Analysis strip ────────────────────────────────────────────
+//
+// Per-load + per-day revenue-per-mile readout, fed by the server-side
+// computeProfitability(). Each card shows revenue, attributed miles
+// (loaded + inbound deadhead), the two RPM lenses (loaded-only vs
+// all-in), deadhead %, and driver pay → net-to-truck. The day card
+// at the right rolls everything up and exposes the "total RPM" lens
+// that includes the yard-return overhead — useful for honest fleet-
+// level comparisons.
+
+function fmtMoney(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+}
+function fmtRpm(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `$${n.toFixed(2)}/mi`;
+}
+function fmtPct(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${Math.round(n * 100)}%`;
+}
+function fmtMi(n: number): string {
+  return `${n.toFixed(1)}mi`;
+}
+
+function RevenueAnalysisStrip({
+  profitability, assetColor, fs,
+}: {
+  profitability: TimelineProfitability;
+  assetColor: string;
+  fs: (px: number) => number;
+}) {
+  const { loads, day } = profitability;
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+          Revenue analysis
+        </span>
+        <span style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
+          · inbound attribution · {loads.length} load{loads.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="flex gap-3 overflow-x-auto pb-2">
+        {loads.map((l) => (
+          <LoadProfitCard key={l.eventId} load={l} accent={assetColor} fs={fs} />
+        ))}
+        <DayProfitCard day={day} fs={fs} />
+      </div>
+    </div>
+  );
+}
+
+function LoadProfitCard({
+  load, accent, fs,
+}: {
+  load: TimelineProfitabilityLoad;
+  accent: string;
+  fs: (px: number) => number;
+}) {
+  const noMiles = load.attributedMiles === 0;
+  return (
+    <div
+      className="flex-shrink-0 rounded-lg p-3"
+      style={{
+        width:      260,
+        background: 'var(--gc-surface)',
+        border:     '1px solid var(--gc-border)',
+        borderLeft: `3px solid ${accent}`,
+      }}
+    >
+      <div className="font-semibold truncate" style={{ color: 'var(--gc-text-1)', fontSize: fs(12) }} title={load.title ?? ''}>
+        {load.title ?? '(no title)'}
+      </div>
+
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', fontSize: fs(20) }}>
+          {fmtMoney(load.revenue)}
+        </span>
+        <span className="tabular-nums" style={{ color: noMiles ? 'var(--gc-text-3)' : '#1e8e3e', fontSize: fs(12) }}>
+          {fmtRpm(load.rpmAllIn)} all-in
+        </span>
+      </div>
+      <div className="tabular-nums mt-0.5" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+        {fmtRpm(load.rpmLoaded)} loaded · {fmtPct(load.deadheadPct)} dh
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5" style={{ color: 'var(--gc-text-2)', fontSize: fs(11) }}>
+        <span>Loaded</span>
+        <span className="text-right tabular-nums">{fmtMi(load.loadedMiles)}</span>
+        <span>Inbound dh</span>
+        <span className="text-right tabular-nums">{fmtMi(load.inboundDhMiles)}</span>
+        <span style={{ color: 'var(--gc-text-3)' }}>Attributed</span>
+        <span className="text-right tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMi(load.attributedMiles)}</span>
+      </div>
+
+      {load.driverPay > 0 || load.revenue > 0 ? (
+        <div className="mt-2 pt-2 grid grid-cols-2 gap-x-2 gap-y-0.5" style={{ borderTop: '1px dashed var(--gc-border)', color: 'var(--gc-text-2)', fontSize: fs(11) }}>
+          <span>Driver pay</span>
+          <span className="text-right tabular-nums">{fmtMoney(load.driverPay)}</span>
+          <span style={{ color: 'var(--gc-text-3)' }}>Net to truck</span>
+          <span className="text-right tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(load.netToTruck)}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DayProfitCard({
+  day, fs,
+}: {
+  day: TimelineProfitability['day'];
+  fs: (px: number) => number;
+}) {
+  return (
+    <div
+      className="flex-shrink-0 rounded-lg p-3"
+      style={{
+        width:      280,
+        background: 'var(--gc-surface-2)',
+        border:     '1px solid var(--gc-border)',
+      }}
+    >
+      <div className="font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+        Day total
+      </div>
+
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', fontSize: fs(20) }}>
+          {fmtMoney(day.totalRevenue)}
+        </span>
+        <span className="tabular-nums" style={{ color: '#1e8e3e', fontSize: fs(12) }}>
+          {fmtRpm(day.dayRpm)} attr
+        </span>
+      </div>
+      <div className="tabular-nums mt-0.5" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+        {fmtRpm(day.dayRpmTotal)} total · {fmtPct(day.deadheadPctOfDay)} dh
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5" style={{ color: 'var(--gc-text-2)', fontSize: fs(11) }}>
+        <span>Loaded</span>
+        <span className="text-right tabular-nums">{fmtMi(day.loadedMiles)}</span>
+        <span>Inbound dh</span>
+        <span className="text-right tabular-nums">{fmtMi(day.inboundDhMiles)}</span>
+        <span>Yard return</span>
+        <span className="text-right tabular-nums">{fmtMi(day.yardReturnMiles)}</span>
+        {day.unattributedMiles > 0 ? (
+          <>
+            <span style={{ color: 'var(--gc-text-3)' }}>Unattributed</span>
+            <span className="text-right tabular-nums" style={{ color: 'var(--gc-text-3)' }}>{fmtMi(day.unattributedMiles)}</span>
+          </>
+        ) : null}
+        <span style={{ color: 'var(--gc-text-3)' }}>Total miles</span>
+        <span className="text-right tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMi(day.totalMiles)}</span>
+      </div>
+
+      <div className="mt-2 pt-2 grid grid-cols-2 gap-x-2 gap-y-0.5" style={{ borderTop: '1px dashed var(--gc-border)', color: 'var(--gc-text-2)', fontSize: fs(11) }}>
+        <span>Driver pay</span>
+        <span className="text-right tabular-nums">{fmtMoney(day.totalDriverPay)}</span>
+        <span style={{ color: 'var(--gc-text-3)' }}>Net to truck</span>
+        <span className="text-right tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(day.netToTruck)}</span>
       </div>
     </div>
   );

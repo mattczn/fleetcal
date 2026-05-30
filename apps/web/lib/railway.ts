@@ -163,6 +163,8 @@ export interface TimelineEvent {
   eventKind:        string | null;
   nonRevenueType:   string | null;
   loadPrice:        number | null;
+  driverPay:        number | null;     // events.driver_pay
+  loadedMiles:      number | null;     // events.loaded_miles (quoted)
   driverName:       string | null;
   stops: Array<{
     id:             string;
@@ -179,13 +181,54 @@ export interface TimelineEvent {
   }>;
 }
 
+// ── Profitability attribution (revenue/mile per load + day) ────────
+// Inbound convention: deadhead miles credited to the load they're
+// repositioning toward; end-of-day yard return = day overhead.
+// See apps/api/src/routes/timeline.ts computeProfitability().
+
+export interface TimelineProfitabilityLoad {
+  eventId:          string;
+  title:            string | null;
+  revenue:          number;
+  driverPay:        number;
+  netToTruck:       number;
+  loadedMiles:      number;
+  inboundDhMiles:   number;
+  attributedMiles:  number;
+  dwellMin:         number;
+  rpmLoaded:        number | null;
+  rpmAllIn:         number | null;
+  deadheadPct:      number | null;
+}
+
+export interface TimelineProfitabilityDay {
+  totalRevenue:       number;
+  totalDriverPay:     number;
+  netToTruck:         number;
+  loadedMiles:        number;
+  inboundDhMiles:     number;
+  attributedMiles:    number;
+  yardReturnMiles:    number;
+  unattributedMiles:  number;
+  totalMiles:         number;
+  dayRpm:             number | null;
+  dayRpmTotal:        number | null;
+  deadheadPctOfDay:   number | null;
+}
+
+export interface TimelineProfitability {
+  loads: TimelineProfitabilityLoad[];
+  day:   TimelineProfitabilityDay;
+}
+
 export interface TimelinePayload {
-  asset:      { id: number; name: string; unit: string | null };
-  windowFrom: string;
-  windowTo:   string;
-  events:     TimelineEvent[];
-  movements:  TimelineMovement[];
-  links:      TimelineLink[];
+  asset:         { id: number; name: string; unit: string | null };
+  windowFrom:    string;
+  windowTo:      string;
+  events:        TimelineEvent[];
+  movements:     TimelineMovement[];
+  links:         TimelineLink[];
+  profitability: TimelineProfitability;
 }
 
 export interface CreateMovementRequest {

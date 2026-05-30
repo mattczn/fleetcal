@@ -202,6 +202,8 @@ interface TimelineEvent {
   eventKind: string | null;
   nonRevenueType: string | null;
   loadPrice: number | null;
+  driverPay: number | null;       // events.driver_pay (per-leg)
+  loadedMiles: number | null;     // events.loaded_miles (quoted miles)
   driverName: string | null;
   stops: Array<{
     id: string;
@@ -218,6 +220,44 @@ interface TimelineEvent {
   }>;
 }
 
+// Per-load attribution result. Inbound convention: a deadhead segment
+// is attributed to the load it's repositioning TOWARD. Yard-return at
+// the end of the day stays in day overhead.
+interface ProfitabilityLoad {
+  eventId:           string;
+  title:             string | null;
+  revenue:           number;       // load_price (0 if missing)
+  driverPay:         number;       // event.driver_pay (0 if missing)
+  netToTruck:        number;       // revenue - driverPay
+  loadedMiles:       number;       // sum of movement.miles where link.role='loaded' → this event
+  inboundDhMiles:    number;       // sum of movement.miles where link.role='transition' → toEventId = this event
+  attributedMiles:   number;       // loadedMiles + inboundDhMiles
+  dwellMin:          number;       // sum of movement.duration_min where link.role='dwell' → this event
+  rpmLoaded:         number | null;  // revenue / loadedMiles
+  rpmAllIn:          number | null;  // revenue / attributedMiles
+  deadheadPct:       number | null;  // inboundDhMiles / attributedMiles (0..1)
+}
+
+interface ProfitabilityDay {
+  totalRevenue:        number;
+  totalDriverPay:      number;
+  netToTruck:          number;
+  loadedMiles:         number;       // sum across loads
+  inboundDhMiles:      number;       // sum across loads
+  attributedMiles:     number;       // loadedMiles + inboundDhMiles
+  yardReturnMiles:     number;       // end-of-day transition (only fromEventId, no toEventId)
+  unattributedMiles:   number;       // rest + unrelated + unlinked
+  totalMiles:          number;       // attributed + yardReturn + unattributed
+  dayRpm:              number | null;  // revenue / attributedMiles
+  dayRpmTotal:         number | null;  // revenue / totalMiles (brutal honesty)
+  deadheadPctOfDay:    number | null;  // (inboundDh + yardReturn) / totalMiles
+}
+
+interface ProfitabilityPayload {
+  loads: ProfitabilityLoad[];
+  day:   ProfitabilityDay;
+}
+
 interface TimelinePayload {
   asset: { id: number; name: string; unit: string | null };
   windowFrom: string;
@@ -225,6 +265,7 @@ interface TimelinePayload {
   events: TimelineEvent[];
   movements: MovementOut[];
   links: MovementLinkOut[];   // current truth only (superseded_at IS NULL)
+  profitability: ProfitabilityPayload;
 }
 
 timeline.get("/assets/:assetId", async (c) => {
@@ -258,7 +299,7 @@ timeline.get("/assets/:assetId", async (c) => {
   // loads on the timeline.
   const { data: events, error: eErr } = await sb
     .from("events")
-    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, driver_name, load:loads(load_price)")
+    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, driver_name, driver_pay, loaded_miles, load:loads(load_price)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
@@ -305,7 +346,8 @@ timeline.get("/assets/:assetId", async (c) => {
   const eventsOut: TimelineEvent[] = ((events ?? []) as Array<{
     id: string; title: string | null; start: string; end: string;
     status: string | null; event_kind: string | null; non_revenue_type: string | null;
-    driver_name: string | null; load: { load_price: number | null } | null;
+    driver_name: string | null; driver_pay: number | null; loaded_miles: number | null;
+    load: { load_price: number | null } | null;
   }>).map((e) => ({
     id:             e.id,
     title:          e.title,
@@ -315,6 +357,8 @@ timeline.get("/assets/:assetId", async (c) => {
     eventKind:      e.event_kind,
     nonRevenueType: e.non_revenue_type,
     loadPrice:      e.load?.load_price ?? null,
+    driverPay:      e.driver_pay ?? null,
+    loadedMiles:    e.loaded_miles ?? null,
     driverName:     e.driver_name,
     stops:          stopsByEvent.get(e.id) ?? [],
   }));
@@ -348,6 +392,15 @@ timeline.get("/assets/:assetId", async (c) => {
     : { data: [] };
   const linksOut = ((linkRows ?? []) as MovementLinkRow[]).map(rowToLink);
 
+  // ── Profitability attribution (revenue/mile per load + day) ─────
+  // Inbound convention: every deadhead mile is attributed to the load
+  // it's heading TOWARD. The end-of-day yard return (transition with
+  // only a fromEventId) is day overhead. Rest / unrelated / unlinked
+  // movements stay in day overhead. See the design discussion in the
+  // commit for the rationale — TL;DR: this gives each load a clean
+  // "what did it cost to do this load" P&L without double-counting.
+  const profitability = computeProfitability(eventsOut, movementsOut, linksOut);
+
   const res: TimelinePayload = {
     asset:      { id: asset.id, name: asset.name, unit: asset.unit ?? null },
     windowFrom: from,
@@ -355,9 +408,152 @@ timeline.get("/assets/:assetId", async (c) => {
     events:     eventsOut,
     movements:  movementsOut,
     links:      linksOut,
+    profitability,
   };
   return c.json(res);
 });
+
+// ── Profitability attribution ──────────────────────────────────────
+
+function computeProfitability(
+  events: TimelineEvent[],
+  movements: MovementOut[],
+  links: MovementLinkOut[],
+): ProfitabilityPayload {
+  // Index by lookup keys we'll need.
+  const linkByMovementId = new Map<string, MovementLinkOut>();
+  for (const l of links) linkByMovementId.set(l.movementId, l);
+
+  // Only revenue events participate as attribution targets — a
+  // non_revenue event (maintenance, vacation) shouldn't have a P&L
+  // even if a movement is tagged 'loaded' for it.
+  const revenueEvents = events.filter((e) => e.eventKind !== "non_revenue");
+  const revenueEventIds = new Set(revenueEvents.map((e) => e.id));
+
+  // Per-load accumulator.
+  type Acc = { loadedMiles: number; inboundDhMiles: number; dwellMin: number };
+  const accByEvent = new Map<string, Acc>();
+  const getAcc = (eventId: string): Acc => {
+    let a = accByEvent.get(eventId);
+    if (!a) { a = { loadedMiles: 0, inboundDhMiles: 0, dwellMin: 0 }; accByEvent.set(eventId, a); }
+    return a;
+  };
+
+  // Day-level accumulators for non-attributed driving.
+  let yardReturnMiles    = 0;
+  let unattributedMiles  = 0;
+
+  for (const m of movements) {
+    const miles = m.miles ?? 0;
+    if (miles === 0 && m.durationMin == null) continue;
+
+    const link = linkByMovementId.get(m.id);
+    if (!link) {
+      // No link → unclassified. Treat as unattributed (we don't know
+      // which load to credit it to). Surfaces as day overhead.
+      unattributedMiles += miles;
+      continue;
+    }
+
+    switch (link.role) {
+      case "loaded": {
+        if (link.loadedEventId && revenueEventIds.has(link.loadedEventId)) {
+          getAcc(link.loadedEventId).loadedMiles += miles;
+        } else {
+          unattributedMiles += miles;
+        }
+        break;
+      }
+      case "transition": {
+        // Inbound attribution: if there's a 'to' event AND it's a
+        // revenue event, credit miles to that load. If only a 'from'
+        // (heading to yard / end of day), it's the yard-return overhead.
+        if (link.toEventId && revenueEventIds.has(link.toEventId)) {
+          getAcc(link.toEventId).inboundDhMiles += miles;
+        } else if (link.fromEventId && !link.toEventId) {
+          yardReturnMiles += miles;
+        } else {
+          // Transition with no usable refs — treat as unattributed.
+          unattributedMiles += miles;
+        }
+        break;
+      }
+      case "dwell": {
+        // Dwell adds time, not miles (post-coalescing it should be near-
+        // zero miles anyway). Time still attributed to the load.
+        if (link.loadedEventId && revenueEventIds.has(link.loadedEventId)) {
+          getAcc(link.loadedEventId).dwellMin += (m.durationMin ?? 0);
+        }
+        // Miles, if any, go to unattributed since dwell isn't a driving
+        // segment in the cost sense.
+        unattributedMiles += miles;
+        break;
+      }
+      case "rest":
+      case "unrelated":
+      default: {
+        unattributedMiles += miles;
+        break;
+      }
+    }
+  }
+
+  // Build per-load output. Order by event start so the strip reads
+  // left→right matching the timeline above.
+  const loads: ProfitabilityLoad[] = revenueEvents
+    .slice()
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .map((e) => {
+      const acc = accByEvent.get(e.id) ?? { loadedMiles: 0, inboundDhMiles: 0, dwellMin: 0 };
+      const revenue   = e.loadPrice ?? 0;
+      const driverPay = e.driverPay ?? 0;
+      const attributedMiles = acc.loadedMiles + acc.inboundDhMiles;
+      const rpmLoaded = acc.loadedMiles > 0 ? revenue / acc.loadedMiles : null;
+      const rpmAllIn  = attributedMiles  > 0 ? revenue / attributedMiles : null;
+      const deadheadPct = attributedMiles > 0 ? acc.inboundDhMiles / attributedMiles : null;
+      return {
+        eventId:         e.id,
+        title:           e.title,
+        revenue,
+        driverPay,
+        netToTruck:      revenue - driverPay,
+        loadedMiles:     acc.loadedMiles,
+        inboundDhMiles:  acc.inboundDhMiles,
+        attributedMiles,
+        dwellMin:        acc.dwellMin,
+        rpmLoaded,
+        rpmAllIn,
+        deadheadPct,
+      };
+    });
+
+  // Day-level rollup.
+  const totalRevenue   = loads.reduce((s, l) => s + l.revenue, 0);
+  const totalDriverPay = loads.reduce((s, l) => s + l.driverPay, 0);
+  const loadedMiles    = loads.reduce((s, l) => s + l.loadedMiles, 0);
+  const inboundDhMiles = loads.reduce((s, l) => s + l.inboundDhMiles, 0);
+  const attributedMiles = loadedMiles + inboundDhMiles;
+  const totalMiles      = attributedMiles + yardReturnMiles + unattributedMiles;
+
+  const day: ProfitabilityDay = {
+    totalRevenue,
+    totalDriverPay,
+    netToTruck:        totalRevenue - totalDriverPay,
+    loadedMiles,
+    inboundDhMiles,
+    attributedMiles,
+    yardReturnMiles,
+    unattributedMiles,
+    totalMiles,
+    dayRpm:            attributedMiles > 0 ? totalRevenue / attributedMiles : null,
+    dayRpmTotal:       totalMiles      > 0 ? totalRevenue / totalMiles      : null,
+    deadheadPctOfDay:  totalMiles      > 0
+      ? (inboundDhMiles + yardReturnMiles) / totalMiles
+      : null,
+  };
+
+  return { loads, day };
+}
 
 // ── POST /movements — create a manual movement ────────────────────
 
