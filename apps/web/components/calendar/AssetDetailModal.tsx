@@ -458,6 +458,18 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
                   No ELD
                 </span>
               )}
+              {/* Quick link to the new asset timeline (per-day events vs
+                  movements side-by-side). Opens in a new tab so the
+                  current modal context isn't disrupted. */}
+              <a
+                href={`/assets/${asset.id}/timeline`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ml-1 flex items-center gap-1"
+                style={{ background: 'var(--gc-blue-tint)', color: 'var(--gc-blue)' }}
+              >
+                Timeline <ExternalLink size={10} />
+              </a>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-full transition-colors" style={{ color: 'var(--gc-text-3)' }}
