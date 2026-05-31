@@ -3244,6 +3244,17 @@ export default function EventModal() {
     setStops(next.map((s, i) => ({ ...s, sequence: i + 1 })));
   };
 
+  /** Strip the driver-check-in runtime fields off a stop. Used by
+   *  Duplicate and +1 Week so a brand-new load draft doesn't inherit
+   *  the original's "Arrived at 3:45pm" timestamps from when its
+   *  driver actually checked in. The static load-definition fields
+   *  (facility, address, appt window, etc.) all carry over. */
+  const stripStopRuntime = (s: Stop): Stop => {
+    const { arrivedAt: _arrivedAt, arrivedLat: _arrivedLat, arrivedLng: _arrivedLng, ...rest } = s;
+    void _arrivedAt; void _arrivedLat; void _arrivedLng;
+    return rest as Stop;
+  };
+
   const handlePlusOneWeek = () => {
     const shiftDateStr = (dateStr: string) => {
       const [y, m, d] = dateStr.split('-').map(Number);
@@ -3262,7 +3273,7 @@ export default function EventModal() {
       return `${yy}-${mm}-${dd}${timePart}`;
     };
     const shiftedStops = stops.map(s => ({
-      ...s,
+      ...stripStopRuntime(s),
       apptStart: shiftIso(s.apptStart),
       apptEnd:   shiftIso(s.apptEnd),
     }));
@@ -3284,12 +3295,15 @@ export default function EventModal() {
     // Strip per-load identifiers — these should never carry over to a duplicate.
     const { loadNum: _loadNum, refNums: _refNums, ...rest } = buildOptionalPayload();
     void _loadNum; void _refNums;
+    // Strip the driver-check-in runtime fields off each stop. The
+    // duplicate is a fresh future load — it hasn't been driven yet.
+    const cleanedStops = stops.map(stripStopRuntime);
     openCreateModal({
       title: title || undefined, assetId, driverName: driverName || undefined,
       start: `${startDate}T${startTime}`, end: `${endDate}T${endTime}`,
       ...rest,
       accessorials: accessorials.length > 0 ? accessorials : undefined,
-      stops: stops.length > 0 ? stops : undefined,
+      stops: cleanedStops.length > 0 ? cleanedStops : undefined,
     });
   };
 
