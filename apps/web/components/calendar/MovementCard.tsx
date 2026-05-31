@@ -12,8 +12,7 @@
 import React from 'react';
 import { extractCity, type MovementCluster } from '@/lib/clusterMovements';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { timeToPixels } from '@/lib/time-utils';
-import { dateKeyInTz } from '@/lib/lifecycle';
+import { localDateStr, timeToPixels } from '@/lib/time-utils';
 
 interface Props {
   cluster: MovementCluster;
@@ -23,13 +22,7 @@ interface Props {
 
 export default function MovementCardView({ cluster, assetColor, onClick }: Props) {
   const { rowHeight, currentDate, calendarTimezone } = useCalendarStore();
-  // CRITICAL: dateKeyInTz, not localDateStr. The cluster startDay/endDay
-  // below are computed in calendarTimezone (org tz). If we use
-  // localDateStr (browser tz), users whose browser is east of the org
-  // tz get a one-day mismatch and the filter wholesale-drops every
-  // cluster — confirmed via the [movements/card] trace where viewRange
-  // was 2026-05-26 but dateStr(browser) was 2026-05-27.
-  const dateStr = dateKeyInTz(currentDate, calendarTimezone);
+  const dateStr = localDateStr(currentDate);
 
   // Convert start/end (UTC ISO) → view-tz YYYY-MM-DDTHH:mm so the same
   // timeToPixels math used by load cards lines up exactly. We use the
@@ -43,7 +36,18 @@ export default function MovementCardView({ cluster, assetColor, onClick }: Props
 
   const startDay = startNaive.split('T')[0];
   const endDay   = displayNaive.split('T')[0];
-  if (endDay < dateStr || startDay > dateStr) return null;
+  // Diagnostic: pair with [movements/col] log. dateStr here is
+  // localDateStr(currentDate) = BROWSER tz. startDay/endDay are derived
+  // via isoToNaiveTz with calendarTimezone = ORG tz. If browser ≠ org,
+  // they can disagree across midnight and drop clusters that should
+  // render. The cluster-id log makes it trivial to count drops.
+  if (endDay < dateStr || startDay > dateStr) {
+    // eslint-disable-next-line no-console
+    console.log(`[movements/card] DROP cluster id=${cluster.id} startDay=${startDay} endDay=${endDay} dateStr=${dateStr} (${endDay < dateStr ? 'end-before' : 'start-after'})`);
+    return null;
+  }
+  // eslint-disable-next-line no-console
+  console.log(`[movements/card] KEEP cluster id=${cluster.id} startDay=${startDay} endDay=${endDay} dateStr=${dateStr}`);
 
   const top    = startDay < dateStr ? 0 : timeToPixels(startNaive, rowHeight);
   const bottom = endDay > dateStr ? 24 * rowHeight : timeToPixels(displayNaive, rowHeight);

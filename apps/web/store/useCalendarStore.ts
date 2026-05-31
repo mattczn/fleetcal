@@ -720,6 +720,9 @@ export const useCalendarStore = create<CalendarStore>()(
     // The race fires reliably when navigating between days quickly
     // (which is exactly when users say "movements disappeared").
     const requestId = useCalendarStore.getState().movementsRequestId + 1;
+    const callTraceId = `${requestId}-${start}→${end}`;
+    // eslint-disable-next-line no-console
+    console.log(`[movements] fetch START ${callTraceId} (prev id=${requestId - 1}, prev vehicles=${Object.keys(useCalendarStore.getState().movementsByVehicle).length})`);
     set({ movementsRequestId: requestId, movementsLoading: true, movementsError: null });
 
     // Expand the YYYY-MM-DD inputs to a UTC window that covers the
@@ -743,7 +746,16 @@ export const useCalendarStore = create<CalendarStore>()(
 
         // Check whether a NEWER fetch has fired in the meantime; if so
         // this response is stale, drop it on the floor.
-        if (useCalendarStore.getState().movementsRequestId !== requestId) return;
+        if (useCalendarStore.getState().movementsRequestId !== requestId) {
+          // eslint-disable-next-line no-console
+          console.log(`[movements] fetch STALE ${callTraceId} (response had ${Object.keys(res.byVehicle ?? {}).length} vehicles, ${Object.values(res.byVehicle ?? {}).flat().length} periods) — dropped`);
+          return;
+        }
+
+        const vehicles = Object.keys(res.byVehicle ?? {}).length;
+        const periods  = Object.values(res.byVehicle ?? {}).flat().length;
+        // eslint-disable-next-line no-console
+        console.log(`[movements] fetch OK    ${callTraceId} attempt=${attempt + 1} → ${vehicles} vehicles, ${periods} periods${vehicles === 0 ? ' ⚠️ EMPTY RESPONSE — calendar will appear blank' : ''}`);
 
         set({
           movementsByVehicle: res.byVehicle ?? {},
@@ -753,6 +765,8 @@ export const useCalendarStore = create<CalendarStore>()(
         return;
       } catch (err) {
         lastErr = err;
+        // eslint-disable-next-line no-console
+        console.warn(`[movements] fetch FAIL  ${callTraceId} attempt=${attempt + 1}:`, err);
         if (attempt < 2) {
           // Backoff before the next retry.
           await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
@@ -765,7 +779,7 @@ export const useCalendarStore = create<CalendarStore>()(
     // banner is strictly better than going blank, especially when
     // the failure is transient (the next nav will refetch cleanly).
     if (useCalendarStore.getState().movementsRequestId !== requestId) return;
-    console.error('[useCalendarStore] fetchMovements failed after 3 attempts:', lastErr);
+    console.error(`[movements] fetch GAVEUP ${callTraceId} after 3 attempts:`, lastErr);
     set({
       movementsLoading: false,
       movementsError:   lastErr instanceof Error ? lastErr.message : 'Failed to load movements',
