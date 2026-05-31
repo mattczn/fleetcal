@@ -69,6 +69,67 @@ function highlightedIdsFor(
   return out;
 }
 
+/** Returns the cluster's link role by checking its first member with a
+ *  current link. Cluster members share an identical link post-AI, so
+ *  the first one with a link is representative. */
+function roleForCluster(
+  cl: TimelineCluster,
+  linkByMovementId: Map<string, TimelineLink>,
+): TimelineLink['role'] | null {
+  for (const m of cl.members) {
+    const l = linkByMovementId.get(m.id);
+    if (l) return l.role;
+  }
+  return null;
+}
+
+/** Polyline style for a cluster's route, per industry convention:
+ *  loaded = solid heavy line; deadhead = dashed lighter line. */
+function polylineOptionsForRole(
+  role: TimelineLink['role'] | null,
+  assetColor: string,
+  path: google.maps.LatLngLiteral[],
+): google.maps.PolylineOptions {
+  if (role === 'loaded') {
+    return {
+      path,
+      strokeColor:   assetColor,
+      strokeOpacity: 0.95,
+      strokeWeight:  5,
+      geodesic:      true,
+    };
+  }
+  if (role === 'transition') {
+    // Dashed: stroke transparent + repeating short-line icons.
+    return {
+      path,
+      strokeColor:   assetColor,
+      strokeOpacity: 0,
+      strokeWeight:  3,
+      geodesic:      true,
+      icons: [{
+        icon:   { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: assetColor, scale: 3 } as google.maps.Symbol,
+        offset: '0',
+        repeat: '14px',
+      }],
+    };
+  }
+  // rest / unrelated / unlinked — neutral gray dashed so they show
+  // but don't compete visually with real trips.
+  return {
+    path,
+    strokeColor:   '#5f6368',
+    strokeOpacity: 0,
+    strokeWeight:  3,
+    geodesic:      true,
+    icons: [{
+      icon:   { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: '#5f6368', scale: 3 } as google.maps.Symbol,
+      offset: '0',
+      repeat: '14px',
+    }],
+  };
+}
+
 /** Pull every coord pair we have across a cluster's members. */
 function coordsForCluster(cl: TimelineCluster): {
   start: google.maps.LatLngLiteral | null;
@@ -199,13 +260,15 @@ export default function TimelineMap({
 
     // Pass 2: prominent renders for each highlighted cluster.
     // Each gets a Start dot (or numbered dot if it's one of many),
-    // intermediate waypoint dots, End dot, and a routed polyline.
+    // intermediate waypoint dots, End dot, and a routed polyline
+    // styled by link role (loaded = solid heavy, deadhead = dashed).
     const highlightedClusters = clusters.filter((c) => highlighted.has(c.id));
     highlightedClusters.forEach((cl, idx) => {
       const { start, end, waypoints } = coordsForCluster(cl);
+      const role = roleForCluster(cl, linkByMovementId);
 
       // Per-cluster Start / End numbering when multiple are highlighted
-      // (the event-selection case: many trips for one load).
+      // (event-selection case: many trips for one load).
       const startLabel = highlightedClusters.length > 1 ? `${idx + 1}` : 'Start';
       const endLabel   = highlightedClusters.length > 1 ? null : 'End';
 
@@ -240,21 +303,12 @@ export default function TimelineMap({
         bounds.extend(end); boundsTouched = true;
       }
 
+      // Polyline rendering: ask DirectionsService for the road path,
+      // then draw OUR OWN polyline using role-specific styling (solid
+      // for loaded, dashed for deadhead). DirectionsRenderer can't
+      // dash, so we ignore it and use the result's overview_path.
       if (start && end) {
         const ds = new g.maps.DirectionsService();
-        const renderer = new g.maps.DirectionsRenderer({
-          map,
-          suppressMarkers: true,
-          polylineOptions: {
-            strokeColor:   assetColor,
-            strokeOpacity: 0.9,
-            strokeWeight:  4,
-          },
-          preserveViewport: true,    // we manage bounds ourselves
-        });
-        overlaysRef.current.push({
-          setMap: (mp) => { renderer.setMap(mp); },
-        });
         ds.route(
           {
             origin: start, destination: end, waypoints,
@@ -262,26 +316,19 @@ export default function TimelineMap({
             optimizeWaypoints: false,
           },
           (result, status) => {
-            if (status === g.maps.DirectionsStatus.OK && result) {
-              renderer.setDirections(result);
+            let path: google.maps.LatLngLiteral[];
+            if (status === g.maps.DirectionsStatus.OK && result?.routes?.[0]) {
+              // Road-accurate path from the routing result.
+              path = result.routes[0].overview_path.map((p) => ({ lat: p.lat(), lng: p.lng() }));
             } else {
-              // Routing failed — dashed straight line so something
-              // still draws (matches MovementDetailPanel fallback).
-              const path = [start, ...waypoints.map((w) => w.location as google.maps.LatLngLiteral), end];
-              const line = new g.maps.Polyline({
-                map, path,
-                strokeColor:   assetColor,
-                strokeOpacity: 0.7,
-                strokeWeight:  3,
-                geodesic:      true,
-                icons: [{
-                  icon:   { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
-                  offset: '0',
-                  repeat: '12px',
-                }],
-              });
-              overlaysRef.current.push(line);
+              // Routing failed — straight line through waypoints.
+              path = [start, ...waypoints.map((w) => w.location as google.maps.LatLngLiteral), end];
             }
+            const line = new g.maps.Polyline({
+              ...polylineOptionsForRole(role, assetColor, path),
+              map,
+            });
+            overlaysRef.current.push(line);
           },
         );
       }

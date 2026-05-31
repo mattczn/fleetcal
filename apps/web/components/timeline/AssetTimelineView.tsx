@@ -18,7 +18,7 @@
  *     movement at the right wall-clock hour.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -327,6 +327,42 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     setSelection(null);
   }, [effectiveAssetId, dayKey]);
 
+  // Keyboard click-through across the day's trips when a cluster is
+  // selected — mirrors AssetDetailModal's ← / → shortcuts. Wires to
+  // the same setSelection used by the in-panel prev/next buttons so
+  // there's only one nav code path.
+  useEffect(() => {
+    if (selection?.kind !== 'cluster') return;
+    const handler = (e: KeyboardEvent) => {
+      // Don't hijack arrow keys while a text input or date input is focused.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      // Same-tick re-read of visibleClusters via closure — only the
+      // currently-selected cluster id matters for finding the index.
+      const idx = visibleClustersRef.current.findIndex((c) => c.id === selection.cluster.id);
+      if (idx < 0) return;
+      const nextIdx = e.key === 'ArrowLeft' ? idx - 1 : idx + 1;
+      if (nextIdx < 0 || nextIdx >= visibleClustersRef.current.length) return;
+      const next = visibleClustersRef.current[nextIdx];
+      const linkFor = (cl: TimelineCluster): TimelineLink | undefined => {
+        for (const m of cl.members) {
+          const l = linkByMovementIdRef.current.get(m.id);
+          if (l) return l;
+        }
+        return undefined;
+      };
+      e.preventDefault();
+      setSelection({ kind: 'cluster', cluster: next, link: linkFor(next) });
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selection]);
+  // Refs so the keyboard handler sees the freshest clusters / link map
+  // without having to subscribe and recreate itself on every change.
+  const visibleClustersRef     = useRef<TimelineCluster[]>([]);
+  const linkByMovementIdRef    = useRef<Map<string, TimelineLink>>(new Map());
+
   const linkByMovementId = useMemo(() => {
     const m = new Map<string, TimelineLink>();
     for (const l of data?.links ?? []) m.set(l.movementId, l);
@@ -373,6 +409,78 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     () => computeDwells(visibleClusters, savedLocations),
     [visibleClusters, savedLocations],
   );
+
+  // Mirror to refs so the global keydown handler reads the freshest
+  // clusters + link map without rebinding on every render.
+  useEffect(() => { visibleClustersRef.current  = visibleClusters;  }, [visibleClusters]);
+  useEffect(() => { linkByMovementIdRef.current = linkByMovementId; }, [linkByMovementId]);
+
+  // Revenue analysis filtered to the *visible* day.
+  //
+  // The server computes profitability over every event in the fetch
+  // window (which is padded by ±6h so boundary movements get caught).
+  // That means a Wednesday 4am load shows up in Tuesday's profitability
+  // block — wrong from the dispatcher's "what did this day earn?" lens.
+  // We refilter to events that actually intersect dayKey (same filter
+  // visibleEvents uses) and rebuild the day rollup. The movement-side
+  // stats (yard return / unattributed / total miles) get re-derived
+  // from visibleClusters so they reflect only this day's driving.
+  const visibleProfitability = useMemo((): TimelineProfitability | null => {
+    if (!data?.profitability) return null;
+    const visibleEventIds = new Set(visibleEvents.map((e) => e.id));
+
+    const loads = data.profitability.loads.filter((l) => visibleEventIds.has(l.eventId));
+
+    const totalRevenue    = loads.reduce((s, l) => s + l.revenue, 0);
+    const totalDriverPay  = loads.reduce((s, l) => s + l.driverPay, 0);
+    const loadedMiles     = loads.reduce((s, l) => s + l.loadedMiles, 0);
+    const inboundDhMiles  = loads.reduce((s, l) => s + l.inboundDhMiles, 0);
+    const attributedMiles = loadedMiles + inboundDhMiles;
+
+    // Re-derive yard-return + unattributed miles by walking THIS day's
+    // visible clusters. A movement linked to a load OUTSIDE the visible
+    // day (e.g. Tue late-night deadhead toward Wed's pickup) falls into
+    // unattributed for this day — physically the driving happened today
+    // but it doesn't belong to any load on today's books.
+    let yardReturnMiles   = 0;
+    let unattributedMiles = 0;
+    for (const cl of visibleClusters) {
+      const link = linkForCluster(cl);
+      const miles = cl.miles;
+      if (!link) { unattributedMiles += miles; continue; }
+      if (link.role === 'loaded' && link.loadedEventId && visibleEventIds.has(link.loadedEventId)) {
+        // already aggregated through the load's loadedMiles
+      } else if (link.role === 'transition' && link.toEventId && visibleEventIds.has(link.toEventId)) {
+        // already aggregated through the load's inboundDhMiles
+      } else if (link.role === 'transition' && link.fromEventId && !link.toEventId) {
+        yardReturnMiles += miles;
+      } else {
+        unattributedMiles += miles;
+      }
+    }
+
+    const totalMiles = attributedMiles + yardReturnMiles + unattributedMiles;
+
+    return {
+      loads,
+      day: {
+        totalRevenue,
+        totalDriverPay,
+        netToTruck:        totalRevenue - totalDriverPay,
+        loadedMiles,
+        inboundDhMiles,
+        attributedMiles,
+        yardReturnMiles,
+        unattributedMiles,
+        totalMiles,
+        dayRpm:            attributedMiles > 0 ? totalRevenue / attributedMiles : null,
+        dayRpmTotal:       totalMiles      > 0 ? totalRevenue / totalMiles      : null,
+        deadheadPctOfDay:  totalMiles      > 0 ? (inboundDhMiles + yardReturnMiles) / totalMiles : null,
+      },
+    };
+  // linkForCluster reads linkByMovementId; safe to depend on the map.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.profitability, visibleEvents, visibleClusters, linkByMovementId]);
 
   // A cluster's link is the link on any of its members — the AI writes
   // identical links to every member, so the first one with a link wins.
@@ -514,56 +622,22 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             from the AI-classified link graph with inbound attribution
             (deadhead credited to the load it repositions toward).
             Renders only when the payload has a profitability block. */}
-        {data?.profitability && data.profitability.loads.length > 0 ? (
-          <RevenueAnalysisStrip profitability={data.profitability} assetColor={assetColor} fs={fs} />
+        {visibleProfitability && visibleProfitability.loads.length > 0 ? (
+          <RevenueAnalysisStrip profitability={visibleProfitability} assetColor={assetColor} fs={fs} />
         ) : null}
 
-        {/* Body: map (flex-1 with the detail panel stacked above) +
-            narrow events/movements columns on the right. Selection
-            drives what shows on the map — clicking a load draws all
-            its linked trips; clicking a trip shows just that trip. */}
+        {/* Body: schedule/actual columns on the LEFT (flex-1 — they
+            grow with the screen), map + detail stack on the RIGHT
+            (flex-1 too). Both proportions scale on bigger displays so
+            nothing gets squeezed on a 27" monitor.
+
+            Selection drives the map: clicking a load draws all its
+            linked trips; clicking a trip shows just that trip. */}
         <div className="flex gap-3 items-start mt-3">
-          {/* Map + detail column */}
-          <div className="flex-1 min-w-0 flex flex-col gap-3">
-            <div
-              className="rounded-lg overflow-hidden flex flex-col"
-              style={{
-                background: 'var(--gc-surface)',
-                border: '1px solid var(--gc-border)',
-                maxHeight: 320,                 // cap so the map below stays visible
-              }}
-            >
-              <DetailPanel
-                selection={selection}
-                tz={tz}
-                assetColor={assetColor}
-                events={data?.events ?? []}
-                eventLookup={eventById}
-                clusters={visibleClusters}
-                linkByMovementId={linkByMovementId}
-                fs={fs}
-                onClose={() => setSelection(null)}
-                onMutated={() => setRefreshTick((t) => t + 1)}
-                onSelect={(s) => setSelection(s)}
-              />
-            </div>
-
-            <TimelineMap
-              clusters={visibleClusters}
-              linkByMovementId={linkByMovementId}
-              selection={(() => {
-                if (!selection) return null;
-                if (selection.kind === 'event') return { kind: 'event', eventId: selection.event.id };
-                return { kind: 'cluster', clusterId: selection.cluster.id };
-              })()}
-              assetColor={assetColor}
-              height={560}
-            />
-          </div>
-
-          {/* Schedule / Actual columns — narrower than before so the
-              map gets the visual weight. Time ruler shrunk to 44px. */}
-          <div className="w-[520px] flex-shrink-0">
+          {/* Schedule + Actual columns — flex-1 so they grow as the
+              viewport widens. min-w-[480px] keeps them legible on
+              smaller screens. Time ruler 44px to claw back chip width. */}
+          <div className="flex-1 min-w-[480px]">
             {loading ? (
               <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
                 Loading timeline…
@@ -676,6 +750,45 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Map + detail column — RIGHT side, flex-1 + min-w-[480px]
+              so it grows with the viewport instead of being pinned. */}
+          <div className="flex-1 min-w-[480px] flex flex-col gap-3">
+            <div
+              className="rounded-lg overflow-hidden flex flex-col"
+              style={{
+                background: 'var(--gc-surface)',
+                border: '1px solid var(--gc-border)',
+                maxHeight: 320,
+              }}
+            >
+              <DetailPanel
+                selection={selection}
+                tz={tz}
+                assetColor={assetColor}
+                events={data?.events ?? []}
+                eventLookup={eventById}
+                clusters={visibleClusters}
+                linkByMovementId={linkByMovementId}
+                fs={fs}
+                onClose={() => setSelection(null)}
+                onMutated={() => setRefreshTick((t) => t + 1)}
+                onSelect={(s) => setSelection(s)}
+              />
+            </div>
+
+            <TimelineMap
+              clusters={visibleClusters}
+              linkByMovementId={linkByMovementId}
+              selection={(() => {
+                if (!selection) return null;
+                if (selection.kind === 'event') return { kind: 'event', eventId: selection.event.id };
+                return { kind: 'cluster', clusterId: selection.cluster.id };
+              })()}
+              assetColor={assetColor}
+              height={560}
+            />
           </div>
         </div>
 
@@ -1019,9 +1132,9 @@ function DetailPanel({
             : selection.kind === 'event' ? 'Scheduled event' : 'Trip'}
         </span>
 
-        {/* Prev/next cluster navigation — only meaningful when a
-            cluster is selected, lets the user step through the day's
-            trips in time order without leaving the panel. */}
+        {/* Prev/next cluster navigation — matches AssetDetailModal's
+            click-through (rounded-full chevron buttons + N/total
+            counter). Keyboard ← / → handled at the page level. */}
         {selection?.kind === 'cluster' ? (() => {
           const idx = clusters.findIndex((c) => c.id === selection.cluster.id);
           const prev = idx > 0 ? clusters[idx - 1] : null;
@@ -1033,24 +1146,33 @@ function DetailPanel({
             }
             return undefined;
           };
+          const navBtnStyle = { color: 'var(--gc-text-2)' as const };
           return (
-            <span className="ml-3 flex items-center gap-1 tabular-nums" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
+            <span className="ml-3 flex items-center gap-1 tabular-nums">
               <button
                 onClick={() => prev && onSelect({ kind: 'cluster', cluster: prev, link: linkFor(prev) })}
                 disabled={!prev}
-                className="w-6 h-6 rounded flex items-center justify-center hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed"
-                title={prev ? 'Previous trip' : 'No earlier trip'}
+                className="p-1.5 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                style={navBtnStyle}
+                onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                title="Earlier (← key)"
               >
-                <ChevronLeft size={14} />
+                <ChevronLeft size={16} />
               </button>
-              <span>{idx + 1} / {clusters.length}</span>
+              <span className="font-mono" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
+                {idx + 1} / {clusters.length}
+              </span>
               <button
                 onClick={() => next && onSelect({ kind: 'cluster', cluster: next, link: linkFor(next) })}
                 disabled={!next}
-                className="w-6 h-6 rounded flex items-center justify-center hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed"
-                title={next ? 'Next trip' : 'No later trip'}
+                className="p-1.5 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                style={navBtnStyle}
+                onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                title="Later (→ key)"
               >
-                <ChevronRight size={14} />
+                <ChevronRight size={16} />
               </button>
             </span>
           );
