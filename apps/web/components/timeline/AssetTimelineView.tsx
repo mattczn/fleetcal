@@ -22,11 +22,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ChevronLeft, ChevronRight, Calendar as CalendarIcon, ArrowLeft,
+  Calendar as CalendarIcon, ArrowLeft,
   Truck, MapPin, Clock, Sparkles, X, Plus, Pencil, Trash2, Loader2,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
-import DatePicker from '@/components/calendar/DatePicker';
 import {
   railway,
   type TimelinePayload, type TimelineEvent, type TimelineLink,
@@ -275,20 +274,49 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   const todayKey = utcDateKeyInTz(new Date().toISOString(), tz);
   const [dayKey, setDayKey] = useState<string>(todayKey);
 
-  // viewMode: 'day' = single-day view with chevron/picker nav.
-  //           'week' = week strip becomes the primary nav; clicking the
-  //                    Week-total card swaps the Revenue Analysis to a
-  //                    week-aggregate panel.
-  type ViewMode = 'day' | 'week';
-  const [viewMode, setViewMode] = useState<ViewMode>('day');
-  // weekTotalSelected only meaningful in viewMode='week'. When true,
-  // the Week-total card is highlighted and the page renders the
-  // week-aggregate analysis instead of the single-day timeline body.
+  // When the Week-total card on the strip is clicked, this flips true
+  // and the per-day Revenue Analysis swaps to the week-aggregate panel.
+  // Switching weeks (or clicking a day card) resets it to false.
   const [weekTotalSelected, setWeekTotalSelected] = useState<boolean>(false);
-  // Switching mode resets the totals selection so re-entering week mode
-  // starts on today's day, not stuck on the previous total view.
-  function switchViewMode(next: ViewMode) {
-    setViewMode(next);
+
+  // Started-weeks list for the Week dropdown — Saturdays going back
+  // from the current week. Each option labels its Sat → Fri range.
+  // Capped at 12 weeks back for a reasonable dropdown size; if a
+  // dispatcher needs to audit something older they can deep-link.
+  const currentWeekStart = useMemo(() => weekStartFor(todayKey), [todayKey]);
+  const startedWeeks = useMemo(() => {
+    const items: { weekStart: string; label: string }[] = [];
+    let cur = currentWeekStart;
+    for (let i = 0; i < 12; i++) {
+      const fri = shiftDateKey(cur, 6);
+      const [satY, satM, satD] = cur.split('-').map(Number);
+      const [friY, friM, friD] = fri.split('-').map(Number);
+      const satDate = new Date(satY, satM - 1, satD);
+      const friDate = new Date(friY, friM - 1, friD);
+      const sameMonth = satDate.getMonth() === friDate.getMonth();
+      const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const left  = `${monthNames[satDate.getMonth()]} ${satD}`;
+      const right = sameMonth
+        ? `${friD}`
+        : `${monthNames[friDate.getMonth()]} ${friD}`;
+      let label = `${left} – ${right}`;
+      if (cur === currentWeekStart) label = `This week (${label})`;
+      else if (i === 1)             label = `Last week (${label})`;
+      items.push({ weekStart: cur, label });
+      cur = shiftDateKey(cur, -7);
+    }
+    return items;
+  }, [currentWeekStart]);
+
+  /** Switch the displayed week. If the user picks the current week we
+   *  jump to today; otherwise we jump to the selected week's Saturday
+   *  so the dispatcher lands on a sensible day inside the new week. */
+  function selectWeek(weekStart: string) {
+    if (weekStart === currentWeekStart) {
+      setDayKey(todayKey);
+    } else {
+      setDayKey(weekStart);
+    }
     setWeekTotalSelected(false);
   }
 
@@ -644,22 +672,22 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             </select>
           </div>
 
-          {/* View mode picker — Day vs Week. Day mode keeps the existing
-              chevron+DatePicker date nav; Week mode hides that and turns
-              the week strip into the primary navigation. */}
+          {/* Week selector — list of started weeks (Sat → Fri). Picking
+              one sets dayKey to today (current week) or to that week's
+              Saturday. The WeekStrip below + the day cards inside it
+              handle finer navigation. */}
           <div className="flex items-center gap-2 px-2 py-1 rounded"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
-            <span className="uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)', fontSize: 10 }}>
-              View
-            </span>
+            <CalendarIcon size={12} style={{ color: 'var(--gc-text-3)' }} />
             <select
-              value={viewMode}
-              onChange={(e) => switchViewMode((e.target.value as ViewMode) === 'week' ? 'week' : 'day')}
+              value={weekStartFor(dayKey)}
+              onChange={(e) => selectWeek(e.target.value)}
               className="text-[13px] font-semibold bg-transparent border-0 outline-none cursor-pointer"
               style={{ color: 'var(--gc-text-1)' }}
             >
-              <option value="day">Day</option>
-              <option value="week">Week (Sat–Fri)</option>
+              {startedWeeks.map((w) => (
+                <option key={w.weekStart} value={w.weekStart}>{w.label}</option>
+              ))}
             </select>
           </div>
 
@@ -748,76 +776,22 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </div>
         ) : null}
 
-        {/* Day nav — only shown in Day view. In Week view the WeekStrip
-            below is the primary navigation. */}
-        {viewMode === 'day' ? (
-          <div
-            className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg"
-            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
-          >
-            <button
-              onClick={() => setDayKey((k) => shiftDateKey(k, -1))}
-              className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
-              title="Previous day"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <DatePicker
-              value={dayKey}
-              onChange={(v) => setDayKey(v || todayKey)}
-              headerColor={assetColor}
-              buttonClassName="flex items-center gap-2 px-2 py-1 rounded hover:bg-black/5"
-              buttonStyle={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--gc-text-1)',
-                fontWeight: 600,
-                fontSize: 14,
-                width: 'auto',
-                padding: '4px 8px',
-              }}
-              containerStyle={{ flex: 'none' }}
-            />
-            <button
-              onClick={() => setDayKey((k) => shiftDateKey(k, 1))}
-              className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
-              title="Next day"
-            >
-              <ChevronRight size={16} />
-            </button>
-            <span className="ml-1" style={{ color: 'var(--gc-text-3)', fontSize: 12 }}>
-              {fmtDateHeader(dayKey, tz)}
-            </span>
-            <button
-              onClick={() => setDayKey(todayKey)}
-              className="ml-auto text-[11px] font-semibold px-2 py-1 rounded"
-              style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
-            >
-              TODAY
-            </button>
-          </div>
-        ) : null}
-
-        {/* Week strip — always rendered when the summary is loaded. In
-            Week view it acts as the primary nav (clickable Week-total
-            card included); in Day view it's an informative supplement. */}
+        {/* Week strip — primary day-level navigation. Clicking a day
+            card sets dayKey; clicking the Week-total card flips
+            weekTotalSelected and the per-day analysis swaps to the
+            week-aggregate panel. */}
         {weekSummary ? (
           <WeekStrip
             summary={weekSummary}
             activeDayKey={dayKey}
-            weekTotalSelected={viewMode === 'week' && weekTotalSelected}
+            weekTotalSelected={weekTotalSelected}
             todayKey={todayKey}
             assetColor={assetColor}
             onSelectDay={(k) => {
               setDayKey(k);
-              // In Week view, picking a day card un-selects the total.
-              if (viewMode === 'week') setWeekTotalSelected(false);
+              setWeekTotalSelected(false);
             }}
-            onSelectWeekTotal={
-              viewMode === 'week'
-                ? () => setWeekTotalSelected(true)
-                : undefined
-            }
+            onSelectWeekTotal={() => setWeekTotalSelected(true)}
             fs={fs}
           />
         ) : weekSummaryLoading ? (
@@ -826,10 +800,9 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </div>
         ) : null}
 
-        {/* Week-aggregate analysis — replaces the per-day Revenue
-            Analysis strip + the entire timeline body when the user
-            zooms out to the week's total. */}
-        {viewMode === 'week' && weekTotalSelected && weekSummary ? (
+        {/* Week-aggregate analysis — replaces per-day Revenue Analysis
+            + the entire timeline body when the user zooms out. */}
+        {weekTotalSelected && weekSummary ? (
           <WeekRevenuePanel
             summary={weekSummary}
             assetColor={assetColor}
@@ -846,7 +819,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
         {/* Body: schedule/actual columns + map. Hidden in week-aggregate
             mode since the day-scoped layout doesn't have a coherent
             week-scope rendering. */}
-        {viewMode === 'week' && weekTotalSelected ? null : (
+        {weekTotalSelected ? null : (
           <>
         {/* items-stretch (default) lets the right column match the
             left column's full natural height — the calendar grid
