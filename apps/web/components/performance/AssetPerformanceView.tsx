@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Truck, ChevronDown, ChevronUp, ArrowUpDown, Users } from 'lucide-react';
+import { Truck, ChevronDown, ChevronUp, ArrowUpDown, Users, Sparkles, Loader2 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import {
@@ -28,6 +28,7 @@ import {
 } from '@/lib/periodRange';
 import { railway, type FleetAssetPerformance } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { parseNaiveIsoInTz } from '@/lib/time-utils';
 
 // ── Column definitions ──────────────────────────────────────────────
 
@@ -152,6 +153,18 @@ export default function AssetPerformanceView() {
   const [rows, setRows]     = useState<FleetAssetPerformance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]   = useState<string | null>(null);
+  /** Bump to retrigger the fetch after a bulk-relink finishes. */
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  // Bulk-relink state — drives the header progress UI.
+  const [relinking, setRelinking] = useState(false);
+  const [relinkProgress, setRelinkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [relinkResult, setRelinkResult] = useState<{
+    totalCalls:        number;
+    successCalls:      number;
+    totalLinksWritten: number;
+    totalManualSkipped: number;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,7 +174,67 @@ export default function AssetPerformanceView() {
       .then((res) => { if (!cancelled) { setRows(res.assets); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false); } });
     return () => { cancelled = true; };
-  }, [fromISO, toISO, tz]);
+  }, [fromISO, toISO, tz, refreshTick]);
+
+  /** Re-link every day of the selected period for every visible truck
+   *  in parallel (capped concurrency). Each call hits the existing
+   *  per-day auto-link endpoint — same one "Re-link week" already uses
+   *  on the timeline page. Refreshes the table on completion. */
+  const runFleetRelink = useCallback(async () => {
+    if (rows.length === 0 || relinking) return;
+    const dayKeys = enumerateDayKeys(fromISO, toISO);
+    const jobs: Array<{ assetId: number; from: string; to: string }> = [];
+    const padMs = 6 * 60 * 60 * 1000;
+    for (const a of rows) {
+      for (const dayKey of dayKeys) {
+        const startEpoch = parseNaiveIsoInTz(`${dayKey}T00:00:00`, tz);
+        const endEpoch   = parseNaiveIsoInTz(`${dayKey}T23:59:59`, tz);
+        jobs.push({
+          assetId: a.assetId,
+          from: new Date(startEpoch - padMs).toISOString(),
+          to:   new Date(endEpoch   + padMs).toISOString(),
+        });
+      }
+    }
+    setRelinking(true);
+    setRelinkResult(null);
+    setRelinkProgress({ done: 0, total: jobs.length });
+
+    let done = 0;
+    let success = 0;
+    let totalLinks = 0;
+    let totalSkipped = 0;
+    const CONCURRENCY = 8;     // 8 parallel AI calls; tune if rate-limited
+
+    let cursor = 0;
+    async function worker() {
+      while (cursor < jobs.length) {
+        const idx = cursor++;
+        const job = jobs[idx];
+        try {
+          const r = await railway.autoLinkAssetTimeline(job.assetId, job.from, job.to);
+          success++;
+          totalLinks   += r.linksWritten;
+          totalSkipped += r.manualSkipped;
+        } catch {
+          /* swallow — surfaced as a failure count below */
+        }
+        done++;
+        setRelinkProgress({ done, total: jobs.length });
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, () => worker()));
+
+    setRelinking(false);
+    setRelinkProgress(null);
+    setRelinkResult({
+      totalCalls:         jobs.length,
+      successCalls:       success,
+      totalLinksWritten:  totalLinks,
+      totalManualSkipped: totalSkipped,
+    });
+    setRefreshTick((t) => t + 1);
+  }, [rows, fromISO, toISO, tz, relinking]);
 
   // Sort state.
   const [sortKey, setSortKey] = useState<ColumnKey>('totalRevenue');
@@ -218,6 +291,22 @@ export default function AssetPerformanceView() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={runFleetRelink}
+              disabled={relinking || rows.length === 0}
+              className="text-[12px] font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded"
+              style={{
+                background: relinking ? 'var(--gc-surface-2)' : 'var(--gc-purple, #a142f4)',
+                color:      relinking ? 'var(--gc-text-3)' : '#fff',
+                opacity:    rows.length === 0 ? 0.5 : 1,
+              }}
+              title="Fires AI auto-link for every visible truck × every day in the period (parallel, capped concurrency)"
+            >
+              {relinking ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {relinking
+                ? `Linking… ${relinkProgress?.done ?? 0} / ${relinkProgress?.total ?? 0}`
+                : 'Re-link period for fleet'}
+            </button>
             <Link
               href="/drivers"
               className="text-[12px] font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded"
@@ -237,6 +326,31 @@ export default function AssetPerformanceView() {
             />
           </div>
         </div>
+
+        {/* Bulk re-link result banner */}
+        {relinkResult ? (
+          <div
+            className="mb-4 px-3 py-2 rounded-lg text-[12px] flex items-center gap-2"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
+          >
+            <Sparkles size={14} style={{ color: '#a142f4' }} />
+            <span>
+              Fleet relink: {relinkResult.successCalls} of {relinkResult.totalCalls} truck-day jobs succeeded ·{' '}
+              {relinkResult.totalLinksWritten} links written
+              {relinkResult.totalManualSkipped > 0 ? `; ${relinkResult.totalManualSkipped} manual skipped` : ''}
+              {relinkResult.successCalls < relinkResult.totalCalls
+                ? `; ${relinkResult.totalCalls - relinkResult.successCalls} failed`
+                : ''}
+            </span>
+            <button
+              onClick={() => setRelinkResult(null)}
+              className="ml-auto px-2 py-0.5 rounded text-[10px]"
+              style={{ color: 'var(--gc-text-3)' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="py-20 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
@@ -396,4 +510,21 @@ function RankingStrip({
 function isoLocal(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Inclusive list of YYYY-MM-DD day-keys from `from` through `to`. */
+function enumerateDayKeys(fromISO: string, toISO: string): string[] {
+  const out: string[] = [];
+  // Use a stable noon-UTC anchor so DST / TZ math doesn't drift the
+  // iteration. Day-keys are pure date strings, no clock-time involved.
+  const cur = new Date(`${fromISO}T12:00:00Z`);
+  const end = new Date(`${toISO}T12:00:00Z`);
+  while (cur.getTime() <= end.getTime()) {
+    out.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+    // Hard cap — guards against runaway loops if someone passes a
+    // year-long period by accident.
+    if (out.length > 366) break;
+  }
+  return out;
 }
