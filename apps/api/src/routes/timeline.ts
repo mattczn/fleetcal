@@ -201,6 +201,8 @@ interface TimelineEvent {
   status: string | null;
   eventKind: string | null;
   nonRevenueType: string | null;
+  /** 'pickup' / 'delivery' for relay legs, null for whole loads. */
+  relayRole: 'pickup' | 'delivery' | null;
   loadPrice: number | null;
   loadNum: string | null;         // loads.load_num
   driverPay: number | null;       // events.driver_pay (per-leg)
@@ -300,7 +302,7 @@ timeline.get("/assets/:assetId", async (c) => {
   // loads on the timeline.
   const { data: events, error: eErr } = await sb
     .from("events")
-    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, driver_name, driver_pay, loaded_miles, load:loads(load_price, load_num)")
+    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, relay_role, driver_name, driver_pay, loaded_miles, load:loads(load_price, load_num)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
@@ -347,6 +349,7 @@ timeline.get("/assets/:assetId", async (c) => {
   const eventsOut: TimelineEvent[] = ((events ?? []) as Array<{
     id: string; title: string | null; start: string; end: string;
     status: string | null; event_kind: string | null; non_revenue_type: string | null;
+    relay_role: string | null;
     driver_name: string | null; driver_pay: number | null; loaded_miles: number | null;
     load: { load_price: number | null; load_num: string | null } | null;
   }>).map((e) => ({
@@ -357,6 +360,9 @@ timeline.get("/assets/:assetId", async (c) => {
     status:         e.status,
     eventKind:      e.event_kind,
     nonRevenueType: e.non_revenue_type,
+    relayRole:      e.relay_role === 'pickup' || e.relay_role === 'delivery'
+                      ? e.relay_role
+                      : null,
     loadPrice:      e.load?.load_price ?? null,
     loadNum:        e.load?.load_num   ?? null,
     driverPay:      e.driver_pay ?? null,
@@ -1540,6 +1546,15 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   const movFrom = naiveToUtcIso(weekStartNaive);
   const movTo   = naiveToUtcIso(weekEndNaive);
 
+  // ── Movements: within-week window + cross-week spillover ───────
+  //
+  // The within-window fetch catches normal-case movements. The
+  // spillover fetch grabs movements that PHYSICALLY happened outside
+  // the week but whose link points to a load IN the week (e.g. a load
+  // pickup Fri end-of-week + delivery Sat start-of-next-week — last
+  // week's loaded miles include both Fri and Sat morning driving so
+  // RPM math stays honest).
+
   const { data: movementRows } = await sb
     .from("movements")
     .select("id, miles, start_time")
@@ -1548,7 +1563,7 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
     .is("deleted_at", null)
     .gte("start_time", movFrom)
     .lt("start_time", movTo);
-  const movementsList = ((movementRows ?? []) as Array<{
+  const inWindowMovements = ((movementRows ?? []) as Array<{
     id: string; miles: number | null; start_time: string;
   }>);
 
@@ -1557,26 +1572,77 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date(utc));
 
-  // ── Current-truth links for those movements ─────────────────────
-  const movementIds = movementsList.map((m) => m.id);
-  const { data: linkRows } = movementIds.length > 0
-    ? await sb
-        .from("movement_links")
-        .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
-        .eq("org_id", orgId)
-        .in("movement_id", movementIds)
-        .is("superseded_at", null)
-    : { data: [] };
-  const linkByMovementId = new Map<string, {
-    role: string; loaded_event_id: string | null;
-    from_event_id: string | null; to_event_id: string | null;
-  }>();
-  for (const l of (linkRows ?? []) as Array<{
-    movement_id: string; role: string; loaded_event_id: string | null;
-    from_event_id: string | null; to_event_id: string | null;
-  }>) {
-    linkByMovementId.set(l.movement_id, l);
+  // Fetch every CURRENT link that touches our week — either by
+  // movement-id (within-window movements) or by event-id reference
+  // (spillover from a movement physically outside the week).
+  const inWindowMovementIds = inWindowMovements.map((m) => m.id);
+  const eventIds = eventList.map((e) => e.id);
+  type LinkRow = {
+    movement_id: string; role: string;
+    loaded_event_id: string | null;
+    from_event_id: string | null;
+    to_event_id: string | null;
+  };
+  // Two parallel fetches kept simple: by-movement-id (in-window) and
+  // by-event-ref (link spillover). PostgREST's .or() with .in() on
+  // UUID columns is finicky enough that two clean queries are easier
+  // than one combined string-built filter.
+  const [byMovement, spilloverA, spilloverB, spilloverC] = await Promise.all([
+    inWindowMovementIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("movement_id", inWindowMovementIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    eventIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("loaded_event_id", eventIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    eventIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("from_event_id", eventIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    eventIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("to_event_id", eventIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+  ]);
+  const linkByMovementId = new Map<string, LinkRow>();
+  for (const set of [byMovement, spilloverA, spilloverB, spilloverC]) {
+    for (const l of ((set.data ?? []) as LinkRow[])) {
+      linkByMovementId.set(l.movement_id, l);
+    }
   }
+
+  // Fetch any spillover-movement rows we don't already have. These are
+  // the physically-outside-window movements that link to in-window loads.
+  const inWindowSet = new Set(inWindowMovementIds);
+  const spilloverMovementIds = Array.from(linkByMovementId.keys()).filter((id) => !inWindowSet.has(id));
+  const { data: spilloverMovementRows } = spilloverMovementIds.length > 0
+    ? await sb
+        .from("movements")
+        .select("id, miles, start_time")
+        .eq("org_id", orgId)
+        .eq("asset_id", assetId)
+        .is("deleted_at", null)
+        .in("id", spilloverMovementIds)
+    : { data: [] };
+  const movementsList = [
+    ...inWindowMovements,
+    ...((spilloverMovementRows ?? []) as Array<{
+      id: string; miles: number | null; start_time: string;
+    }>),
+  ];
 
   // ── Initialize per-day accumulators ─────────────────────────────
   type Bucket = {

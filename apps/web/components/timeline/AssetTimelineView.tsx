@@ -1064,11 +1064,25 @@ function EventBlock({
       <div className="px-1.5 pt-0.5 flex flex-col h-full overflow-hidden">
         <div className="flex items-start gap-1">
           <div
-            className="font-extrabold leading-tight break-words min-w-0"
+            className="font-extrabold leading-tight break-words min-w-0 flex-1"
             style={{ color: isNonRev ? '#202124' : '#ffffff', fontSize: fsTitle }}
           >
             {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
           </div>
+          {event.relayRole ? (
+            <span
+              className="font-extrabold uppercase tracking-wider px-1 rounded flex-shrink-0"
+              style={{
+                fontSize:   fs(9),
+                color:      '#ffffff',
+                background: 'rgba(0,0,0,0.25)',
+                marginTop:  1,
+              }}
+              title={event.relayRole === 'pickup' ? 'Pickup leg of a relay load' : 'Delivery leg of a relay load'}
+            >
+              {event.relayRole === 'pickup' ? 'PU LEG' : 'DEL LEG'}
+            </span>
+          ) : null}
         </div>
         {fields.map((line, i) => {
           // Mirror CalendarEvent's stop-rendering-when-too-tall logic:
@@ -1110,6 +1124,19 @@ function shortTime(hhmm: string): string {
   const ampm = h >= 12 ? 'p' : 'a';
   const h12  = h % 12 || 12;
   return m === 0 ? `${h12}${ampm}` : `${h12}:${String(m).padStart(2, '0')}${ampm}`;
+}
+
+/** Filter an event's stops to only those relevant to its relay leg.
+ *  Whole loads (no relayRole) show every stop. Pickup legs show pickup
+ *  stops; delivery legs show delivery / drop / drop_hook stops. */
+function stopsForLeg(event: TimelineEvent): TimelineEvent['stops'] {
+  if (!event.relayRole) return event.stops;
+  if (event.relayRole === 'pickup') {
+    return event.stops.filter((s) => s.type === 'pickup');
+  }
+  return event.stops.filter(
+    (s) => s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook',
+  );
 }
 
 function stopLabel(type: string): string {
@@ -1416,9 +1443,22 @@ function EventDetail({
     <>
       <div className="flex items-center gap-2">
         <div className="w-3 h-3 rounded-full" style={{ background: isNonRev ? '#f9ab00' : color }} />
-        <h2 className="font-semibold" style={{ color: 'var(--gc-text-1)', fontSize: fs(16) }}>
+        <h2 className="font-semibold flex-1 min-w-0" style={{ color: 'var(--gc-text-1)', fontSize: fs(16) }}>
           {event.title ?? (isNonRev ? event.nonRevenueType ?? 'Non-revenue' : 'Untitled')}
         </h2>
+        {event.relayRole ? (
+          <span
+            className="uppercase tracking-wider font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+            style={{
+              fontSize:   fs(10),
+              background: color,
+              color:      '#ffffff',
+            }}
+            title={event.relayRole === 'pickup' ? 'Pickup leg of a relay load' : 'Delivery leg of a relay load'}
+          >
+            {event.relayRole === 'pickup' ? 'Pickup leg' : 'Delivery leg'}
+          </span>
+        ) : null}
       </div>
       <div className="flex items-center gap-2" style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
         <Clock size={Math.max(10, fs(12))} />
@@ -1492,13 +1532,22 @@ function EventDetail({
         </div>
       ) : null}
 
-      {event.stops.length > 0 ? (
+      {(() => {
+        // For relay legs, show only the stops relevant to this side
+        // of the relay (pickups for the pickup leg, deliveries for the
+        // delivery leg). Whole loads keep showing every stop.
+        const visibleStops = stopsForLeg(event);
+        if (visibleStops.length === 0) return null;
+        const legNote = event.relayRole === 'pickup' ? ' · pickup leg'
+                      : event.relayRole === 'delivery' ? ' · delivery leg'
+                      : '';
+        return (
         <div>
           <div className="font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
-            Stops ({event.stops.length})
+            Stops ({visibleStops.length}{legNote})
           </div>
           <div className="space-y-2">
-            {event.stops.map((s) => {
+            {visibleStops.map((s) => {
               const pin =
                 s.type === 'pickup'                                ? '#16a34a' :
                 s.type === 'delivery' || s.type === 'drop' || s.type === 'drop_hook' ? '#dc2626' :
@@ -1527,7 +1576,8 @@ function EventDetail({
             })}
           </div>
         </div>
-      ) : null}
+        );
+      })()}
     </>
   );
 }

@@ -164,6 +164,8 @@ export interface TimelineEvent {
   nonRevenueType:   string | null;
   loadPrice:        number | null;
   loadNum:          string | null;     // loads.load_num
+  /** 'pickup' / 'delivery' for relay legs, null for whole loads. */
+  relayRole:        'pickup' | 'delivery' | null;
   driverPay:        number | null;     // events.driver_pay
   loadedMiles:      number | null;     // events.loaded_miles (quoted)
   driverName:       string | null;

@@ -118,15 +118,25 @@ fleet.get("/performance", async (c) => {
   const movTo   = naiveToUtcIso(toNaive, tz);
 
   // ── Assets in org ──────────────────────────────────────────────
+  // Filters:
+  //   • hidden = false                          (calendar-hidden trucks excluded)
+  //   • type != 'Unassigned' AND name != 'Unassigned'
+  //                                             (drops the orphan-load pseudo-asset)
+  //   • active_from <= window's `to`            (asset existed by the end of window)
+  //   • active_to IS NULL OR active_to >= from  (asset wasn't retired before window)
   const { data: assetRows } = await sb
     .from("assets")
-    .select("id, name, unit, color, motive_vehicle_id")
+    .select("id, name, unit, color, motive_vehicle_id, type")
     .eq("org_id", orgId)
     .eq("hidden", false)
+    .neq("type", "Unassigned")
+    .neq("name", "Unassigned")
+    .lte("active_from", to)
+    .or(`active_to.is.null,active_to.gte.${from}`)
     .order("sort_order", { ascending: true });
   const assets = ((assetRows ?? []) as Array<{
     id: number; name: string; unit: string | null; color: string;
-    motive_vehicle_id: string | null;
+    motive_vehicle_id: string | null; type: string | null;
   }>);
   if (assets.length === 0) {
     const res: FleetPerformanceResponse = { windowFrom: from, windowTo: to, assets: [] };
@@ -158,7 +168,15 @@ fleet.get("/performance", async (c) => {
     if (e.event_kind !== "non_revenue") revenueEventIds.add(e.id);
   }
 
-  // ── Movements for all assets in window ────────────────────────
+  // ── Movements: in-window + cross-period spillover ─────────────
+  //
+  // In-window catches the normal case: movements that happened during
+  // [from, to]. Spillover catches movements PHYSICALLY outside the
+  // window whose link refs an event INSIDE the window — same fix as
+  // week-summary. A multi-day load that started in the period but
+  // had miles after the window's end still credits those miles to
+  // this period (the load's owning bucket).
+
   const { data: movementRows } = await sb
     .from("movements")
     .select("id, asset_id, miles, start_time")
@@ -167,30 +185,77 @@ fleet.get("/performance", async (c) => {
     .is("deleted_at", null)
     .gte("start_time", movFrom)
     .lt("start_time", movTo);
-  const movements = ((movementRows ?? []) as Array<{
+  const inWindowMovements = ((movementRows ?? []) as Array<{
     id: string; asset_id: number; miles: number | null; start_time: string;
   }>);
 
-  // ── Current-truth links for those movements ───────────────────
-  const movementIds = movements.map((m) => m.id);
-  const { data: linkRows } = movementIds.length > 0
-    ? await sb
-        .from("movement_links")
-        .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
-        .eq("org_id", orgId)
-        .in("movement_id", movementIds)
-        .is("superseded_at", null)
-    : { data: [] };
-  const linkByMovementId = new Map<string, {
-    role: string; loaded_event_id: string | null;
-    from_event_id: string | null; to_event_id: string | null;
-  }>();
-  for (const l of (linkRows ?? []) as Array<{
-    movement_id: string; role: string; loaded_event_id: string | null;
-    from_event_id: string | null; to_event_id: string | null;
-  }>) {
-    linkByMovementId.set(l.movement_id, l);
+  // Pull every CURRENT link that references either a window movement
+  // OR a window event. Four parallel queries — PostgREST's .or() with
+  // .in() on UUID columns gets messy enough that this is cleaner.
+  const inWindowMovementIds = inWindowMovements.map((m) => m.id);
+  const eventIds = events.map((e) => e.id);
+  type LinkRow = {
+    movement_id: string; role: string;
+    loaded_event_id: string | null;
+    from_event_id: string | null;
+    to_event_id: string | null;
+  };
+  const [byMovement, spilloverA, spilloverB, spilloverC] = await Promise.all([
+    inWindowMovementIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("movement_id", inWindowMovementIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    eventIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("loaded_event_id", eventIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    eventIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("from_event_id", eventIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+    eventIds.length > 0
+      ? sb.from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("to_event_id", eventIds)
+          .is("superseded_at", null)
+      : Promise.resolve({ data: [] as LinkRow[] }),
+  ]);
+  const linkByMovementId = new Map<string, LinkRow>();
+  for (const set of [byMovement, spilloverA, spilloverB, spilloverC]) {
+    for (const l of ((set.data ?? []) as LinkRow[])) {
+      linkByMovementId.set(l.movement_id, l);
+    }
   }
+
+  // Fetch any spillover-movement rows we don't already have (movements
+  // physically outside the window but linked to a window event).
+  const inWindowSet = new Set(inWindowMovementIds);
+  const spilloverMovementIds = Array.from(linkByMovementId.keys()).filter((id) => !inWindowSet.has(id));
+  const { data: spilloverMovementRows } = spilloverMovementIds.length > 0
+    ? await sb
+        .from("movements")
+        .select("id, asset_id, miles, start_time")
+        .eq("org_id", orgId)
+        .in("asset_id", assetIds)
+        .is("deleted_at", null)
+        .in("id", spilloverMovementIds)
+    : { data: [] };
+  const movements = [
+    ...inWindowMovements,
+    ...((spilloverMovementRows ?? []) as Array<{
+      id: string; asset_id: number; miles: number | null; start_time: string;
+    }>),
+  ];
 
   // ── Per-asset accumulators ────────────────────────────────────
   type Bucket = {
@@ -308,10 +373,17 @@ fleet.get("/performance", async (c) => {
     };
   });
 
+  // Drop rows that were utterly idle in this window — no loads, no
+  // movements at all. The dispatcher doesn't want a wall of zeros
+  // from trucks that were parked the whole period.
+  const activeAssets = assetsOut.filter(
+    (a) => a.loadCount > 0 || a.totalMiles > 0 || a.activeDays > 0,
+  );
+
   const res: FleetPerformanceResponse = {
     windowFrom: from,
     windowTo:   to,
-    assets:     assetsOut,
+    assets:     activeAssets,
   };
   return c.json(res);
 });
