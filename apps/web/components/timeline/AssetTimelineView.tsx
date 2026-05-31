@@ -415,6 +415,19 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   useEffect(() => { visibleClustersRef.current  = visibleClusters;  }, [visibleClusters]);
   useEffect(() => { linkByMovementIdRef.current = linkByMovementId; }, [linkByMovementId]);
 
+  // A cluster's link is the link on any of its members — the AI writes
+  // identical links to every member, so the first one with a link wins.
+  // Declared HERE (above visibleProfitability) because the useMemo
+  // below captures it via closure — TDZ-safe ordering matters with
+  // const arrow functions (they don't hoist like `function` decls).
+  const linkForCluster = (cl: TimelineCluster): TimelineLink | undefined => {
+    for (const m of cl.members) {
+      const l = linkByMovementId.get(m.id);
+      if (l) return l;
+    }
+    return undefined;
+  };
+
   // Revenue analysis filtered to the *visible* day.
   //
   // The server computes profitability over every event in the fetch
@@ -481,16 +494,6 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   // linkForCluster reads linkByMovementId; safe to depend on the map.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.profitability, visibleEvents, visibleClusters, linkByMovementId]);
-
-  // A cluster's link is the link on any of its members — the AI writes
-  // identical links to every member, so the first one with a link wins.
-  const linkForCluster = (cl: TimelineCluster): TimelineLink | undefined => {
-    for (const m of cl.members) {
-      const l = linkByMovementId.get(m.id);
-      if (l) return l;
-    }
-    return undefined;
-  };
 
   const asset = data?.asset;
 
