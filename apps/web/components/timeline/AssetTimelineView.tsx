@@ -35,6 +35,7 @@ import {
   type WeekSummary,
 } from '@/lib/railway';
 import WeekStrip from './WeekStrip';
+import WeekRevenuePanel from './WeekRevenuePanel';
 import {
   clusterTimelineMovements, computeDwells, findSavedLocation,
   type TimelineCluster, type TimelineDwell,
@@ -273,6 +274,23 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
 
   const todayKey = utcDateKeyInTz(new Date().toISOString(), tz);
   const [dayKey, setDayKey] = useState<string>(todayKey);
+
+  // viewMode: 'day' = single-day view with chevron/picker nav.
+  //           'week' = week strip becomes the primary nav; clicking the
+  //                    Week-total card swaps the Revenue Analysis to a
+  //                    week-aggregate panel.
+  type ViewMode = 'day' | 'week';
+  const [viewMode, setViewMode] = useState<ViewMode>('day');
+  // weekTotalSelected only meaningful in viewMode='week'. When true,
+  // the Week-total card is highlighted and the page renders the
+  // week-aggregate analysis instead of the single-day timeline body.
+  const [weekTotalSelected, setWeekTotalSelected] = useState<boolean>(false);
+  // Switching mode resets the totals selection so re-entering week mode
+  // starts on today's day, not stuck on the previous total view.
+  function switchViewMode(next: ViewMode) {
+    setViewMode(next);
+    setWeekTotalSelected(false);
+  }
 
   const [data, setData]       = useState<TimelinePayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -626,6 +644,25 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             </select>
           </div>
 
+          {/* View mode picker — Day vs Week. Day mode keeps the existing
+              chevron+DatePicker date nav; Week mode hides that and turns
+              the week strip into the primary navigation. */}
+          <div className="flex items-center gap-2 px-2 py-1 rounded"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
+            <span className="uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)', fontSize: 10 }}>
+              View
+            </span>
+            <select
+              value={viewMode}
+              onChange={(e) => switchViewMode((e.target.value as ViewMode) === 'week' ? 'week' : 'day')}
+              className="text-[13px] font-semibold bg-transparent border-0 outline-none cursor-pointer"
+              style={{ color: 'var(--gc-text-1)' }}
+            >
+              <option value="day">Day</option>
+              <option value="week">Week (Sat–Fri)</option>
+            </select>
+          </div>
+
           {/* Header actions */}
           {effectiveAssetId != null ? (
             <div className="ml-auto flex items-center gap-2">
@@ -711,71 +748,76 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </div>
         ) : null}
 
-        {/* Day nav */}
-        <div
-          className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg"
-          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
-        >
-          {/* Day-nav: prev + date + next clustered together on the left
-              (was prev-far-left / next-far-right; the chevrons should
-              flank the date so they read as a unit). TODAY shortcut on
-              the far right. */}
-          <button
-            onClick={() => setDayKey((k) => shiftDateKey(k, -1))}
-            className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
-            title="Previous day"
+        {/* Day nav — only shown in Day view. In Week view the WeekStrip
+            below is the primary navigation. */}
+        {viewMode === 'day' ? (
+          <div
+            className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
           >
-            <ChevronLeft size={16} />
-          </button>
-          <DatePicker
-            value={dayKey}
-            onChange={(v) => setDayKey(v || todayKey)}
-            headerColor={assetColor}
-            buttonClassName="flex items-center gap-2 px-2 py-1 rounded hover:bg-black/5"
-            buttonStyle={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--gc-text-1)',
-              fontWeight: 600,
-              fontSize: 14,
-              width: 'auto',          // override the picker default of width:100%
-              padding: '4px 8px',
-            }}
-            containerStyle={{ flex: 'none' }}   // don't eat the toolbar's free width
-          />
-          <button
-            onClick={() => setDayKey((k) => shiftDateKey(k, 1))}
-            className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
-            title="Next day"
-          >
-            <ChevronRight size={16} />
-          </button>
-          <span className="ml-1" style={{ color: 'var(--gc-text-3)', fontSize: 12 }}>
-            {fmtDateHeader(dayKey, tz)}
-          </span>
-          <button
-            onClick={() => setDayKey(todayKey)}
-            className="ml-auto text-[11px] font-semibold px-2 py-1 rounded"
-            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
-          >
-            TODAY
-          </button>
-        </div>
+            <button
+              onClick={() => setDayKey((k) => shiftDateKey(k, -1))}
+              className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
+              title="Previous day"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <DatePicker
+              value={dayKey}
+              onChange={(v) => setDayKey(v || todayKey)}
+              headerColor={assetColor}
+              buttonClassName="flex items-center gap-2 px-2 py-1 rounded hover:bg-black/5"
+              buttonStyle={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--gc-text-1)',
+                fontWeight: 600,
+                fontSize: 14,
+                width: 'auto',
+                padding: '4px 8px',
+              }}
+              containerStyle={{ flex: 'none' }}
+            />
+            <button
+              onClick={() => setDayKey((k) => shiftDateKey(k, 1))}
+              className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
+              title="Next day"
+            >
+              <ChevronRight size={16} />
+            </button>
+            <span className="ml-1" style={{ color: 'var(--gc-text-3)', fontSize: 12 }}>
+              {fmtDateHeader(dayKey, tz)}
+            </span>
+            <button
+              onClick={() => setDayKey(todayKey)}
+              className="ml-auto text-[11px] font-semibold px-2 py-1 rounded"
+              style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
+            >
+              TODAY
+            </button>
+          </div>
+        ) : null}
 
-        {/* Revenue Analysis strip — pulled to the TOP of the page so the
-            day P&L is the first thing on screen. Computed server-side
-            from the AI-classified link graph with inbound attribution
-            (deadhead credited to the load it repositions toward).
-            Renders only when the payload has a profitability block. */}
-        {/* Week strip — clickable Sat → Fri day cards + week total.
-            Active day card highlighted with the asset color. */}
+        {/* Week strip — always rendered when the summary is loaded. In
+            Week view it acts as the primary nav (clickable Week-total
+            card included); in Day view it's an informative supplement. */}
         {weekSummary ? (
           <WeekStrip
             summary={weekSummary}
             activeDayKey={dayKey}
+            weekTotalSelected={viewMode === 'week' && weekTotalSelected}
             todayKey={todayKey}
             assetColor={assetColor}
-            onSelectDay={(k) => setDayKey(k)}
+            onSelectDay={(k) => {
+              setDayKey(k);
+              // In Week view, picking a day card un-selects the total.
+              if (viewMode === 'week') setWeekTotalSelected(false);
+            }}
+            onSelectWeekTotal={
+              viewMode === 'week'
+                ? () => setWeekTotalSelected(true)
+                : undefined
+            }
             fs={fs}
           />
         ) : weekSummaryLoading ? (
@@ -784,17 +826,28 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           </div>
         ) : null}
 
-        {visibleProfitability && visibleProfitability.loads.length > 0 ? (
+        {/* Week-aggregate analysis — replaces the per-day Revenue
+            Analysis strip + the entire timeline body when the user
+            zooms out to the week's total. */}
+        {viewMode === 'week' && weekTotalSelected && weekSummary ? (
+          <WeekRevenuePanel
+            summary={weekSummary}
+            assetColor={assetColor}
+            onSelectDay={(k) => {
+              setDayKey(k);
+              setWeekTotalSelected(false);
+            }}
+            fs={fs}
+          />
+        ) : visibleProfitability && visibleProfitability.loads.length > 0 ? (
           <RevenueAnalysisStrip profitability={visibleProfitability} assetColor={assetColor} fs={fs} />
         ) : null}
 
-        {/* Body: schedule/actual columns on the LEFT (flex-1 — they
-            grow with the screen), map + detail stack on the RIGHT
-            (flex-1 too). Both proportions scale on bigger displays so
-            nothing gets squeezed on a 27" monitor.
-
-            Selection drives the map: clicking a load draws all its
-            linked trips; clicking a trip shows just that trip. */}
+        {/* Body: schedule/actual columns + map. Hidden in week-aggregate
+            mode since the day-scoped layout doesn't have a coherent
+            week-scope rendering. */}
+        {viewMode === 'week' && weekTotalSelected ? null : (
+          <>
         {/* items-stretch (default) lets the right column match the
             left column's full natural height — the calendar grid
             anchors the height, the map + details fill the same span. */}
@@ -962,6 +1015,9 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             </div>
           </div>
         </div>
+
+          </>
+        )}
 
       </div>
 

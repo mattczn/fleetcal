@@ -39,16 +39,26 @@ function fmtDayHeader(dayKey: string): string {
 }
 
 interface Props {
-  summary:     WeekSummary;
-  activeDayKey: string;
-  todayKey:    string;
-  assetColor:  string;
-  onSelectDay: (dayKey: string) => void;
-  fs:          (px: number) => number;
+  summary:        WeekSummary;
+  /** dayKey of the day-card highlighted in 'day' mode. Ignored when
+   *  weekTotalSelected is true. */
+  activeDayKey:   string;
+  /** When true, the Week-total card is highlighted (and no day card is
+   *  treated as active) — used in Week view to indicate the user has
+   *  zoomed out to a weekly aggregate. */
+  weekTotalSelected?: boolean;
+  todayKey:       string;
+  assetColor:     string;
+  onSelectDay:    (dayKey: string) => void;
+  /** Optional click on the Week-total card. When omitted, the card is
+   *  not interactive (back-compat with the day-mode strip). */
+  onSelectWeekTotal?: () => void;
+  fs:             (px: number) => number;
 }
 
 export default function WeekStrip({
-  summary, activeDayKey, todayKey, assetColor, onSelectDay, fs,
+  summary, activeDayKey, weekTotalSelected, todayKey, assetColor,
+  onSelectDay, onSelectWeekTotal, fs,
 }: Props) {
   return (
     <div className="mt-1 mb-3">
@@ -65,14 +75,20 @@ export default function WeekStrip({
           <DayCard
             key={d.dayKey}
             day={d}
-            isActive={d.dayKey === activeDayKey}
+            isActive={!weekTotalSelected && d.dayKey === activeDayKey}
             isToday={d.dayKey === todayKey}
             assetColor={assetColor}
             onClick={() => onSelectDay(d.dayKey)}
             fs={fs}
           />
         ))}
-        <WeekTotalCard total={summary.weekTotal} fs={fs} />
+        <WeekTotalCard
+          total={summary.weekTotal}
+          isActive={!!weekTotalSelected}
+          assetColor={assetColor}
+          onClick={onSelectWeekTotal}
+          fs={fs}
+        />
       </div>
     </div>
   );
@@ -133,20 +149,24 @@ function DayCard({
 }
 
 function WeekTotalCard({
-  total, fs,
+  total, isActive, assetColor, onClick, fs,
 }: {
-  total: WeekDaySummary;
-  fs:    (px: number) => number;
+  total:      WeekDaySummary;
+  isActive:   boolean;
+  assetColor: string;
+  onClick?:   () => void;
+  fs:         (px: number) => number;
 }) {
-  return (
-    <div
-      className="flex-shrink-0 rounded-lg p-2.5"
-      style={{
-        width:      160,
-        background: 'var(--gc-surface-2)',
-        border:     '1px solid var(--gc-border)',
-      }}
-    >
+  const interactive = !!onClick;
+  const className = 'flex-shrink-0 rounded-lg p-2.5 text-left transition-colors';
+  const style: React.CSSProperties = {
+    width:      160,
+    background: isActive ? `${assetColor}1a` : 'var(--gc-surface-2)',
+    border:     isActive ? `2px solid ${assetColor}` : '1px solid var(--gc-border)',
+    cursor:     interactive ? 'pointer' : 'default',
+  };
+  const body = (
+    <>
       <div className="font-semibold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
         Week total
       </div>
@@ -164,6 +184,15 @@ function WeekTotalCard({
           Net: {fmtMoney(total.totalRevenue - total.totalDriverPay)}
         </div>
       ) : null}
+    </>
+  );
+  return interactive ? (
+    <button type="button" onClick={onClick} className={className} style={style}>
+      {body}
+    </button>
+  ) : (
+    <div className={className} style={style}>
+      {body}
     </div>
   );
 }
