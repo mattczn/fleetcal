@@ -246,6 +246,41 @@ export interface WeekSummary {
   weekTotal: WeekDaySummary;
 }
 
+// ── Fleet performance (per-asset comparison rollup) ─────────────────
+
+export interface FleetAssetPerformance {
+  assetId:              number;
+  name:                 string;
+  unit:                 string | null;
+  color:                string;
+  motiveLinked:         boolean;
+  totalRevenue:         number;
+  totalDriverPay:       number;
+  netToTruck:           number;
+  loadCount:            number;
+  loadedMiles:          number;
+  inboundDhMiles:       number;
+  attributedMiles:      number;
+  yardReturnMiles:      number;
+  unattributedMiles:    number;
+  totalMiles:           number;
+  dayRpm:               number | null;
+  dayRpmTotal:          number | null;
+  deadheadPctOfDay:     number | null;
+  avgRevPerLoad:        number | null;
+  avgLoadedMilesPerLoad: number | null;
+  driverPayPct:         number | null;
+  utilization:          number | null;
+  activeDays:           number;
+  netPerMile:           number | null;
+}
+
+export interface FleetPerformanceResponse {
+  windowFrom: string;
+  windowTo:   string;
+  assets:     FleetAssetPerformance[];
+}
+
 export interface TimelinePayload {
   asset:         { id: number; name: string; unit: string | null };
   windowFrom:    string;
@@ -779,6 +814,14 @@ class RailwayClient {
   getWeekSummary(assetId: number, weekStart: string, tz: string) {
     const qs = new URLSearchParams({ weekStart, tz });
     return this.req<WeekSummary>('GET', `/v1/timeline/assets/${assetId}/week-summary?${qs.toString()}`);
+  }
+
+  /** Per-asset performance rollup over an arbitrary window — feeds the
+   *  /performance comparison table. Same inbound-attribution pipeline
+   *  the timeline page uses, applied across every non-hidden asset. */
+  getFleetPerformance(from: string, to: string, tz: string) {
+    const qs = new URLSearchParams({ from, to, tz });
+    return this.req<FleetPerformanceResponse>('GET', `/v1/fleet/performance?${qs.toString()}`);
   }
 
   // ── Movements (Motive driving-periods feed) ───────────────────────────
