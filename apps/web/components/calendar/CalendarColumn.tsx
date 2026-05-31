@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { Asset, CalendarEvent as EventType } from '@/lib/types';
-import { localDateStr, hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
+import { hoursToTimeStr, timeToPixels, timeHeightPixels, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
+import { dateKeyInTz } from '@/lib/lifecycle';
 import { clusterMovements } from '@/lib/clusterMovements';
 
 import CalendarEvent from './CalendarEvent';
@@ -99,7 +100,12 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
   // focused on that cluster — pass the first member's Motive period id
   // so the modal can find the right cluster after its own re-fetch.
   const [openMovementId, setOpenMovementId] = useState<number | null>(null);
-  const dateStr = localDateStr(currentDate);
+  // dateKeyInTz (org tz), NOT localDateStr (browser tz). The event
+  // filter below compares against eStart/eEnd derived via
+  // naiveHomeToView which uses calendarTimezone — both sides must
+  // agree on tz or users east of the org tz lose every event/cluster
+  // across the midnight boundary. Same fix as MovementCard.
+  const dateStr = dateKeyInTz(currentDate, calendarTimezone);
   const mode = calendarMode;
 
   // Movements mode — render Motive driving-period cards instead of
@@ -112,15 +118,6 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
     ? (movementsByVehicle[String(asset.motiveVehicleId)] ?? [])
     : [];
   const movementClusters = clusterMovements(rawMovements);
-  // Diagnostic: per-column cluster accounting. Pair with MovementCard
-  // filter logs to figure out the "flash then half disappear" mystery.
-  // dateStr is computed below from currentDate; log it here too so we
-  // can compare browser-tz (localDateStr) vs org-tz (the cluster filter
-  // uses isoToNaiveTz with calendarTimezone).
-  if (mode === 'movements' && asset.motiveVehicleId && movementClusters.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(`[movements/col] ${asset.name} (vid=${asset.motiveVehicleId}) raw=${rawMovements.length} clusters=${movementClusters.length} dateStr(browser)=${dateStr} tz=${calendarTimezone}`);
-  }
 
   const colEvents = mode === 'movements' ? [] : events.filter((e) => {
     if (e.assetId !== asset.id) return false;

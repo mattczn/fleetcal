@@ -74,15 +74,8 @@ export default function CalendarView() {
   // Fetch Motive movements whenever the calendar is in 'movements'
   // mode and the visible date range changes. The API is filtered by
   // display_eligible so this just paints whatever the cron has synced.
-  //
-  // The console.log is a deliberate diagnostic for the "flash then
-  // disappear" bug — pairs with [movements] logs in the store so we
-  // can see effect firings vs fetch starts and catch the race where
-  // a second effect tick wipes the first fetch's data.
   useEffect(() => {
     if (calendarMode !== 'movements') return;
-    // eslint-disable-next-line no-console
-    console.log(`[movements] useEffect FIRE viewRange=${viewRange.start}→${viewRange.end} mode=${calendarMode}`);
     void fetchMovements(viewRange.start, viewRange.end);
   }, [calendarMode, viewRange.start, viewRange.end, fetchMovements]);
 
