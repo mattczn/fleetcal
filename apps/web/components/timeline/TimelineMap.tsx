@@ -24,14 +24,21 @@
  * state (and the tile cache) survive.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
-import type { TimelineCluster } from '@/lib/timelineClusters';
+import { type TimelineCluster } from '@/lib/timelineClusters';
+import { extractCity } from '@/lib/clusterMovements';
 import type { TimelineEvent, TimelineLink } from '@/lib/railway';
 
 interface Props {
   clusters:          TimelineCluster[];
   linkByMovementId:  Map<string, TimelineLink>;
+  /** Used by the bottom-overlay footer to resolve event titles when an
+   *  event is selected. Optional — when omitted, the footer falls back
+   *  to the cluster route description. */
+  eventLookup?:      Map<string, TimelineEvent>;
+  tz:                string;
   selection:
     | { kind: 'event';   eventId: string }
     | { kind: 'cluster'; clusterId: string }
@@ -39,6 +46,11 @@ interface Props {
   assetColor:        string;
   /** Pixel height of the map container. */
   height:            number;
+  /** Called when the footer's prev / next steps to a different cluster
+   *  — page reacts by updating selection state. */
+  onSelectCluster?:  (clusterId: string) => void;
+  /** Called when the footer's "Clear" button is hit. */
+  onClearSelection?: () => void;
 }
 
 /** Picks the cluster(s) that should be drawn "prominent" based on the
@@ -178,7 +190,9 @@ function makeDot(color: string, label: string | null = null): HTMLElement {
 }
 
 export default function TimelineMap({
-  clusters, linkByMovementId, selection, assetColor, height,
+  clusters, linkByMovementId, eventLookup, tz,
+  selection, assetColor, height,
+  onSelectCluster, onClearSelection,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
@@ -352,6 +366,85 @@ export default function TimelineMap({
     }
   }, [clusters, linkByMovementId, selection, assetColor]);
 
+  // ── Click-through footer overlay ──────────────────────────────────
+  //
+  // Mirrors AssetDetailModal's bottom-overlay click-through. The list
+  // we cycle through depends on what's selected:
+  //   - event   → clusters whose link references that event
+  //   - cluster → ALL day clusters
+  //   - nothing → ALL day clusters; clicking next picks cluster #1
+  //
+  // This way the dispatcher can click a load chip and step through
+  // just that load's deliveries, or click no chip and audit the day.
+
+  const cycleList = useMemo<TimelineCluster[]>(() => {
+    if (selection?.kind === 'event') {
+      const out: TimelineCluster[] = [];
+      for (const cl of clusters) {
+        for (const m of cl.members) {
+          const l = linkByMovementId.get(m.id);
+          if (!l) continue;
+          if (
+            l.loadedEventId === selection.eventId ||
+            l.fromEventId   === selection.eventId ||
+            l.toEventId     === selection.eventId
+          ) {
+            out.push(cl);
+            break;
+          }
+        }
+      }
+      return out;
+    }
+    return clusters;
+  }, [clusters, linkByMovementId, selection]);
+
+  const selectedClusterId = selection?.kind === 'cluster' ? selection.clusterId : null;
+  const currentIdx = selectedClusterId
+    ? cycleList.findIndex((c) => c.id === selectedClusterId)
+    : -1;
+
+  const prevCluster = currentIdx > 0 ? cycleList[currentIdx - 1] : null;
+  const nextCluster = currentIdx === -1
+    ? (cycleList[0] ?? null)
+    : (currentIdx < cycleList.length - 1 ? cycleList[currentIdx + 1] : null);
+
+  const activeCluster: TimelineCluster | null = currentIdx >= 0 ? cycleList[currentIdx] : null;
+
+  // Header text — the route summary for the active cluster, OR the
+  // linked event's title when an event is selected but no cluster yet,
+  // OR a "Day overview" fallback.
+  const footerTitle: string = (() => {
+    if (activeCluster) {
+      const o = extractCity(activeCluster.origin);
+      const d = extractCity(activeCluster.destination);
+      if (o && d && o.toLowerCase() === d.toLowerCase()) return `around ${o}`;
+      if (o || d) return `${o ?? '—'} → ${d ?? '—'}`;
+      return 'Trip';
+    }
+    if (selection?.kind === 'event' && eventLookup) {
+      const ev = eventLookup.get(selection.eventId);
+      if (ev?.title) return ev.title;
+    }
+    return cycleList.length > 0 ? `${cycleList.length} trip${cycleList.length === 1 ? '' : 's'}` : 'No trips';
+  })();
+
+  const footerSubtitle: string = (() => {
+    if (activeCluster) {
+      const start = new Date(activeCluster.startTime);
+      const end   = activeCluster.endTime ? new Date(activeCluster.endTime) : null;
+      const fmtT = (d: Date) => d.toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+      const fmtD = (d: Date) => d.toLocaleDateString('en-US', { timeZone: tz, month: 'numeric', day: 'numeric' });
+      const date = fmtD(start);
+      const timeRange = end ? `${fmtT(start)} – ${fmtT(end)}` : fmtT(start);
+      const miles = `${activeCluster.miles.toFixed(1)} mi`;
+      const dur   = `${activeCluster.durationMin}m`;
+      return `${date}, ${timeRange} · ${miles} · ${dur}`;
+    }
+    if (selection?.kind === 'event') return `Click ‹ or › to step through linked trips`;
+    return `Click ‹ or › to step through the day's trips`;
+  })();
+
   return (
     <div
       className="relative rounded-lg overflow-hidden"
@@ -372,6 +465,70 @@ export default function TimelineMap({
           fontSize: 12,
         }}
       />
+
+      {/* Bottom-overlay click-through — mirrors AssetDetailModal's. */}
+      {cycleList.length > 0 || selection != null ? (
+        <div
+          className="absolute left-4 right-4 bottom-4 flex items-center gap-3 rounded-2xl px-4 py-3"
+          style={{
+            background:     'rgba(255,255,255,0.96)',
+            backdropFilter: 'blur(8px)',
+            boxShadow:      'var(--shadow-3)',
+          }}
+        >
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+              {footerTitle}
+            </div>
+            <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--gc-text-3)' }}>
+              {footerSubtitle}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => prevCluster && onSelectCluster?.(prevCluster.id)}
+              disabled={!prevCluster}
+              className="p-1.5 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              title="Earlier (← key)"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span className="text-[10px] font-mono tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+              {currentIdx >= 0 ? currentIdx + 1 : 0} / {cycleList.length}
+            </span>
+            <button
+              onClick={() => nextCluster && onSelectCluster?.(nextCluster.id)}
+              disabled={!nextCluster}
+              className="p-1.5 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              style={{ color: 'var(--gc-text-2)' }}
+              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              title="Later (→ key)"
+            >
+              <ChevronRight size={16} />
+            </button>
+            {selection != null ? (
+              <button
+                onClick={() => onClearSelection?.()}
+                className="flex items-center gap-1 ml-1.5 px-2 py-1 rounded-md text-[11px] font-medium transition-colors"
+                style={{
+                  color:       assetColor,
+                  background:  `${assetColor}1f`,        // ~12% alpha
+                  border:      `1px solid ${assetColor}4d`,
+                }}
+                title="Clear selection (Esc)"
+              >
+                <X size={11} />
+                Clear
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

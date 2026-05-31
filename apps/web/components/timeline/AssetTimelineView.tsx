@@ -26,6 +26,7 @@ import {
   Truck, MapPin, Clock, Sparkles, X, Plus, Pencil, Trash2, Loader2,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
+import DatePicker from '@/components/calendar/DatePicker';
 import {
   railway,
   type TimelinePayload, type TimelineEvent, type TimelineLink,
@@ -586,37 +587,40 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
           className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg"
           style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}
         >
+          {/* Day-nav: prev + date + next clustered together on the left
+              (was prev-far-left / next-far-right; the chevrons should
+              flank the date so they read as a unit). TODAY shortcut on
+              the far right. */}
           <button
             onClick={() => setDayKey((k) => shiftDateKey(k, -1))}
             className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
+            title="Previous day"
           >
             <ChevronLeft size={16} />
           </button>
-          <div className="flex-1 flex items-center gap-2">
-            <CalendarIcon size={14} style={{ color: 'var(--gc-text-3)' }} />
-            <input
-              type="date"
-              value={dayKey}
-              onChange={(e) => setDayKey(e.target.value || todayKey)}
-              className="text-[14px] font-semibold bg-transparent border-0 outline-none"
-              style={{ color: 'var(--gc-text-1)' }}
-            />
-            <span className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-              {fmtDateHeader(dayKey, tz)}
-            </span>
-          </div>
-          <button
-            onClick={() => setDayKey(todayKey)}
-            className="text-[11px] font-semibold px-2 py-1 rounded"
-            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
-          >
-            TODAY
-          </button>
+          <DatePicker
+            value={dayKey}
+            onChange={(v) => setDayKey(v || todayKey)}
+            headerColor={assetColor}
+            buttonClassName="flex items-center gap-2 px-2 py-1 rounded hover:bg-black/5"
+            buttonStyle={{ background: 'transparent', border: 'none', color: 'var(--gc-text-1)', fontWeight: 600, fontSize: 14 }}
+          />
           <button
             onClick={() => setDayKey((k) => shiftDateKey(k, 1))}
             className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5"
+            title="Next day"
           >
             <ChevronRight size={16} />
+          </button>
+          <span className="ml-1" style={{ color: 'var(--gc-text-3)', fontSize: 12 }}>
+            {fmtDateHeader(dayKey, tz)}
+          </span>
+          <button
+            onClick={() => setDayKey(todayKey)}
+            className="ml-auto text-[11px] font-semibold px-2 py-1 rounded"
+            style={{ background: 'var(--gc-surface-2)', color: 'var(--gc-text-2)' }}
+          >
+            TODAY
           </button>
         </div>
 
@@ -636,7 +640,10 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
 
             Selection drives the map: clicking a load draws all its
             linked trips; clicking a trip shows just that trip. */}
-        <div className="flex gap-3 items-start mt-3">
+        {/* items-stretch (default) lets the right column match the
+            left column's full natural height — the calendar grid
+            anchors the height, the map + details fill the same span. */}
+        <div className="flex gap-3 mt-3">
           {/* Schedule + Actual columns — flex-1 so they grow as the
               viewport widens. min-w-[480px] keeps them legible on
               smaller screens. Time ruler 44px to claw back chip width. */}
@@ -755,15 +762,33 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             )}
           </div>
 
-          {/* Map + detail column — RIGHT side, flex-1 + min-w-[480px]
-              so it grows with the viewport instead of being pinned. */}
+          {/* Map + detail column — RIGHT side. Map on TOP with the
+              click-through footer overlay; details below. */}
           <div className="flex-1 min-w-[480px] flex flex-col gap-3">
+            <TimelineMap
+              clusters={visibleClusters}
+              linkByMovementId={linkByMovementId}
+              eventLookup={eventById}
+              tz={tz}
+              selection={(() => {
+                if (!selection) return null;
+                if (selection.kind === 'event') return { kind: 'event', eventId: selection.event.id };
+                return { kind: 'cluster', clusterId: selection.cluster.id };
+              })()}
+              assetColor={assetColor}
+              height={520}
+              onSelectCluster={(clusterId) => {
+                const cl = visibleClusters.find((c) => c.id === clusterId);
+                if (cl) setSelection({ kind: 'cluster', cluster: cl, link: linkForCluster(cl) });
+              }}
+              onClearSelection={() => setSelection(null)}
+            />
+
             <div
-              className="rounded-lg overflow-hidden flex flex-col"
+              className="rounded-lg overflow-hidden flex flex-col flex-1 min-h-0"
               style={{
                 background: 'var(--gc-surface)',
                 border: '1px solid var(--gc-border)',
-                maxHeight: 320,
               }}
             >
               <DetailPanel
@@ -780,18 +805,6 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
                 onSelect={(s) => setSelection(s)}
               />
             </div>
-
-            <TimelineMap
-              clusters={visibleClusters}
-              linkByMovementId={linkByMovementId}
-              selection={(() => {
-                if (!selection) return null;
-                if (selection.kind === 'event') return { kind: 'event', eventId: selection.event.id };
-                return { kind: 'cluster', clusterId: selection.cluster.id };
-              })()}
-              assetColor={assetColor}
-              height={560}
-            />
           </div>
         </div>
 
@@ -1135,52 +1148,9 @@ function DetailPanel({
             : selection.kind === 'event' ? 'Scheduled event' : 'Trip'}
         </span>
 
-        {/* Prev/next cluster navigation — matches AssetDetailModal's
-            click-through (rounded-full chevron buttons + N/total
-            counter). Keyboard ← / → handled at the page level. */}
-        {selection?.kind === 'cluster' ? (() => {
-          const idx = clusters.findIndex((c) => c.id === selection.cluster.id);
-          const prev = idx > 0 ? clusters[idx - 1] : null;
-          const next = idx >= 0 && idx < clusters.length - 1 ? clusters[idx + 1] : null;
-          const linkFor = (cl: TimelineCluster): TimelineLink | undefined => {
-            for (const m of cl.members) {
-              const l = linkByMovementId.get(m.id);
-              if (l) return l;
-            }
-            return undefined;
-          };
-          const navBtnStyle = { color: 'var(--gc-text-2)' as const };
-          return (
-            <span className="ml-3 flex items-center gap-1 tabular-nums">
-              <button
-                onClick={() => prev && onSelect({ kind: 'cluster', cluster: prev, link: linkFor(prev) })}
-                disabled={!prev}
-                className="p-1.5 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                style={navBtnStyle}
-                onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                title="Earlier (← key)"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span className="font-mono" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
-                {idx + 1} / {clusters.length}
-              </span>
-              <button
-                onClick={() => next && onSelect({ kind: 'cluster', cluster: next, link: linkFor(next) })}
-                disabled={!next}
-                className="p-1.5 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                style={navBtnStyle}
-                onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                title="Later (→ key)"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </span>
-          );
-        })() : null}
-
+        {/* Prev/next nav moved to the map's bottom-overlay footer so
+            the header here stays compact. Keyboard ← / → still handled
+            at the page level. */}
         <span className="ml-auto" />
         {selection != null ? (
           <button onClick={onClose} className="w-7 h-7 rounded flex items-center justify-center hover:bg-black/5" title="Clear selection">
