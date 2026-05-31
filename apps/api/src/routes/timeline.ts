@@ -1479,166 +1479,203 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
     return c.json({ error: "asset_not_found" } satisfies ApiErrorResponse, 404);
   }
 
-  // Build the 7 day windows (naive boundaries in org TZ, padded by
-  // ±6h in UTC to catch boundary movements). One supabase round-trip
-  // per day — N+1 is acceptable here since N=7 and each query is
-  // small. Could be batched into a single events + single movements
-  // query later if it becomes a hot path.
+  // Single-pass design (replaces the old per-day loop that
+  // double-counted overnight loads):
+  //   1. Fetch the entire week's events + movements + links once.
+  //   2. Bucket every entity into exactly ONE day:
+  //        - a LOAD lives in its start-day bucket (revenue, pay,
+  //          loaded miles, inbound dh — all credited there, even if
+  //          the load delivers a day later).
+  //        - a MOVEMENT lives in its start-time-day bucket for the
+  //          yard-return / unattributed pile (miles that aren't tied
+  //          to a load, like an end-of-day return).
+  //   3. Per-day cards now sum exactly to the week total. Overnight
+  //      loads no longer get counted twice.
+  //
+  // The display side (timeline grid + day-card row) still shows the
+  // load on every day it intersects — that's the right visual
+  // ("this load touches today"). Only the aggregation honors the
+  // start-day rule.
+
+  const weekStartNaive = `${weekStart}T00:00:00`;
+  const weekEndExclusive = shiftDayKey(weekStart, 7);
+  const weekEndNaive   = `${weekEndExclusive}T00:00:00`;
+
+  // ── Events in the week (bucket by start day) ────────────────────
+  const { data: events } = await sb
+    .from("events")
+    .select("id, start, \"end\", event_kind, driver_pay, load:loads(load_price)")
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .is("deleted_at", null)
+    .gte("start", weekStartNaive)
+    .lt("start", weekEndNaive);
+  const eventList = ((events ?? []) as Array<{
+    id: string; start: string; end: string;
+    event_kind: string | null; driver_pay: number | null;
+    load: { load_price: number | null } | null;
+  }>);
+  /** event.id → its bucket dayKey (the load's start day). */
+  const eventBucketDay = new Map<string, string>();
+  const revenueEventIds = new Set<string>();
+  for (const e of eventList) {
+    eventBucketDay.set(e.id, e.start.slice(0, 10));
+    if (e.event_kind !== "non_revenue") revenueEventIds.add(e.id);
+  }
+
+  // ── Movements in the week (bucket by start day in org TZ) ───────
+  const naiveToUtcIso = (naive: string) => {
+    const local = new Date(naive);
+    const tzFmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).format(local);
+    const [d, t] = tzFmt.split(', ');
+    const [mo, dd, yyyy] = d.split('/');
+    const [hh, mi, ss] = t.split(':');
+    const localAsUtc = Date.UTC(+yyyy, +mo - 1, +dd, +hh, +mi, +ss);
+    const offsetMs = localAsUtc - local.getTime();
+    return new Date(local.getTime() - offsetMs).toISOString();
+  };
+  const movFrom = naiveToUtcIso(weekStartNaive);
+  const movTo   = naiveToUtcIso(weekEndNaive);
+
+  const { data: movementRows } = await sb
+    .from("movements")
+    .select("id, miles, start_time")
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .is("deleted_at", null)
+    .gte("start_time", movFrom)
+    .lt("start_time", movTo);
+  const movementsList = ((movementRows ?? []) as Array<{
+    id: string; miles: number | null; start_time: string;
+  }>);
+
+  /** Resolve a movement's bucket day from start_time in org TZ. */
+  const utcToOrgDayKey = (utc: string) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(utc));
+
+  // ── Current-truth links for those movements ─────────────────────
+  const movementIds = movementsList.map((m) => m.id);
+  const { data: linkRows } = movementIds.length > 0
+    ? await sb
+        .from("movement_links")
+        .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+        .eq("org_id", orgId)
+        .in("movement_id", movementIds)
+        .is("superseded_at", null)
+    : { data: [] };
+  const linkByMovementId = new Map<string, {
+    role: string; loaded_event_id: string | null;
+    from_event_id: string | null; to_event_id: string | null;
+  }>();
+  for (const l of (linkRows ?? []) as Array<{
+    movement_id: string; role: string; loaded_event_id: string | null;
+    from_event_id: string | null; to_event_id: string | null;
+  }>) {
+    linkByMovementId.set(l.movement_id, l);
+  }
+
+  // ── Initialize per-day accumulators ─────────────────────────────
+  type Bucket = {
+    totalRevenue: number; totalDriverPay: number; loadCount: number;
+    loadedMiles: number; inboundDhMiles: number;
+    yardReturnMiles: number; unattributedMiles: number;
+  };
+  const buckets = new Map<string, Bucket>();
+  for (let i = 0; i < 7; i++) {
+    const k = shiftDayKey(weekStart, i);
+    buckets.set(k, {
+      totalRevenue: 0, totalDriverPay: 0, loadCount: 0,
+      loadedMiles: 0, inboundDhMiles: 0,
+      yardReturnMiles: 0, unattributedMiles: 0,
+    });
+  }
+
+  // ── Load revenue + driver pay → load's start-day bucket ─────────
+  for (const e of eventList) {
+    if (e.event_kind === "non_revenue") continue;
+    const day = eventBucketDay.get(e.id);
+    if (!day) continue;
+    const b = buckets.get(day);
+    if (!b) continue;     // event outside the week (shouldn't happen given the query)
+    b.totalRevenue   += e.load?.load_price ?? 0;
+    b.totalDriverPay += e.driver_pay ?? 0;
+    b.loadCount      += 1;
+  }
+
+  // ── Movement miles → load's start-day OR movement's own start-day ─
+  for (const m of movementsList) {
+    const miles = m.miles ?? 0;
+    if (miles === 0) continue;
+    const link = linkByMovementId.get(m.id);
+    const movDay = utcToOrgDayKey(m.start_time);
+
+    if (!link) {
+      const b = buckets.get(movDay);
+      if (b) b.unattributedMiles += miles;
+      continue;
+    }
+    switch (link.role) {
+      case "loaded": {
+        const loadDay = link.loaded_event_id && eventBucketDay.get(link.loaded_event_id);
+        const b = loadDay && revenueEventIds.has(link.loaded_event_id!)
+          ? buckets.get(loadDay)
+          : buckets.get(movDay);
+        if (b) {
+          if (loadDay && revenueEventIds.has(link.loaded_event_id!)) {
+            b.loadedMiles += miles;
+          } else {
+            b.unattributedMiles += miles;
+          }
+        }
+        break;
+      }
+      case "transition": {
+        const toDay = link.to_event_id && eventBucketDay.get(link.to_event_id);
+        if (toDay && revenueEventIds.has(link.to_event_id!)) {
+          const b = buckets.get(toDay);
+          if (b) b.inboundDhMiles += miles;
+        } else if (link.from_event_id && !link.to_event_id) {
+          const b = buckets.get(movDay);
+          if (b) b.yardReturnMiles += miles;
+        } else {
+          const b = buckets.get(movDay);
+          if (b) b.unattributedMiles += miles;
+        }
+        break;
+      }
+      default: {
+        const b = buckets.get(movDay);
+        if (b) b.unattributedMiles += miles;
+        break;
+      }
+    }
+  }
+
+  // ── Materialize per-day summaries ───────────────────────────────
   const days: WeekDaySummary[] = [];
   for (let i = 0; i < 7; i++) {
     const dayKey = shiftDayKey(weekStart, i);
-    const dayStartNaive = `${dayKey}T00:00:00`;
-    const dayEndNaive   = `${dayKey}T23:59:59`;
-
-    // Naive→UTC for the movement window (movements use TIMESTAMPTZ).
-    // Postgres can compute this from a naive string + tz on its own
-    // via AT TIME ZONE, but the JS shim is simpler. (The 'tz' name
-    // here is the IANA zone; Intl handles the offset.)
-    const naiveToUtc = (naive: string) => {
-      // Approximate: parse as if local, then offset by the TZ delta
-      // between local and target. Good enough for the ±6h padded window.
-      const local = new Date(naive);
-      const tzFmt = new Intl.DateTimeFormat('en-US', {
-        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-      }).format(local);
-      const [d, t] = tzFmt.split(', ');
-      const [mo, dd, yyyy] = d.split('/');
-      const [hh, mi, ss] = t.split(':');
-      const localAsUtc = Date.UTC(+yyyy, +mo - 1, +dd, +hh, +mi, +ss);
-      const offsetMs = localAsUtc - local.getTime();
-      return new Date(local.getTime() - offsetMs).toISOString();
-    };
-    const padMs = 6 * 60 * 60 * 1000;
-    const movFrom = new Date(new Date(naiveToUtc(dayStartNaive)).getTime() - padMs).toISOString();
-    const movTo   = new Date(new Date(naiveToUtc(dayEndNaive)).getTime()   + padMs).toISOString();
-
-    // Events whose [start, end] intersects this day-naive window.
-    const { data: events } = await sb
-      .from("events")
-      .select("id, start, \"end\", event_kind, driver_pay, load:loads(load_price)")
-      .eq("org_id", orgId)
-      .eq("asset_id", assetId)
-      .is("deleted_at", null)
-      .lt("start", dayEndNaive)
-      .gt("end",   dayStartNaive);
-    const eventList = ((events ?? []) as Array<{
-      id: string; start: string; end: string;
-      event_kind: string | null; driver_pay: number | null;
-      load: { load_price: number | null } | null;
-    }>);
-    const revenueEventIds = new Set(
-      eventList.filter((e) => e.event_kind !== "non_revenue").map((e) => e.id),
-    );
-
-    // Movements in the padded window.
-    const { data: movementRows } = await sb
-      .from("movements")
-      .select("id, miles")
-      .eq("org_id", orgId)
-      .eq("asset_id", assetId)
-      .is("deleted_at", null)
-      .gte("start_time", movFrom)
-      .lt("start_time", movTo);
-    const movementsList = ((movementRows ?? []) as Array<{ id: string; miles: number | null }>);
-    const movementIds = movementsList.map((m) => m.id);
-
-    // Current-truth links for those movements.
-    const { data: linkRows } = movementIds.length > 0
-      ? await sb
-          .from("movement_links")
-          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
-          .eq("org_id", orgId)
-          .in("movement_id", movementIds)
-          .is("superseded_at", null)
-      : { data: [] };
-    const linkByMovementId = new Map<string, {
-      role: string; loaded_event_id: string | null;
-      from_event_id: string | null; to_event_id: string | null;
-    }>();
-    for (const l of (linkRows ?? []) as Array<{
-      movement_id: string; role: string; loaded_event_id: string | null;
-      from_event_id: string | null; to_event_id: string | null;
-    }>) {
-      linkByMovementId.set(l.movement_id, l);
-    }
-
-    // Per-load aggregation (inbound attribution).
-    type Acc = { loadedMiles: number; inboundDhMiles: number };
-    const accByEvent = new Map<string, Acc>();
-    const getAcc = (eventId: string): Acc => {
-      let a = accByEvent.get(eventId);
-      if (!a) { a = { loadedMiles: 0, inboundDhMiles: 0 }; accByEvent.set(eventId, a); }
-      return a;
-    };
-    let yardReturnMiles = 0;
-    let unattributedMiles = 0;
-    for (const m of movementsList) {
-      const miles = m.miles ?? 0;
-      const link = linkByMovementId.get(m.id);
-      if (!link) { unattributedMiles += miles; continue; }
-      switch (link.role) {
-        case "loaded":
-          if (link.loaded_event_id && revenueEventIds.has(link.loaded_event_id)) {
-            getAcc(link.loaded_event_id).loadedMiles += miles;
-          } else {
-            unattributedMiles += miles;
-          }
-          break;
-        case "transition":
-          if (link.to_event_id && revenueEventIds.has(link.to_event_id)) {
-            getAcc(link.to_event_id).inboundDhMiles += miles;
-          } else if (link.from_event_id && !link.to_event_id) {
-            yardReturnMiles += miles;
-          } else {
-            unattributedMiles += miles;
-          }
-          break;
-        default:
-          unattributedMiles += miles;
-          break;
-      }
-    }
-
-    // Only count loads whose event start (naive) actually lands on
-    // this day (not just intersects the padded window). Mirrors the
-    // client-side visibleProfitability filter.
-    const visibleLoads = eventList.filter((e) =>
-      e.event_kind !== "non_revenue"
-      && e.start.slice(0, 10) <= dayKey
-      && e.end.slice(0, 10)   >= dayKey
-    );
-
-    let totalRevenue = 0;
-    let totalDriverPay = 0;
-    let loadedMiles = 0;
-    let inboundDhMiles = 0;
-    for (const e of visibleLoads) {
-      totalRevenue   += e.load?.load_price ?? 0;
-      totalDriverPay += e.driver_pay ?? 0;
-      const acc = accByEvent.get(e.id);
-      if (acc) {
-        loadedMiles    += acc.loadedMiles;
-        inboundDhMiles += acc.inboundDhMiles;
-      }
-    }
-    const attributedMiles = loadedMiles + inboundDhMiles;
-    const totalMiles = attributedMiles + yardReturnMiles + unattributedMiles;
-
+    const b = buckets.get(dayKey)!;
+    const attributedMiles = b.loadedMiles + b.inboundDhMiles;
+    const totalMiles      = attributedMiles + b.yardReturnMiles + b.unattributedMiles;
     days.push({
       dayKey,
-      totalRevenue,
-      totalDriverPay,
-      loadCount:       visibleLoads.length,
-      loadedMiles,
-      inboundDhMiles,
+      totalRevenue:     b.totalRevenue,
+      totalDriverPay:   b.totalDriverPay,
+      loadCount:        b.loadCount,
+      loadedMiles:      b.loadedMiles,
+      inboundDhMiles:   b.inboundDhMiles,
       attributedMiles,
-      yardReturnMiles,
-      unattributedMiles,
+      yardReturnMiles:  b.yardReturnMiles,
+      unattributedMiles: b.unattributedMiles,
       totalMiles,
-      dayRpm:          attributedMiles > 0 ? totalRevenue / attributedMiles : null,
-      dayRpmTotal:     totalMiles > 0 ? totalRevenue / totalMiles : null,
-      deadheadPctOfDay: totalMiles > 0 ? (inboundDhMiles + yardReturnMiles) / totalMiles : null,
+      dayRpm:           attributedMiles > 0 ? b.totalRevenue / attributedMiles : null,
+      dayRpmTotal:      totalMiles > 0 ? b.totalRevenue / totalMiles : null,
+      deadheadPctOfDay: totalMiles > 0 ? (b.inboundDhMiles + b.yardReturnMiles) / totalMiles : null,
     });
   }
 
