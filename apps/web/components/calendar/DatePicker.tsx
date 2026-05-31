@@ -22,6 +22,11 @@ interface Props {
    *  on top of the defaults so callers can drop the border, change
    *  font size, etc. without rebuilding the trigger from scratch. */
   buttonStyle?: React.CSSProperties;
+  /** Optional inline style for the outer wrapper. Useful when the
+   *  default `flex: 1` (which makes the picker eat all available row
+   *  width) is wrong — e.g. a toolbar with multiple controls where
+   *  the picker should size to content. */
+  containerStyle?: React.CSSProperties;
 }
 
 const DOW   = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -41,7 +46,7 @@ function todayStr(): string {
   return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
 }
 
-export default function DatePicker({ value, onChange, headerColor, min, required, displayText, buttonClassName, buttonStyle }: Props) {
+export default function DatePicker({ value, onChange, headerColor, min, required, displayText, buttonClassName, buttonStyle, containerStyle }: Props) {
   const [open, setOpen]         = useState(false);
   const [popupPos, setPopupPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [viewYear, setVY]       = useState(() => value ? parseInt(value.slice(0, 4)) : new Date().getFullYear());
@@ -109,7 +114,7 @@ export default function DatePicker({ value, onChange, headerColor, min, required
   };
 
   return (
-    <div ref={ref} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+    <div ref={ref} style={{ position: 'relative', flex: 1, minWidth: 0, ...containerStyle }}>
       {/* Trigger button */}
       <button
         ref={btnRef}

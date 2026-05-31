@@ -603,7 +603,16 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             onChange={(v) => setDayKey(v || todayKey)}
             headerColor={assetColor}
             buttonClassName="flex items-center gap-2 px-2 py-1 rounded hover:bg-black/5"
-            buttonStyle={{ background: 'transparent', border: 'none', color: 'var(--gc-text-1)', fontWeight: 600, fontSize: 14 }}
+            buttonStyle={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--gc-text-1)',
+              fontWeight: 600,
+              fontSize: 14,
+              width: 'auto',          // override the picker default of width:100%
+              padding: '4px 8px',
+            }}
+            containerStyle={{ flex: 'none' }}   // don't eat the toolbar's free width
           />
           <button
             onClick={() => setDayKey((k) => shiftDateKey(k, 1))}
