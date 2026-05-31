@@ -21,7 +21,7 @@ export type Period = 'week' | 'month' | '30d' | '90d' | 'ytd' | 'custom';
 export interface PeriodRange { start: Date; end: Date }
 
 export const PERIODS: { value: Period; label: string }[] = [
-  { value: 'week',   label: 'This Week' },
+  { value: 'week',   label: 'Week' },
   { value: 'month',  label: 'This Month' },
   { value: '30d',    label: '30 Days' },
   { value: '90d',    label: '90 Days' },
@@ -29,16 +29,67 @@ export const PERIODS: { value: Period; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
+/** Returns the most-recent Saturday on or before `today` as a YYYY-MM-DD
+ *  string. Used to seed the "Week" period's default weekStartISO and to
+ *  anchor the started-weeks dropdown. */
+export function currentWeekStartISO(): string {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dow = today.getDay();
+  const sat = new Date(today);
+  sat.setDate(today.getDate() - ((dow + 1) % 7));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${sat.getFullYear()}-${pad(sat.getMonth() + 1)}-${pad(sat.getDate())}`;
+}
+
+/** Builds the list of started weeks (current week + N past weeks),
+ *  labeled with their Sat → Fri range. Matches the timeline page's
+ *  week dropdown shape. */
+export function startedWeeksISO(count = 12): Array<{ weekStart: string; label: string }> {
+  const items: Array<{ weekStart: string; label: string }> = [];
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let cur = currentWeekStartISO();
+  for (let i = 0; i < count; i++) {
+    const [y, m, d] = cur.split('-').map(Number);
+    const sat = new Date(y, m - 1, d);
+    const fri = new Date(sat);
+    fri.setDate(sat.getDate() + 6);
+    const sameMonth = sat.getMonth() === fri.getMonth();
+    const left  = `${monthNames[sat.getMonth()]} ${sat.getDate()}`;
+    const right = sameMonth ? `${fri.getDate()}` : `${monthNames[fri.getMonth()]} ${fri.getDate()}`;
+    let label = `${left} – ${right}`;
+    if (i === 0)      label = `This week (${label})`;
+    else if (i === 1) label = `Last week (${label})`;
+    items.push({ weekStart: cur, label });
+    // Step back 7 days.
+    const prev = new Date(sat);
+    prev.setDate(sat.getDate() - 7);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    cur = `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}-${pad(prev.getDate())}`;
+  }
+  return items;
+}
+
 export function getPeriodRange(
   period: Period,
-  custom?: { startISO: string; endISO: string },
+  custom?: { startISO: string; endISO: string; weekStartISO?: string },
 ): PeriodRange {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   switch (period) {
     case 'week': {
-      // Week runs Saturday → Friday
+      // Week runs Saturday → Friday. Accept an explicit weekStartISO
+      // so a "week picker" UI can select any past week without losing
+      // the Sat→Fri shape.
+      if (custom?.weekStartISO) {
+        const [y, m, d] = custom.weekStartISO.split('-').map(Number);
+        const sat = new Date(y, (m ?? 1) - 1, d ?? 1);
+        const fri = new Date(sat);
+        fri.setDate(sat.getDate() + 6);
+        return { start: sat, end: fri };
+      }
+      // Default: the week containing today.
       const dow = today.getDay(); // 0=Sun … 6=Sat
       const sat = new Date(today);
       sat.setDate(today.getDate() - ((dow + 1) % 7)); // back to most-recent Saturday

@@ -17,7 +17,7 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import AppShell from '@/components/nav/AppShell';
 import { relayLegShare } from '@/lib/legMiles';
 import { isActiveInRange, dateKeyOf } from '@/lib/lifecycle';
-import { type Period, PERIODS, getPeriodRange } from '@/lib/periodRange';
+import { type Period, PERIODS, getPeriodRange, currentWeekStartISO } from '@/lib/periodRange';
 import { PeriodSelector } from '@/components/ui/PeriodSelector';
 import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
@@ -410,10 +410,14 @@ export default function DashboardView() {
   }, []);
   const [customStart, setCustomStart] = useState<string>(initialMonthRange.start);
   const [customEnd,   setCustomEnd]   = useState<string>(initialMonthRange.end);
+  // weekStart drives the started-weeks dropdown when period === 'week'.
+  // Seeded with the current week's Saturday so the dashboard lands on
+  // "This week" by default.
+  const [weekStart,   setWeekStart]   = useState<string>(() => currentWeekStartISO());
 
   const { start: pStart, end: pEnd } = useMemo(
-    () => getPeriodRange(period, { startISO: customStart, endISO: customEnd }),
-    [period, customStart, customEnd],
+    () => getPeriodRange(period, { startISO: customStart, endISO: customEnd, weekStartISO: weekStart }),
+    [period, customStart, customEnd, weekStart],
   );
 
   // Period boundaries in every flavor the various API endpoints need.
@@ -1080,6 +1084,8 @@ export default function DashboardView() {
               customEnd={customEnd}
               onCustomStartChange={setCustomStart}
               onCustomEndChange={setCustomEnd}
+              weekStart={weekStart}
+              onWeekStartChange={setWeekStart}
             />
           </div>
 

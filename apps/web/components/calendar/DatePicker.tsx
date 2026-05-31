@@ -80,11 +80,21 @@ export default function DatePicker({ value, onChange, headerColor, min, required
   const handleOpen = useCallback(() => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      // Flip upward if not enough space below
+      // Flip upward if not enough space below.
       const spaceBelow = window.innerHeight - r.bottom;
       const popupH = 320; // approx height
       const top = spaceBelow < popupH ? r.top - popupH - 6 : r.bottom + 6;
-      setPopupPos({ top, left: r.left });
+      // Horizontal: prefer left-aligning to the trigger. If that would
+      // overflow the right edge of the viewport, right-align to the
+      // trigger's right edge instead. Clamp to >= 8px gutter so the
+      // popover never sits flush against the window edge.
+      const popupW = 280; // matches the fixed width set on the popover
+      const gutter = 8;
+      let left = r.left;
+      if (left + popupW > window.innerWidth - gutter) {
+        left = Math.max(gutter, r.right - popupW);
+      }
+      setPopupPos({ top, left });
     }
     setOpen(o => !o);
   }, [open]);

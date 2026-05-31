@@ -17,9 +17,10 @@
 'use client';
 
 import type { Period } from '@/lib/periodRange';
-import { PERIODS, getPeriodRange } from '@/lib/periodRange';
+import { PERIODS, getPeriodRange, startedWeeksISO, currentWeekStartISO } from '@/lib/periodRange';
 import DatePicker from '@/components/calendar/DatePicker';
 import { LOAD_ACCENT } from '@/lib/loadAccent';
+import { useMemo } from 'react';
 
 export interface PeriodSelectorProps {
   period: Period;
@@ -28,6 +29,11 @@ export interface PeriodSelectorProps {
   customEnd:   string;     // YYYY-MM-DD
   onCustomStartChange: (iso: string) => void;
   onCustomEndChange:   (iso: string) => void;
+  /** Selected week's Saturday for the 'week' period. When omitted,
+   *  defaults to the current week. Pass + handle to enable picking
+   *  any started week from the dropdown. */
+  weekStart?:        string;
+  onWeekStartChange?: (iso: string) => void;
   /** Render the date-range label under the pills (default true).
    *  Set false when the page already shows the range elsewhere. */
   showRangeLabel?: boolean;
@@ -36,9 +42,16 @@ export interface PeriodSelectorProps {
 export function PeriodSelector({
   period, onPeriodChange,
   customStart, customEnd, onCustomStartChange, onCustomEndChange,
+  weekStart, onWeekStartChange,
   showRangeLabel = true,
 }: PeriodSelectorProps) {
-  const range = getPeriodRange(period, { startISO: customStart, endISO: customEnd });
+  const effectiveWeekStart = weekStart ?? currentWeekStartISO();
+  const range = getPeriodRange(period, {
+    startISO:      customStart,
+    endISO:        customEnd,
+    weekStartISO:  effectiveWeekStart,
+  });
+  const weeks = useMemo(() => startedWeeksISO(12), []);
 
   return (
     <div className="flex flex-col items-end gap-1.5 shrink-0">
@@ -63,6 +76,21 @@ export function PeriodSelector({
           );
         })}
       </div>
+      {period === 'week' && onWeekStartChange && (
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded"
+          style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
+          <select
+            value={effectiveWeekStart}
+            onChange={(e) => onWeekStartChange(e.target.value)}
+            className="text-[13px] font-semibold bg-transparent border-0 outline-none cursor-pointer"
+            style={{ color: 'var(--gc-text-1)' }}
+          >
+            {weeks.map((w) => (
+              <option key={w.weekStart} value={w.weekStart}>{w.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
       {period === 'custom' && (
         <div className="flex items-center gap-1.5">
           <DatePicker
