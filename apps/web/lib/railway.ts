@@ -222,6 +222,30 @@ export interface TimelineProfitability {
   day:   TimelineProfitabilityDay;
 }
 
+// ── Week summary (per-day P&L rollup for the week strip) ──────────
+
+export interface WeekDaySummary {
+  dayKey:            string;
+  totalRevenue:      number;
+  totalDriverPay:    number;
+  loadCount:         number;
+  loadedMiles:       number;
+  inboundDhMiles:    number;
+  attributedMiles:   number;
+  yardReturnMiles:   number;
+  unattributedMiles: number;
+  totalMiles:        number;
+  dayRpm:            number | null;
+  dayRpmTotal:       number | null;
+  deadheadPctOfDay:  number | null;
+}
+
+export interface WeekSummary {
+  weekStart: string;
+  days:      WeekDaySummary[];
+  weekTotal: WeekDaySummary;
+}
+
 export interface TimelinePayload {
   asset:         { id: number; name: string; unit: string | null };
   windowFrom:    string;
@@ -747,6 +771,14 @@ class RailwayClient {
       proposedCount?: number;
       message?:       string;
     }>('POST', `/v1/timeline/assets/${assetId}/auto-link?${qs.toString()}`);
+  }
+
+  /** Per-day P&L summary for one asset across a 7-day window. Used
+   *  by the timeline page's week strip to render a Sat-Fri row of
+   *  load count / revenue / RPM cards without 7 timeline payload fetches. */
+  getWeekSummary(assetId: number, weekStart: string, tz: string) {
+    const qs = new URLSearchParams({ weekStart, tz });
+    return this.req<WeekSummary>('GET', `/v1/timeline/assets/${assetId}/week-summary?${qs.toString()}`);
   }
 
   // ── Movements (Motive driving-periods feed) ───────────────────────────

@@ -1410,4 +1410,269 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
   });
 });
 
+// ── GET /assets/:assetId/week-summary — per-day P&L for one truck ──
+//
+// Returns a 7-element array of compact profitability summaries (Sat
+// through Fri) so the timeline page can paint a week-strip without
+// 7 separate timeline payload fetches. Same attribution logic as the
+// single-day endpoint — just iterated 7 times with day-bounded event
+// filtering applied server-side (matches the client-side filter).
+//
+// Inputs:
+//   - assetId          path param
+//   - weekStart=YYYY-MM-DD   first day of the week (Saturday)
+//   - tz=America/Denver      org TZ for naive-day boundary resolution
+//
+// Cheap intentionally: skips the heavy stops + links + movement detail
+// payload; only needs events + movements + current-link rows.
+
+interface WeekDaySummary {
+  dayKey:           string;
+  totalRevenue:     number;
+  totalDriverPay:   number;
+  loadCount:        number;
+  loadedMiles:      number;
+  inboundDhMiles:   number;
+  attributedMiles:  number;
+  yardReturnMiles:  number;
+  unattributedMiles: number;
+  totalMiles:       number;
+  dayRpm:           number | null;
+  dayRpmTotal:      number | null;
+  deadheadPctOfDay: number | null;
+}
+
+interface WeekSummaryResponse {
+  weekStart: string;
+  days:      WeekDaySummary[];
+  weekTotal: WeekDaySummary;
+}
+
+/** Naive-string day boundary in the org's TZ. Reused from the client
+ *  shape so server + client agree on what "today" means. */
+function shiftDayKey(dayKey: string, days: number): string {
+  const d = new Date(`${dayKey}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+timeline.get("/assets/:assetId/week-summary", async (c) => {
+  const orgId = c.get("orgId");
+  const assetId = Number(c.req.param("assetId"));
+  const weekStart = c.req.query("weekStart");
+  const tz = c.req.query("tz") || "America/Denver";
+
+  if (!Number.isFinite(assetId)) {
+    return c.json({ error: "validation_failed", errors: ["assetId must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  if (!weekStart || !/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
+    return c.json({ error: "validation_failed", errors: ["weekStart=YYYY-MM-DD required"] } satisfies ApiErrorResponse, 400);
+  }
+
+  const { data: asset } = await sb
+    .from("assets")
+    .select("id")
+    .eq("id", assetId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (!asset) {
+    return c.json({ error: "asset_not_found" } satisfies ApiErrorResponse, 404);
+  }
+
+  // Build the 7 day windows (naive boundaries in org TZ, padded by
+  // ±6h in UTC to catch boundary movements). One supabase round-trip
+  // per day — N+1 is acceptable here since N=7 and each query is
+  // small. Could be batched into a single events + single movements
+  // query later if it becomes a hot path.
+  const days: WeekDaySummary[] = [];
+  for (let i = 0; i < 7; i++) {
+    const dayKey = shiftDayKey(weekStart, i);
+    const dayStartNaive = `${dayKey}T00:00:00`;
+    const dayEndNaive   = `${dayKey}T23:59:59`;
+
+    // Naive→UTC for the movement window (movements use TIMESTAMPTZ).
+    // Postgres can compute this from a naive string + tz on its own
+    // via AT TIME ZONE, but the JS shim is simpler. (The 'tz' name
+    // here is the IANA zone; Intl handles the offset.)
+    const naiveToUtc = (naive: string) => {
+      // Approximate: parse as if local, then offset by the TZ delta
+      // between local and target. Good enough for the ±6h padded window.
+      const local = new Date(naive);
+      const tzFmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      }).format(local);
+      const [d, t] = tzFmt.split(', ');
+      const [mo, dd, yyyy] = d.split('/');
+      const [hh, mi, ss] = t.split(':');
+      const localAsUtc = Date.UTC(+yyyy, +mo - 1, +dd, +hh, +mi, +ss);
+      const offsetMs = localAsUtc - local.getTime();
+      return new Date(local.getTime() - offsetMs).toISOString();
+    };
+    const padMs = 6 * 60 * 60 * 1000;
+    const movFrom = new Date(new Date(naiveToUtc(dayStartNaive)).getTime() - padMs).toISOString();
+    const movTo   = new Date(new Date(naiveToUtc(dayEndNaive)).getTime()   + padMs).toISOString();
+
+    // Events whose [start, end] intersects this day-naive window.
+    const { data: events } = await sb
+      .from("events")
+      .select("id, start, \"end\", event_kind, driver_pay, load:loads(load_price)")
+      .eq("org_id", orgId)
+      .eq("asset_id", assetId)
+      .is("deleted_at", null)
+      .lt("start", dayEndNaive)
+      .gt("end",   dayStartNaive);
+    const eventList = ((events ?? []) as Array<{
+      id: string; start: string; end: string;
+      event_kind: string | null; driver_pay: number | null;
+      load: { load_price: number | null } | null;
+    }>);
+    const revenueEventIds = new Set(
+      eventList.filter((e) => e.event_kind !== "non_revenue").map((e) => e.id),
+    );
+
+    // Movements in the padded window.
+    const { data: movementRows } = await sb
+      .from("movements")
+      .select("id, miles")
+      .eq("org_id", orgId)
+      .eq("asset_id", assetId)
+      .is("deleted_at", null)
+      .gte("start_time", movFrom)
+      .lt("start_time", movTo);
+    const movementsList = ((movementRows ?? []) as Array<{ id: string; miles: number | null }>);
+    const movementIds = movementsList.map((m) => m.id);
+
+    // Current-truth links for those movements.
+    const { data: linkRows } = movementIds.length > 0
+      ? await sb
+          .from("movement_links")
+          .select("movement_id, role, loaded_event_id, from_event_id, to_event_id")
+          .eq("org_id", orgId)
+          .in("movement_id", movementIds)
+          .is("superseded_at", null)
+      : { data: [] };
+    const linkByMovementId = new Map<string, {
+      role: string; loaded_event_id: string | null;
+      from_event_id: string | null; to_event_id: string | null;
+    }>();
+    for (const l of (linkRows ?? []) as Array<{
+      movement_id: string; role: string; loaded_event_id: string | null;
+      from_event_id: string | null; to_event_id: string | null;
+    }>) {
+      linkByMovementId.set(l.movement_id, l);
+    }
+
+    // Per-load aggregation (inbound attribution).
+    type Acc = { loadedMiles: number; inboundDhMiles: number };
+    const accByEvent = new Map<string, Acc>();
+    const getAcc = (eventId: string): Acc => {
+      let a = accByEvent.get(eventId);
+      if (!a) { a = { loadedMiles: 0, inboundDhMiles: 0 }; accByEvent.set(eventId, a); }
+      return a;
+    };
+    let yardReturnMiles = 0;
+    let unattributedMiles = 0;
+    for (const m of movementsList) {
+      const miles = m.miles ?? 0;
+      const link = linkByMovementId.get(m.id);
+      if (!link) { unattributedMiles += miles; continue; }
+      switch (link.role) {
+        case "loaded":
+          if (link.loaded_event_id && revenueEventIds.has(link.loaded_event_id)) {
+            getAcc(link.loaded_event_id).loadedMiles += miles;
+          } else {
+            unattributedMiles += miles;
+          }
+          break;
+        case "transition":
+          if (link.to_event_id && revenueEventIds.has(link.to_event_id)) {
+            getAcc(link.to_event_id).inboundDhMiles += miles;
+          } else if (link.from_event_id && !link.to_event_id) {
+            yardReturnMiles += miles;
+          } else {
+            unattributedMiles += miles;
+          }
+          break;
+        default:
+          unattributedMiles += miles;
+          break;
+      }
+    }
+
+    // Only count loads whose event start (naive) actually lands on
+    // this day (not just intersects the padded window). Mirrors the
+    // client-side visibleProfitability filter.
+    const visibleLoads = eventList.filter((e) =>
+      e.event_kind !== "non_revenue"
+      && e.start.slice(0, 10) <= dayKey
+      && e.end.slice(0, 10)   >= dayKey
+    );
+
+    let totalRevenue = 0;
+    let totalDriverPay = 0;
+    let loadedMiles = 0;
+    let inboundDhMiles = 0;
+    for (const e of visibleLoads) {
+      totalRevenue   += e.load?.load_price ?? 0;
+      totalDriverPay += e.driver_pay ?? 0;
+      const acc = accByEvent.get(e.id);
+      if (acc) {
+        loadedMiles    += acc.loadedMiles;
+        inboundDhMiles += acc.inboundDhMiles;
+      }
+    }
+    const attributedMiles = loadedMiles + inboundDhMiles;
+    const totalMiles = attributedMiles + yardReturnMiles + unattributedMiles;
+
+    days.push({
+      dayKey,
+      totalRevenue,
+      totalDriverPay,
+      loadCount:       visibleLoads.length,
+      loadedMiles,
+      inboundDhMiles,
+      attributedMiles,
+      yardReturnMiles,
+      unattributedMiles,
+      totalMiles,
+      dayRpm:          attributedMiles > 0 ? totalRevenue / attributedMiles : null,
+      dayRpmTotal:     totalMiles > 0 ? totalRevenue / totalMiles : null,
+      deadheadPctOfDay: totalMiles > 0 ? (inboundDhMiles + yardReturnMiles) / totalMiles : null,
+    });
+  }
+
+  // Week rollup.
+  const weekRevenue    = days.reduce((s, d) => s + d.totalRevenue, 0);
+  const weekDriverPay  = days.reduce((s, d) => s + d.totalDriverPay, 0);
+  const weekLoadCount  = days.reduce((s, d) => s + d.loadCount, 0);
+  const weekLoaded     = days.reduce((s, d) => s + d.loadedMiles, 0);
+  const weekInboundDh  = days.reduce((s, d) => s + d.inboundDhMiles, 0);
+  const weekAttributed = weekLoaded + weekInboundDh;
+  const weekYardReturn = days.reduce((s, d) => s + d.yardReturnMiles, 0);
+  const weekUnattr     = days.reduce((s, d) => s + d.unattributedMiles, 0);
+  const weekTotalMiles = weekAttributed + weekYardReturn + weekUnattr;
+
+  const res: WeekSummaryResponse = {
+    weekStart,
+    days,
+    weekTotal: {
+      dayKey:           weekStart,
+      totalRevenue:     weekRevenue,
+      totalDriverPay:   weekDriverPay,
+      loadCount:        weekLoadCount,
+      loadedMiles:      weekLoaded,
+      inboundDhMiles:   weekInboundDh,
+      attributedMiles:  weekAttributed,
+      yardReturnMiles:  weekYardReturn,
+      unattributedMiles: weekUnattr,
+      totalMiles:       weekTotalMiles,
+      dayRpm:           weekAttributed > 0 ? weekRevenue / weekAttributed : null,
+      dayRpmTotal:      weekTotalMiles > 0 ? weekRevenue / weekTotalMiles : null,
+      deadheadPctOfDay: weekTotalMiles > 0 ? (weekInboundDh + weekYardReturn) / weekTotalMiles : null,
+    },
+  };
+  return c.json(res);
+});
+
 export default timeline;

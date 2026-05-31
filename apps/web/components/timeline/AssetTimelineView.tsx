@@ -32,7 +32,9 @@ import {
   type TimelinePayload, type TimelineEvent, type TimelineLink,
   type TimelineLinkRole, type AssertLinkRequest, type CreateMovementRequest,
   type TimelineProfitability, type TimelineProfitabilityLoad,
+  type WeekSummary,
 } from '@/lib/railway';
+import WeekStrip from './WeekStrip';
 import {
   clusterTimelineMovements, computeDwells, findSavedLocation,
   type TimelineCluster, type TimelineDwell,
@@ -127,6 +129,16 @@ function fmtDateHeader(dayKey: string, tz: string): string {
 function shiftDateKey(dayKey: string, days: number): string {
   const d = new Date(`${dayKey}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Saturday on or before the given dayKey — the org's week starts on
+ *  Saturday and runs through Friday. Used to anchor the week strip. */
+function weekStartFor(dayKey: string): string {
+  const d = new Date(`${dayKey}T12:00:00Z`);
+  const dow = d.getUTCDay();           // 0=Sun, 1=Mon, ..., 6=Sat
+  const daysBack = (dow - 6 + 7) % 7;  // 0 when dayKey is Sat
+  d.setUTCDate(d.getUTCDate() - daysBack);
   return d.toISOString().slice(0, 10);
 }
 
@@ -278,6 +290,18 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     linksWritten: number; manualSkipped: number; totalMovements: number; message?: string;
   } | null>(null);
 
+  // Bulk-week AI state — separate from single-day so the existing
+  // single-day path keeps working unchanged.
+  const [weekLinking, setWeekLinking]   = useState(false);
+  const [weekProgress, setWeekProgress] = useState<{ done: number; total: number } | null>(null);
+  const [weekLinkResult, setWeekLinkResult] = useState<{
+    daysLinked: number; totalLinksWritten: number; totalManualSkipped: number; failures: number;
+  } | null>(null);
+
+  // Week-summary fetch state (per-day P&L for the week strip).
+  const [weekSummary, setWeekSummary]       = useState<WeekSummary | null>(null);
+  const [weekSummaryLoading, setWeekSummaryLoading] = useState(false);
+
   async function runAutoLink() {
     if (effectiveAssetId == null) return;
     setAutoLinking(true);
@@ -296,6 +320,60 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     } finally {
       setAutoLinking(false);
     }
+  }
+
+  /** Run AI auto-link for every day in the visible week (Sat → Fri) in
+   *  parallel. Each day uses its own padded ±6h UTC window. Failures
+   *  are tallied but don't abort the rest. */
+  async function runWeekAutoLink() {
+    if (effectiveAssetId == null) return;
+    const weekStart = weekStartFor(dayKey);
+    setWeekLinking(true);
+    setWeekLinkResult(null);
+    setWeekProgress({ done: 0, total: 7 });
+
+    const dayKeys = Array.from({ length: 7 }, (_, i) => shiftDateKey(weekStart, i));
+    const pad = 6 * 60 * 60 * 1000;
+    const windows = dayKeys.map((k) => {
+      const startEpoch = parseNaiveIsoInTz(`${k}T00:00:00`, tz);
+      const endEpoch   = parseNaiveIsoInTz(`${k}T23:59:59`, tz);
+      return {
+        from: new Date(startEpoch - pad).toISOString(),
+        to:   new Date(endEpoch   + pad).toISOString(),
+      };
+    });
+
+    let done = 0;
+    let totalLinks = 0;
+    let totalSkipped = 0;
+    let failures = 0;
+    const results = await Promise.allSettled(
+      windows.map(async (w) => {
+        const r = await railway.autoLinkAssetTimeline(effectiveAssetId!, w.from, w.to);
+        return r;
+      }).map((p) => p.finally(() => {
+        done++;
+        setWeekProgress({ done, total: 7 });
+      })),
+    );
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        totalLinks   += r.value.linksWritten;
+        totalSkipped += r.value.manualSkipped;
+      } else {
+        failures++;
+      }
+    }
+
+    setWeekLinkResult({
+      daysLinked:         7 - failures,
+      totalLinksWritten:  totalLinks,
+      totalManualSkipped: totalSkipped,
+      failures,
+    });
+    setWeekLinking(false);
+    setWeekProgress(null);
+    setRefreshTick((t) => t + 1);
   }
 
   // Window: 6h before day start → 6h after day end, in UTC.
@@ -321,6 +399,20 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
       .catch((e) => { if (!cancelled) { setError(e instanceof Error ? e.message : 'Failed to load'); setLoading(false); } });
     return () => { cancelled = true; };
   }, [effectiveAssetId, fetchWindow.from, fetchWindow.to, refreshTick]);
+
+  // Fetch the week-summary whenever the asset or week changes. The
+  // single useState + cancelled-guard pattern matches the timeline
+  // fetch above — stale responses for an earlier week don't overwrite.
+  const weekStartKey = useMemo(() => weekStartFor(dayKey), [dayKey]);
+  useEffect(() => {
+    if (effectiveAssetId == null) return;
+    let cancelled = false;
+    setWeekSummaryLoading(true);
+    railway.getWeekSummary(effectiveAssetId, weekStartKey, tz)
+      .then((res) => { if (!cancelled) { setWeekSummary(res); setWeekSummaryLoading(false); } })
+      .catch(() => { if (!cancelled) setWeekSummaryLoading(false); });
+    return () => { cancelled = true; };
+  }, [effectiveAssetId, weekStartKey, tz, refreshTick]);
 
   // Reset selection when switching truck or day so the panel doesn't
   // hang around showing a stale row from the previous view.
@@ -539,16 +631,32 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             <div className="ml-auto flex items-center gap-2">
               <button
                 onClick={runAutoLink}
-                disabled={autoLinking}
+                disabled={autoLinking || weekLinking}
                 className="text-[12px] font-semibold px-3 py-1.5 rounded flex items-center gap-1.5"
                 style={{
-                  background: autoLinking ? 'var(--gc-surface-2)' : 'var(--gc-purple, #a142f4)',
-                  color: autoLinking ? 'var(--gc-text-3)' : '#fff',
+                  background: (autoLinking || weekLinking) ? 'var(--gc-surface-2)' : 'var(--gc-purple, #a142f4)',
+                  color: (autoLinking || weekLinking) ? 'var(--gc-text-3)' : '#fff',
                 }}
                 title="Claude classifies each movement on this day's window (skips manually-linked rows)"
               >
                 {autoLinking ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                {autoLinking ? 'Linking…' : 'Re-link with AI'}
+                {autoLinking ? 'Linking…' : 'Re-link day'}
+              </button>
+              <button
+                onClick={runWeekAutoLink}
+                disabled={autoLinking || weekLinking}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded flex items-center gap-1.5"
+                style={{
+                  background: (autoLinking || weekLinking) ? 'var(--gc-surface-2)' : 'var(--gc-purple, #a142f4)',
+                  color: (autoLinking || weekLinking) ? 'var(--gc-text-3)' : '#fff',
+                  opacity: weekLinking ? 1 : 0.9,
+                }}
+                title="Fires AI classification for every day in this Sat → Fri week in parallel"
+              >
+                {weekLinking ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {weekLinking
+                  ? `Linking week… ${weekProgress?.done ?? 0} / ${weekProgress?.total ?? 7}`
+                  : 'Re-link week'}
               </button>
               <button
                 onClick={() => setShowCreateMovement(true)}
@@ -575,6 +683,27 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             </span>
             <button
               onClick={() => setAutoLinkResult(null)}
+              className="ml-auto w-5 h-5 rounded flex items-center justify-center hover:bg-black/5"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : null}
+
+        {/* Week-link result banner */}
+        {weekLinkResult ? (
+          <div
+            className="mb-3 px-3 py-2 rounded-lg text-[12px] flex items-center gap-2"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
+          >
+            <Sparkles size={14} style={{ color: '#a142f4' }} />
+            <span>
+              Week relink: {weekLinkResult.daysLinked} of 7 days · {weekLinkResult.totalLinksWritten} links written
+              {weekLinkResult.totalManualSkipped > 0 ? `; ${weekLinkResult.totalManualSkipped} manual skipped` : ''}
+              {weekLinkResult.failures > 0 ? `; ${weekLinkResult.failures} day(s) failed` : ''}
+            </span>
+            <button
+              onClick={() => setWeekLinkResult(null)}
               className="ml-auto w-5 h-5 rounded flex items-center justify-center hover:bg-black/5"
             >
               <X size={12} />
@@ -638,6 +767,23 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
             from the AI-classified link graph with inbound attribution
             (deadhead credited to the load it repositions toward).
             Renders only when the payload has a profitability block. */}
+        {/* Week strip — clickable Sat → Fri day cards + week total.
+            Active day card highlighted with the asset color. */}
+        {weekSummary ? (
+          <WeekStrip
+            summary={weekSummary}
+            activeDayKey={dayKey}
+            todayKey={todayKey}
+            assetColor={assetColor}
+            onSelectDay={(k) => setDayKey(k)}
+            fs={fs}
+          />
+        ) : weekSummaryLoading ? (
+          <div className="mt-1 mb-3 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+            Loading week summary…
+          </div>
+        ) : null}
+
         {visibleProfitability && visibleProfitability.loads.length > 0 ? (
           <RevenueAnalysisStrip profitability={visibleProfitability} assetColor={assetColor} fs={fs} />
         ) : null}
