@@ -49,6 +49,34 @@ export function localDateStr(d: Date): string {
 }
 
 /**
+ * Construct a Date whose browser-tz reading is "the given day at noon."
+ *
+ * `currentDate` semantically represents a calendar day, not a moment.
+ * If we anchor it at midnight browser-tz (the old behavior of
+ * `new Date(y, m, d)`), the epoch lands at a moment that any tz EAST of
+ * the browser still considers "yesterday" — a 1-2h window where
+ * dateKeyInTz(orgTz) and localDateStr(browserTz) disagree about the
+ * day. That mismatch silently broke movements rendering and caused
+ * load events to span the wrong day for cross-tz users (an Eastern
+ * dispatcher viewing a Denver fleet was the original reproduction).
+ *
+ * Noon is the safe anchor: ±11h from noon stays inside the same
+ * calendar day in every IANA tz pair on Earth. So an Eastern browser
+ * picking "May 31" produces an epoch that BOTH Eastern AND Denver
+ * unambiguously read as May 31.
+ */
+export function dayAtNoon(y: number, mZeroBased: number, d: number): Date {
+  return new Date(y, mZeroBased, d, 12, 0, 0, 0);
+}
+
+/** Today (browser tz) at noon. Same noon-anchor rationale as
+ *  `dayAtNoon` — see that function's doc for why this matters. */
+export function todayAtNoon(): Date {
+  const n = new Date();
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 12, 0, 0, 0);
+}
+
+/**
  * Coerce whatever's stored as the "timezone" setting into something
  * Intl.DateTimeFormat will accept, or undefined.
  *

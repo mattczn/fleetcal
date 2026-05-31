@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, CheckCircle2, Loader2, Menu, Search, X, Trash2, RotateCcw, SlidersHorizontal, Eye, Container, Truck } from 'lucide-react';
 import { OrganizationSwitcher, UserButton, useUser } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { localDateStr, nowInTz } from '@/lib/time-utils';
+import { localDateStr, nowInTz, dayAtNoon } from '@/lib/time-utils';
 import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
 import { NotificationsBell } from '@/components/toolbar/NotificationsBell';
@@ -160,7 +160,7 @@ export default function CalendarToolbar() {
 
   const handleSelectResult = (eventId: string, start: string) => {
     const [y, m, d] = start.split('T')[0].split('-').map(Number);
-    setCurrentDate(new Date(y, m - 1, d));
+    setCurrentDate(dayAtNoon(y, m - 1, d));
     // For cancelled-keep-load + recently-deleted hits, the event isn't
     // in the live events store (calendar only loads active rows in the
     // visible window). Merge the search-returned event so the modal
@@ -176,7 +176,7 @@ export default function CalendarToolbar() {
 
   const handleRestore = (id: string, start: string) => {
     const [y, m, d] = start.split('T')[0].split('-').map(Number);
-    setCurrentDate(new Date(y, m - 1, d));
+    setCurrentDate(dayAtNoon(y, m - 1, d));
     const restoreEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, loadRestored: true };
     restoreEvent(id, restoreEntry);
   };
@@ -189,7 +189,7 @@ export default function CalendarToolbar() {
 
   const goToday = () => {
     const n = nowInTz(calendarTimezone);
-    setCurrentDate(new Date(n.getFullYear(), n.getMonth(), n.getDate()));
+    setCurrentDate(dayAtNoon(n.getFullYear(), n.getMonth(), n.getDate()));
   };
 
   // Withhold the "today" highlight until after mount — server SSR may render
@@ -254,7 +254,7 @@ export default function CalendarToolbar() {
           value={localDateStr(currentDate)}
           onChange={(v) => {
             const [y, m, d] = v.split('-').map(Number);
-            setCurrentDate(new Date(y, m - 1, d));
+            setCurrentDate(dayAtNoon(y, m - 1, d));
           }}
           headerColor="#1a73e8"
           displayText={formatToolbarDate(currentDate, viewMode)}

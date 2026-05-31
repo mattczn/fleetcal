@@ -13,7 +13,7 @@ import { fetchEventsInRange, fetchSavedLocations, createSavedLocation, updateSav
 import { railway } from '@/lib/railway';
 import { buildCreateLoadBody, splitForUpdate, buildEventByIdUpdate } from '@/lib/loadFieldSplit';
 import { DUMMY_ASSETS, DUMMY_DRIVERS, DUMMY_EVENTS, DEMO_BASE_DATE } from '@/lib/dummy-data';
-import { localDateStr } from '@/lib/time-utils';
+import { localDateStr, todayAtNoon } from '@/lib/time-utils';
 
 // ─── Self-echo suppression ──────────────────────────────────────────────
 //
@@ -499,7 +499,7 @@ export const useCalendarStore = create<CalendarStore>()(
       orgId, assets, events, deletedEvents, drivers,
       driverPrefs,
       driverPrefsSecondary: driverPrefsSecondary ?? {},
-      dbReady: true, currentDate: new Date(), loadedStart, loadedEnd,
+      dbReady: true, currentDate: todayAtNoon(), loadedStart, loadedEnd,
       unassignedAssetId: unassigned?.id ?? null,
       showUnassigned: persistedShowUnassigned,
       lastKnownAssetCount: visibleCount,
@@ -572,7 +572,11 @@ export const useCalendarStore = create<CalendarStore>()(
   drivers:       [],
   driverPrefs:          {},
   driverPrefsSecondary: {},
-  currentDate:   new Date(),
+  // Noon-anchored — see todayAtNoon docs. Midnight-browser-tz lands in
+  // the 1-2h window where org tz (HOME_TZ) and a browser tz east of it
+  // disagree about the day, which silently broke movements rendering
+  // and made events span the wrong calendar day.
+  currentDate:   todayAtNoon(),
   resourceWidth:       80,
   resourceWidthLocked: false,
   rowHeight:           68,
@@ -680,7 +684,7 @@ export const useCalendarStore = create<CalendarStore>()(
       driverPrefsSecondary: {},
       showUnassigned:       true,
       unassignedAssetId:    UNASSIGNED_ID,
-      currentDate:          new Date(),
+      currentDate:          todayAtNoon(),
     });
   },
   exitDemoMode: () => set({
@@ -720,9 +724,6 @@ export const useCalendarStore = create<CalendarStore>()(
     // The race fires reliably when navigating between days quickly
     // (which is exactly when users say "movements disappeared").
     const requestId = useCalendarStore.getState().movementsRequestId + 1;
-    const callTraceId = `${requestId}-${start}→${end}`;
-    // eslint-disable-next-line no-console
-    console.log(`[movements] fetch START ${callTraceId} (prev id=${requestId - 1}, prev vehicles=${Object.keys(useCalendarStore.getState().movementsByVehicle).length})`);
     set({ movementsRequestId: requestId, movementsLoading: true, movementsError: null });
 
     // Expand the YYYY-MM-DD inputs to a UTC window that covers the
@@ -746,16 +747,7 @@ export const useCalendarStore = create<CalendarStore>()(
 
         // Check whether a NEWER fetch has fired in the meantime; if so
         // this response is stale, drop it on the floor.
-        if (useCalendarStore.getState().movementsRequestId !== requestId) {
-          // eslint-disable-next-line no-console
-          console.log(`[movements] fetch STALE ${callTraceId} (response had ${Object.keys(res.byVehicle ?? {}).length} vehicles, ${Object.values(res.byVehicle ?? {}).flat().length} periods) — dropped`);
-          return;
-        }
-
-        const vehicles = Object.keys(res.byVehicle ?? {}).length;
-        const periods  = Object.values(res.byVehicle ?? {}).flat().length;
-        // eslint-disable-next-line no-console
-        console.log(`[movements] fetch OK    ${callTraceId} attempt=${attempt + 1} → ${vehicles} vehicles, ${periods} periods${vehicles === 0 ? ' ⚠️ EMPTY RESPONSE — calendar will appear blank' : ''}`);
+        if (useCalendarStore.getState().movementsRequestId !== requestId) return;
 
         set({
           movementsByVehicle: res.byVehicle ?? {},
@@ -765,8 +757,6 @@ export const useCalendarStore = create<CalendarStore>()(
         return;
       } catch (err) {
         lastErr = err;
-        // eslint-disable-next-line no-console
-        console.warn(`[movements] fetch FAIL  ${callTraceId} attempt=${attempt + 1}:`, err);
         if (attempt < 2) {
           // Backoff before the next retry.
           await new Promise((r) => setTimeout(r, 500 * Math.pow(3, attempt)));
@@ -779,7 +769,7 @@ export const useCalendarStore = create<CalendarStore>()(
     // banner is strictly better than going blank, especially when
     // the failure is transient (the next nav will refetch cleanly).
     if (useCalendarStore.getState().movementsRequestId !== requestId) return;
-    console.error(`[movements] fetch GAVEUP ${callTraceId} after 3 attempts:`, lastErr);
+    console.error('[useCalendarStore] fetchMovements failed after 3 attempts:', lastErr);
     set({
       movementsLoading: false,
       movementsError:   lastErr instanceof Error ? lastErr.message : 'Failed to load movements',

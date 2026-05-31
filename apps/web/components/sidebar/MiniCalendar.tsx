@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { localDateStr, todayStrInTz } from '@/lib/time-utils';
+import { localDateStr, todayStrInTz, dayAtNoon } from '@/lib/time-utils';
 
 const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -49,7 +49,7 @@ export default function MiniCalendar() {
   };
 
   const selectDay = (day: number) => {
-    setCurrentDate(new Date(viewYear, viewMonth, day));
+    setCurrentDate(dayAtNoon(viewYear, viewMonth, day));
   };
 
   return (

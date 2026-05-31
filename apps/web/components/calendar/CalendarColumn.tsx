@@ -112,15 +112,6 @@ export default function CalendarColumn({ asset, compact = false, onSmartAssign }
     ? (movementsByVehicle[String(asset.motiveVehicleId)] ?? [])
     : [];
   const movementClusters = clusterMovements(rawMovements);
-  // Diagnostic: per-column cluster accounting. Pair with MovementCard
-  // filter logs to figure out the "flash then half disappear" mystery.
-  // dateStr is computed below from currentDate; log it here too so we
-  // can compare browser-tz (localDateStr) vs org-tz (the cluster filter
-  // uses isoToNaiveTz with calendarTimezone).
-  if (mode === 'movements' && asset.motiveVehicleId && movementClusters.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(`[movements/col] ${asset.name} (vid=${asset.motiveVehicleId}) raw=${rawMovements.length} clusters=${movementClusters.length} dateStr(browser)=${dateStr} tz=${calendarTimezone}`);
-  }
 
   const colEvents = mode === 'movements' ? [] : events.filter((e) => {
     if (e.assetId !== asset.id) return false;
