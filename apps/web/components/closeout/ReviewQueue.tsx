@@ -999,19 +999,46 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
           </span>
           <div className="flex flex-col flex-1 min-w-0">
-            {onOpenLoadModal ? (
-              <button type="button"
-                onClick={() => onOpenLoadModal(current)}
-                className="text-base font-extrabold truncate text-left hover:underline transition-colors"
-                style={{ color: 'var(--gc-blue)' }}
-                title="Open full load details">
-                {current.title}
-              </button>
-            ) : (
-              <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                {current.title}
+            {/* Title row — load title on the left, verification chips
+                inline on the right. The chips moved here from the doc
+                column so the viewer gets all the space; the title is
+                wide enough to host them inline. */}
+            <div className="flex items-center gap-3 min-w-0 flex-wrap">
+              {onOpenLoadModal ? (
+                <button type="button"
+                  onClick={() => onOpenLoadModal(current)}
+                  className="text-base font-extrabold truncate text-left hover:underline transition-colors"
+                  style={{ color: 'var(--gc-blue)' }}
+                  title="Open full load details">
+                  {current.title}
+                </button>
+              ) : (
+                <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                  {current.title}
+                </div>
+              )}
+              {/* Verification chips — Rate Con, POD, (Lumper / Scale if
+                  the load's accessorials require them). Green check
+                  when present, red ! when missing. TONU shows a blue
+                  badge instead (POD not required). */}
+              <div className="flex items-center gap-3 flex-wrap">
+                {isTonu && (
+                  <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold"
+                    style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
+                    TONU
+                  </span>
+                )}
+                {checklist.filter(c => !c.skip).map(c => (
+                  <span key={c.id} className="flex items-center gap-1 text-[12px] font-semibold"
+                    style={{ color: c.pass ? 'var(--gc-text-1)' : '#dc2626' }}>
+                    {c.pass
+                      ? <CheckCircle2 size={13} style={{ color: '#15803d' }} />
+                      : <AlertCircle  size={13} style={{ color: '#dc2626' }} />}
+                    <span>{c.label}</span>
+                  </span>
+                ))}
               </div>
-            )}
+            </div>
             <div className="text-xs flex items-center gap-3 flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
               <span className="tabular-nums">
                 {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
@@ -1233,273 +1260,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 }} />
             </div>
 
-            {/* Uploaded docs column.
-                Layout (replaces the old horizontal POD 1/POD 2 tab strip):
-                  ┌─ Verification header + "+ Add Documents" button
-                  ├─ Doc rows (click → viewer; per-row "Invoice" toggle)
-                  ├─ Pending file kind picker (only when uploading)
-                  ├─ "Manage documents" button (opens merge dialog)
-                  └─ DocViewer (fills remaining height)
-
-                The hidden <input ref={fileInputRef}> that pickFile()
-                triggers is mounted at the bottom of this column so it
-                stays in the React tree across all rendering branches
-                (used to live inside the old "Add paperwork" section in
-                the right sidebar; that section is gone now). */}
+            {/* Middle column — pure viewer.
+                Everything that used to live here (Verification header,
+                doc list, kind picker, Manage button) moved either to
+                the modal's top bar (verification chips) or to the right
+                sidebar (Add Documents header, doc rows, pending picker,
+                Manage Documents button). The viewer now gets the full
+                width and height of this column. */}
             <div className="flex-1 flex flex-col min-w-0">
-              {/* Verification header + Add Documents */}
-              <div className="shrink-0 px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap"
-                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                <div className="flex items-center gap-3 min-w-0 flex-wrap">
-                  <span className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-text-3)' }}>
-                    Verification
-                  </span>
-                  {isTonu && (
-                    <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold"
-                      style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
-                      TONU
-                    </span>
-                  )}
-                  {checklist.filter(c => !c.skip).map(c => (
-                    <span key={c.id} className="flex items-center gap-1 text-[12px] font-semibold"
-                      style={{ color: c.pass ? 'var(--gc-text-1)' : '#dc2626' }}>
-                      {c.pass
-                        ? <CheckCircle2 size={13} style={{ color: '#15803d' }} />
-                        : <AlertCircle  size={13} style={{ color: '#dc2626' }} />}
-                      <span>{c.label}</span>
-                    </span>
-                  ))}
-                </div>
-                {loadId && (
-                  <button type="button" onClick={pickFile} disabled={uploading}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-opacity disabled:opacity-50 shrink-0"
-                    style={{
-                      background:  'var(--gc-blue)',
-                      color:       '#fff',
-                      textShadow:  '0 1px 1px rgba(0,0,0,0.2)',
-                      boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
-                    }}>
-                    {uploading ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
-                    Add Documents
-                  </button>
-                )}
-              </div>
-
-              {/* Doc rows — vertical list replacing the horizontal tab
-                  strip. Each row shows: kind chip, filename, per-row
-                  "Invoice" toggle, hover-revealed rename/delete. Clicking
-                  the row sets activeDocIdx, which the viewer reads. */}
-              <div className="shrink-0 overflow-y-auto px-2 py-1.5 space-y-1"
-                style={{ borderBottom: '1px solid var(--gc-border-light)', maxHeight: 200 }}>
-                {docs.length === 0 ? (
-                  <div className="text-xs italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
-                    {docsLoading ? 'Loading…' : 'No documents uploaded yet for this load.'}
-                  </div>
-                ) : (
-                  docs.map((d, i) => {
-                    const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
-                    const active   = i === activeDocIdx;
-                    const included = includedDocIds.has(d.id);
-                    // Same enumeration as the old tab strip — single POD
-                    // stays "POD" but two PODs become "POD 1" / "POD 2".
-                    const sameKindCount = docs.filter(x => x.kind === d.kind).length;
-                    const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
-                    const labelText     = KIND_LABEL[d.kind] ?? d.kind;
-                    const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
-                    return (
-                      <div key={d.id}
-                        className="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
-                        style={{
-                          background: active ? tint.bg + '14' : 'transparent',
-                          border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
-                        }}
-                        onClick={() => setActiveDocIdx(i)}
-                        onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                        onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                          style={{ background: tint.bg, color: tint.fg }}>
-                          {rowKindLabel}
-                        </span>
-                        {renamingDocId === d.id ? (
-                          // Inline rename — Enter commits, Esc cancels.
-                          // Click handler on the input swallows the row's
-                          // setActiveDocIdx so typing doesn't navigate.
-                          <input
-                            autoFocus
-                            value={renameDraft}
-                            disabled={renameSaving}
-                            onClick={e => e.stopPropagation()}
-                            onChange={e => setRenameDraft(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
-                              if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                            }}
-                            onBlur={() => { if (!renameSaving) void commitRename(); }}
-                            className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
-                            style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
-                          />
-                        ) : (
-                          <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
-                            title={d.fileName}>
-                            {d.fileName}
-                          </span>
-                        )}
-                        {/* Hover-revealed rename/delete — same as the old
-                            "Include in invoice" panel had. */}
-                        {renamingDocId !== d.id && (
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                            <button type="button"
-                              onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
-                              className="rounded-full p-1 transition-colors"
-                              title={`Rename — ${d.fileName}`}
-                              style={{ color: tint.bg, background: 'transparent' }}
-                              onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
-                              onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                              <Pencil size={11} />
-                            </button>
-                            <button type="button"
-                              onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                              className="rounded-full p-1 transition-colors"
-                              title={`Delete — ${d.fileName}`}
-                              style={{ color: '#d93025', background: 'transparent' }}
-                              onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                              onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                              <Trash2 size={11} />
-                            </button>
-                          </div>
-                        )}
-                        {/* Include-in-invoice toggle. stopPropagation so
-                            clicking it doesn't also switch the active
-                            doc in the viewer. Writes go to includedDocIds
-                            in state; persisted to loads.invoice_doc_ids
-                            on Generate/Regenerate via persistInvoiceDocs(). */}
-                        <button type="button"
-                          onClick={e => {
-                            e.stopPropagation();
-                            setIncludedDocIds(prev => {
-                              const next = new Set(prev);
-                              if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
-                              return next;
-                            });
-                          }}
-                          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
-                          style={{
-                            background: included ? '#dcfce7' : 'var(--gc-bg)',
-                            color:      included ? '#166534' : 'var(--gc-text-3)',
-                            border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
-                          }}
-                          title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
-                          {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
-                          Invoice
-                        </button>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* Pending file kind picker — only when files are queued.
-                  Same workflow as before (multi-file → "Save merged PDF
-                  as"); just lives here now instead of the right sidebar. */}
-              {pendingFiles.length > 0 && (
-                <div className="shrink-0 px-3 py-2.5 space-y-2"
-                  style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                  <div className="space-y-1">
-                    {pendingFiles.map((f, i) => (
-                      <div key={i} className="flex items-center gap-1.5 text-[12px] px-1.5 py-1 rounded"
-                        style={{ background: 'var(--gc-surface)' }}>
-                        <span className="text-[10px] font-bold tabular-nums" style={{ color: 'var(--gc-text-3)', minWidth: 14 }}>
-                          {i + 1}.
-                        </span>
-                        <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
-                        <span className="truncate flex-1" title={f.name} style={{ color: 'var(--gc-text-1)' }}>
-                          {f.name}
-                        </span>
-                        <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
-                          disabled={uploading}
-                          className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Remove from list">
-                          <X size={11} style={{ color: 'var(--gc-text-3)' }} />
-                        </button>
-                      </div>
-                    ))}
-                    <button onClick={pickFile} disabled={uploading}
-                      className="w-full flex items-center justify-center gap-1.5 text-[11px] py-1 rounded transition-colors"
-                      style={{ color: 'var(--gc-blue)', background: 'transparent', border: '1px dashed var(--gc-border-light)' }}>
-                      <Plus size={11} /> Add more
-                    </button>
-                  </div>
-                  {pendingFiles.length > 1 && (
-                    <div className="text-[10px] px-2 py-1 rounded flex items-start gap-1.5"
-                      style={{ background: '#e0f2fe', color: '#0c4a6e' }}>
-                      <FileText size={10} style={{ marginTop: 1, flexShrink: 0 }} />
-                      <span>
-                        {pendingFiles.length} files will be merged into one PDF before upload.
-                      </span>
-                    </div>
-                  )}
-                  <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
-                    {pendingFiles.length > 1 ? 'Save merged PDF as' : 'What is this?'}
-                  </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {KIND_OPTIONS.map(opt => (
-                      <button key={opt.kind}
-                        onClick={() => void uploadAs(opt.kind)}
-                        disabled={uploading}
-                        className="flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider py-2 transition-opacity disabled:opacity-50"
-                        style={{
-                          background:  opt.tint.bg,
-                          color:       opt.tint.fg,
-                          boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
-                          textShadow:  '0 1px 1px rgba(0,0,0,0.25)',
-                        }}>
-                        {uploading ? <Loader2 size={11} className="animate-spin" /> : null}
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                  {uploading && mergeStatus && (
-                    <div className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded"
-                      style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
-                      <Loader2 size={10} className="animate-spin" />
-                      <span className="truncate flex-1">{mergeStatus}</span>
-                    </div>
-                  )}
-                  {uploadError && (
-                    <div className="text-[11px] flex items-start gap-1" style={{ color: '#dc2626' }}>
-                      <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} /> {uploadError}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Manage documents — opens a dialog where the user can
-                  merge any docs (rate con included) into a single PDF
-                  AND convert non-PDF docs (camera-roll JPEGs / HEICs)
-                  to PDF via the dialog's secondary "Convert to PDF"
-                  action. Visible when either workflow is meaningful;
-                  hidden only on loads with a single PDF and nothing to
-                  do. */}
-              {(mergeCandidates.length >= 2 || convertCandidates.length >= 1) && (
-                <div className="shrink-0 px-3 py-2"
-                  style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                  <button type="button"
-                    onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
-                    disabled={merging}
-                    className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors disabled:opacity-50"
-                    style={{
-                      background: 'transparent',
-                      color:      'var(--gc-text-2)',
-                      border:     '1px dashed var(--gc-border)',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                    {merging ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
-                    Manage documents
-                  </button>
-                </div>
-              )}
-
-              {/* Viewer — fills remaining vertical space */}
               {docs.length > 0 ? (() => {
                 const active = docs[Math.min(activeDocIdx, docs.length - 1)];
                 return (
@@ -1511,8 +1279,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 );
               })() : <NoDocPanel label="No documents uploaded yet for this load." />}
 
-              {/* Hidden file input — wired by pickFile(). multiple=true so
-                  a single OS picker can grab the whole stack. */}
+              {/* Hidden file input — wired by pickFile(), which is fired
+                  from the right sidebar's "+ Add Documents" button.
+                  Lives here at the bottom of the column so it stays
+                  mounted across all rendering branches. */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1563,13 +1333,240 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </div>
             )}
 
-            {/* Verification, Add paperwork, and Include-in-invoice all
-                lived here previously — they've moved to the middle
-                column's new doc panel (Verification header, "+ Add
-                Documents" button, per-row "Invoice" toggles). The right
-                sidebar now keeps just Accessorials + the bottom action
-                stack (Generate Invoice / Release / Flag / Skip). */}
-            <div className="flex-1" />
+            {/* Document management lives here in the right sidebar so
+                the middle column can be all viewer (more horizontal +
+                vertical space for the PDF / image). Verification chips
+                moved up to the modal top bar — inline with the load
+                title — for the same reason: the doc viewer benefits
+                from every pixel.
+
+                Layout, top → bottom:
+                  ┌─ "+ Add Documents" button (header bar)
+                  ├─ Pending file kind picker (only when uploading)
+                  ├─ Doc rows (flex-1 — scrolls when many docs)
+                  └─ "Manage documents" button (opens merge / convert) */}
+            <div className="shrink-0 px-3 py-2.5 flex items-center justify-between gap-2"
+              style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                Documents {docs.length > 0 && <span style={{ color: 'var(--gc-text-2)' }}>· {docs.length}</span>}
+              </span>
+              {loadId && (
+                <button type="button" onClick={pickFile} disabled={uploading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-opacity disabled:opacity-50"
+                  style={{
+                    background:  'var(--gc-blue)',
+                    color:       '#fff',
+                    textShadow:  '0 1px 1px rgba(0,0,0,0.2)',
+                    boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
+                  }}>
+                  {uploading ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+                  Add Documents
+                </button>
+              )}
+            </div>
+
+            {/* Pending file kind picker — only when files are queued.
+                Lives above the doc list so the user sees their picked
+                file at the top of the panel, then chooses the kind. */}
+            {pendingFiles.length > 0 && (
+              <div className="shrink-0 px-3 py-2.5 space-y-2"
+                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                <div className="space-y-1">
+                  {pendingFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-1.5 text-[12px] px-1.5 py-1 rounded"
+                      style={{ background: 'var(--gc-surface)' }}>
+                      <span className="text-[10px] font-bold tabular-nums" style={{ color: 'var(--gc-text-3)', minWidth: 14 }}>
+                        {i + 1}.
+                      </span>
+                      <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+                      <span className="truncate flex-1" title={f.name} style={{ color: 'var(--gc-text-1)' }}>
+                        {f.name}
+                      </span>
+                      <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                        disabled={uploading}
+                        className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Remove from list">
+                        <X size={11} style={{ color: 'var(--gc-text-3)' }} />
+                      </button>
+                    </div>
+                  ))}
+                  <button onClick={pickFile} disabled={uploading}
+                    className="w-full flex items-center justify-center gap-1.5 text-[11px] py-1 rounded transition-colors"
+                    style={{ color: 'var(--gc-blue)', background: 'transparent', border: '1px dashed var(--gc-border-light)' }}>
+                    <Plus size={11} /> Add more
+                  </button>
+                </div>
+                {pendingFiles.length > 1 && (
+                  <div className="text-[10px] px-2 py-1 rounded flex items-start gap-1.5"
+                    style={{ background: '#e0f2fe', color: '#0c4a6e' }}>
+                    <FileText size={10} style={{ marginTop: 1, flexShrink: 0 }} />
+                    <span>
+                      {pendingFiles.length} files will be merged into one PDF before upload.
+                    </span>
+                  </div>
+                )}
+                <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                  {pendingFiles.length > 1 ? 'Save merged PDF as' : 'What is this?'}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {KIND_OPTIONS.map(opt => (
+                    <button key={opt.kind}
+                      onClick={() => void uploadAs(opt.kind)}
+                      disabled={uploading}
+                      className="flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider py-2 transition-opacity disabled:opacity-50"
+                      style={{
+                        background:  opt.tint.bg,
+                        color:       opt.tint.fg,
+                        boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
+                        textShadow:  '0 1px 1px rgba(0,0,0,0.25)',
+                      }}>
+                      {uploading ? <Loader2 size={11} className="animate-spin" /> : null}
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {uploading && mergeStatus && (
+                  <div className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded"
+                    style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
+                    <Loader2 size={10} className="animate-spin" />
+                    <span className="truncate flex-1">{mergeStatus}</span>
+                  </div>
+                )}
+                {uploadError && (
+                  <div className="text-[11px] flex items-start gap-1" style={{ color: '#dc2626' }}>
+                    <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} /> {uploadError}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Doc rows — vertical list. Each row shows: kind chip,
+                filename (truncated), hover-revealed rename/delete, and
+                the per-row "Invoice" toggle on the far right. Clicking
+                the row sets activeDocIdx for the viewer in the middle
+                column. */}
+            <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-1"
+              style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              {docs.length === 0 ? (
+                <div className="text-xs italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
+                  {docsLoading ? 'Loading…' : 'No documents uploaded yet for this load.'}
+                </div>
+              ) : (
+                docs.map((d, i) => {
+                  const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
+                  const active   = i === activeDocIdx;
+                  const included = includedDocIds.has(d.id);
+                  // Same enumeration as the old tab strip — single POD
+                  // stays "POD" but two PODs become "POD 1" / "POD 2".
+                  const sameKindCount = docs.filter(x => x.kind === d.kind).length;
+                  const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
+                  const labelText     = KIND_LABEL[d.kind] ?? d.kind;
+                  const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                  return (
+                    <div key={d.id}
+                      className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
+                      style={{
+                        background: active ? tint.bg + '14' : 'transparent',
+                        border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
+                      }}
+                      onClick={() => setActiveDocIdx(i)}
+                      onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: tint.bg, color: tint.fg }}>
+                        {rowKindLabel}
+                      </span>
+                      {renamingDocId === d.id ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          disabled={renameSaving}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => setRenameDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={() => { if (!renameSaving) void commitRename(); }}
+                          className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
+                          style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                        />
+                      ) : (
+                        <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
+                          title={d.fileName}>
+                          {d.fileName}
+                        </span>
+                      )}
+                      {renamingDocId !== d.id && (
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button type="button"
+                            onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
+                            className="rounded-full p-1 transition-colors"
+                            title={`Rename — ${d.fileName}`}
+                            style={{ color: tint.bg, background: 'transparent' }}
+                            onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                            <Pencil size={11} />
+                          </button>
+                          <button type="button"
+                            onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                            className="rounded-full p-1 transition-colors"
+                            title={`Delete — ${d.fileName}`}
+                            style={{ color: '#d93025', background: 'transparent' }}
+                            onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      )}
+                      {/* Per-row include-in-invoice toggle. stopPropagation
+                          so clicking it doesn't also switch the active
+                          viewer doc. */}
+                      <button type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setIncludedDocIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+                            return next;
+                          });
+                        }}
+                        className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                        style={{
+                          background: included ? '#dcfce7' : 'var(--gc-bg)',
+                          color:      included ? '#166534' : 'var(--gc-text-3)',
+                          border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
+                        }}
+                        title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
+                        {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                        Invoice
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Manage documents — opens the merge/convert dialog. Hidden
+                only when neither workflow has any meaning on this load. */}
+            {(mergeCandidates.length >= 2 || convertCandidates.length >= 1) && (
+              <div className="shrink-0 px-3 py-2"
+                style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                <button type="button"
+                  onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
+                  disabled={merging}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors disabled:opacity-50"
+                  style={{
+                    background: 'transparent',
+                    color:      'var(--gc-text-2)',
+                    border:     '1px dashed var(--gc-border)',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {merging ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
+                  Manage documents
+                </button>
+              </div>
+            )}
 
             {/* Action buttons. Stack order top→bottom:
                   1. (optional) "Convert to PDF" when non-PDF docs exist
