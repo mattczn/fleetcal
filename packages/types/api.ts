@@ -1561,7 +1561,12 @@ export interface LoadSummary {
   createdByName?:   string;
 
   // Money
+  /** Linehaul rate (UI label: "Linehaul"). */
   loadPrice?:       number;
+  /** Server-computed: linehaul + billable accessorials. Read-only.
+   *  UI label: "Total" (only shown when accessorials make it differ
+   *  from loadPrice). */
+  totalBillable?:   number;
   /** Load-level accessorials. Per-leg accessorials are a future split. */
   accessorials?:    Accessorial[];
 

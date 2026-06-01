@@ -17,7 +17,7 @@ const EVENT_COLS =
   "confirmed_at,confirmed_by,confirm_reminder_sent_at";
 
 const LOAD_COLS =
-  "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
+  "id,internal_load_id,load_num,broker,load_price,total_billable,commodity,weight," +
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +

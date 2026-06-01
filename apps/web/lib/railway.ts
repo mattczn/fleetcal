@@ -163,6 +163,8 @@ export interface TimelineEvent {
   eventKind:        string | null;
   nonRevenueType:   string | null;
   loadPrice:        number | null;
+  /** Server-computed: linehaul + billable accessorials. Read-only. */
+  totalBillable:    number | null;
   loadNum:          string | null;     // loads.load_num
   /** 'pickup' / 'delivery' for relay legs, null for whole loads. */
   relayRole:        'pickup' | 'delivery' | null;

@@ -41,7 +41,7 @@ const EVENT_COLS =
   "confirmed_at,confirmed_by,confirm_reminder_sent_at";
 
 const LOAD_COLS =
-  "id,internal_load_id,load_num,broker,load_price,commodity,weight," +
+  "id,internal_load_id,load_num,broker,load_price,total_billable,commodity,weight," +
   "dispatcher,notes,internal_notes," +
   "accessorials,rate_con_pdf,ref_nums," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by,follow_ups,is_tonu," +
@@ -269,7 +269,10 @@ closeout.get("/queue", async (c) => {
     let standaloneEvents = 0; // events without a load (defensive — shouldn't happen for revenue events but we count them)
     for (const r of rows) {
       const lid = r.load?.id as string | undefined;
-      const price = Number(r.load?.load_price ?? 0) || 0;
+      // Total billable (linehaul + billable accessorials). The
+      // loads_compute_total_billable trigger keeps this in sync; fall
+      // back to load_price for legacy rows predating the backfill.
+      const price = Number(r.load?.total_billable ?? r.load?.load_price ?? 0) || 0;
       if (!lid) { standaloneEvents++; continue; }
       if (!byLoadId.has(lid)) byLoadId.set(lid, price);
     }

@@ -685,7 +685,15 @@ export interface Load {
   deliveryAppt?: string;
 
   // Financial
+  /** The linehaul rate negotiated with the broker. UI label: "Linehaul". */
   loadPrice?: number;
+  /**
+   * Total billable to the broker = linehaul + billable accessorials.
+   * Server-computed (loads_compute_total_billable trigger). Read-only on
+   * the client — write attempts are silently overwritten by the DB.
+   * UI label: "Total" (only shown when it differs from loadPrice).
+   */
+  totalBillable?: number;
   driverPay?: number;
   /**
    * Routed road miles on this leg, cached server-side so reports don't

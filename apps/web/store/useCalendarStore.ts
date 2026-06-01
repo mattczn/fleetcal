@@ -1895,6 +1895,11 @@ export const useCalendarStore = create<CalendarStore>()(
       customerId:     ev.customerId,
       dispatcher:     ev.dispatcher,
       loadPrice:      ev.loadPrice,
+      // Mirror the load-level total_billable onto the shadow delivery
+      // leg so display surfaces (chip render, side strips) read the
+      // same number on both legs of a relay. Write paths are unaffected
+      // — the field is server-computed.
+      totalBillable:  ev.totalBillable,
       rateConPdf:     ev.rateConPdf,
       accessorials:   ev.accessorials,
       refNums:        ev.refNums,

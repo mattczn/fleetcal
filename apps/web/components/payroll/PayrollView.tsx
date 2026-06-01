@@ -1492,7 +1492,11 @@ export default function PayrollView() {
   }, [weekLoadSummaries, weekEvents]);
   const totalRevenue = useMemo(() => {
     if (weekLoadSummaries) {
+      // Total billable (linehaul + billable accessorials), maintained
+      // by the loads_compute_total_billable trigger. Falls back to
+      // inline math for any legacy row.
       return weekLoadSummaries.reduce((s, l) => {
+        if (l.totalBillable != null) return s + l.totalBillable;
         const accessorials = (l.accessorials ?? [])
           .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
         return s + (l.loadPrice ?? 0) + accessorials;

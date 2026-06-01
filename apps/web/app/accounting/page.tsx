@@ -289,8 +289,13 @@ function AccountingPageInner() {
 
   // ── Bucket stats (count + $ — uses raw bucket counts, not filtered) ─
   const stats = useMemo(() => {
-    const sumLoadsRows    = (rs: Row[]) => rs.reduce((s, r) => s + (r.load.loadPrice ?? 0), 0);
-    const sumInvoiceRows  = (rs: Row[]) => rs.reduce((s, r) => s + (r.invoice?.total ?? r.load.loadPrice ?? 0), 0);
+    // For Released, sum total_billable (linehaul + accessorials) so the
+    // bucket header reflects what the invoices WILL bill, not just
+    // linehaul. For invoiced/paid, prefer the invoice's snapshot total
+    // (immutable, broker-facing), falling back to total_billable if the
+    // invoice somehow lacks it.
+    const sumLoadsRows   = (rs: Row[]) => rs.reduce((s, r) => s + (r.load.totalBillable ?? r.load.loadPrice ?? 0), 0);
+    const sumInvoiceRows = (rs: Row[]) => rs.reduce((s, r) => s + (r.invoice?.total ?? r.load.totalBillable ?? r.load.loadPrice ?? 0), 0);
     return {
       released: { count: releasedRows.length, total: sumLoadsRows(releasedRows) },
       queued:   { count: queuedRows.length,   total: sumInvoiceRows(queuedRows) },
@@ -452,7 +457,7 @@ function AccountingPageInner() {
     });
 
     all.push({
-      key: 'rate', header: 'Rate', width: DEFAULT_COL_WIDTHS.rate,
+      key: 'rate', header: 'Linehaul', width: DEFAULT_COL_WIDTHS.rate,
       align: 'right', sortable: true,
       sortValue: r => r.load.loadPrice ?? 0,
       render: r => (
@@ -478,14 +483,18 @@ function AccountingPageInner() {
     all.push({
       key: 'total', header: 'Total', width: DEFAULT_COL_WIDTHS.total,
       align: 'right', sortable: true,
-      sortValue: r => r.invoice?.total ?? (r.load.loadPrice ?? 0),
+      // Prefer the invoice snapshot total (immutable, broker-facing)
+      // for invoiced/paid; for Released-bucket rows (no invoice yet),
+      // use the server-computed total_billable. Either way we avoid
+      // recomputing the math client-side — it's the trigger's job now.
+      sortValue: r => r.invoice?.total ?? r.load.totalBillable ?? (r.load.loadPrice ?? 0),
       render: r => {
-        const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
+        const tot = r.invoice
+          ? r.invoice.total
+          : r.load.totalBillable ?? r.load.loadPrice ?? null;
         return (
           <span className="font-bold tabular-nums">
-            {r.invoice ? moneyFmt.format(r.invoice.total)
-              : r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice + accSum)
-              : '—'}
+            {tot != null ? moneyFmt.format(tot) : '—'}
           </span>
         );
       },
@@ -1042,7 +1051,9 @@ function InvoiceSummaryModal({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BatchGenerateInvoicesResponse | null>(null);
 
-  const totalAmount = loads.reduce((s, l) => s + (l.loadPrice ?? 0), 0);
+  // Batch-generate summary uses total_billable (linehaul + accessorials)
+  // so the "$X total" in the header matches what the invoices will bill.
+  const totalAmount = loads.reduce((s, l) => s + (l.totalBillable ?? l.loadPrice ?? 0), 0);
   const willSend = action === 'generateSend';
   const missingEmail = willSend && loads.some(l => {
     const c = l.customerId ? customerById.get(l.customerId) : undefined;
@@ -1129,7 +1140,12 @@ function InvoiceSummaryModal({
                           </Td>
                           <Td className="tabular-nums">{l.internalLoadId ?? '—'}</Td>
                           <Td align="right" className="tabular-nums font-semibold">
-                            <span style={{ color: '#15803d' }}>{l.loadPrice != null ? moneyFmt.format(l.loadPrice) : '—'}</span>
+                            {/* Total billable — what the broker will actually be invoiced. */}
+                            <span style={{ color: '#15803d' }}>{
+                              (l.totalBillable ?? l.loadPrice) != null
+                                ? moneyFmt.format(l.totalBillable ?? l.loadPrice!)
+                                : '—'
+                            }</span>
                           </Td>
                         </tr>
                       );

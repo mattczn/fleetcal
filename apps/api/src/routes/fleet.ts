@@ -148,7 +148,7 @@ fleet.get("/performance", async (c) => {
   // ── Events for all assets in window (start in window) ─────────
   const { data: eventRows } = await sb
     .from("events")
-    .select("id, asset_id, start, \"end\", event_kind, driver_pay, load:loads(load_price)")
+    .select("id, asset_id, start, \"end\", event_kind, driver_pay, load:loads(load_price, total_billable)")
     .eq("org_id", orgId)
     .in("asset_id", assetIds)
     .is("deleted_at", null)
@@ -157,7 +157,7 @@ fleet.get("/performance", async (c) => {
   const events = ((eventRows ?? []) as Array<{
     id: string; asset_id: number; start: string; end: string;
     event_kind: string | null; driver_pay: number | null;
-    load: { load_price: number | null } | null;
+    load: { load_price: number | null; total_billable: number | null } | null;
   }>);
 
   // Build per-event maps used by movement attribution + per-asset rollup.
@@ -280,7 +280,12 @@ fleet.get("/performance", async (c) => {
     if (e.event_kind === "non_revenue") continue;
     const b = buckets.get(e.asset_id);
     if (!b) continue;
-    b.totalRevenue   += e.load?.load_price ?? 0;
+    // Revenue uses total_billable (linehaul + billable accessorials),
+    // computed by the loads_compute_total_billable trigger. Falls back
+    // to load_price for any row predating the backfill, but the trigger
+    // guarantees total_billable is populated for every row written
+    // after 20260605_loads_total_billable.sql.
+    b.totalRevenue   += e.load?.total_billable ?? e.load?.load_price ?? 0;
     b.totalDriverPay += e.driver_pay ?? 0;
     b.loadCount      += 1;
   }

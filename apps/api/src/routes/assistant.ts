@@ -55,6 +55,8 @@ interface LoadRow {
   internal_load_id: number;
   broker: string | null;
   load_price: number | null;
+  /** Server-computed (loads_compute_total_billable trigger). */
+  total_billable: number | null;
   notes: string | null;
   accessorials: unknown;
   customer_id: string | null;
@@ -211,7 +213,13 @@ function buildContext(args: {
       const aliasNote = cust?.aliases?.length ? ` [aliases: ${cust.aliases.join(", ")}]` : "";
       lines.push(`  Broker: ${load.broker}${aliasNote}`);
     }
-    if (load.load_price != null) lines.push(`  Rate: ${fmtMoney(load.load_price)}`);
+    // Surface linehaul + total billable so the assistant can reason about
+    // accessorials. If total == linehaul (no billable accessorials), only
+    // print the one line to keep the prompt compact.
+    if (load.load_price != null) lines.push(`  Linehaul: ${fmtMoney(load.load_price)}`);
+    if (load.total_billable != null && load.total_billable !== load.load_price) {
+      lines.push(`  Total billable: ${fmtMoney(load.total_billable)}`);
+    }
     if (load.notes) lines.push(`  Load notes: ${load.notes.slice(0, 200)}`);
     const accs = Array.isArray(load.accessorials) ? load.accessorials : [];
     if (accs.length > 0) {
@@ -448,7 +456,7 @@ async function runSearchLoads(orgId: string, input: { query?: unknown; limit?: u
 
   const { data, error } = await supabase
     .from("loads")
-    .select("id,internal_load_id,load_num,broker,load_price,notes,customer_id")
+    .select("id,internal_load_id,load_num,broker,load_price,total_billable,notes,customer_id")
     .eq("org_id", orgId)
     .is("deleted_at", null)
     .or(orFilter)
@@ -478,7 +486,11 @@ async function runSearchLoads(orgId: string, input: { query?: unknown; limit?: u
     const driver = first?.driver_name ?? "—";
     const status = first?.status ?? "—";
     const date = first?.start ? fmtDate(first.start).slice(0, 10) : "—";
-    return `Load #${l.internal_load_id}${l.load_num ? ` (broker #${l.load_num})` : ""} · ${l.broker ?? "?"} · ${date} · ${driver} · ${status} · ${l.load_price != null ? fmtMoney(l.load_price) : "—"}`;
+    // Total billable preferred over linehaul — gives the assistant the
+    // amount the broker will actually be invoiced when reasoning about
+    // weekly totals, top customers, etc.
+    const billable = l.total_billable ?? l.load_price ?? null;
+    return `Load #${l.internal_load_id}${l.load_num ? ` (broker #${l.load_num})` : ""} · ${l.broker ?? "?"} · ${date} · ${driver} · ${status} · ${billable != null ? fmtMoney(billable) : "—"}`;
   }).join("\n");
 }
 
@@ -488,7 +500,7 @@ async function runGetLoadDetails(orgId: string, input: { loadId?: unknown }): Pr
 
   let loadQuery = supabase
     .from("loads")
-    .select("id,internal_load_id,load_num,broker,load_price,notes,accessorials,ref_nums,audit_log,customer_id,created_at")
+    .select("id,internal_load_id,load_num,broker,load_price,total_billable,notes,accessorials,ref_nums,audit_log,customer_id,created_at")
     .eq("org_id", orgId);
   if (/^\d+$/.test(raw)) loadQuery = loadQuery.eq("internal_load_id", parseInt(raw, 10));
   else                    loadQuery = loadQuery.eq("id", raw);
@@ -530,7 +542,10 @@ async function runGetLoadDetails(orgId: string, input: { loadId?: unknown }): Pr
     const c = customer as { name: string; short_name: string | null; mc_num: string | null; contact_name: string | null; contact_phone: string | null };
     lines.push(`Customer record: ${c.name}${c.short_name ? ` (${c.short_name})` : ""}${c.mc_num ? ` MC ${c.mc_num}` : ""}${c.contact_name ? ` · contact ${c.contact_name}${c.contact_phone ? ` ${c.contact_phone}` : ""}` : ""}`);
   }
-  if (load.load_price != null) lines.push(`Rate: ${fmtMoney(load.load_price)}`);
+  if (load.load_price != null) lines.push(`Linehaul: ${fmtMoney(load.load_price)}`);
+  if (load.total_billable != null && load.total_billable !== load.load_price) {
+    lines.push(`Total billable: ${fmtMoney(load.total_billable)}`);
+  }
   if (load.notes) lines.push(`Notes: ${load.notes}`);
   const accs = Array.isArray(load.accessorials) ? load.accessorials : [];
   if (accs.length > 0) {
@@ -731,7 +746,7 @@ assistant.post("/", async (c) => {
       .gte("end", fromIso).lte("start", toIso)
       .order("start", { ascending: true }),
     supabase.from("loads")
-      .select("id,load_num,internal_load_id,broker,load_price,notes,accessorials,customer_id,ref_nums")
+      .select("id,load_num,internal_load_id,broker,load_price,total_billable,notes,accessorials,customer_id,ref_nums")
       .eq("org_id", orgId).is("deleted_at", null),
     supabase.from("assets").select("id,name,unit,type,hidden,motive_vehicle_id").eq("org_id", orgId),
     supabase.from("drivers").select("id,name,phone").eq("org_id", orgId).order("name"),

@@ -1041,7 +1041,12 @@ function EventBlock({
   const t2 = event.end.split('T')[1]?.slice(0, 5);
   if (t1 && t2) fields.push(`${shortTime(t1)}–${shortTime(t2)}`);
   if (event.loadNum)            fields.push(`#${event.loadNum}`);
-  if (event.loadPrice != null)  fields.push(`$${event.loadPrice.toLocaleString()}`);
+  // Show total billable when it differs from linehaul (i.e., there's at
+  // least one billable accessorial); else show bare linehaul. The chip
+  // text only carries one money number to stay readable.
+  if ((event.totalBillable ?? event.loadPrice) != null) {
+    fields.push(`$${(event.totalBillable ?? event.loadPrice!).toLocaleString()}`);
+  }
   if (event.loadedMiles != null) fields.push(`${event.loadedMiles.toLocaleString()} mi`);
   if (event.driverName)         fields.push(event.driverName);
 
@@ -1475,10 +1480,15 @@ function EventDetail({
           Driver: <span style={{ color: 'var(--gc-text-1)' }}>{event.driverName}</span>
         </div>
       ) : null}
-      {event.loadPrice != null ? (
+      {(event.totalBillable ?? event.loadPrice) != null ? (
         <div style={{ color: 'var(--gc-text-2)', fontSize: fs(12) }}>
-          Revenue: <span className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-            ${event.loadPrice.toLocaleString('en-US')}
+          {/* Detail panel — "Revenue" line shows total billable when it
+              differs from linehaul, tooltipped with the breakdown. */}
+          Revenue: <span className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}
+            title={event.totalBillable != null && event.loadPrice != null && event.totalBillable !== event.loadPrice
+              ? `Linehaul $${event.loadPrice.toLocaleString('en-US')} + accessorials = $${event.totalBillable.toLocaleString('en-US')}`
+              : undefined}>
+            ${(event.totalBillable ?? event.loadPrice!).toLocaleString('en-US')}
           </span>
           {event.driverPay != null ? (
             <>

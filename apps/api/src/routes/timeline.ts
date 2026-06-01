@@ -204,6 +204,10 @@ interface TimelineEvent {
   /** 'pickup' / 'delivery' for relay legs, null for whole loads. */
   relayRole: 'pickup' | 'delivery' | null;
   loadPrice: number | null;
+  /** Server-computed: linehaul + billable accessorials. UI shows it
+   *  only when it differs from loadPrice. Maintained by the
+   *  loads_compute_total_billable BEFORE trigger. */
+  totalBillable: number | null;
   loadNum: string | null;         // loads.load_num
   driverPay: number | null;       // events.driver_pay (per-leg)
   loadedMiles: number | null;     // events.loaded_miles (quoted miles)
@@ -302,7 +306,7 @@ timeline.get("/assets/:assetId", async (c) => {
   // loads on the timeline.
   const { data: events, error: eErr } = await sb
     .from("events")
-    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, relay_role, driver_name, driver_pay, loaded_miles, load:loads(load_price, load_num)")
+    .select("id, title, start, \"end\", status, event_kind, non_revenue_type, relay_role, driver_name, driver_pay, loaded_miles, load:loads(load_price, total_billable, load_num)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
@@ -351,7 +355,7 @@ timeline.get("/assets/:assetId", async (c) => {
     status: string | null; event_kind: string | null; non_revenue_type: string | null;
     relay_role: string | null;
     driver_name: string | null; driver_pay: number | null; loaded_miles: number | null;
-    load: { load_price: number | null; load_num: string | null } | null;
+    load: { load_price: number | null; total_billable: number | null; load_num: string | null } | null;
   }>).map((e) => ({
     id:             e.id,
     title:          e.title,
@@ -364,6 +368,7 @@ timeline.get("/assets/:assetId", async (c) => {
                       ? e.relay_role
                       : null,
     loadPrice:      e.load?.load_price ?? null,
+    totalBillable:  e.load?.total_billable ?? null,
     loadNum:        e.load?.load_num   ?? null,
     driverPay:      e.driver_pay ?? null,
     loadedMiles:    e.loaded_miles ?? null,
@@ -513,7 +518,10 @@ function computeProfitability(
     .sort((a, b) => a.start.localeCompare(b.start))
     .map((e) => {
       const acc = accByEvent.get(e.id) ?? { loadedMiles: 0, inboundDhMiles: 0, dwellMin: 0 };
-      const revenue   = e.loadPrice ?? 0;
+      // Revenue is total billable (linehaul + accessorials), maintained
+      // by the loads_compute_total_billable trigger. Falls back to
+      // load_price for legacy rows.
+      const revenue   = e.totalBillable ?? e.loadPrice ?? 0;
       const driverPay = e.driverPay ?? 0;
       const attributedMiles = acc.loadedMiles + acc.inboundDhMiles;
       const rpmLoaded = acc.loadedMiles > 0 ? revenue / acc.loadedMiles : null;
@@ -1510,7 +1518,7 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   // ── Events in the week (bucket by start day) ────────────────────
   const { data: events } = await sb
     .from("events")
-    .select("id, start, \"end\", event_kind, driver_pay, load:loads(load_price)")
+    .select("id, start, \"end\", event_kind, driver_pay, load:loads(load_price, total_billable)")
     .eq("org_id", orgId)
     .eq("asset_id", assetId)
     .is("deleted_at", null)
@@ -1519,7 +1527,7 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
   const eventList = ((events ?? []) as Array<{
     id: string; start: string; end: string;
     event_kind: string | null; driver_pay: number | null;
-    load: { load_price: number | null } | null;
+    load: { load_price: number | null; total_billable: number | null } | null;
   }>);
   /** event.id → its bucket dayKey (the load's start day). */
   const eventBucketDay = new Map<string, string>();
@@ -1667,7 +1675,8 @@ timeline.get("/assets/:assetId/week-summary", async (c) => {
     if (!day) continue;
     const b = buckets.get(day);
     if (!b) continue;     // event outside the week (shouldn't happen given the query)
-    b.totalRevenue   += e.load?.load_price ?? 0;
+    // Total billable (linehaul + billable accessorials).
+    b.totalRevenue   += e.load?.total_billable ?? e.load?.load_price ?? 0;
     b.totalDriverPay += e.driver_pay ?? 0;
     b.loadCount      += 1;
   }

@@ -1059,11 +1059,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   <CopyLoadNum value={current.loadNum} />
                 </>
               )}
-              {current.loadPrice != null && (
+              {(current.totalBillable ?? current.loadPrice) != null && (
                 <>
                   <Sep />
-                  <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-2)' }}>
-                    {moneyFmt.format(current.loadPrice)}
+                  {/* Show total billable when it differs from linehaul
+                      (i.e., when there's at least one billable accessorial);
+                      otherwise show the bare linehaul. The full breakdown
+                      lives in the load modal — this strip just answers
+                      "how much does this load bill?". */}
+                  <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-2) ' }}
+                        title={current.totalBillable != null && current.loadPrice != null && current.totalBillable !== current.loadPrice
+                          ? `Linehaul ${moneyFmt.format(current.loadPrice)} + accessorials = ${moneyFmt.format(current.totalBillable)}`
+                          : undefined}>
+                    {moneyFmt.format(current.totalBillable ?? current.loadPrice!)}
                   </span>
                 </>
               )}

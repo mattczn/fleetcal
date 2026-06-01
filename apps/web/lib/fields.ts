@@ -33,7 +33,7 @@ export const ALL_FIELDS: FieldDef[] = [
   { id: 'weight',     label: 'Weight (lbs)',      section: 'load',      type: 'number', defaultEnabled: true,  placeholder: '40000',            extractionHint: 'Total cargo weight in pounds — number only, no commas or units. Convert from kg/tons if needed. Omit if not stated.' },
 
   // Financial
-  { id: 'loadPrice',     label: 'Load Price ($)',     section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00',    extractionHint: 'Total load rate or price — number only, no $ sign or commas, e.g. 1850.00' },
+  { id: 'loadPrice',     label: 'Linehaul ($)',       section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00',    extractionHint: 'Linehaul rate from the rate confirmation — the flat freight charge, BEFORE accessorials (detention, lumper, layover, etc.). Number only, no $ sign or commas, e.g. 1850.00' },
   { id: 'driverPay',     label: 'Driver Pay ($)',     section: 'financial', type: 'number', defaultEnabled: true,  placeholder: '0.00' },
 
   // Special Instructions — extraction hint is overridden by promptVariables.specialInstructionsFormat

@@ -34,6 +34,15 @@ function billableAcc(e: CalendarEvent): number {
   return (e.accessorials ?? []).filter(a => a.billable).reduce((s, a) => s + a.amount, 0);
 }
 
+// Revenue accessor: prefer server-computed total_billable (linehaul +
+// billable accessorials, maintained by the loads_compute_total_billable
+// trigger). Falls back to loadPrice for legacy rows. Used everywhere the
+// dashboard sums revenue so Gross Revenue, broker breakouts, weekly bars,
+// and KPI tiles all include accessorials consistently.
+function eventRevenue(e: CalendarEvent): number {
+  return e.totalBillable ?? e.loadPrice ?? 0;
+}
+
 // Round up to a clean chart ceiling (1, 2, 4, 5, or 10 × 10^n)
 function niceRound(v: number): number {
   if (v <= 0) return 1000;
@@ -729,11 +738,14 @@ export default function DashboardView() {
   // numbers always agree.
   const kpis = useMemo(() => {
     if (loadSummaries) {
-      // Revenue = rate-con price + billable accessorials. Matches
-      // LoadsReport's "Total" column footer and Payroll's headline tile;
-      // non-billable accessorials (driver per-diem, lumper reimbursements)
-      // are excluded by design.
+      // Revenue = total_billable (linehaul + billable accessorials).
+      // Maintained server-side by the loads_compute_total_billable
+      // trigger, so this matches the invoice snapshot and every
+      // other revenue surface (closeout, accounting, performance).
+      // Fall back to the inline math for any legacy row that lacks
+      // total_billable.
       const revenue = loadSummaries.reduce((s, l) => {
+        if (l.totalBillable != null) return s + l.totalBillable;
         const accessorials = (l.accessorials ?? [])
           .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
         return s + (l.loadPrice ?? 0) + accessorials;
@@ -766,7 +778,7 @@ export default function DashboardView() {
       return { revenue, loads, delivered, delivRate, avgRevPerLoad, avgRevPerAsset, activeAssets, miles, driverPay };
     }
     // ─ Fallback while the load-shaped report is still in flight ─
-    const revenue = deduped.reduce((s, e) => s + (e.loadPrice ?? 0), 0);
+    const revenue = deduped.reduce((s, e) => s + eventRevenue(e), 0);
     const loads   = deduped.length;
     const delivered  = deduped.filter(e => e.status === 'delivered').length;
     const nonCancel  = deduped.filter(e => e.status !== 'cancelled').length;
@@ -817,7 +829,7 @@ export default function DashboardView() {
         let loads   = 0;
         for (const e of ae) {
           if (!e.relayGroupId || !e.relayRole) {
-            revenue += e.loadPrice ?? 0;
+            revenue += eventRevenue(e);
             loads += 1;
             continue;
           }
@@ -829,7 +841,7 @@ export default function DashboardView() {
           const share = partner
             ? relayLegShare(e, partner)
             : 0.5;
-          revenue += (e.loadPrice ?? 0) * share;
+          revenue += eventRevenue(e) * share;
           // Count relay legs as 0.5 of a load each so totals stay sane;
           // the dashboard "loads" KPI uses the dedup'd list separately.
           loads += 0.5;
@@ -900,7 +912,7 @@ export default function DashboardView() {
     // the data back out for a Dispatcher/Maintenance user.
     const headers = canViewDriverPay
       ? ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Driver Pay', 'Accessorials']
-      : ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Accessorials'];
+      : ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Linehaul', 'Accessorials'];
 
     const rows = weekLoads.map(load => {
       const partner = load.relayGroupId && load.relayRole
@@ -975,7 +987,7 @@ export default function DashboardView() {
     for (const e of deduped) {
       const key = e.broker?.trim() || 'Unknown';
       const cur = map.get(key) ?? { revenue: 0, loads: 0 };
-      map.set(key, { revenue: cur.revenue + (e.loadPrice ?? 0), loads: cur.loads + 1 });
+      map.set(key, { revenue: cur.revenue + eventRevenue(e), loads: cur.loads + 1 });
     }
     return [...map.entries()]
       .map(([name, data]) => ({ name, ...data }))
@@ -1003,7 +1015,7 @@ export default function DashboardView() {
         });
         buckets.push({
           label:   DAY_NAMES[cur.getDay()],
-          revenue: dayEvents.reduce((s, e) => s + (e.loadPrice ?? 0), 0),
+          revenue: dayEvents.reduce((s, e) => s + eventRevenue(e), 0),
           loads:   dayEvents.length,
         });
         cur.setDate(cur.getDate() + 1);
@@ -1021,7 +1033,7 @@ export default function DashboardView() {
         });
         buckets.push({
           label:   cur.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          revenue: wEvents.reduce((s, e) => s + (e.loadPrice ?? 0), 0),
+          revenue: wEvents.reduce((s, e) => s + eventRevenue(e), 0),
           loads:   wEvents.length,
         });
         cur.setDate(cur.getDate() + 7);
@@ -1033,10 +1045,12 @@ export default function DashboardView() {
   const maxBucketRev = Math.max(...timeBuckets.map(b => b.revenue), 1);
 
   // ── Top loads (deduped — relay shows once, attributed to pickup leg) ──
+  // Ranks by total billable (linehaul + accessorials) so a load with a
+  // big detention surcharge climbs the leaderboard correctly.
   const topLoads = useMemo(
     () => [...deduped]
-      .filter(e => (e.loadPrice ?? 0) > 0)
-      .sort((a, b) => (b.loadPrice ?? 0) - (a.loadPrice ?? 0))
+      .filter(e => eventRevenue(e) > 0)
+      .sort((a, b) => eventRevenue(b) - eventRevenue(a))
       .slice(0, 10),
     [deduped],
   );

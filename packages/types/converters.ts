@@ -130,6 +130,11 @@ export function joinEventLoadToApp(
     dispatcher:     (l?.dispatcher as string | null | undefined) ?? undefined,
     createdByName:  (l?.created_by_name as string | null | undefined) ?? undefined,
     loadPrice:      (l?.load_price as number | null | undefined) ?? undefined,
+    // Server-computed: linehaul + billable accessorials.
+    // Maintained by the loads_compute_total_billable BEFORE trigger
+    // (see 20260605_loads_total_billable.sql). Never written from the
+    // client — appLoadToLoadInsert deliberately omits it.
+    totalBillable:  (l?.total_billable as number | null | undefined) ?? undefined,
     commodity:      (l?.commodity as string | null | undefined) ?? undefined,
     weight:         (l?.weight as number | null | undefined) ?? undefined,
     rateConPdf:     (l?.rate_con_pdf as string | null | undefined) ?? undefined,

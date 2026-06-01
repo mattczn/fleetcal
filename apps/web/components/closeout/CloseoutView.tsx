@@ -626,7 +626,7 @@ export default function CloseoutView() {
     });
 
     cols.push({
-      key: 'rate', header: 'Rate', width: DEFAULT_COL_WIDTHS.rate,
+      key: 'rate', header: 'Linehaul', width: DEFAULT_COL_WIDTHS.rate,
       align: 'right', sortable: true,
       sortValue: r => r.loadPrice ?? 0,
       render: r => (
@@ -683,10 +683,15 @@ export default function CloseoutView() {
       cols.push({
         key: 'total', header: 'Total', width: DEFAULT_COL_WIDTHS.total,
         align: 'right', sortable: true,
-        sortValue: r => (r.loadPrice ?? 0) + (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
+        // Prefer the server-computed total_billable (trigger-maintained
+        // for every load row); fall back to inline math for any legacy
+        // row that somehow lacks it. The fallback matches the same
+        // math the trigger uses, so the sort key stays consistent.
+        sortValue: r => r.totalBillable
+                       ?? (r.loadPrice ?? 0) + (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
         render: r => {
           const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-          const tot = (r.loadPrice ?? 0) + accSum;
+          const tot = r.totalBillable ?? (r.loadPrice ?? 0) + accSum;
           if (r.loadPrice == null && accSum === 0) {
             return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
           }

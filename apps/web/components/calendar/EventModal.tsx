@@ -1967,7 +1967,10 @@ export default function EventModal() {
     setAccessorials(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
     markDirty();
   };
-  const totalBillable = accessorials.filter(a => a.billable).reduce((sum, a) => sum + (a.amount || 0), 0);
+  // Sum of billable accessorials (NOT the grand total — that's
+  // linehaul + this. Named to avoid clashing with loads.total_billable
+  // which DOES mean linehaul + accessorials and is server-computed.)
+  const accessorialsTotal = accessorials.filter(a => a.billable).reduce((sum, a) => sum + (a.amount || 0), 0);
 
   // Dirty tracking
   const [isDirty,        setIsDirty]        = useState(false);
@@ -5704,17 +5707,17 @@ export default function EventModal() {
                       ))}
                     </div>
                   )}
-                  {section === 'financial' && eventKind === 'revenue' && totalBillable > 0 && (() => {
-                    const loadPrice = parseFloat(String(fieldValues['loadPrice'] ?? 0)) || 0;
-                    const grandTotal = loadPrice + totalBillable;
+                  {section === 'financial' && eventKind === 'revenue' && accessorialsTotal > 0 && (() => {
+                    const linehaul = parseFloat(String(fieldValues['loadPrice'] ?? 0)) || 0;
+                    const grandTotal = linehaul + accessorialsTotal;
                     return (
                       <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium flex-wrap"
                         style={{ background: '#f0fdf4', color: '#166534', border: '1px solid #bbf7d0' }}>
                         <span>
-                          Total billable to broker: <strong>${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                          Total billable: <strong>${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                         </span>
                         <span>
-                          (${loadPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} load + ${totalBillable.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} accessorials)
+                          (Linehaul ${linehaul.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} + Accessorials ${accessorialsTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
                         </span>
                       </div>
                     );

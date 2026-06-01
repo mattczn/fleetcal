@@ -54,7 +54,7 @@ TIME BUCKETS (mirror the mileage buckets, in HOURS):
 - Track hours separately from miles — a slow-moving 30 mi inner-city run can take longer than a 70 mi highway run, and that time has cost (driver wages, opportunity cost).
 
 REVENUE / COST:
-- **Revenue**: load_price from the rate-con.
+- **Revenue**: total_billable from the load — linehaul (the rate-con's flat rate) plus any billable accessorials (detention, lumper, layover, etc.). When total_billable is missing, fall back to linehaul.
 - **Driver pay**: amount paid to the driver for this load (the dispatcher's actual payout — already known per load).
 - **Margin after driver**: revenue − driver_pay. This is gross-margin before fuel/maintenance/insurance.
 
@@ -260,7 +260,7 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
     .from("events")
     .select(`
       id, title, start, "end", loaded_miles, status, driver_pay, driver_name,
-      load:loads(id, broker, load_price, load_num, commodity)
+      load:loads(id, broker, load_price, total_billable, load_num, commodity)
     `)
     .eq("org_id", orgId)
     .eq("asset_id", asset.id)
@@ -315,11 +315,12 @@ costAnalysis.post("/run", requireCapability("loads.view"), async (c) => {
               `  ${s.sequence}. ${s.type ?? "stop"} — ${s.facility_name ?? ""} ${s.address ?? ""} ${s.city ?? ""} ${s.state ?? ""}` +
               (s.appt_start ? ` (appt ${s.appt_start}${s.appt_end ? "→" + s.appt_end : ""})` : "")
             ).join("\n");
-        const load = e.load as { broker?: string; load_price?: number; load_num?: string; commodity?: string } | null;
+        const load = e.load as { broker?: string; load_price?: number; total_billable?: number; load_num?: string; commodity?: string } | null;
+        const revenue = load?.total_billable ?? load?.load_price ?? null;
         return [
           `L${e.id}: ${e.title ?? "(no title)"}`,
           `  Status: ${e.status ?? "??"}  |  Window: ${e.start} → ${e.end}`,
-          `  Loaded miles (quoted): ${e.loaded_miles ?? "??"}  |  Revenue: $${load?.load_price ?? "??"}  |  Driver pay: $${e.driver_pay ?? "??"}  |  Driver: ${e.driver_name ?? "??"}`,
+          `  Loaded miles (quoted): ${e.loaded_miles ?? "??"}  |  Revenue: $${revenue ?? "??"}  |  Driver pay: $${e.driver_pay ?? "??"}  |  Driver: ${e.driver_name ?? "??"}`,
           `  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
           stopsText,
         ].join("\n");
@@ -620,7 +621,7 @@ costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
     .from("events")
     .select(`
       id, title, start, "end", loaded_miles, status, driver_pay, driver_name, asset_id,
-      load:loads(id, broker, load_price, load_num, commodity)
+      load:loads(id, broker, load_price, total_billable, load_num, commodity)
     `)
     .eq("id", loadEventId)
     .eq("org_id", orgId)
@@ -724,11 +725,12 @@ costAnalysis.post("/load", requireCapability("loads.view"), async (c) => {
         (s.appt_start ? ` (appt ${s.appt_start}${s.appt_end ? "→" + s.appt_end : ""})` : "")
       ).join("\n");
 
-  const load = event.load as { broker?: string; load_price?: number; load_num?: string; commodity?: string } | null;
+  const load = event.load as { broker?: string; load_price?: number; total_billable?: number; load_num?: string; commodity?: string } | null;
+  const revenue = load?.total_billable ?? load?.load_price ?? null;
   const loadBlock = [
     `LOAD ${event.id}: ${event.title ?? "(no title)"}`,
     `  Window: ${event.start} → ${event.end}`,
-    `  Loaded miles (quoted): ${event.loaded_miles ?? "??"}  |  Revenue: $${load?.load_price ?? "??"}  |  Driver pay: $${event.driver_pay ?? "??"}`,
+    `  Loaded miles (quoted): ${event.loaded_miles ?? "??"}  |  Revenue: $${revenue ?? "??"}  |  Driver pay: $${event.driver_pay ?? "??"}`,
     `  Broker: ${load?.broker ?? "??"}  |  Load #: ${load?.load_num ?? "??"}  |  Commodity: ${load?.commodity ?? "??"}`,
     stopsText,
   ].join("\n");

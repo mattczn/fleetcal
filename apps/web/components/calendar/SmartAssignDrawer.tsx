@@ -309,7 +309,17 @@ export default function SmartAssignDrawer() {
               <span style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>{fmtTime(load.start)} – {fmtTime(load.end)}</span>
               {load.broker && <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>{displayBrokerName(load.broker, customers)}</span>}
               {load.loadNum && <span style={{ fontSize: 12, color: 'var(--gc-text-3)' }}>#{load.loadNum}</span>}
-              {load.loadPrice != null && <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>${load.loadPrice.toLocaleString()}</span>}
+              {/* SmartAssign quick-pick chip — show total billable when
+                  it differs from linehaul, else just linehaul. Tooltip
+                  carries the breakdown. */}
+              {(load.totalBillable ?? load.loadPrice) != null && (
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}
+                  title={load.totalBillable != null && load.loadPrice != null && load.totalBillable !== load.loadPrice
+                    ? `Linehaul $${load.loadPrice.toLocaleString()} + accessorials = $${load.totalBillable.toLocaleString()}`
+                    : undefined}>
+                  ${(load.totalBillable ?? load.loadPrice!).toLocaleString()}
+                </span>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>

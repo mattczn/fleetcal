@@ -510,7 +510,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     else { setSortField(field); setSortDir('asc'); }
   };
 
-  const totalRevenue = loads.reduce((s, e) => s + (e.loadPrice ?? 0), 0);
+  // Total revenue uses total_billable (linehaul + billable accessorials,
+  // trigger-maintained). Falls back to loadPrice for legacy rows.
+  const totalRevenue = loads.reduce((s, e) => s + (e.totalBillable ?? e.loadPrice ?? 0), 0);
   const avgRevenue   = loads.length > 0 ? totalRevenue / loads.length : 0;
   const lastLoadStart = loads.reduce<string | null>((latest, e) => {
     if (!e.start) return latest;
@@ -944,8 +946,13 @@ function LoadDetailPanel({ load, assets, onClose, onOpenEditor }: {
   const asset = assets.find(a => a.id === load.assetId);
   const sm = STATUS_META[load.status ?? 'scheduled'] ?? STATUS_META.scheduled;
 
-  const margin = (load.loadPrice && load.driverPay)
-    ? ((load.loadPrice - load.driverPay) / load.loadPrice * 100).toFixed(1)
+  // Margin is "what we keep after paying the driver" — denominator is
+  // total billable (linehaul + accessorials, what the broker pays),
+  // numerator is total billable minus driver pay. Falls back to
+  // linehaul when total_billable is missing.
+  const marginBase = load.totalBillable ?? load.loadPrice;
+  const margin = (marginBase && load.driverPay)
+    ? ((marginBase - load.driverPay) / marginBase * 100).toFixed(1)
     : null;
 
   const accessorialTotal = (load.accessorials ?? [])
@@ -1044,7 +1051,14 @@ function LoadDetailPanel({ load, assets, onClose, onOpenEditor }: {
           <DetailSectionLabel>Financials</DetailSectionLabel>
           <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--gc-border-light)' }}>
             {load.loadPrice != null && (
-              <FinRow label="Load Price" value={moneyFmt.format(load.loadPrice)} accent />
+              <FinRow label="Linehaul" value={moneyFmt.format(load.loadPrice)} accent />
+            )}
+            {/* Total billable — only surfaces when accessorials make it
+                differ from linehaul. The whole line is hidden when
+                linehaul == total to keep the panel uncluttered for the
+                common no-accessorial case. */}
+            {load.totalBillable != null && load.loadPrice != null && load.totalBillable !== load.loadPrice && (
+              <FinRow label="Total billable" value={moneyFmt.format(load.totalBillable)} accent />
             )}
             {load.driverPay != null && (
               <FinRow label="Driver Pay" value={moneyFmt.format(load.driverPay)} />

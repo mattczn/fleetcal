@@ -61,6 +61,9 @@ interface LoadRow {
   dispatcher:       string | null;
   created_by_name:  string | null;
   load_price:       number | null;
+  /** Server-computed: load_price + billable accessorials. Maintained by
+   *  the loads_compute_total_billable BEFORE trigger. */
+  total_billable:   number | null;
   rate_con_pdf:     string | null;
   accessorials:     unknown;
   ref_nums:         string | null;
@@ -132,7 +135,7 @@ interface StopRow {
 
 const LOAD_COLS =
   "id,internal_load_id,load_num,broker,customer_id,dispatcher,created_by_name," +
-  "load_price,rate_con_pdf,accessorials,ref_nums,notes,internal_notes," +
+  "load_price,total_billable,rate_con_pdf,accessorials,ref_nums,notes,internal_notes," +
   "commodity,weight," +
   "billing_status,flagged_reason,flagged_note,flagged_at,flagged_by," +
   "verified_at,verified_by,invoice_doc_ids,is_tonu,document_counts,audit_log," +
@@ -267,6 +270,10 @@ function buildLoadSummary(load: LoadRow, events: EventRow[], stopsByEvent: Map<s
     createdByName:    load.created_by_name ?? undefined,
 
     loadPrice:        load.load_price ?? undefined,
+    // Server-computed (loads_compute_total_billable trigger). Read-only
+    // mirror of load_price + billable accessorials. UI shows it only
+    // when it differs from loadPrice.
+    totalBillable:    load.total_billable ?? undefined,
     accessorials:     parseJson<Accessorial[]>(load.accessorials),
 
     commodity:        load.commodity ?? undefined,

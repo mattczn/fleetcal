@@ -872,6 +872,7 @@ export type Database = {
           org_id: string
           rate_con_pdf: string | null
           ref_nums: string | null
+          total_billable: number | null
           updated_at: string
           verified_at: string | null
           verified_by: string | null
@@ -904,6 +905,9 @@ export type Database = {
           org_id: string
           rate_con_pdf?: string | null
           ref_nums?: string | null
+          /** Computed by DB trigger from load_price + billable accessorials.
+           *  Write attempts are ignored (the BEFORE trigger overwrites). */
+          total_billable?: number | null
           updated_at?: string
           verified_at?: string | null
           verified_by?: string | null
@@ -936,6 +940,8 @@ export type Database = {
           org_id?: string
           rate_con_pdf?: string | null
           ref_nums?: string | null
+          /** Computed by DB trigger; write attempts are ignored. */
+          total_billable?: number | null
           updated_at?: string
           verified_at?: string | null
           verified_by?: string | null

@@ -47,12 +47,18 @@ function billableAccessorials(load: LoadSummary): number {
   return (load.accessorials ?? []).reduce((sum, a) => sum + (a.billable ? (a.amount ?? 0) : 0), 0);
 }
 
-/** Total revenue billable to the broker for this load: rate-con price plus
+/** Total revenue billable to the broker for this load: linehaul plus
  *  every accessorial marked as billable. NOT a sum of all accessorials —
  *  internal ones (driver per-diem, lumper reimbursements, etc.) are
- *  excluded by design. */
+ *  excluded by design.
+ *
+ *  Prefers the server-computed total_billable (loads_compute_total_billable
+ *  trigger) and falls back to the inline math for any legacy row that
+ *  somehow lacks it. The trigger uses identical billable/amount filtering
+ *  to billableAccessorials() above, so the two paths produce the same
+ *  number. */
 function billableTotal(load: LoadSummary): number {
-  return (load.loadPrice ?? 0) + billableAccessorials(load);
+  return load.totalBillable ?? (load.loadPrice ?? 0) + billableAccessorials(load);
 }
 
 /** Build a NAIVE org-local cutoff string ("YYYY-MM-DDTHH:mm:ss.SSS",
@@ -131,7 +137,7 @@ const COLUMNS: ColumnDef[] = [
   { id: 'commodity',    label: 'Commodity',   get: (l) => l.commodity ?? '' },
   { id: 'weight',       label: 'Weight (lbs)', align: 'right', get: (l) => l.weight ?? '' },
   { id: 'miles',        label: 'Miles', align: 'right',        get: (l) => l.totalLoadedMiles ?? '' },
-  { id: 'loadPrice',    label: 'Load Price', align: 'right',   get: (l) => l.loadPrice ?? '' },
+  { id: 'loadPrice',    label: 'Linehaul',   align: 'right',   get: (l) => l.loadPrice ?? '' },
   { id: 'accessorials', label: 'Accessorials', align: 'right', get: (l) => billableAccessorials(l) || '' },
   { id: 'total',        label: 'Total',       align: 'right',  get: (l) => billableTotal(l) || '' },
   { id: 'driverPay',    label: 'Driver Pay', align: 'right',   get: (l) => l.totalDriverPay ?? '' },
@@ -889,7 +895,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
             <div style={{ fontSize: 12, color: 'var(--gc-text-2)' }}>
               <strong style={{ color: 'var(--gc-text-1)' }}>{rows.length}</strong>
               {' load'}{rows.length === 1 ? '' : 's'}
-              {totals.loadPrice ? <> · Revenue <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.loadPrice)}</strong></> : null}
+              {totals.loadPrice ? <> · Linehaul <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.loadPrice)}</strong></> : null}
               {totals.accessorials ? <> · Accessorials <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.accessorials)}</strong></> : null}
               {totals.total ? <> · Total <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.total)}</strong></> : null}
               {totals.driverPay ? <> · Driver Pay <strong style={{ color: 'var(--gc-text-1)' }}>{fmt$(totals.driverPay)}</strong></> : null}

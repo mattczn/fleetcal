@@ -327,6 +327,10 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             // cap. Maintenance opening a calendar should see route +
             // driver + status but not the rate.
             if (key === 'loadPrice' && !canDo('loads.view_price')) return null;
+            // Total billable mirrors loads.view_price — same financial
+            // info, just including accessorials. Maintenance-tier roles
+            // shouldn't see either.
+            if (key === 'totalBillable' && !canDo('loads.view_price')) return null;
             if (key === 'driverPay' && !canDo('loads.view_driver_pay')) return null;
             const value = def.render(event, { driverLabel, customers });
             if (!value) return null;
