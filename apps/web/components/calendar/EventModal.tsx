@@ -735,12 +735,40 @@ function UploadedDocsPanel({
   ));
 
   if (docs.length === 0 && invoiceRows.length === 0) {
+    // Empty state mirrors the Rate Con tab — centered icon + hint copy
+    // + a single primary "+ Add Documents" CTA tinted with the asset's
+    // headerColor. The dashed uploadHeader button is hidden here because
+    // it would duplicate the primary CTA below; once at least one doc
+    // exists the list view restores the header bar (line 752).
     return (
-      <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
-        {uploadHeader}
-        <div className="flex-1 flex items-center justify-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
-          No documents uploaded for this load yet.
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center" style={{ background: 'var(--gc-bg)' }}>
+        <div className="flex items-center justify-center" style={{ width: 56, height: 56, borderRadius: 14, background: `${headerColor}15`, color: headerColor }}>
+          <FileText size={26} />
         </div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--gc-text-2)' }}>
+          No Documents uploaded for this load yet
+        </div>
+        {loadId && (
+          <button type="button" onClick={() => addFileRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+            style={{ color: 'white', background: headerColor, border: `1px solid ${headerColor}` }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+            <Plus size={14} /> Add Documents
+          </button>
+        )}
+        {/* The hidden file input that addFileRef triggers lives inside
+            uploadHeader's JSX, which we don't render in the empty state.
+            Mount it directly here so the button has something to click. */}
+        {loadId && (
+          <input ref={addFileRef} type="file" accept=".pdf,application/pdf,image/*"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f) { setPendingFile(f); setUploadError(null); }
+              e.target.value = '';
+            }} />
+        )}
       </div>
     );
   }
