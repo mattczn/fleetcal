@@ -1472,10 +1472,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 </div>
               )}
 
-              {/* Manage documents — opens the merge dialog so the user can
-                  pick any docs (rate con included) and merge them into a
-                  single PDF. Hidden when there's nothing to merge. */}
-              {mergeCandidates.length >= 2 && (
+              {/* Manage documents — opens a dialog where the user can
+                  merge any docs (rate con included) into a single PDF
+                  AND convert non-PDF docs (camera-roll JPEGs / HEICs)
+                  to PDF via the dialog's secondary "Convert to PDF"
+                  action. Visible when either workflow is meaningful;
+                  hidden only on loads with a single PDF and nothing to
+                  do. */}
+              {(mergeCandidates.length >= 2 || convertCandidates.length >= 1) && (
                 <div className="shrink-0 px-3 py-2"
                   style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
                   <button type="button"
@@ -1578,27 +1582,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 would re-stamp the verified_at timestamp and add noise to
                 the audit trail. */}
             <div className="shrink-0 px-4 py-4 space-y-2" style={{ background: 'var(--gc-bg)' }}>
-              {/* Convert to PDF — batch-converts non-PDF docs (camera-roll
-                  JPEGs / HEICs / etc) into PDF copies. Hidden when
-                  everything on the load is already PDF. Creates a new
-                  doc per source so dispatchers keep the originals. */}
-              {convertCandidates.length >= 1 && (
-                <button type="button"
-                  onClick={() => {
-                    setConvertSelection(new Set());
-                    setConvertDialogOpen(true);
-                  }}
-                  disabled={converting}
-                  className="w-full flex items-center justify-center gap-1.5 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2 rounded-lg transition-opacity disabled:opacity-50"
-                  style={{
-                    background: 'var(--gc-surface)',
-                    color:      'var(--gc-blue)',
-                    border:     '1.5px solid var(--gc-blue)',
-                  }}>
-                  {converting ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
-                  Convert to PDF
-                </button>
-              )}
+              {/* Convert to PDF used to live here as a standalone CTA;
+                  it moved into the Manage Documents dialog (passed in
+                  via the dialog's `extraAction` slot) so the sidebar
+                  stays focused on the invoice + release path. */}
               {/* Generate / Regenerate invoice — primary green CTA.
                   Persists the per-row invoice selection from the doc
                   list above before firing. Verb flips by activeInvoice:
@@ -1737,8 +1724,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
       {mergeDialogOpen && (
         <DocSelectionDialog
-          title="Merge files"
-          description="Pick the documents to combine into a single PDF. Originals stay in the list."
+          title="Manage documents"
+          description="Pick documents to combine into a single PDF. Originals stay in the list."
           docs={mergeCandidates}
           selected={mergeSelection}
           onToggle={(id) => setMergeSelection(prev => {
@@ -1758,6 +1745,29 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           ctaWhenLow="Pick at least 2"
           kindLabel={KIND_LABEL}
           kindTint={KIND_TINT}
+          // Convert-to-PDF lives here now (was previously a standalone
+          // CTA in the right sidebar). Closes the merge dialog and
+          // opens the convert dialog. Hidden when there's nothing
+          // non-PDF on the load.
+          extraAction={convertCandidates.length >= 1 ? (
+            <button type="button"
+              onClick={() => {
+                setMergeDialogOpen(false);
+                setMergeSelection(new Set());
+                setConvertSelection(new Set());
+                setConvertDialogOpen(true);
+              }}
+              disabled={merging || converting}
+              className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+              style={{
+                background: 'var(--gc-surface)',
+                color:      'var(--gc-blue)',
+                border:     '1px solid var(--gc-blue)',
+              }}
+              title={`Convert ${convertCandidates.length} non-PDF doc${convertCandidates.length === 1 ? '' : 's'} to PDF`}>
+              <FileText size={11} /> Convert to PDF
+            </button>
+          ) : undefined}
           zIndex={zIndex + 60}
         />
       )}
@@ -2050,6 +2060,7 @@ function DocSelectionDialog({
   actionIcon, actionLabel, ctaWhenLow,
   kindLabel, kindTint,
   emptyMessage,
+  extraAction,
   zIndex = 240,
 }: {
   title: string;
@@ -2070,6 +2081,12 @@ function DocSelectionDialog({
   kindLabel: Record<string, string>;
   kindTint:  Record<string, { bg: string; fg: string }>;
   emptyMessage?: string;
+  /** Optional secondary action chip rendered in the select-all bar
+   *  on the right (just before the "N selected" counter). The merge
+   *  dialog uses this to surface "Convert to PDF" when non-PDF docs
+   *  exist; the convert dialog leaves it undefined. Keeps the dialog
+   *  generic — the secondary action is owned by the caller. */
+  extraAction?: React.ReactNode;
   /** Override stacking so this dialog can sit above a hoisted parent
    *  (e.g. ReviewQueue opened from the load modal at z-250). Defaults
    *  to 240 — fine for the standalone closeout page case. */
@@ -2118,6 +2135,7 @@ function DocSelectionDialog({
             None
           </button>
           <div className="flex-1" />
+          {extraAction}
           <span className="text-[11px] font-bold" style={{ color: canConfirm ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
             {count} selected
           </span>
