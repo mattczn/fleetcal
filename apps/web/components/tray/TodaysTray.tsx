@@ -283,7 +283,7 @@ function LoadRow({
 // ── Main tray ──────────────────────────────────────────────────────────────────
 
 export default function TodaysTray() {
-  const { events, assets, updateEvent, openEditModal, setTrayOpen, calendarTimezone } = useCalendarStore();
+  const { events, assets, updateEvent, openEditModal, setTrayOpen, calendarTimezone, cardFontScale } = useCalendarStore();
   // Org's configured timezone — drives the header pivot timestamp +
   // every load row's time range. Stored as a raw IANA string in
   // store.calendarTimezone (NOT promptVariables.timezone, which holds
@@ -381,8 +381,21 @@ export default function TodaysTray() {
 
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 z-40 flex flex-col"
-      style={{ background: 'var(--gc-surface)', borderTop: '1px solid var(--gc-border)', boxShadow: '0 -2px 8px rgba(0,0,0,.08)', overflow: 'hidden' }}
+      className="ui-scale-scope fixed bottom-0 left-0 right-0 z-40 flex flex-col"
+      style={{
+        background: 'var(--gc-surface)',
+        borderTop: '1px solid var(--gc-border)',
+        boxShadow: '0 -2px 8px rgba(0,0,0,.08)',
+        overflow: 'hidden',
+        // Drawer caps at 40% of viewport height so the grid above stays
+        // workable on smaller (laptop) screens. The expanded panel below
+        // pairs this with its own internal maxHeight so the content
+        // scrolls instead of pushing the cap.
+        maxHeight: '40vh',
+        // Opt into Settings → Appearance scale (CSS overrides in
+        // globals.css multiply text utilities by --ui-scale).
+        ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1,
+      } as React.CSSProperties}
     >
       {/* Collapsed / header bar */}
       <div className="flex items-center gap-3 px-5"
@@ -430,9 +443,12 @@ export default function TodaysTray() {
         </div>
       </div>
 
-      {/* Expanded panel */}
+      {/* Expanded panel — internal maxHeight clamped to the smaller of
+          a fixed pixel ceiling and a viewport-relative cap so laptop
+          screens stay workable above the drawer. The outer wrapper
+          enforces a 40vh hard cap on top of this. */}
       {expanded && (
-        <div style={{ maxHeight: 380, display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--gc-border-light)' }}>
+        <div style={{ maxHeight: 'min(380px, calc(40vh - 48px))', display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--gc-border-light)' }}>
 
           {/* Toolbar: filters + date + batch */}
           <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>

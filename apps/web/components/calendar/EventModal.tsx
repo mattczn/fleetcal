@@ -1824,6 +1824,7 @@ export default function EventModal() {
     eldLocations,
     mergeEvents,
     calendarTimezone,
+    cardFontScale,
   } = useCalendarStore();
 
   const { user } = useUser();
@@ -4082,9 +4083,12 @@ export default function EventModal() {
     )}
     {/* z-[200] keeps the load detail modal above the closeout review
         queue (z-180) so the user can pop it open without losing their
-        review-queue position. Sub-dialogs below stack at +10/+20. */}
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.36)' }}
+        review-queue position. Sub-dialogs below stack at +10/+20.
+        ui-scale-scope opts the modal into the user's Settings →
+        Appearance → "Calendar card text" preference; --ui-scale is
+        consumed by the text utility overrides in globals.css. */}
+    <div className="ui-scale-scope fixed inset-0 z-[200] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.36)', ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}
       onMouseDown={e => { if (e.target === e.currentTarget) handleBackdropClick(); }}>
       <div className="flex"
         style={{

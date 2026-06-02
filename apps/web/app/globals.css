@@ -141,3 +141,46 @@ input[type="range"] { accent-color: var(--gc-blue); }
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
+
+
+/* ════════════════════════════════════════════════════════════════════
+ * UI Font Scale — surfaces that opt into the user's Settings →
+ * Appearance → "Calendar card text" preference (cardFontScale).
+ *
+ * Apply by adding `ui-scale-scope` to a container AND setting
+ *   style={{ '--ui-scale': cardFontScale }}
+ * on the same element. Child Tailwind text utilities + the most
+ * common bracket sizes auto-scale; bare style={{ fontSize: N }} on
+ * children still wins (intentional — that's an explicit author choice).
+ *
+ * Defaults are tuned ~10–12% smaller than Tailwind's stock sizes so
+ * scale=1.0 reads comfortably on a 13–15" laptop. Bigger screens
+ * should crank to 1.15 in Settings to restore the original feel.
+ *
+ * Surfaces wired up:
+ *   • EventModal (calendar)
+ *   • AssetSidebar (left nav)
+ *   • TodaysTray (bottom drawer)
+ * ════════════════════════════════════════════════════════════════════ */
+.ui-scale-scope {
+  --ui-scale: 1;
+}
+/* Tailwind text utilities — overridden to be smaller at scale=1.0
+ * and to multiply by --ui-scale. */
+.ui-scale-scope .text-xs   { font-size: calc(11px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-sm   { font-size: calc(12.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-base { font-size: calc(14px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-lg   { font-size: calc(16px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-xl   { font-size: calc(18px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-2xl  { font-size: calc(22px * var(--ui-scale)) !important; }
+/* Common bracket utilities used throughout EventModal / sidebars.
+ * Targeted explicitly so `text-[12px]` etc. participate in scaling. */
+.ui-scale-scope .text-\[10px\] { font-size: calc(10px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[11px\] { font-size: calc(11px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[12px\] { font-size: calc(12px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[12\.5px\] { font-size: calc(12.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[13px\] { font-size: calc(13px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[14px\] { font-size: calc(14px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[15px\] { font-size: calc(15px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[16px\] { font-size: calc(16px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[18px\] { font-size: calc(18px * var(--ui-scale)) !important; }

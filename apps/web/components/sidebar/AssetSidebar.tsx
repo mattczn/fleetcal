@@ -20,7 +20,7 @@ export default function AssetSidebar() {
   // filter chips — plus the cross-page nav rail that used to live in
   // AppSidebar. The Manage Assets / Manage Drivers / Settings buttons
   // at the bottom remain the doorway into the directory modals.
-  const { openCreateModal, sidebarOpen, toggleSidebar, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables } = useCalendarStore();
+  const { openCreateModal, sidebarOpen, toggleSidebar, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, cardFontScale } = useCalendarStore();
   const { organization } = useOrganization();
   const [showDrivers, setShowDrivers] = useState(false);
   const [showAssets,  setShowAssets]  = useState(false);
@@ -90,11 +90,14 @@ export default function AssetSidebar() {
     <>
       <aside
         data-tour="sidebar"
-        className="flex flex-col h-full shrink-0 overflow-hidden"
+        className="ui-scale-scope flex flex-col h-full shrink-0 overflow-hidden"
         style={{
           background: 'var(--gc-surface)',
           width: sidebarOpen ? 256 : 0,
           borderRight: sidebarOpen ? '1px solid var(--gc-border)' : 'none',
+          // Opt into the Settings → Appearance scale. The CSS overrides
+          // in globals.css multiply text utilities by --ui-scale.
+          ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1,
           transition: 'width 200ms ease, border 200ms ease',
         }}
       >
