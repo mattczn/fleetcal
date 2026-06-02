@@ -999,46 +999,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
           </span>
           <div className="flex flex-col flex-1 min-w-0">
-            {/* Title row — load title on the left, verification chips
-                inline on the right. The chips moved here from the doc
-                column so the viewer gets all the space; the title is
-                wide enough to host them inline. */}
-            <div className="flex items-center gap-3 min-w-0 flex-wrap">
-              {onOpenLoadModal ? (
-                <button type="button"
-                  onClick={() => onOpenLoadModal(current)}
-                  className="text-base font-extrabold truncate text-left hover:underline transition-colors"
-                  style={{ color: 'var(--gc-blue)' }}
-                  title="Open full load details">
-                  {current.title}
-                </button>
-              ) : (
-                <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
-                  {current.title}
-                </div>
-              )}
-              {/* Verification chips — Rate Con, POD, (Lumper / Scale if
-                  the load's accessorials require them). Green check
-                  when present, red ! when missing. TONU shows a blue
-                  badge instead (POD not required). */}
-              <div className="flex items-center gap-3 flex-wrap">
-                {isTonu && (
-                  <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold"
-                    style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
-                    TONU
-                  </span>
-                )}
-                {checklist.filter(c => !c.skip).map(c => (
-                  <span key={c.id} className="flex items-center gap-1 text-[12px] font-semibold"
-                    style={{ color: c.pass ? 'var(--gc-text-1)' : '#dc2626' }}>
-                    {c.pass
-                      ? <CheckCircle2 size={13} style={{ color: '#15803d' }} />
-                      : <AlertCircle  size={13} style={{ color: '#dc2626' }} />}
-                    <span>{c.label}</span>
-                  </span>
-                ))}
+            {onOpenLoadModal ? (
+              <button type="button"
+                onClick={() => onOpenLoadModal(current)}
+                className="text-base font-extrabold truncate text-left hover:underline transition-colors"
+                style={{ color: 'var(--gc-blue)' }}
+                title="Open full load details">
+                {current.title}
+              </button>
+            ) : (
+              <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+                {current.title}
               </div>
-            </div>
+            )}
             <div className="text-xs flex items-center gap-3 flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
               <span className="tabular-nums">
                 {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
@@ -1260,14 +1233,62 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 }} />
             </div>
 
-            {/* Middle column — pure viewer.
-                Everything that used to live here (Verification header,
-                doc list, kind picker, Manage button) moved either to
-                the modal's top bar (verification chips) or to the right
-                sidebar (Add Documents header, doc rows, pending picker,
-                Manage Documents button). The viewer now gets the full
-                width and height of this column. */}
+            {/* Middle column — viewer with a thin header.
+                Header shape mirrors the Rate Con tab's header (left:
+                doc identity, right: "+ Replace"-style action). Here the
+                action is "+ Add Documents" since uploading is a fresh
+                doc, not a replacement.
+
+                Doc list + Manage Documents live in the right sidebar;
+                verification chips live in the right sidebar's header. */}
             <div className="flex-1 flex flex-col min-w-0">
+              {/* Viewer header */}
+              <div className="shrink-0 px-3 py-2 flex items-center justify-between gap-3"
+                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)', minHeight: 40 }}>
+                {(() => {
+                  const active = docs[Math.min(activeDocIdx, docs.length - 1)];
+                  if (!active) {
+                    return (
+                      <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+                        Documents
+                      </span>
+                    );
+                  }
+                  const tint = KIND_TINT[active.kind] ?? KIND_TINT.other;
+                  // Enumerate same-kind docs as POD 1 / POD 2 for context,
+                  // matching the right sidebar list's row labels.
+                  const sameKindCount = docs.filter(x => x.kind === active.kind).length;
+                  const seq           = docs.slice(0, activeDocIdx + 1).filter(x => x.kind === active.kind).length;
+                  const labelText     = KIND_LABEL[active.kind] ?? active.kind;
+                  const kindLabel     = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                  return (
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: tint.bg, color: tint.fg }}>
+                        {kindLabel}
+                      </span>
+                      <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}
+                        title={active.fileName}>
+                        {active.fileName}
+                      </span>
+                    </div>
+                  );
+                })()}
+                {loadId && (
+                  <button type="button" onClick={pickFile} disabled={uploading}
+                    className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-opacity disabled:opacity-50 shrink-0"
+                    style={{
+                      background:  'var(--gc-blue)',
+                      color:       '#fff',
+                      textShadow:  '0 1px 1px rgba(0,0,0,0.25)',
+                      boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
+                    }}>
+                    {uploading ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
+                    Add Documents
+                  </button>
+                )}
+              </div>
+
               {docs.length > 0 ? (() => {
                 const active = docs[Math.min(activeDocIdx, docs.length - 1)];
                 return (
@@ -1333,36 +1354,45 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </div>
             )}
 
-            {/* Document management lives here in the right sidebar so
-                the middle column can be all viewer (more horizontal +
-                vertical space for the PDF / image). Verification chips
-                moved up to the modal top bar — inline with the load
-                title — for the same reason: the doc viewer benefits
-                from every pixel.
-
-                Layout, top → bottom:
-                  ┌─ "+ Add Documents" button (header bar)
+            {/* Document management lives here. Layout, top → bottom:
+                  ┌─ "Docs · N" label + Verification chips (Rate Con ✓,
+                  │   POD ✓, Lumper / Scale if accessorials require them)
                   ├─ Pending file kind picker (only when uploading)
                   ├─ Doc rows (flex-1 — scrolls when many docs)
-                  └─ "Manage documents" button (opens merge / convert) */}
-            <div className="shrink-0 px-3 py-2.5 flex items-center justify-between gap-2"
+                  └─ "Manage documents" button (opens merge / convert)
+
+                The "+ Add Documents" button lives in the middle column's
+                viewer header (mirrors the Rate Con tab's "+ Replace"
+                pattern) so the upload affordance sits where the result
+                shows up. */}
+            <div className="shrink-0 px-3 py-2.5 flex items-center justify-between gap-2 flex-wrap"
               style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-              <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-                Documents {docs.length > 0 && <span style={{ color: 'var(--gc-text-2)' }}>· {docs.length}</span>}
+              <span className="text-[11px] font-bold uppercase tracking-wider shrink-0" style={{ color: 'var(--gc-text-3)' }}>
+                Docs {docs.length > 0 && <span style={{ color: 'var(--gc-text-2)' }}>· {docs.length}</span>}
               </span>
-              {loadId && (
-                <button type="button" onClick={pickFile} disabled={uploading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-opacity disabled:opacity-50"
-                  style={{
-                    background:  'var(--gc-blue)',
-                    color:       '#fff',
-                    textShadow:  '0 1px 1px rgba(0,0,0,0.2)',
-                    boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
-                  }}>
-                  {uploading ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
-                  Add Documents
-                </button>
-              )}
+              {/* Verification chips — Rate Con + POD (+ Lumper / Scale
+                  if the load's accessorials require them). Green check
+                  when present, red ! when missing. TONU shows a blue
+                  badge instead (POD not required). flex-wrap on the
+                  container so a long load with all four checks gracefully
+                  drops the last chip to a second row. */}
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {isTonu && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
+                    style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
+                    TONU
+                  </span>
+                )}
+                {checklist.filter(c => !c.skip).map(c => (
+                  <span key={c.id} className="flex items-center gap-1 text-[11px] font-semibold"
+                    style={{ color: c.pass ? 'var(--gc-text-1)' : '#dc2626' }}>
+                    {c.pass
+                      ? <CheckCircle2 size={12} style={{ color: '#15803d' }} />
+                      : <AlertCircle  size={12} style={{ color: '#dc2626' }} />}
+                    <span>{c.label}</span>
+                  </span>
+                ))}
+              </div>
             </div>
 
             {/* Pending file kind picker — only when files are queued.
