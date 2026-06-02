@@ -599,6 +599,38 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
   };
 
+  // Change a doc's kind. The API may auto-rename the display fileName
+  // (it uses the same {LOAD_NUM}_{KIND}{_N}.{ext} convention as upload),
+  // so we read back the new fileName off the response and apply both
+  // kind + fileName to the local docs list AND the prefetch cache.
+  // Optimistic update keeps the dialog responsive without a full
+  // refetch round-trip.
+  const handleChangeKind = async (docId: string, newKind: import('@fleetcal/types').DocumentKind) => {
+    if (!loadId) return;
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
+      const res = await railway.updateDocumentKind(docId, newKind);
+      const nextFileName = res.fileName;
+      setDocs(prev => prev.map(d => d.id === docId
+        ? { ...d, kind: newKind, ...(nextFileName ? { fileName: nextFileName } : {}) }
+        : d
+      ));
+      const entry = docsCacheRef.current.get(loadId);
+      if (entry) {
+        docsCacheRef.current.set(loadId, {
+          ...entry,
+          docs: entry.docs.map(d => d.id === docId
+            ? { ...d, kind: newKind, ...(nextFileName ? { fileName: nextFileName } : {}) }
+            : d
+          ),
+        });
+      }
+    } catch (err) {
+      console.error('[review queue] change kind failed:', err);
+      alert(`Change kind failed: ${(err as Error).message ?? 'Unknown error'}`);
+    }
+  };
+
   // ── Upload paperwork ──────────────────────────────────────────────
   // Two-stage flow: file picker (multi-select allowed) → kind picker.
   // Multiple files get merged into a single PDF locally via pdfMerge
@@ -1397,8 +1429,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
             {/* Pending file kind picker — only when files are queued.
                 Lives above the doc list so the user sees their picked
-                file at the top of the panel, then chooses the kind. */}
-            {pendingFiles.length > 0 && (
+                file at the top of the panel, then chooses the kind.
+                Hidden when the Manage Documents dialog is open — the
+                dialog renders its own copy of this UI inline so the
+                upload workflow stays in one modal. */}
+            {pendingFiles.length > 0 && !mergeDialogOpen && (
               <div className="shrink-0 px-3 py-2.5 space-y-2"
                 style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
                 <div className="space-y-1">
@@ -1752,7 +1787,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       {mergeDialogOpen && (
         <DocSelectionDialog
           title="Manage documents"
-          description="Pick documents to combine into a single PDF. Originals stay in the list."
+          description="Add, rename, retype, delete — or pick documents to merge into one PDF."
           docs={mergeCandidates}
           selected={mergeSelection}
           onToggle={(id) => setMergeSelection(prev => {
@@ -1772,10 +1807,93 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           ctaWhenLow="Pick at least 2"
           kindLabel={KIND_LABEL}
           kindTint={KIND_TINT}
-          // Convert-to-PDF lives here now (was previously a standalone
-          // CTA in the right sidebar). Closes the merge dialog and
-          // opens the convert dialog. Hidden when there's nothing
-          // non-PDF on the load.
+          // ── Manage-mode wiring ──────────────────────────────────────
+          // Turns on per-row pencil (rename) + trash (delete) + clickable
+          // kind chip (change kind). Add button surfaces in the header.
+          // All mutations call back to the parent's existing handlers,
+          // which already own the optimistic update + cache patching.
+          manageMode
+          onAdd={pickFile}
+          onRename={async (id, newName) => { await railway.renameDocument(id, newName); setDocs(prev => prev.map(d => d.id === id ? { ...d, fileName: newName } : d)); if (loadId) { const entry = docsCacheRef.current.get(loadId); if (entry) docsCacheRef.current.set(loadId, { ...entry, docs: entry.docs.map(d => d.id === id ? { ...d, fileName: newName } : d) }); } }}
+          onChangeKind={handleChangeKind}
+          onDelete={handleDeleteDoc}
+          kindOptions={KIND_OPTIONS}
+          // Pending kind picker — when the user clicks "+ Add document"
+          // and picks files, the OS file picker fires (via pickFile).
+          // Picked files land in pendingFiles state. We render the kind
+          // picker INSIDE the dialog so the upload workflow stays in
+          // one modal instead of bouncing to the sidebar.
+          pendingArea={pendingFiles.length > 0 ? (
+            <div className="mx-5 mb-3 px-3 py-2.5 space-y-2 rounded-lg"
+              style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+              <div className="space-y-1">
+                {pendingFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-1.5 text-[12px] px-1.5 py-1 rounded"
+                    style={{ background: 'var(--gc-surface)' }}>
+                    <span className="text-[10px] font-bold tabular-nums" style={{ color: 'var(--gc-text-3)', minWidth: 14 }}>
+                      {i + 1}.
+                    </span>
+                    <FileText size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+                    <span className="truncate flex-1" title={f.name} style={{ color: 'var(--gc-text-1)' }}>
+                      {f.name}
+                    </span>
+                    <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                      disabled={uploading}
+                      className="p-0.5 rounded hover:bg-[var(--gc-hover)]" title="Remove from list">
+                      <X size={11} style={{ color: 'var(--gc-text-3)' }} />
+                    </button>
+                  </div>
+                ))}
+                <button onClick={pickFile} disabled={uploading}
+                  className="w-full flex items-center justify-center gap-1.5 text-[11px] py-1 rounded transition-colors"
+                  style={{ color: 'var(--gc-blue)', background: 'transparent', border: '1px dashed var(--gc-border-light)' }}>
+                  <Plus size={11} /> Add more
+                </button>
+              </div>
+              {pendingFiles.length > 1 && (
+                <div className="text-[10px] px-2 py-1 rounded flex items-start gap-1.5"
+                  style={{ background: '#e0f2fe', color: '#0c4a6e' }}>
+                  <FileText size={10} style={{ marginTop: 1, flexShrink: 0 }} />
+                  <span>{pendingFiles.length} files will be merged into one PDF before upload.</span>
+                </div>
+              )}
+              <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                {pendingFiles.length > 1 ? 'Save merged PDF as' : 'What is this?'}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {KIND_OPTIONS.map(opt => (
+                  <button key={opt.kind}
+                    onClick={() => void uploadAs(opt.kind)}
+                    disabled={uploading}
+                    className="flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider py-2 transition-opacity disabled:opacity-50"
+                    style={{
+                      background:  opt.tint.bg,
+                      color:       opt.tint.fg,
+                      boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
+                      textShadow:  '0 1px 1px rgba(0,0,0,0.25)',
+                    }}>
+                    {uploading ? <Loader2 size={11} className="animate-spin" /> : null}
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {uploading && mergeStatus && (
+                <div className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded"
+                  style={{ background: 'var(--gc-hover)', color: 'var(--gc-text-2)' }}>
+                  <Loader2 size={10} className="animate-spin" />
+                  <span className="truncate flex-1">{mergeStatus}</span>
+                </div>
+              )}
+              {uploadError && (
+                <div className="text-[11px] flex items-start gap-1" style={{ color: '#dc2626' }}>
+                  <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} /> {uploadError}
+                </div>
+              )}
+            </div>
+          ) : undefined}
+          // Convert-to-PDF lives here as a secondary action chip.
+          // Closes Manage Documents and opens the convert flow. Hidden
+          // when there's nothing non-PDF on the load.
           extraAction={convertCandidates.length >= 1 ? (
             <button type="button"
               onClick={() => {
@@ -2088,6 +2206,13 @@ function DocSelectionDialog({
   kindLabel, kindTint,
   emptyMessage,
   extraAction,
+  manageMode,
+  onAdd,
+  onRename,
+  onChangeKind,
+  onDelete,
+  kindOptions,
+  pendingArea,
   zIndex = 240,
 }: {
   title: string;
@@ -2114,6 +2239,34 @@ function DocSelectionDialog({
    *  exist; the convert dialog leaves it undefined. Keeps the dialog
    *  generic — the secondary action is owned by the caller. */
   extraAction?: React.ReactNode;
+  /** When true, the dialog gains per-row management affordances:
+   *  rename (pencil), change kind (kind chip becomes a native <select>),
+   *  and delete (trash with inline 2-step confirm). The caller wires the
+   *  callbacks below; the dialog owns the local UI state (in-flight
+   *  rename draft, delete-confirm pending id). */
+  manageMode?: boolean;
+  /** Triggers the parent's pickFile flow. Rendered as a primary "+
+   *  Add Document" button at the top of the dialog when defined. */
+  onAdd?: () => void;
+  /** Persist a doc's new fileName. Caller handles the optimistic
+   *  update + cache refresh. */
+  onRename?: (id: string, newName: string) => Promise<void>;
+  /** Persist a doc's new kind. Caller handles the optimistic update.
+   *  Server may auto-rename the displayed fileName. */
+  onChangeKind?: (id: string, newKind: import('@fleetcal/types').DocumentKind) => Promise<void>;
+  /** Hard-delete the doc + its storage blob. Caller handles the
+   *  optimistic update. Dialog uses an inline 2-step confirm. */
+  onDelete?: (id: string) => Promise<void>;
+  /** Drives the kind <select> options in manageMode. Same shape as the
+   *  parent's KIND_OPTIONS constant. ReadonlyArray so the parent's
+   *  `as const` literal is assignable without a defensive copy. */
+  kindOptions?: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind; label: string; tint: { bg: string; fg: string } }>;
+  /** Optional JSX rendered above the doc list. The merge dialog uses
+   *  this to surface the pending-files kind picker INSIDE the dialog
+   *  when "+ Add Document" was clicked from here — so the upload
+   *  workflow stays in the same modal instead of bouncing the user
+   *  back to the sidebar. */
+  pendingArea?: React.ReactNode;
   /** Override stacking so this dialog can sit above a hoisted parent
    *  (e.g. ReviewQueue opened from the load modal at z-250). Defaults
    *  to 240 — fine for the standalone closeout page case. */
@@ -2121,21 +2274,77 @@ function DocSelectionDialog({
 }) {
   const count = selected.size;
   const canConfirm = count >= minSelect && !busy;
+  // Local management state — only meaningful when manageMode is true.
+  //   renamingId / renameDraft: the row currently being inline-renamed
+  //   deleteConfirmId:          row pending 2-step delete confirm
+  //   pendingActionId:          row with an in-flight mutation (prevents
+  //                             double-click; visual loader on that row)
+  const [renamingId, setRenamingId]         = useState<string | null>(null);
+  const [renameDraft, setRenameDraft]       = useState('');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+
+  const startRename = (id: string, currentName: string) => {
+    // Strip the extension so the user edits only the human-readable part;
+    // commit re-appends the original extension. Matches the sidebar's
+    // commitRename behavior.
+    const stem = currentName.replace(/\.[^.]+$/, '');
+    setRenamingId(id);
+    setRenameDraft(stem);
+    setDeleteConfirmId(null);
+  };
+  const cancelRename = () => { setRenamingId(null); setRenameDraft(''); };
+  const commitDialogRename = async (originalName: string) => {
+    if (!onRename || !renamingId) return;
+    const ext = (originalName.match(/\.[^.]+$/)?.[0] ?? '').toLowerCase();
+    const next = `${renameDraft.trim()}${ext}`;
+    if (!renameDraft.trim() || next === originalName) { cancelRename(); return; }
+    setPendingActionId(renamingId);
+    try {
+      await onRename(renamingId, next);
+      cancelRename();
+    } finally {
+      setPendingActionId(null);
+    }
+  };
+  const handleKindChange = async (id: string, newKind: import('@fleetcal/types').DocumentKind) => {
+    if (!onChangeKind) return;
+    setPendingActionId(id);
+    try { await onChangeKind(id, newKind); }
+    finally { setPendingActionId(null); }
+  };
+  const handleDeleteClick = async (id: string) => {
+    if (!onDelete) return;
+    if (deleteConfirmId !== id) {
+      // Two-step click — first arms the confirm, second commits. Tap
+      // anywhere else (or the X) to cancel.
+      setDeleteConfirmId(id);
+      return;
+    }
+    setPendingActionId(id);
+    try {
+      await onDelete(id);
+      setDeleteConfirmId(null);
+    } finally {
+      setPendingActionId(null);
+    }
+  };
+
   return (
     <div className="fixed inset-0 flex items-center justify-center px-4"
       style={{ background: 'rgba(0,0,0,0.5)', zIndex }}
       onMouseDown={e => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div className="rounded-2xl flex flex-col w-full"
         style={{
-          maxWidth:   480,
-          maxHeight:  '80vh',
+          maxWidth:   manageMode ? 560 : 480,
+          maxHeight:  '85vh',
           background: 'var(--gc-surface)',
           boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
           border:     '1px solid var(--gc-border)',
         }}>
         {/* Header */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-3">
-          <div>
+        <div className="flex items-center justify-between gap-3 px-5 pt-5 pb-3">
+          <div className="min-w-0">
             <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
               {title}
             </div>
@@ -2143,10 +2352,24 @@ function DocSelectionDialog({
               {description}
             </div>
           </div>
-          <button onClick={onCancel} disabled={busy}
-            className="p-1 rounded-full hover:bg-[var(--gc-hover)]" title="Close">
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {onAdd && (
+              <button type="button" onClick={onAdd} disabled={busy}
+                className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50"
+                style={{
+                  background:  'var(--gc-blue)',
+                  color:       '#fff',
+                  textShadow:  '0 1px 1px rgba(0,0,0,0.2)',
+                  boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
+                }}>
+                <Plus size={11} /> Add document
+              </button>
+            )}
+            <button onClick={onCancel} disabled={busy}
+              className="p-1 rounded-full hover:bg-[var(--gc-hover)]" title="Close">
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Select-all + select-none bar */}
@@ -2168,6 +2391,11 @@ function DocSelectionDialog({
           </span>
         </div>
 
+        {/* Pending kind picker (manage mode only). Lives above the doc
+            list so the user sees the file they just picked at the top
+            of the panel. */}
+        {pendingArea}
+
         {/* Doc list */}
         <div className="flex-1 overflow-y-auto px-5 pb-3" style={{ minHeight: 80 }}>
           {docs.length === 0 ? (
@@ -2177,25 +2405,141 @@ function DocSelectionDialog({
           ) : (
             <ul className="space-y-1">
               {docs.map(d => {
-                const tint = kindTint[d.kind] ?? kindTint.other;
-                const isOn = selected.has(d.id);
+                const tint        = kindTint[d.kind] ?? kindTint.other;
+                const isOn        = selected.has(d.id);
+                const isRenaming  = renamingId === d.id;
+                const isDeleting  = deleteConfirmId === d.id;
+                const isPending   = pendingActionId === d.id;
+                const rowDisabled = busy || (isPending && !isRenaming);
                 return (
                   <li key={d.id}>
-                    <label className="flex items-start gap-2 cursor-pointer rounded-lg px-2 py-2 transition-colors hover:bg-[var(--gc-hover)]"
-                      style={{ background: isOn ? 'rgba(26,115,232,0.06)' : 'transparent' }}>
-                      <input type="checkbox" checked={isOn} disabled={busy} className="mt-1"
-                        style={{ accentColor: 'var(--gc-blue)' }}
+                    <div className="flex items-center gap-2 rounded-lg px-2 py-2 transition-colors"
+                      style={{
+                        background: isDeleting    ? '#fee2e2'
+                                  : isRenaming    ? 'rgba(26,115,232,0.06)'
+                                  : isOn          ? 'rgba(26,115,232,0.06)'
+                                  : 'transparent',
+                      }}>
+                      <input type="checkbox" checked={isOn} disabled={rowDisabled}
+                        style={{ accentColor: 'var(--gc-blue)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
                         onChange={() => onToggle(d.id)} />
-                      <div className="flex-1 min-w-0">
-                        <span className="inline-block text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded"
+
+                      {/* Kind chip — static label by default, native
+                          <select> dropdown in manageMode so the user can
+                          change the doc's kind without leaving the dialog.
+                          Native select inherits the tint background +
+                          text color for visual consistency. */}
+                      {manageMode && onChangeKind && kindOptions && kindOptions.length > 0 ? (
+                        <select
+                          value={d.kind}
+                          disabled={isPending || busy || isRenaming}
+                          onChange={e => void handleKindChange(d.id, e.target.value as import('@fleetcal/types').DocumentKind)}
+                          className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-1 rounded shrink-0 cursor-pointer"
+                          style={{
+                            background: tint.bg,
+                            color:      tint.fg,
+                            border:     'none',
+                            // Prevent inherited padding / appearance from
+                            // bloating the chip in non-Chromium browsers.
+                            appearance: 'none',
+                            WebkitAppearance: 'none',
+                            paddingRight: 18,
+                            backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(tint.fg)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>")`,
+                            backgroundRepeat:   'no-repeat',
+                            backgroundPosition: 'right 4px center',
+                          }}
+                          title="Change document type">
+                          {kindOptions.map(opt => (
+                            <option key={opt.kind} value={opt.kind}>{opt.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
                           style={{ background: tint.bg, color: tint.fg }}>
                           {kindLabel[d.kind] ?? d.kind}
                         </span>
-                        <div className="text-[12px] font-semibold truncate mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
+                      )}
+
+                      {/* Filename — inline editable in manageMode rename
+                          state; otherwise a click on the row toggles the
+                          checkbox via label-for. */}
+                      {isRenaming ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          disabled={isPending}
+                          onChange={e => setRenameDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter')  { e.preventDefault(); void commitDialogRename(d.fileName); }
+                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={() => { if (!isPending) void commitDialogRename(d.fileName); }}
+                          className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b min-w-0"
+                          style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                        />
+                      ) : (
+                        <button type="button"
+                          onClick={() => onToggle(d.id)}
+                          disabled={rowDisabled}
+                          className="flex-1 text-left truncate text-[12px] font-semibold min-w-0"
+                          style={{ color: 'var(--gc-text-1)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
+                          title={d.fileName}>
                           {d.fileName}
+                        </button>
+                      )}
+
+                      {/* Per-row management actions — only in manageMode. */}
+                      {manageMode && !isRenaming && (
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          {isPending && (
+                            <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
+                          )}
+                          {onRename && !isPending && (
+                            <button type="button"
+                              onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
+                              className="rounded-full p-1 transition-colors"
+                              title={`Rename — ${d.fileName}`}
+                              style={{ color: tint.bg, background: 'transparent' }}
+                              onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                              onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                              <Pencil size={12} />
+                            </button>
+                          )}
+                          {onDelete && !isPending && (
+                            isDeleting ? (
+                              <>
+                                <button type="button"
+                                  onClick={e => { e.stopPropagation(); void handleDeleteClick(d.id); }}
+                                  className="rounded text-[10px] font-extrabold uppercase tracking-wider px-2 py-1 transition-colors"
+                                  style={{ background: '#d93025', color: '#fff' }}
+                                  title="Confirm delete">
+                                  Delete
+                                </button>
+                                <button type="button"
+                                  onClick={e => { e.stopPropagation(); setDeleteConfirmId(null); }}
+                                  className="rounded-full p-1 transition-colors"
+                                  title="Cancel"
+                                  style={{ color: 'var(--gc-text-3)' }}
+                                  onMouseEnter={ev => (ev.currentTarget.style.background = 'var(--gc-hover)')}
+                                  onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                  <X size={12} />
+                                </button>
+                              </>
+                            ) : (
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); void handleDeleteClick(d.id); }}
+                                className="rounded-full p-1 transition-colors"
+                                title={`Delete — ${d.fileName}`}
+                                style={{ color: '#d93025', background: 'transparent' }}
+                                onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                <Trash2 size={12} />
+                              </button>
+                            )
+                          )}
                         </div>
-                      </div>
-                    </label>
+                      )}
+                    </div>
                   </li>
                 );
               })}
