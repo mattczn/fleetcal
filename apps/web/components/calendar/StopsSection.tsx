@@ -87,7 +87,16 @@ function StopTimeInput({ value, onChange, headerColor }: { value: string; onChan
       onChange={e => setRaw(e.target.value)}
       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
       placeholder="8am"
-      style={{ width: 68, border: '1px solid var(--gc-border)', borderRadius: 8, padding: '10px 8px', fontSize: 15, color: 'var(--gc-text-1)', outline: 'none', cursor: 'text', transition: 'border-color 150ms', background: 'var(--gc-surface)' }}
+      style={{
+        // Scales with the load modal's --ui-scale so the stop time
+        // pill matches the surrounding fields at any preset.
+        width: 'calc(68px * var(--ui-scale, 1))',
+        border: '1px solid var(--gc-border)', borderRadius: 8,
+        padding: 'calc(8.5px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1))',
+        fontSize: 'calc(13.5px * var(--ui-scale, 1))',
+        color: 'var(--gc-text-1)', outline: 'none', cursor: 'text',
+        transition: 'border-color 150ms', background: 'var(--gc-surface)',
+      }}
       onFocus={e => { requestAnimationFrame(() => e.target.select()); e.currentTarget.style.borderColor = headerColor; }}
       onBlur={e => { commit(); e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
     />
@@ -105,7 +114,14 @@ function ApptInput({ value, onChange, placeholder, headerColor }: { value: strin
       <button
         type="button"
         onClick={() => onChange(`${new Date().toISOString().slice(0, 10)}T08:00`)}
-        style={{ border: '1px solid var(--gc-border)', borderRadius: 8, padding: '10px 12px', fontSize: 13, color: 'var(--gc-text-3)', background: 'var(--gc-surface)', cursor: 'pointer', width: '100%', textAlign: 'left', transition: 'border-color 150ms' }}
+        style={{
+          border: '1px solid var(--gc-border)', borderRadius: 8,
+          padding: 'calc(8.5px * var(--ui-scale, 1)) calc(11px * var(--ui-scale, 1))',
+          fontSize: 'calc(12px * var(--ui-scale, 1))',
+          color: 'var(--gc-text-3)', background: 'var(--gc-surface)',
+          cursor: 'pointer', width: '100%', textAlign: 'left',
+          transition: 'border-color 150ms',
+        }}
         onMouseEnter={e => (e.currentTarget.style.borderColor = headerColor)}
         onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
       >
@@ -411,8 +427,14 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
   }
 
   const inp: React.CSSProperties = {
-    border: '1px solid var(--gc-border)', borderRadius: 6, padding: '5px 8px',
-    fontSize: 13, color: 'var(--gc-text-1)', background: 'var(--gc-surface)',
+    border: '1px solid var(--gc-border)', borderRadius: 6,
+    // Per-stop input rows (address, ref #, notes, etc.) scale with
+    // the load modal's --ui-scale just like the top-level form fields
+    // — without this they'd stay the original size while everything
+    // around them shrinks.
+    padding: 'calc(5px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1))',
+    fontSize: 'calc(12.5px * var(--ui-scale, 1))',
+    color: 'var(--gc-text-1)', background: 'var(--gc-surface)',
     outline: 'none', width: '100%',
   };
 

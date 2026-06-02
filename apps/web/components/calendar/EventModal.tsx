@@ -79,7 +79,18 @@ function SmartTimeInput({ value, onChange, placeholder = '8am, 1:30pm', headerCo
     <input type="text" value={raw} onChange={e => setRaw(e.target.value)}
       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
       placeholder={placeholder}
-      style={{ width: 120, minWidth: 120, border: '1px solid var(--gc-border)', borderRadius: 8, padding: '10px 12px', fontSize: 15, color: 'var(--gc-text-1)', outline: 'none', cursor: 'text', transition: 'border-color 150ms', background: 'var(--gc-surface)' }}
+      style={{
+        // Width also tracks --ui-scale so the time pill stays
+        // visually proportional to the date picker next to it.
+        width: 'calc(120px * var(--ui-scale, 1))',
+        minWidth: 'calc(120px * var(--ui-scale, 1))',
+        border: '1px solid var(--gc-border)',
+        borderRadius: 8,
+        padding: 'calc(8.5px * var(--ui-scale, 1)) calc(11px * var(--ui-scale, 1))',
+        fontSize: 'calc(13.5px * var(--ui-scale, 1))',
+        color: 'var(--gc-text-1)', outline: 'none', cursor: 'text',
+        transition: 'border-color 150ms', background: 'var(--gc-surface)',
+      }}
       onFocus={e => { const el = e.currentTarget; requestAnimationFrame(() => el.select()); el.style.borderColor = headerColor; }}
       onBlur={e => { commit(); e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
     />
@@ -87,7 +98,25 @@ function SmartTimeInput({ value, onChange, placeholder = '8am, 1:30pm', headerCo
 }
 
 function inputStyle(): React.CSSProperties {
-  return { border: '1px solid var(--gc-border)', borderRadius: 8, padding: '10px 12px', fontSize: 15, color: 'var(--gc-text-1)', outline: 'none', background: 'var(--gc-surface)', width: '100%', transition: 'border-color 150ms', cursor: 'auto' };
+  // Field sizing follows the surrounding `.ui-scale-scope --ui-scale`
+  // (set by the modal root from Settings → Appearance → Calendar card
+  // text). Base values dropped from 10/12 padding · 15 font to
+  // 8.5/11 padding · 13.5 font so fields read a touch tighter on a
+  // laptop and line up with the modal's new text-base default. Outside
+  // a scoped surface the var falls back to 1 so other callers keep
+  // their original feel.
+  return {
+    border: '1px solid var(--gc-border)',
+    borderRadius: 8,
+    padding: 'calc(8.5px * var(--ui-scale, 1)) calc(11px * var(--ui-scale, 1))',
+    fontSize: 'calc(13.5px * var(--ui-scale, 1))',
+    color: 'var(--gc-text-1)',
+    outline: 'none',
+    background: 'var(--gc-surface)',
+    width: '100%',
+    transition: 'border-color 150ms',
+    cursor: 'auto',
+  };
 }
 
 function CopyLabelBtn({ value }: { value: string }) {
@@ -4436,7 +4465,14 @@ export default function EventModal() {
                   {selectedAsset?.unit ? ` · #${selectedAsset.unit}` : ''}
                   {selectedAsset?.truck ? ` · ${selectedAsset.truck}` : ''}
                 </span>
-                {truckLoc && (
+                {/* Hide the ELD location subtitle when any side panel is
+                    open — Map/Docs/DriverSummary all narrow the header
+                    and the "20.9 mi NW of Holden, UT · 2m ago" line
+                    forced the title block to wrap into two rows. The
+                    truck's live position is already visible in the Map
+                    panel itself; suppressing it here keeps the header
+                    a single row. */}
+                {truckLoc && !showPdfViewer && !showMapPanel && !showDriverSummary && (
                   <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--gc-text-3)' }}>
                     <span style={{ opacity: 0.4 }}>·</span>
                     <MapPin size={10} style={{ flexShrink: 0 }} />
