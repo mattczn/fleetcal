@@ -737,30 +737,42 @@ function UploadedDocsPanel({
   if (docs.length === 0 && invoiceRows.length === 0) {
     // Empty state mirrors the Rate Con tab — centered icon + hint copy
     // + a single primary "+ Add Documents" CTA tinted with the asset's
-    // headerColor. The dashed uploadHeader button is hidden here because
-    // it would duplicate the primary CTA below; once at least one doc
-    // exists the list view restores the header bar (line 752).
+    // headerColor. Once the user picks a file the empty state stays
+    // visible but we mount `uploadHeader` at the top so the kind
+    // picker ("What is this?" + chips) renders — without it the click
+    // on "+ Add Documents" appeared to do nothing because the empty
+    // state had no surface for the post-pick step.
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center" style={{ background: 'var(--gc-bg)' }}>
-        <div className="flex items-center justify-center" style={{ width: 56, height: 56, borderRadius: 14, background: `${headerColor}15`, color: headerColor }}>
-          <FileText size={26} />
+      <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+        {/* Kind picker — only renders when a file is queued. Same
+            JSX `uploadHeader` uses in the list/viewer branches, so
+            the pending-file → choose-kind → upload flow is identical
+            across all three rendering branches. */}
+        {pendingFile && uploadHeader}
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
+          <div className="flex items-center justify-center" style={{ width: 56, height: 56, borderRadius: 14, background: `${headerColor}15`, color: headerColor }}>
+            <FileText size={26} />
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--gc-text-2)' }}>
+            {pendingFile ? 'Choose a document type above to upload' : 'No Documents uploaded for this load yet'}
+          </div>
+          {loadId && !pendingFile && (
+            <button type="button" onClick={() => addFileRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+              style={{ color: 'white', background: headerColor, border: `1px solid ${headerColor}` }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
+              onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+              <Plus size={14} /> Add Documents
+            </button>
+          )}
         </div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--gc-text-2)' }}>
-          No Documents uploaded for this load yet
-        </div>
-        {loadId && (
-          <button type="button" onClick={() => addFileRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
-            style={{ color: 'white', background: headerColor, border: `1px solid ${headerColor}` }}
-            onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
-            onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-            <Plus size={14} /> Add Documents
-          </button>
-        )}
-        {/* The hidden file input that addFileRef triggers lives inside
-            uploadHeader's JSX, which we don't render in the empty state.
-            Mount it directly here so the button has something to click. */}
-        {loadId && (
+        {/* Hidden file input lives at the empty-state root so the
+            centered "+ Add Documents" button has something to click
+            even when uploadHeader (which mounts its own copy) isn't
+            rendered yet. Once a file is picked, this input
+            unmounts and uploadHeader's copy takes over via the same
+            addFileRef. */}
+        {loadId && !pendingFile && (
           <input ref={addFileRef} type="file" accept=".pdf,application/pdf,image/*"
             style={{ display: 'none' }}
             onChange={e => {

@@ -166,21 +166,29 @@ input[type="range"] { accent-color: var(--gc-blue); }
   --ui-scale: 1;
 }
 /* Tailwind text utilities — overridden to be smaller at scale=1.0
- * and to multiply by --ui-scale. */
-.ui-scale-scope .text-xs   { font-size: calc(11px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-sm   { font-size: calc(12.5px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-base { font-size: calc(14px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-lg   { font-size: calc(16px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-xl   { font-size: calc(18px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-2xl  { font-size: calc(22px * var(--ui-scale)) !important; }
+ * and to multiply by --ui-scale. Dropped another ~1px from the first
+ * pass so dense surfaces (load modal especially) read comfortably on
+ * a 13–15" laptop. Big-screen users bump to 1.15 in Settings. */
+.ui-scale-scope .text-xs   { font-size: calc(10.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-sm   { font-size: calc(12px   * var(--ui-scale)) !important; }
+.ui-scale-scope .text-base { font-size: calc(13.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-lg   { font-size: calc(15px   * var(--ui-scale)) !important; }
+.ui-scale-scope .text-xl   { font-size: calc(17px   * var(--ui-scale)) !important; }
+.ui-scale-scope .text-2xl  { font-size: calc(20px   * var(--ui-scale)) !important; }
 /* Common bracket utilities used throughout EventModal / sidebars.
  * Targeted explicitly so `text-[12px]` etc. participate in scaling. */
-.ui-scale-scope .text-\[10px\] { font-size: calc(10px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[11px\] { font-size: calc(11px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[12px\] { font-size: calc(12px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[12\.5px\] { font-size: calc(12.5px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[13px\] { font-size: calc(13px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[14px\] { font-size: calc(14px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[15px\] { font-size: calc(15px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[16px\] { font-size: calc(16px * var(--ui-scale)) !important; }
-.ui-scale-scope .text-\[18px\] { font-size: calc(18px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[10px\]    { font-size: calc(9.5px  * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[11px\]    { font-size: calc(10.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[12px\]    { font-size: calc(11.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[12\.5px\] { font-size: calc(12px   * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[13px\]    { font-size: calc(12.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[14px\]    { font-size: calc(13.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[15px\]    { font-size: calc(14.5px * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[16px\]    { font-size: calc(15px   * var(--ui-scale)) !important; }
+.ui-scale-scope .text-\[18px\]    { font-size: calc(17px   * var(--ui-scale)) !important; }
+/* Variable-driven helper used by DatePicker (and other components
+ * that draw their visual size via inline styles). Multiplies any px
+ * value by --ui-scale via CSS calc(); reference it as
+ *   style={{ fontSize: 'calc(15px * var(--ui-scale, 1))' }}
+ * Inline so DatePicker's trigger button + popover cells scale with
+ * the modal they live inside. */

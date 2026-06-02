@@ -82,13 +82,13 @@ export default function DatePicker({ value, onChange, headerColor, min, required
       const r = btnRef.current.getBoundingClientRect();
       // Flip upward if not enough space below.
       const spaceBelow = window.innerHeight - r.bottom;
-      const popupH = 320; // approx height
+      const popupH = 320 * (Number(getComputedStyle(btnRef.current).getPropertyValue('--ui-scale')) || 1); // approx height, scaled
       const top = spaceBelow < popupH ? r.top - popupH - 6 : r.bottom + 6;
       // Horizontal: prefer left-aligning to the trigger. If that would
       // overflow the right edge of the viewport, right-align to the
       // trigger's right edge instead. Clamp to >= 8px gutter so the
       // popover never sits flush against the window edge.
-      const popupW = 280; // matches the fixed width set on the popover
+      const popupW = 280 * (Number(getComputedStyle(btnRef.current).getPropertyValue('--ui-scale')) || 1); // matches the fixed width set on the popover, scaled
       const gutter = 8;
       let left = r.left;
       if (left + popupW > window.innerWidth - gutter) {
@@ -135,8 +135,14 @@ export default function DatePicker({ value, onChange, headerColor, min, required
           width: '100%',
           border: `1px solid ${open ? headerColor : 'var(--gc-border)'}`,
           borderRadius: 8,
-          padding: '10px 13px',
-          fontSize: 15,
+          // Trigger scales with the ambient --ui-scale (set by any
+          // surrounding `.ui-scale-scope` — e.g. the load modal). The
+          // padding uses the same multiplier so the pill height shrinks
+          // proportionally and doesn't dwarf neighboring inputs. Falls
+          // back to 1 outside a scoped surface so tables/toolbars keep
+          // their original size.
+          padding: 'calc(10px * var(--ui-scale, 1)) calc(13px * var(--ui-scale, 1))',
+          fontSize: 'calc(15px * var(--ui-scale, 1))',
           color: value ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
           background: 'var(--gc-surface)',
           textAlign: 'left',
@@ -163,8 +169,12 @@ export default function DatePicker({ value, onChange, headerColor, min, required
             background: 'var(--gc-surface)',
             borderRadius: 12,
             boxShadow: 'var(--shadow-3)',
-            padding: '14px 12px 12px',
-            width: 280,
+            padding: 'calc(14px * var(--ui-scale, 1)) calc(12px * var(--ui-scale, 1)) calc(12px * var(--ui-scale, 1))',
+            // Popover width scales with --ui-scale so the day grid stays
+            // proportional to the trigger button. position: fixed escapes
+            // overflow clipping but CSS vars inherit through the DOM, so
+            // the value the modal sets still applies here.
+            width: 'calc(280px * var(--ui-scale, 1))',
           }}
         >
           {/* Month nav */}
@@ -176,7 +186,7 @@ export default function DatePicker({ value, onChange, headerColor, min, required
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
               <ChevronLeft size={16} />
             </button>
-            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--gc-text-1)' }}>
+            <span style={{ fontSize: 'calc(14px * var(--ui-scale, 1))', fontWeight: 700, color: 'var(--gc-text-1)' }}>
               {MONTHS[viewMonth]} {viewYear}
             </span>
             <button type="button" onClick={() => goMonth(1)}
@@ -192,7 +202,7 @@ export default function DatePicker({ value, onChange, headerColor, min, required
           <div className="grid grid-cols-7 mb-1">
             {DOW.map(d => (
               <div key={d} className="flex items-center justify-center"
-                style={{ height: 28, fontSize: 11, fontWeight: 700, color: 'var(--gc-text-3)' }}>
+                style={{ height: 'calc(28px * var(--ui-scale, 1))', fontSize: 'calc(11px * var(--ui-scale, 1))', fontWeight: 700, color: 'var(--gc-text-3)' }}>
                 {d}
               </div>
             ))}
@@ -201,7 +211,7 @@ export default function DatePicker({ value, onChange, headerColor, min, required
           {/* Day grid */}
           <div className="grid grid-cols-7 gap-y-0.5">
             {cells.map((day, i) => {
-              if (!day) return <div key={i} style={{ height: 36 }} />;
+              if (!day) return <div key={i} style={{ height: 'calc(36px * var(--ui-scale, 1))' }} />;
               const dStr    = `${viewYear}-${String(viewMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
               const isSel   = dStr === value;
               const isTday  = dStr === today;
@@ -213,8 +223,8 @@ export default function DatePicker({ value, onChange, headerColor, min, required
                   onClick={() => !disabled && pick(day)}
                   className="flex items-center justify-center rounded-full transition-colors mx-auto"
                   style={{
-                    width: 36, height: 36,
-                    fontSize: 13,
+                    width: 'calc(36px * var(--ui-scale, 1))', height: 'calc(36px * var(--ui-scale, 1))',
+                    fontSize: 'calc(13px * var(--ui-scale, 1))',
                     fontWeight: isSel || isTday ? 700 : 400,
                     background: isSel ? headerColor : 'transparent',
                     color: isSel ? 'white' : isTday ? headerColor : disabled ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
