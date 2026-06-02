@@ -441,6 +441,17 @@ export default function CalendarToolbar() {
                       ? { label: 'Deleted',   bg: '#fee2e2', fg: '#991b1b' }
                       : { label: 'Cancelled', bg: '#fef3c7', fg: '#92400e' })
                   : null;
+                // Relay leg badge — search results don't visually
+                // distinguish pickup-leg vs delivery-leg of the same
+                // load, which makes the two rows look like duplicates.
+                // Show the leg as a purple chip (matches the calendar
+                // chip's relay styling: bg #f5f3ff, fg #7c3aed) so the
+                // dispatcher can pick the right leg at a glance.
+                const relayLeg = ev.relayRole === 'pickup'
+                  ? { label: 'Pickup Leg' }
+                  : ev.relayRole === 'delivery'
+                    ? { label: 'Delivery Leg' }
+                    : null;
                 return (
                   <button key={ev.id} onClick={() => handleSelectResult(ev.id, ev.start)}
                     className="w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors"
@@ -456,6 +467,14 @@ export default function CalendarToolbar() {
                         {ev.driverName && <> · {ev.driverName}</>}
                       </div>
                     </div>
+                    {relayLeg && (
+                      <span
+                        className="text-[10px] font-bold uppercase tracking-wider rounded px-1.5 py-0.5 shrink-0 whitespace-nowrap"
+                        style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe', letterSpacing: '0.5px' }}
+                      >
+                        ⇄ {relayLeg.label}
+                      </span>
+                    )}
                     {pill && (
                       <span
                         className="text-[10px] font-bold uppercase tracking-wider rounded px-1.5 py-0.5 shrink-0"
