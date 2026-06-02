@@ -180,6 +180,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // signed URL. Rate-con and doc URLs all expire in ~1h, well past a
   // typical review session.
   const [rateConUrl, setRateConUrl] = useState<string | null>(null);
+  // Selected rate-con for the left-panel viewer.
+  //   null                    → show the canonical rate con (rateConUrl)
+  //   RATE_CON_PRIMARY_ID     → same as null (the canonical), but with an
+  //                             explicit selection highlight in the list
+  //   other id                → a secondary rate-con load_document; left
+  //                             viewer reads its URL via secondaryRateConUrl
+  const [activeRateConId, setActiveRateConId]       = useState<string | null>(null);
+  const [secondaryRateConUrl, setSecondaryRateConUrl] = useState<string | null>(null);
   interface LoadAssets {
     docs:        LoadDocument[];
     urlByDocId:  Map<string, string>;
@@ -230,6 +238,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setDocs([]);
       setActiveDocUrl(null);
       setRateConUrl(null);
+      setSecondaryRateConUrl(null);
+      setActiveRateConId(null);
       setIncludedDocIds(new Set());
       return;
     }
@@ -239,6 +249,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setDocs(assets.docs);
       setActiveDocIdx(0);
       setRateConUrl(assets.rateConUrl);
+      // Reset the secondary rate-con selection — the canonical is the
+      // default until the user picks a different one from the right
+      // sidebar's Rate Confirmations list.
+      setSecondaryRateConUrl(null);
+      setActiveRateConId(null);
       // Default invoice selection — same heuristic as before: prior
       // saved selection wins, else PODs near delivery time.
       // current.end is naive ISO in the org's dispatch zone; interpret
@@ -315,9 +330,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // the cached one. Falls back to a per-doc fetch only if the cache
   // doesn't have it (e.g., a freshly uploaded doc whose URL hasn't
   // been prefetched yet).
+  //
+  // Indexes into nonRateConDocs (defined below — but it's a simple
+  // derived list, so the temporal dead zone is fine inside an effect
+  // that fires on render). Rate cons are handled by the left-panel
+  // viewer via selectRateCon, not the middle viewer.
   useEffect(() => {
-    if (docs.length === 0) { setActiveDocUrl(null); return; }
-    const d = docs[Math.min(activeDocIdx, docs.length - 1)];
+    const list = docs.filter(d => d.kind !== 'rate_con');
+    if (list.length === 0) { setActiveDocUrl(null); return; }
+    const d = list[Math.min(activeDocIdx, list.length - 1)];
     if (!d) { setActiveDocUrl(null); return; }
     const cached = loadId ? docsCacheRef.current.get(loadId) : undefined;
     const cachedUrl = cached?.urlByDocId.get(d.id);
@@ -730,6 +751,64 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     } as unknown as LoadDocument;
     return [virtual, ...docs];
   }, [docs, current?.rateConPdf, current?.loadNum, loadId]);
+
+  // ── Right-sidebar section splits ───────────────────────────────────
+  // Rate Confirmations and Documents render as separate sub-lists in the
+  // right sidebar. Rate Confirmations includes:
+  //   • every load_documents row with kind='rate_con'
+  //   • PLUS a synthetic "canonical" row when loads.rate_con_pdf is set
+  //     but no kind='rate_con' load_document exists (legacy + first-upload
+  //     before the API mirror existed). Same sentinel id reused from
+  //     mergeCandidates above so the merge dialog still picks it up.
+  const rateConDocs = useMemo<LoadDocument[]>(() => {
+    const fromDocs = docs.filter(d => d.kind === 'rate_con');
+    if (fromDocs.length > 0) return fromDocs;
+    if (!current?.rateConPdf) return [];
+    const virtual = {
+      id:         RATE_CON_PRIMARY_ID,
+      loadId:     loadId ?? null,
+      fileName:   `Rate Con${current?.loadNum ? ` — #${current.loadNum}` : ''}`,
+      mimeType:   undefined,
+      sizeBytes:  undefined,
+      kind:       'rate_con',
+      uploadedAt: '',
+    } as unknown as LoadDocument;
+    return [virtual];
+  }, [docs, current?.rateConPdf, current?.loadNum, loadId]);
+  const nonRateConDocs = useMemo<LoadDocument[]>(
+    () => docs.filter(d => d.kind !== 'rate_con'),
+    [docs],
+  );
+
+  // Click handler for a row in the Rate Confirmations section: swap the
+  // left-panel viewer to the selected rate-con. The canonical (virtual)
+  // row falls back to rateConUrl; secondary rows resolve their signed
+  // URL via the existing prefetch cache, fetching fresh only if the
+  // cache hasn't seen them yet.
+  const selectRateCon = (doc: LoadDocument) => {
+    setLeftPanelView('rateCon');
+    setActiveRateConId(doc.id);
+    if (doc.id === RATE_CON_PRIMARY_ID) {
+      setSecondaryRateConUrl(null);
+      return;
+    }
+    const cached = loadId ? docsCacheRef.current.get(loadId) : undefined;
+    const cachedUrl = cached?.urlByDocId.get(doc.id);
+    if (cachedUrl) {
+      setSecondaryRateConUrl(cachedUrl);
+      return;
+    }
+    setSecondaryRateConUrl(null);
+    void getLoadDocumentSignedUrl(doc.id).then(url => {
+      if (!url) return;
+      setSecondaryRateConUrl(url);
+      if (loadId) {
+        const entry = docsCacheRef.current.get(loadId);
+        if (entry) entry.urlByDocId.set(doc.id, url);
+      }
+    });
+  };
+
   const handleMergeSelected = async () => {
     if (!loadId || merging) return;
     const selected = mergeCandidates.filter(d => mergeSelection.has(d.id));
@@ -1251,9 +1330,22 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 </div>
               </div>
               {leftPanelView === 'rateCon'
-                ? (current.rateConPdf
-                    ? <PdfCanvas dataUrl={rateConUrl ?? ''} onRetry={() => loadId && railway.getRateConUrl(loadId).then(({ url }) => setRateConUrl(url))} />
-                    : <NoDocPanel label="No rate-con uploaded for this load." />)
+                ? (() => {
+                    // Left viewer shows whichever rate con the user picked
+                    // from the right sidebar's Rate Confirmations list.
+                    // Defaults to the canonical (loads.rate_con_pdf →
+                    // rateConUrl); secondaryRateConUrl overrides when the
+                    // user clicks a non-canonical kind='rate_con' row.
+                    const url = secondaryRateConUrl ?? rateConUrl ?? '';
+                    const hasAny = current.rateConPdf || rateConDocs.length > 0;
+                    if (!hasAny) {
+                      return <NoDocPanel label="No rate-con uploaded for this load." />;
+                    }
+                    return (
+                      <PdfCanvas dataUrl={url}
+                        onRetry={() => loadId && railway.getRateConUrl(loadId).then(({ url: u }) => setRateConUrl(u))} />
+                    );
+                  })()
                 : <StopsView stops={allStopsForView} />}
               {/* Hidden file input — fired by the Replace/Upload button. */}
               <input ref={rateConInputRef} type="file" accept=".pdf,application/pdf,image/*"
@@ -1278,7 +1370,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               <div className="shrink-0 px-3 py-2 flex items-center justify-between gap-3"
                 style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)', minHeight: 40 }}>
                 {(() => {
-                  const active = docs[Math.min(activeDocIdx, docs.length - 1)];
+                  // Middle viewer only shows non-rate-con docs. Rate cons
+                  // render in the left panel via selectRateCon.
+                  const active = nonRateConDocs[Math.min(activeDocIdx, nonRateConDocs.length - 1)];
                   if (!active) {
                     return (
                       <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
@@ -1289,8 +1383,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const tint = KIND_TINT[active.kind] ?? KIND_TINT.other;
                   // Enumerate same-kind docs as POD 1 / POD 2 for context,
                   // matching the right sidebar list's row labels.
-                  const sameKindCount = docs.filter(x => x.kind === active.kind).length;
-                  const seq           = docs.slice(0, activeDocIdx + 1).filter(x => x.kind === active.kind).length;
+                  const sameKindCount = nonRateConDocs.filter(x => x.kind === active.kind).length;
+                  const seq           = nonRateConDocs.slice(0, activeDocIdx + 1).filter(x => x.kind === active.kind).length;
                   const labelText     = KIND_LABEL[active.kind] ?? active.kind;
                   const kindLabel     = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
                   return (
@@ -1321,8 +1415,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 )}
               </div>
 
-              {docs.length > 0 ? (() => {
-                const active = docs[Math.min(activeDocIdx, docs.length - 1)];
+              {nonRateConDocs.length > 0 ? (() => {
+                const active = nonRateConDocs[Math.min(activeDocIdx, nonRateConDocs.length - 1)];
                 return (
                   <DocViewer
                     url={activeDocUrl ?? ''}
@@ -1504,111 +1598,210 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </div>
             )}
 
-            {/* Doc rows — vertical list. Each row shows: kind chip,
-                filename (truncated), hover-revealed rename/delete, and
-                the per-row "Invoice" toggle on the far right. Clicking
-                the row sets activeDocIdx for the viewer in the middle
-                column. */}
-            <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-1"
+            {/* Two sections — Rate Confirmations + Documents.
+                Rate Confirmations always renders first (closer to the
+                top, mirrors workflow: review rate con, then verify
+                supporting docs). Click a row to view it in the left
+                panel; the Documents list still drives the middle viewer.
+
+                Rate-con rows skip the Invoice toggle — they're always
+                auto-included in the invoice packet by the API
+                (resolvePacketDocsForLoad + resolveRateConPathForLoad).
+
+                The virtual canonical row (id === RATE_CON_PRIMARY_ID)
+                represents loads.rate_con_pdf when no kind='rate_con'
+                load_document exists. It can't be renamed or deleted
+                inline (no real row to mutate), so those affordances
+                are gated on the sentinel. */}
+            <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-2"
               style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-              {docs.length === 0 ? (
-                <div className="text-xs italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
-                  {docsLoading ? 'Loading…' : 'No documents uploaded yet for this load.'}
-                </div>
-              ) : (
-                docs.map((d, i) => {
-                  const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
-                  const active   = i === activeDocIdx;
-                  const included = includedDocIds.has(d.id);
-                  // Same enumeration as the old tab strip — single POD
-                  // stays "POD" but two PODs become "POD 1" / "POD 2".
-                  const sameKindCount = docs.filter(x => x.kind === d.kind).length;
-                  const seq           = docs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
-                  const labelText     = KIND_LABEL[d.kind] ?? d.kind;
-                  const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
-                  return (
-                    <div key={d.id}
-                      className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
-                      style={{
-                        background: active ? tint.bg + '14' : 'transparent',
-                        border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
-                      }}
-                      onClick={() => setActiveDocIdx(i)}
-                      onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                        style={{ background: tint.bg, color: tint.fg }}>
-                        {rowKindLabel}
-                      </span>
-                      {renamingDocId === d.id ? (
-                        <input
-                          autoFocus
-                          value={renameDraft}
-                          disabled={renameSaving}
-                          onClick={e => e.stopPropagation()}
-                          onChange={e => setRenameDraft(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
-                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+              {/* RATE CONFIRMATIONS */}
+              {rateConDocs.length > 0 && (
+                <div>
+                  <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                    style={{ color: 'var(--gc-text-3)' }}>
+                    Rate Confirmations · {rateConDocs.length}
+                  </div>
+                  <div className="space-y-1">
+                    {rateConDocs.map((d, i) => {
+                      const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
+                      const isVirtual = d.id === RATE_CON_PRIMARY_ID;
+                      // The canonical highlights when nothing else is
+                      // explicitly selected (activeRateConId === null),
+                      // matching the default left-viewer state.
+                      const active   = activeRateConId === d.id
+                                     || (activeRateConId === null && isVirtual);
+                      const sameKindCount = rateConDocs.length;
+                      const seq           = i + 1;
+                      const labelText     = KIND_LABEL[d.kind] ?? d.kind;
+                      const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                      return (
+                        <div key={d.id}
+                          className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
+                          style={{
+                            background: active ? tint.bg + '14' : 'transparent',
+                            border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
                           }}
-                          onBlur={() => { if (!renameSaving) void commitRename(); }}
-                          className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
-                          style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
-                        />
-                      ) : (
-                        <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
-                          title={d.fileName}>
-                          {d.fileName}
-                        </span>
-                      )}
-                      {renamingDocId !== d.id && (
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          onClick={() => selectRateCon(d)}
+                          onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                          onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                            style={{ background: tint.bg, color: tint.fg }}>
+                            {rowKindLabel}
+                          </span>
+                          {renamingDocId === d.id ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              disabled={renameSaving}
+                              onClick={e => e.stopPropagation()}
+                              onChange={e => setRenameDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                                if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                              }}
+                              onBlur={() => { if (!renameSaving) void commitRename(); }}
+                              className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
+                              style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                            />
+                          ) : (
+                            <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
+                              title={d.fileName}>
+                              {d.fileName}
+                            </span>
+                          )}
+                          {!isVirtual && renamingDocId !== d.id && (
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
+                                className="rounded-full p-1 transition-colors"
+                                title={`Rename — ${d.fileName}`}
+                                style={{ color: tint.bg, background: 'transparent' }}
+                                onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                <Pencil size={11} />
+                              </button>
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                                className="rounded-full p-1 transition-colors"
+                                title={`Delete — ${d.fileName}`}
+                                style={{ color: '#d93025', background: 'transparent' }}
+                                onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* DOCUMENTS */}
+              <div>
+                <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                  style={{ color: 'var(--gc-text-3)' }}>
+                  Documents · {nonRateConDocs.length}
+                </div>
+                {nonRateConDocs.length === 0 ? (
+                  <div className="text-xs italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
+                    {docsLoading ? 'Loading…' : 'No documents uploaded yet for this load.'}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {nonRateConDocs.map((d, i) => {
+                      const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
+                      const active   = i === activeDocIdx;
+                      const included = includedDocIds.has(d.id);
+                      const sameKindCount = nonRateConDocs.filter(x => x.kind === d.kind).length;
+                      const seq           = nonRateConDocs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
+                      const labelText     = KIND_LABEL[d.kind] ?? d.kind;
+                      const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                      return (
+                        <div key={d.id}
+                          className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
+                          style={{
+                            background: active ? tint.bg + '14' : 'transparent',
+                            border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
+                          }}
+                          onClick={() => setActiveDocIdx(i)}
+                          onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                          onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                            style={{ background: tint.bg, color: tint.fg }}>
+                            {rowKindLabel}
+                          </span>
+                          {renamingDocId === d.id ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              disabled={renameSaving}
+                              onClick={e => e.stopPropagation()}
+                              onChange={e => setRenameDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                                if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                              }}
+                              onBlur={() => { if (!renameSaving) void commitRename(); }}
+                              className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
+                              style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                            />
+                          ) : (
+                            <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
+                              title={d.fileName}>
+                              {d.fileName}
+                            </span>
+                          )}
+                          {renamingDocId !== d.id && (
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
+                                className="rounded-full p-1 transition-colors"
+                                title={`Rename — ${d.fileName}`}
+                                style={{ color: tint.bg, background: 'transparent' }}
+                                onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                <Pencil size={11} />
+                              </button>
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                                className="rounded-full p-1 transition-colors"
+                                title={`Delete — ${d.fileName}`}
+                                style={{ color: '#d93025', background: 'transparent' }}
+                                onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          )}
+                          {/* Per-row include-in-invoice toggle. */}
                           <button type="button"
-                            onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
-                            className="rounded-full p-1 transition-colors"
-                            title={`Rename — ${d.fileName}`}
-                            style={{ color: tint.bg, background: 'transparent' }}
-                            onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
-                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                            <Pencil size={11} />
-                          </button>
-                          <button type="button"
-                            onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                            className="rounded-full p-1 transition-colors"
-                            title={`Delete — ${d.fileName}`}
-                            style={{ color: '#d93025', background: 'transparent' }}
-                            onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                            <Trash2 size={11} />
+                            onClick={e => {
+                              e.stopPropagation();
+                              setIncludedDocIds(prev => {
+                                const next = new Set(prev);
+                                if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+                                return next;
+                              });
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                            style={{
+                              background: included ? '#dcfce7' : 'var(--gc-bg)',
+                              color:      included ? '#166534' : 'var(--gc-text-3)',
+                              border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
+                            }}
+                            title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
+                            {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                            Invoice
                           </button>
                         </div>
-                      )}
-                      {/* Per-row include-in-invoice toggle. stopPropagation
-                          so clicking it doesn't also switch the active
-                          viewer doc. */}
-                      <button type="button"
-                        onClick={e => {
-                          e.stopPropagation();
-                          setIncludedDocIds(prev => {
-                            const next = new Set(prev);
-                            if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
-                            return next;
-                          });
-                        }}
-                        className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
-                        style={{
-                          background: included ? '#dcfce7' : 'var(--gc-bg)',
-                          color:      included ? '#166534' : 'var(--gc-text-3)',
-                          border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
-                        }}
-                        title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
-                        {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
-                        Invoice
-                      </button>
-                    </div>
-                  );
-                })
-              )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Manage documents — opens the merge/convert dialog. Hidden
