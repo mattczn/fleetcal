@@ -4517,11 +4517,11 @@ export default function EventModal() {
             )}
             {eventKind === 'revenue' && stops.length >= 2 && stops.some(s => s.geocodeStatus === 'success') && (
               <button type="button" onClick={() => { setShowMapPanel(v => !v); setShowPdfViewer(false); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap"
                 style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showMapPanel ? `${headerColor}22` : `${headerColor}12` }}
                 onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
                 onMouseLeave={e => (e.currentTarget.style.background = showMapPanel ? `${headerColor}22` : `${headerColor}12`)}>
-                <MapPin size={13} /> {showMapPanel ? 'Hide Map' : 'View Map'}
+                <MapPin size={13} /> {showMapPanel ? 'Hide' : 'Map'}
               </button>
             )}
             {eventKind === 'revenue' && (() => {
@@ -4555,11 +4555,11 @@ export default function EventModal() {
               if (hasAnything) {
                 return (
                   <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab(openTab); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap"
                     style={{ color: headerColor, border: `1px solid ${headerColor}50`, background: showPdfViewer ? `${headerColor}22` : `${headerColor}12` }}
                     onMouseEnter={e => (e.currentTarget.style.background = `${headerColor}22`)}
                     onMouseLeave={e => (e.currentTarget.style.background = showPdfViewer ? `${headerColor}22` : `${headerColor}12`)}>
-                    <Eye size={13} /> {showPdfViewer ? 'Hide Docs' : 'View Docs'}
+                    <Eye size={13} /> {showPdfViewer ? 'Hide' : 'Docs'}
                   </button>
                 );
               }
@@ -4568,11 +4568,11 @@ export default function EventModal() {
               // tab over to Uploaded and add other docs.
               return (
                 <button type="button" onClick={() => { setShowPdfViewer(v => !v); setShowMapPanel(false); setDocsTab('rateCon'); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap"
                   style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}
                   onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-2)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
-                  <Paperclip size={13} /> {showPdfViewer ? 'Hide Docs' : 'Add Docs'}
+                  <Paperclip size={13} /> {showPdfViewer ? 'Hide' : 'Add Docs'}
                 </button>
               );
             })()}
