@@ -1289,7 +1289,26 @@ function InvoiceSummaryModal({
                               )}
                             </div>
                           </Td>
-                          <Td className="tabular-nums">{l.internalLoadId ?? '—'}</Td>
+                          <Td className="tabular-nums">
+                            {/* Show both numbers so the dispatcher can
+                                cross-reference either when talking to the
+                                broker (loadNum from the rate con) or with
+                                accounting / internal notes (the sequential
+                                org-internal #). loadNum on top, internal
+                                muted below; when loadNum is missing the
+                                internal becomes primary so we never show
+                                "— / #10838". */}
+                            {l.loadNum ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span style={{ color: 'var(--gc-text-1)' }}>{l.loadNum}</span>
+                                <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                                  #{l.internalLoadId}
+                                </span>
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--gc-text-1)' }}>#{l.internalLoadId}</span>
+                            )}
+                          </Td>
                           <Td align="right" className="tabular-nums font-semibold">
                             {/* Total billable — what the broker will actually be invoiced. */}
                             <span style={{ color: '#15803d' }}>{
