@@ -97,8 +97,10 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
 // hiding) so they don't show up in the Columns picker on the wrong
 // bucket. Released has no invoice yet, so invoice-specific cols
 // vanish; Invoiced/Paid have sent already, so Send-to vanishes.
+// `view` stays everywhere — Released uses it for a "Docs" peek
+// dialog, the rest open the invoice viewer.
 const COLS_OMITTED_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
-  released: new Set(['invoiceNum', 'issued', 'due', 'view', 'status']),
+  released: new Set(['invoiceNum', 'issued', 'due', 'status']),
   queued:   new Set(['status']),
   invoiced: new Set(['status', 'sendTo']),
   paid:     new Set(['status', 'sendTo']),
@@ -159,6 +161,12 @@ function AccountingPageInner() {
   // Single modal for inspecting an invoice — shows the PDF + actions
   // side-by-side. Opened from the View button on each row.
   const [invoiceModalId,  setInvoiceModalId]  = useState<string | null>(null);
+  // Released-bucket peek: shows what docs would land in the eventual
+  // invoice packet (rate con + POD/BOL/lumper/scale/etc.) so the
+  // dispatcher can spot-check paperwork BEFORE clicking Generate.
+  // Keyed by loadId (not invoiceId — released loads have no invoice
+  // yet). null = closed.
+  const [docsPreviewLoad, setDocsPreviewLoad] = useState<LoadSummary | null>(null);
   const [summaryAction,   setSummaryAction]   = useState<null | 'generate' | 'generateSend'>(null);
   const [batchSendOpen,   setBatchSendOpen]   = useState(false);
   const [batchResendOpen, setBatchResendOpen] = useState(false);
@@ -411,6 +419,32 @@ function AccountingPageInner() {
       },
     });
 
+    // View pinned LEFT (right after flags) — the dispatcher's most-
+    // common action is "open this thing", so the button needs to sit
+    // where the eye lands first. Renders one of two things:
+    //   • Queued/Invoiced/Paid (r.invoice exists)  → View invoice
+    //   • Released (no invoice yet)                → View docs
+    //                                                 (preview what
+    //                                                  goes in the
+    //                                                  packet)
+    all.push({
+      key: 'view', header: '', width: DEFAULT_COL_WIDTHS.view,
+      pinned: 'left', alwaysVisible: true, pickerLabel: 'View invoice / docs',
+      render: r => r.invoice ? (
+        <button onClick={(e) => { e.stopPropagation(); setInvoiceModalId(r.invoice!.id); }}
+          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
+          style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+          title="View invoice — PDF + actions"><Eye size={11} /> View</button>
+      ) : (
+        <button onClick={(e) => { e.stopPropagation(); setDocsPreviewLoad(r.load); }}
+          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
+          style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+          title="Preview the docs that will be attached to the invoice packet">
+          <Eye size={11} /> Docs
+        </button>
+      ),
+    });
+
     all.push({
       key: 'invoiceNum', header: 'Invoice #', width: DEFAULT_COL_WIDTHS.invoiceNum,
       sortable: true,
@@ -646,16 +680,9 @@ function AccountingPageInner() {
         : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
     });
 
-    all.push({
-      key: 'view', header: '', width: DEFAULT_COL_WIDTHS.view,
-      align: 'right', pinned: 'right', alwaysVisible: true, pickerLabel: 'View invoice',
-      render: r => r.invoice ? (
-        <button onClick={(e) => { e.stopPropagation(); setInvoiceModalId(r.invoice!.id); }}
-          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
-          style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-          title="View invoice — PDF + actions"><Eye size={11} /> View</button>
-      ) : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
-    });
+    // View column used to be pinned right; it now lives next to the
+    // flags column (above) so the dispatcher's most-common action
+    // sits where the eye lands first.
 
     // Strip columns that don't apply to the active bucket so the
     // picker doesn't expose useless toggles. e.g. Released has no
@@ -924,6 +951,12 @@ function AccountingPageInner() {
       {invoiceModalId && (
         <InvoiceDetailModal invoiceId={invoiceModalId}
           onClose={() => { setInvoiceModalId(null); void refresh(); }} />
+      )}
+      {docsPreviewLoad && (
+        <LoadDocsPreviewModal
+          load={docsPreviewLoad}
+          onClose={() => setDocsPreviewLoad(null)}
+        />
       )}
       {summaryAction && (
         <InvoiceSummaryModal
@@ -1356,6 +1389,203 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Released-bucket peek dialog. Shows the docs the invoice packet
+ * would carry for THIS load if the dispatcher generated the invoice
+ * right now: the rate confirmation (auto-included when present) plus
+ * every uploaded supporting doc, with a chip marking which ones
+ * the server's packet resolver would actually attach.
+ *
+ * Why this exists: at the Released stage the dispatcher hasn't fired
+ * Generate yet, so opening the invoice modal isn't a thing. This is
+ * the "is the paperwork right?" preview before billing.
+ *
+ * The "included" rules mirror apps/api/src/lib/invoicePacket.ts:
+ *   - Rate con is always in (when loads.rate_con_pdf is set).
+ *   - load.invoiceDocIds (explicit selection) overrides the default;
+ *     anything in that array is included.
+ *   - Otherwise the server picks the NEWEST per-kind among
+ *     PACKET_KINDS_ORDER, so we mirror that selection here.
+ */
+function LoadDocsPreviewModal({ load, onClose }: { load: LoadSummary; onClose: () => void }) {
+  type LoadDoc = import('@fleetcal/types').DocumentSummary;
+  const [docs, setDocs]     = useState<LoadDoc[] | null>(null);
+  const [error, setError]   = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void import('@/lib/db').then(({ fetchLoadDocuments }) =>
+      fetchLoadDocuments(load.loadId, '').then(d => {
+        if (!cancelled) setDocs(d);
+      }).catch(err => {
+        if (!cancelled) setError((err as Error)?.message ?? 'fetch failed');
+      }),
+    );
+    return () => { cancelled = true; };
+  }, [load.loadId]);
+
+  // Mirror apps/api/src/lib/invoicePacket.ts → PACKET_DOC_KINDS_ORDER.
+  // Kept in sync with the server resolver so the UI's "Included" chip
+  // matches what generateInvoice actually attaches.
+  const PACKET_KINDS_ORDER: readonly string[] = ['pod', 'bol', 'lumper', 'scale', 'receipt', 'driver_sheet'];
+
+  // Build the set of doc ids the server would include. Note that
+  // load.invoiceDocIds is the explicit override; when set, the
+  // default per-kind selection is ignored.
+  const includedDocIds = useMemo(() => {
+    if (!docs) return new Set<string>();
+    const explicit = (load as { invoiceDocIds?: string[] }).invoiceDocIds;
+    if (Array.isArray(explicit) && explicit.length > 0) {
+      return new Set(explicit);
+    }
+    // Default rule: newest-per-kind in PACKET_KINDS_ORDER.
+    const byKind = new Map<string, LoadDoc>();
+    // sort newest-first so the first match per kind wins.
+    const sorted = [...docs].sort((a, b) =>
+      (b.uploadedAt ?? '').localeCompare(a.uploadedAt ?? ''),
+    );
+    for (const d of sorted) {
+      if (PACKET_KINDS_ORDER.includes(d.kind) && !byKind.has(d.kind)) {
+        byKind.set(d.kind, d);
+      }
+    }
+    return new Set(Array.from(byKind.values()).map(d => d.id));
+  }, [docs, load]);
+
+  // Kind label + tint — same palette as ReviewQueue / EventModal.
+  const KIND_LABEL: Record<string, string> = {
+    rate_con: 'Rate Con', pod: 'POD', bol: 'BOL', lumper: 'Lumper',
+    scale: 'Scale', receipt: 'Receipt', driver_sheet: 'Driver Sheet',
+    invoice: 'Invoice', other: 'Other',
+  };
+  const KIND_TINT: Record<string, { bg: string; fg: string }> = {
+    rate_con: { bg: '#f5f3ff', fg: '#7c3aed' },
+    pod:      { bg: '#dcfce7', fg: '#166534' },
+    bol:      { bg: '#fef3c7', fg: '#854d0e' },
+    lumper:   { bg: '#fce7f3', fg: '#9f1239' },
+    scale:    { bg: '#dbeafe', fg: '#1e40af' },
+    receipt:  { bg: '#fee2e2', fg: '#991b1b' },
+    driver_sheet: { bg: '#fed7aa', fg: '#9a3412' },
+    other:    { bg: 'var(--gc-bg)', fg: 'var(--gc-text-3)' },
+  };
+  const tintFor = (k: string) => KIND_TINT[k] ?? KIND_TINT.other;
+
+  const hasRateCon = !!load.rateConPdf;
+  // Suppress duplicate rate_con rows — when a load has both
+  // loads.rate_con_pdf AND a kind='rate_con' load_documents row, we'd
+  // otherwise show the same doc twice (once as the canonical, once
+  // as a row).
+  const nonRateConDocs = (docs ?? []).filter(d => d.kind !== 'rate_con');
+  const includedCount =
+    (hasRateCon ? 1 : 0) + nonRateConDocs.filter(d => includedDocIds.has(d.id)).length;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.45)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="rounded-2xl overflow-hidden flex flex-col"
+        style={{ width: 540, maxWidth: '94vw', maxHeight: '88vh', background: 'var(--gc-surface)', boxShadow: '0 16px 40px rgba(0,0,0,0.25)' }}
+        onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 flex items-center gap-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+          <Eye size={16} style={{ color: '#1a73e8' }} />
+          <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
+            Invoice packet preview
+            {load.loadNum && <span className="ml-1" style={{ color: 'var(--gc-text-3)' }}>· #{load.loadNum}</span>}
+          </div>
+          <button onClick={onClose} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)]">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="px-5 py-4 flex-1 overflow-y-auto">
+          {!docs && !error && (
+            <div className="text-[12.5px] flex items-center gap-2" style={{ color: 'var(--gc-text-3)' }}>
+              <Loader2 size={13} className="animate-spin" /> Loading docs…
+            </div>
+          )}
+          {error && (
+            <div className="text-[12.5px] flex items-start gap-2 px-3 py-2 rounded-lg"
+              style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
+              <AlertCircle size={13} style={{ marginTop: 1 }} /> {error}
+            </div>
+          )}
+          {docs && !error && (
+            <>
+              <div className="text-[11px] font-bold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Will be attached · {includedCount}
+              </div>
+              <ul className="space-y-1">
+                {hasRateCon && (() => {
+                  const tint = tintFor('rate_con');
+                  return (
+                    <li className="flex items-center gap-2 px-2 py-2 rounded-lg"
+                      style={{ background: 'rgba(26,115,232,0.04)' }}>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: tint.bg, color: tint.fg }}>
+                        Rate Con
+                      </span>
+                      <span className="flex-1 truncate text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                        Rate confirmation
+                      </span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider shrink-0"
+                        style={{ color: '#166534' }}>
+                        Included
+                      </span>
+                    </li>
+                  );
+                })()}
+                {nonRateConDocs.map(d => {
+                  const tint = tintFor(d.kind);
+                  const included = includedDocIds.has(d.id);
+                  return (
+                    <li key={d.id} className="flex items-center gap-2 px-2 py-2 rounded-lg"
+                      style={{ background: included ? 'rgba(26,115,232,0.04)' : 'transparent' }}>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: tint.bg, color: tint.fg }}>
+                        {KIND_LABEL[d.kind] ?? d.kind}
+                      </span>
+                      <span className="flex-1 truncate text-[12.5px]"
+                        style={{ color: included ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}
+                        title={d.fileName}>
+                        {d.fileName}
+                      </span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider shrink-0"
+                        style={{ color: included ? '#166534' : 'var(--gc-text-3)' }}>
+                        {included ? 'Included' : 'Skipped'}
+                      </span>
+                    </li>
+                  );
+                })}
+                {!hasRateCon && nonRateConDocs.length === 0 && (
+                  <li className="text-[12.5px] italic" style={{ color: 'var(--gc-text-3)' }}>
+                    No docs on this load yet.
+                  </li>
+                )}
+              </ul>
+              {(!hasRateCon || includedCount === 0) && (
+                <div className="text-[11.5px] mt-3 px-3 py-2 rounded-lg"
+                  style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}>
+                  {!hasRateCon
+                    ? 'No rate confirmation on file. Upload one from the load modal before generating the invoice.'
+                    : 'No supporting docs would land in the packet — brokers usually expect at least a POD.'}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div className="px-5 py-3 flex justify-end shrink-0"
+          style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+          <button onClick={onClose}
+            className="text-[12px] font-semibold px-4 py-1.5 rounded-lg"
+            style={{ background: '#1a73e8', color: '#fff' }}>
+            Done
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
