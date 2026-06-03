@@ -911,8 +911,15 @@ function AccountingPageInner() {
       {/* Sibling modals */}
       <EventModal />
       {brokerProfileId && (
+        // No refresh() on close — the modal mutates customers via the
+        // calendar store, and our row cells read the live customer from
+        // that store, so a customer rename / email change re-renders
+        // the right cells automatically without a server round-trip.
+        // Refetching loads + invoices was flashing the whole table for
+        // no data delta. The toolbar's Refresh button still works for
+        // explicit reload.
         <BrokerProfileModal initialBrokerId={brokerProfileId}
-          onClose={() => { setBrokerProfileId(null); void refresh(); }} />
+          onClose={() => setBrokerProfileId(null)} />
       )}
       {invoiceModalId && (
         <InvoiceDetailModal invoiceId={invoiceModalId}
