@@ -1846,8 +1846,17 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   list above before firing. Verb flips by activeInvoice:
                     • no active invoice  → "Generate invoice"
                     • active draft       → "Regenerate invoice"
-                    • sent / paid        → disabled with explainer */}
-              {(() => {
+                    • sent / paid        → disabled with explainer
+
+                  Hidden entirely while billing_status is still 'pending'
+                  — invoice generation is a post-release action. Surfacing
+                  it during review encouraged people to generate before
+                  the load was verified, which then required a void +
+                  regenerate cycle when accessorials or notes changed in
+                  the final review pass. The Release CTA below is the
+                  only path forward from 'pending'; once released, this
+                  block lights up. */}
+              {current.billingStatus !== 'pending' && (() => {
                 const hasDraft     = activeInvoice?.status === 'draft';
                 const hasNonDraft  = activeInvoice && activeInvoice.status !== 'draft';
                 const label =
@@ -1873,7 +1882,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   </button>
                 );
               })()}
-              {invoiceError && (
+              {current.billingStatus !== 'pending' && invoiceError && (
                 <div className="text-[11px] px-2 py-1.5 rounded" style={{ color: '#b71c1c', background: '#fce8e6', border: '1px solid #fcd2cf' }}>
                   {invoiceError}
                 </div>
