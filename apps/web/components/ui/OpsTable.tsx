@@ -1310,14 +1310,6 @@ function ColumnPickerChip<T>({
             return (
               <div
                 key={c.key}
-                draggable={dragEnabled}
-                onDragStart={(e) => {
-                  if (!dragEnabled) return;
-                  setDragKey(c.key);
-                  // Required for Firefox to actually start the drag.
-                  e.dataTransfer.effectAllowed = 'move';
-                  e.dataTransfer.setData('text/plain', c.key);
-                }}
                 onDragOver={(e) => {
                   if (!dragEnabled || !dragKey || dragKey === c.key) return;
                   // Vertical midpoint of THIS row decides whether the
@@ -1347,11 +1339,6 @@ function ColumnPickerChip<T>({
                   setDragKey(null);
                   setOverIdx(null);
                 }}
-                onDragEnd={() => {
-                  // Catch-all so a drop outside any row clears state.
-                  setDragKey(null);
-                  setOverIdx(null);
-                }}
                 className="flex items-center gap-2 transition-colors"
                 style={{
                   position:   'relative',
@@ -1378,14 +1365,39 @@ function ColumnPickerChip<T>({
                   }} />
                 )}
                 {dragEnabled && (
+                  // The grip is the ONLY draggable element in the row.
+                  // Putting draggable on the whole row caused inner
+                  // interactive children (the visibility-toggle button,
+                  // the checkbox input) to swallow mousedown without
+                  // initiating the parent's drag, so the feature looked
+                  // broken everywhere except a precise grip-pixel click.
+                  // Scoping draggable to the grip makes the affordance
+                  // explicit AND lets the rest of the row handle clicks
+                  // normally for the visibility toggle.
                   <span
+                    draggable
+                    onDragStart={(e) => {
+                      setDragKey(c.key);
+                      // effectAllowed + setData are both required for
+                      // Firefox to actually start the drag.
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', c.key);
+                    }}
+                    onDragEnd={() => {
+                      // Catch-all so a drop outside any row clears state.
+                      setDragKey(null);
+                      setOverIdx(null);
+                    }}
                     aria-label={`Drag to reorder ${c.pickerLabel ?? c.header}`}
                     title="Drag to reorder"
                     className="flex items-center justify-center shrink-0"
                     style={{
                       width: 16, height: 22, marginLeft: -4,
                       color: 'var(--gc-text-3)',
-                      cursor: 'grab',
+                      cursor: isDragging ? 'grabbing' : 'grab',
+                      // Prevent default text-selection of the grip
+                      // glyph while the user is mid-drag.
+                      userSelect: 'none',
                     }}>
                     <GripVertical size={13} />
                   </span>
