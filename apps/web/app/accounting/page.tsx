@@ -222,6 +222,20 @@ function AccountingPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoaded, isSignedIn]);
 
+  // Re-sync the table whenever a load is edited via EventModal anywhere
+  // in the app. The store bumps loadEditTick after each successful
+  // railway.updateLoad; without this, picking a customer in the modal
+  // and saving would leave the accounting row showing the stale broker
+  // text + the wrong findCustomerForLoad fallback.
+  const loadEditTick = useCalendarStore(s => s.loadEditTick);
+  useEffect(() => {
+    if (!authLoaded || !isSignedIn) return;
+    // Skip the initial render — the mount-effect above already fetched.
+    if (loadEditTick === 0) return;
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadEditTick]);
+
   // ── Build rows per bucket ───────────────────────────────────────────
   //
   // A row marries a LoadSummary with its active invoice (when one

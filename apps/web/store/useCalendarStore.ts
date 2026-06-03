@@ -478,6 +478,13 @@ interface CalendarStore extends ModalState {
    *  load" banner. Call this before a direct API write that bypasses a
    *  store action (e.g. document uploads via railway.uploadLoadDocument). */
   markLoadSelfWrite: (loadId: string) => void;
+  /** Monotonic counter, incremented after every successful load-touching
+   *  store write (updateEvent → railway.updateLoad). Pages that hold
+   *  their own load snapshot (accounting, closeout, timeline) can
+   *  subscribe to this and refetch when it changes — keeps them in sync
+   *  with edits made via EventModal/calendar without prop-drilling an
+   *  onSaved callback through every mount point. */
+  loadEditTick: number;
 }
 
 export const useCalendarStore = create<CalendarStore>()(
@@ -1462,8 +1469,17 @@ export const useCalendarStore = create<CalendarStore>()(
     if ('stops' in updates && updates.stops) {
       promises.push(railway.replaceStops(id, { stops: updates.stops }));
     }
+    const wroteLoad = Object.keys(loadUpdates).length > 0;
     Promise.all(promises)
       .then(() => {
+        // Tell consumer pages (accounting, closeout, timeline) that a
+        // load mutation just landed so they refresh their cached load
+        // snapshots. Skip when only event-level fields changed — those
+        // pages don't show event details and a refresh would just
+        // flash the table.
+        if (wroteLoad) {
+          set({ loadEditTick: get().loadEditTick + 1 });
+        }
         const newDriverId = resolved.driverId;
         if (newDriverId && newDriverId !== prevDriverId) {
           // Last-minute heads-up: if pickup is <6h away, fire an
@@ -2123,6 +2139,12 @@ export const useCalendarStore = create<CalendarStore>()(
   setBatchParseState: (progress, total) => set({ batchParseProgress: progress, batchParseTotal: total }),
   setBatchMinimized:  (v) => set({ batchMinimized: v }),
   requestBatchCancel: () => set({ batchCancelRequested: true, batchParseTotal: 0, batchParseProgress: 0 }),
+
+  // Monotonic counter bumped by updateEvent after every successful
+  // railway.updateLoad. Consumer pages that hold their own load
+  // snapshot subscribe to this and refetch on change. See type comment
+  // above for rationale.
+  loadEditTick: 0,
 
   // ── Modal ─────────────────────────────────────────────────────────────────
   modalOpen:      false,
