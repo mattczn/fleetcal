@@ -392,6 +392,12 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const { updateCustomer } = useCalendarStore();
   const tz = useCalendarStore(s => s.calendarTimezone);
 
+  // Long name = the canonical company name shown in the modal header
+  // and used by the customer-matching code throughout the app.
+  // Editable here because brokers occasionally change branding (typo
+  // fixes, mergers, "LLC" suffix cleanups) and the only path to fix
+  // them used to be a DB write.
+  const [name,                setName]                = useState(broker.name                ?? '');
   const [shortName,           setShortName]           = useState(broker.shortName           ?? '');
   const [mcNum,               setMcNum]               = useState(broker.mcNum               ?? '');
   // Contacts — list of named reps with phone + email. Falls back to
@@ -440,6 +446,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [showAllUpcoming,  setShowAllUpcoming]  = useState(false);
 
   useEffect(() => {
+    setName(broker.name ?? '');
     setShortName(broker.shortName ?? '');
     setMcNum(broker.mcNum ?? '');
     setContacts(seedContacts(broker));
@@ -466,6 +473,10 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       phone: (c.phone ?? '').trim() || undefined,
     })));
   const dirty =
+    // Long name dirty-check uses trim() but ignores the empty case —
+    // a blank name is invalid and we surface that as a save-blocker
+    // separately, not as "clean state".
+    name.trim()                !== (broker.name                ?? '').trim() ||
     shortName.trim()           !== (broker.shortName           ?? '') ||
     mcNum.trim()               !== (broker.mcNum               ?? '') ||
     normalizeContacts(contacts) !== normalizeContacts(seedContacts(broker)) ||
@@ -516,6 +527,12 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   useImperativeHandle(ref, () => ({
     isDirty: () => dirty,
     save: () => updateCustomer(broker.id, {
+      // Drop a blank name into the API — server validates name is
+      // required and rejects empties, but guard here too so a typo
+      // can't accidentally blank the canonical record (the field is
+      // saved by the modal's autosave on close + an invalid empty
+      // would surface as a confusing 500 to the user).
+      name:                name.trim() || broker.name,
       shortName:           shortName.trim()           || undefined,
       mcNum:               mcNum.trim()               || undefined,
       // Strip empty contacts (all three fields blank) and trim each
@@ -539,6 +556,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       invoiceInstructions: invoiceInstructions.trim() || undefined,
     }),
     discard: () => {
+      setName(broker.name ?? '');
       setShortName(broker.shortName ?? '');
       setMcNum(broker.mcNum ?? '');
       setContacts(seedContacts(broker));
@@ -549,7 +567,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setInvoicePortal(broker.invoicePortal ?? '');
       setInvoiceInstructions(broker.invoiceInstructions ?? '');
     },
-  }), [shortName, mcNum, contacts, notes, parseHints, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
+  }), [name, shortName, mcNum, contacts, notes, parseHints, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -584,14 +602,19 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   return (
     <div className="px-7 py-6">
 
-      {/* Avatar + name */}
+      {/* Avatar + name. Heading reflects the local `name` state so
+          the edit field below mirrors live as the user types — the
+          customer record header doesn't drift while the form is
+          dirty. */}
       <div className="flex items-center gap-4 mb-6">
         <div className="w-14 h-14 rounded-full shrink-0 flex items-center justify-center text-lg font-bold text-white"
           style={{ background: ACCENT }}>
-          {brokerInitials(broker.name)}
+          {brokerInitials(name || broker.name)}
         </div>
-        <div>
-          <div className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>{broker.name}</div>
+        <div className="min-w-0">
+          <div className="text-lg font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+            {name.trim() || broker.name}
+          </div>
           {broker.mcNum && (
             <div className="text-xs mt-0.5 flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
               <Hash size={10} /> MC {broker.mcNum}
@@ -613,6 +636,22 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       {/* Details form */}
       <div className="mb-6">
         <SectionLabel>Details</SectionLabel>
+        {/* Full Name spans the row above Short Name + MC Number so
+            it reads as the primary identifier (which it is — every
+            customer-matching path in the app keys off this string). */}
+        <div className="mb-3">
+          <PField label="Full Name" icon={<Building2 size={11} />}>
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="Full company name" style={P_INPUT}
+              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
+          </PField>
+          {!name.trim() && (
+            <div className="text-[11px] mt-1" style={{ color: '#d93025' }}>
+              Full name can't be blank.
+            </div>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <PField label="Short Name" icon={<Hash size={11} />}>
             <input type="text" value={shortName} onChange={e => setShortName(e.target.value)}
