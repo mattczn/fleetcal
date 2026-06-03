@@ -649,6 +649,33 @@ export interface UpdateCustomerRequest {
 }
 export interface UpdateCustomerResponse { customer: Customer; }
 
+// ── POST /v1/customers/:id/refresh-invoicing-from-ratecon ───────────────
+//
+// Re-runs the rate-con pass-1 broker-harvest prompt against the most
+// recent load on file for this customer and returns the extracted
+// invoicing fields. The endpoint does NOT auto-write to the customer —
+// the UI pre-fills the BrokerProfileModal form so the user can review
+// and Save (the existing PATCH /v1/customers/:id flow commits).
+//
+// `parsed` is undefined when the customer has no loads with a rate
+// con yet (404 instead). All four parsed fields are optional because
+// Claude returns empty strings for unknown values; the UI surfaces
+// "(no value)" rather than blanking what's already saved.
+
+export interface RefreshCustomerInvoicingResponse {
+  parsed: {
+    invoiceMethod?:       string;
+    invoiceEmail?:        string;
+    invoicePortal?:       string;
+    invoiceInstructions?: string;
+  };
+  /** Load whose rate con was used (newest with a non-null rate_con_pdf). */
+  sourceLoadId:    string;
+  sourceLoadNum?:  string;
+  /** ISO 8601 timestamp the parse ran. */
+  parsedAt:        string;
+}
+
 // ── /v1/trailers ─────────────────────────────────────────────────────────
 
 export interface ListTrailersResponse { trailers: Trailer[]; }

@@ -4,6 +4,8 @@
  */
 
 import { Hono } from "hono";
+import Anthropic from "@anthropic-ai/sdk";
+import type { DocumentBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
 import {
   type Customer,
   type ListCustomersResponse,
@@ -11,10 +13,13 @@ import {
   type CreateCustomerResponse,
   type UpdateCustomerRequest,
   type UpdateCustomerResponse,
+  type RefreshCustomerInvoicingResponse,
   type ApiErrorResponse,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { env } from "../lib/env.js";
+import { bucketReadOrder } from "../lib/docBuckets.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -184,6 +189,192 @@ customers.delete("/:id", requireCapability("customers.delete"), async (c) => {
     return c.json({ error: "delete_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
   return c.body(null, 204);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/customers/:id/refresh-invoicing-from-ratecon
+//
+// Re-runs the rate-con broker-harvest prompt against this customer's
+// most recent rate confirmation, returning the four invoicing fields
+// (method/email/portal/instructions) for the UI to pre-fill. The UI
+// handles the actual write via PATCH /v1/customers/:id once the user
+// reviews + clicks Save.
+//
+// The prompt below is intentionally inlined — apps/web/lib/prompt.ts
+// has the canonical copy that the upload flow uses. They MUST stay in
+// sync: the whole point of this endpoint is to surface the same
+// invoicing extraction the post-upload AI parse already produces.
+// When that prompt changes (new field, tweaked phrasing), update both.
+// ─────────────────────────────────────────────────────────────────────────
+
+const ANTHROPIC_CLIENT = new Anthropic({ apiKey: env.anthropicApiKey });
+// Haiku is plenty for pass-1 invoicing harvest — small JSON, low risk
+// of hallucination, and the prompt is short. Matches the model the
+// rate-con upload flow uses.
+const HARVEST_MODEL = "claude-haiku-4-5-20251001";
+
+/** KEEP IN SYNC with apps/web/lib/prompt.ts → buildBrokerHarvestPrompt.
+ *  The fields returned drive both the broker-profile pre-fill on
+ *  upload AND this on-demand refresh, so they need to extract the
+ *  same things. */
+function buildBrokerHarvestPrompt(timezone: string): string {
+  return `You are the first of a two-pass rate-confirmation parser. This pass extracts ONLY the broker/customer profile so the second pass can apply broker-specific rules.
+
+Return a single JSON object with this exact shape — no markdown, no explanation. Use empty strings for fields not on the document; do not omit keys.
+
+{
+  "broker": {
+    "name":                "<canonical broker / customer / shipper company name as it appears>",
+    "contactName":         "<dispatcher or rep name on the rate con>",
+    "contactEmail":        "<dispatcher / billing contact email>",
+    "contactPhone":        "<dispatcher phone, digits + format as on the doc>",
+    "invoiceMethod":       "<'email' | 'portal' | '' — how this broker wants invoices submitted. 'portal' if any online billing system is named (TriumphPay, RMIS, McLeod, MyCarrierPortal, broker's own portal, etc.). 'email' if invoices go to a specific AP/billing email. Empty string if unclear.>",
+    "invoiceEmail":        "<AP / billing email when invoiceMethod is 'email', otherwise empty string>",
+    "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal', e.g. 'TriumphPay (https://app.triumphpay.com)'. Otherwise empty string.>",
+    "invoiceInstructions": "<everything else billing-relevant that doesn't fit above: payment terms (net 30, quickpay rates), required documents (BOL/POD/scale tickets/lumper receipts), factor preferences, special PO numbers needed on the invoice. 1-3 short bulleted lines. Empty if nothing else to add.>"
+  },
+  "docType": "<rate_con | amendment | revised | other>"
+}
+
+The current timezone is ${timezone}.`;
+}
+
+function extractJson(text: string): Record<string, unknown> {
+  const match = text.match(/\{[\s\S]*\}/);
+  return JSON.parse(match ? match[0] : text);
+}
+
+customers.post("/:id/refresh-invoicing-from-ratecon", requireCapability("customers.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const customerId = c.req.param("id");
+
+  // Sanity-check the customer belongs to this org. No content needed
+  // from the row — the 404 is the only thing that matters here.
+  const { data: cust, error: custErr } = await supabase
+    .from("customers")
+    .select("id")
+    .eq("id", customerId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (custErr) {
+    console.error("[POST /v1/customers/:id/refresh-invoicing-from-ratecon] customer read:", custErr);
+    return c.json({ error: "fetch_failed", detail: custErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!cust) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  // Most recent load with a rate con. The mirror in
+  // POST /v1/loads/:id/documents keeps loads.rate_con_pdf pointed at
+  // the canonical storage path even for legacy load_documents rows.
+  // We don't fall back to load_documents here — if the mirror is
+  // missing, the load is too old to bother with for this on-demand
+  // refresh. Order by created_at DESC so a recently-updated billing
+  // template surfaces first.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: loads, error: loadErr } = await supabase
+    .from("loads")
+    .select("id, load_num, rate_con_pdf")
+    .eq("org_id", orgId)
+    .eq("customer_id", customerId)
+    .not("rate_con_pdf", "is", null)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (loadErr) {
+    console.error("[POST /v1/customers/:id/refresh-invoicing-from-ratecon] load lookup:", loadErr);
+    return c.json({ error: "fetch_failed", detail: loadErr.message } satisfies ApiErrorResponse, 500);
+  }
+  const row = (loads ?? [])[0] as { id: string; load_num: string | null; rate_con_pdf: string } | undefined;
+  if (!row?.rate_con_pdf) {
+    return c.json({ error: "no_rate_con", detail: "no_rate_con_on_file" } satisfies ApiErrorResponse, 404);
+  }
+
+  // Download the bytes. Rate cons live in the rate-cons bucket
+  // post-Phase 3.1 split, with legacy rows still possibly in
+  // load-documents — try the canonical bucket first.
+  let pdfBytes: Uint8Array | null = null;
+  for (const bucket of bucketReadOrder("rate_con")) {
+    const { data: blob, error: dlErr } = await supabase.storage
+      .from(bucket)
+      .download(row.rate_con_pdf);
+    if (blob && !dlErr) {
+      pdfBytes = new Uint8Array(await blob.arrayBuffer());
+      break;
+    }
+  }
+  if (!pdfBytes) {
+    // The mirror points at a path neither bucket can serve. Could be a
+    // legacy base64 data URL stored before the storage migration —
+    // surface a friendly error rather than try to handle that edge.
+    return c.json({ error: "rate_con_unreadable", detail: "could_not_download_pdf" } satisfies ApiErrorResponse, 500);
+  }
+
+  // base64 for the Anthropic document block.
+  const base64 = Buffer.from(pdfBytes).toString("base64");
+
+  // Timezone choice is mostly cosmetic for this prompt — the four
+  // invoicing fields don't reference dates. Mountain Time is the
+  // common-case default for the existing FleetCal users and matches
+  // the web parse-ratecon route's default.
+  const timezone = "Mountain Time (America/Denver)";
+
+  type HarvestResult = {
+    broker?: {
+      invoiceMethod?:       string;
+      invoiceEmail?:        string;
+      invoicePortal?:       string;
+      invoiceInstructions?: string;
+    };
+  };
+
+  let parsed: HarvestResult;
+  try {
+    const docBlock: DocumentBlockParam = {
+      type:   "document",
+      source: { type: "base64", media_type: "application/pdf", data: base64 },
+    };
+    const textBlock: TextBlockParam = { type: "text", text: buildBrokerHarvestPrompt(timezone) };
+    const content: ContentBlockParam[] = [docBlock, textBlock];
+    const response = await ANTHROPIC_CLIENT.messages.create({
+      model:      HARVEST_MODEL,
+      max_tokens: 512,
+      messages:   [{ role: "user", content }],
+    });
+    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+    parsed = extractJson(text) as HarvestResult;
+  } catch (err) {
+    console.error("[POST /v1/customers/:id/refresh-invoicing-from-ratecon] claude failed:", err);
+    return c.json({
+      error:  "parse_failed",
+      detail: err instanceof Error ? err.message : "unknown",
+    } satisfies ApiErrorResponse, 500);
+  }
+
+  const broker = parsed.broker ?? {};
+  // Trim empty strings to undefined so the UI's "didn't find this" UX
+  // can distinguish "Claude saw nothing" from "Claude said exactly
+  // this empty string".
+  const clean = (s: string | undefined): string | undefined => {
+    const t = (s ?? "").trim();
+    return t ? t : undefined;
+  };
+  // Normalize invoiceMethod — Claude can return "email" / "portal" /
+  // "" / sometimes other strings if it's confused. Anything outside
+  // the two valid values gets dropped.
+  const rawMethod = clean(broker.invoiceMethod)?.toLowerCase();
+  const invoiceMethod = rawMethod === "email" || rawMethod === "portal" ? rawMethod : undefined;
+
+  const res: RefreshCustomerInvoicingResponse = {
+    parsed: {
+      invoiceMethod,
+      invoiceEmail:        clean(broker.invoiceEmail),
+      invoicePortal:       clean(broker.invoicePortal),
+      invoiceInstructions: clean(broker.invoiceInstructions),
+    },
+    sourceLoadId:   row.id,
+    sourceLoadNum:  row.load_num ?? undefined,
+    parsedAt:       new Date().toISOString(),
+  };
+  return c.json(res);
 });
 
 export default customers;

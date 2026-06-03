@@ -6,7 +6,9 @@ import {
   TrendingUp, Package, Clock, CheckCircle2, Search,
   ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft,
   Truck, Calendar, DollarSign, ExternalLink, Plus, Trash2,
+  Sparkles, Loader2, AlertCircle,
 } from 'lucide-react';
+import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { fetchBrokerLoads } from '@/lib/db';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
@@ -423,6 +425,13 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [invoiceEmail,        setInvoiceEmail]        = useState(broker.invoiceEmail        ?? '');
   const [invoicePortal,       setInvoicePortal]       = useState(broker.invoicePortal       ?? '');
   const [invoiceInstructions, setInvoiceInstructions] = useState(broker.invoiceInstructions ?? '');
+  // "Refresh from latest rate con" button — kicks off a server-side
+  // re-parse of this customer's most recent rate confirmation and
+  // pre-fills the four invoicing fields. Doesn't auto-save; user
+  // reviews then hits the modal's normal Save.
+  const [refreshing,        setRefreshing]        = useState(false);
+  const [refreshError,      setRefreshError]      = useState<string | null>(null);
+  const [refreshedFromLoad, setRefreshedFromLoad] = useState<{ id: string; loadNum?: string } | null>(null);
 
   const [search,           setSearch]           = useState('');
   const [sortField,        setSortField]        = useState<SortField>('date');
@@ -440,6 +449,8 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setInvoiceEmail(broker.invoiceEmail ?? '');
     setInvoicePortal(broker.invoicePortal ?? '');
     setInvoiceInstructions(broker.invoiceInstructions ?? '');
+    setRefreshError(null);
+    setRefreshedFromLoad(null);
     setSearch('');
     setShowAllCompleted(false);
     setShowAllUpcoming(false);
@@ -466,6 +477,41 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     invoiceInstructions.trim() !== (broker.invoiceInstructions ?? '');
 
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+
+  /** Pre-fill the four invoicing form fields from the server-side
+   *  re-parse of this customer's most recent rate confirmation. We
+   *  intentionally don't auto-commit — the user reviews the values
+   *  and the modal's existing Save (PATCH /v1/customers/:id) writes
+   *  them. An empty parsed field leaves the existing form value alone
+   *  so users don't accidentally lose what's already saved. */
+  const handleRefreshFromRateCon = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    setRefreshedFromLoad(null);
+    try {
+      const res = await railway.refreshCustomerInvoicingFromRateCon(broker.id);
+      const p = res.parsed;
+      if (p.invoiceMethod === 'email' || p.invoiceMethod === 'portal') {
+        setInvoiceMethod(p.invoiceMethod);
+      }
+      if (p.invoiceEmail)        setInvoiceEmail(p.invoiceEmail);
+      if (p.invoicePortal)       setInvoicePortal(p.invoicePortal);
+      if (p.invoiceInstructions) setInvoiceInstructions(p.invoiceInstructions);
+      setRefreshedFromLoad({ id: res.sourceLoadId, loadNum: res.sourceLoadNum });
+    } catch (err) {
+      const msg = (err as Error)?.message ?? '';
+      if (/no_rate_con/i.test(msg)) {
+        setRefreshError('No rate con on file for this customer yet.');
+      } else if (/rate_con_unreadable/i.test(msg)) {
+        setRefreshError("Couldn't read the latest rate con — it may be a legacy format. Re-upload it.");
+      } else {
+        setRefreshError(`Refresh failed: ${msg || 'unknown'}`);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [broker.id, refreshing]);
 
   useImperativeHandle(ref, () => ({
     isDirty: () => dirty,
@@ -699,9 +745,47 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </PField>
         </div>
         <div className="mt-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
-            <FileText size={11} /> Invoice routing
+          <div className="flex items-center justify-between mb-1.5 gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
+              <FileText size={11} /> Invoice routing
+            </div>
+            {/* Re-runs the rate-con broker-harvest pass on the customer's
+                most recent rate con and pre-fills the four invoicing
+                fields. Doesn't auto-save — user reviews + hits the
+                modal's normal Save. */}
+            <button type="button"
+              onClick={() => void handleRefreshFromRateCon()}
+              disabled={refreshing}
+              className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors disabled:opacity-60"
+              style={{
+                color:      ACCENT,
+                background: `${ACCENT}0d`,
+                border:     `1px solid ${ACCENT}40`,
+                cursor:     refreshing ? 'wait' : 'pointer',
+              }}
+              title="Re-parse this customer's most recent rate con for invoicing instructions">
+              {refreshing
+                ? <Loader2 size={10} className="animate-spin" />
+                : <Sparkles size={10} />}
+              {refreshing ? 'Parsing…' : 'Refresh from rate con'}
+            </button>
           </div>
+          {refreshError && (
+            <div className="flex items-start gap-1.5 mb-2 px-2 py-1.5 rounded-md text-[11px]"
+              style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
+              <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} />
+              {refreshError}
+            </div>
+          )}
+          {refreshedFromLoad && !refreshError && (
+            <div className="flex items-center gap-1.5 mb-2 px-2 py-1.5 rounded-md text-[11px]"
+              style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0' }}>
+              <CheckCircle2 size={11} style={{ flexShrink: 0 }} />
+              Pre-filled from load
+              {refreshedFromLoad.loadNum ? ` #${refreshedFromLoad.loadNum}` : ''}.
+              Review and click Save to apply.
+            </div>
+          )}
           {/* Method picker */}
           <div className="flex gap-1.5 mb-2">
             {(['email', 'portal'] as const).map(m => {

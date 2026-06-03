@@ -37,6 +37,7 @@ import type {
   UpdateDriverRequest, UpdateDriverResponse,
   ListCustomersResponse, CreateCustomerRequest, CreateCustomerResponse,
   UpdateCustomerRequest, UpdateCustomerResponse,
+  RefreshCustomerInvoicingResponse,
   ListTrailersResponse, CreateTrailerRequest, CreateTrailerResponse,
   UpdateTrailerRequest, UpdateTrailerResponse,
   ListDispatchersResponse, CreateDispatcherRequest, CreateDispatcherResponse,
@@ -688,6 +689,14 @@ class RailwayClient {
     return this.req<UpdateCustomerResponse>('PATCH', `/v1/customers/${id}`, body);
   }
   deleteCustomer(id: string)                 { return this.req<void>('DELETE', `/v1/customers/${id}`); }
+  /** Re-runs the rate-con broker-harvest prompt against the customer's
+   *  most recent rate confirmation and returns the four invoicing
+   *  fields for the UI to pre-fill. Does NOT auto-write — caller is
+   *  expected to drop the values into form state and let the existing
+   *  Save (PATCH /v1/customers/:id) commit them. */
+  refreshCustomerInvoicingFromRateCon(id: string) {
+    return this.req<RefreshCustomerInvoicingResponse>('POST', `/v1/customers/${id}/refresh-invoicing-from-ratecon`, {});
+  }
 
   listTrailers()                             { return this.req<ListTrailersResponse>('GET', '/v1/trailers'); }
   createTrailer(body: CreateTrailerRequest)  { return this.req<CreateTrailerResponse>('POST', '/v1/trailers', body); }
