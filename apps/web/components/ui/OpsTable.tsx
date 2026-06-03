@@ -245,13 +245,48 @@ export function OpsTable<T>({
   // ── Filter state ───────────────────────────────────────────────────
   // Keyed by filter.key for select filters and '__search' for search.
   // Date-range filters use `${key}:from` and `${key}:to` keys.
+  //
+  // Persisted to sessionStorage when `persistKey` is set so a filter
+  // the dispatcher set early in a billing pass (e.g. "Pickup: last
+  // week") survives navigations within the same tab — including the
+  // table-remount that bucket changes / action callbacks trigger via
+  // the parent's `key=` prop. Closing the tab clears state (sessionStorage
+  // semantics match the user-facing "until I close the page" rule).
+  const filtersStorageKey = persistKey ? `${persistKey}:filters` : null;
   const [filterState, setFilterState] = useState<Record<string, string>>(() => {
+    // First, hydrate from sessionStorage so a remount preserves what
+    // the user already picked. Read happens once on mount — subsequent
+    // updates flow through the setter + the useEffect below.
+    if (typeof window !== 'undefined' && filtersStorageKey) {
+      try {
+        const raw = window.sessionStorage.getItem(filtersStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, string>;
+          if (parsed && typeof parsed === 'object') return parsed;
+        }
+      } catch { /* corrupted entry — fall through to defaults */ }
+    }
     const init: Record<string, string> = {};
     for (const f of filters) {
       if (f.kind === 'select' && f.defaultValue) init[f.key] = f.defaultValue;
     }
     return init;
   });
+  // Persist on every change. We DROP empty-string entries before
+  // writing so the round-trip back through "Clear filters" doesn't
+  // leave dead keys behind — and the storage key disappears entirely
+  // once everything is cleared, keeping sessionStorage tidy.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !filtersStorageKey) return;
+    try {
+      const live = Object.fromEntries(Object.entries(filterState).filter(([, v]) => v));
+      if (Object.keys(live).length === 0) {
+        window.sessionStorage.removeItem(filtersStorageKey);
+      } else {
+        window.sessionStorage.setItem(filtersStorageKey, JSON.stringify(live));
+      }
+    } catch { /* quota / private mode — best-effort */ }
+  }, [filterState, filtersStorageKey]);
 
   // ── Column visibility ─────────────────────────────────────────────
   // Persisted to localStorage when `persistKey` is set so the user's
