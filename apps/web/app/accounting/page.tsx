@@ -1394,27 +1394,55 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
 }
 
 /**
- * Released-bucket peek dialog. Shows the docs the invoice packet
- * would carry for THIS load if the dispatcher generated the invoice
- * right now: the rate confirmation (auto-included when present) plus
- * every uploaded supporting doc, with a chip marking which ones
- * the server's packet resolver would actually attach.
+ * Released-bucket invoice-packet picker. Two-pane layout: a left
+ * sidebar listing every doc on the load with checkboxes (Include in
+ * invoice) and a right-side viewer that previews the doc the user
+ * just clicked. Saves the picked set to loads.invoice_doc_ids via the
+ * existing `set_invoice_docs` closeout action — same write path the
+ * ReviewQueue uses. The rate confirmation is shown but not toggleable;
+ * the server always auto-attaches loads.rate_con_pdf regardless of
+ * invoice_doc_ids, and surfacing a fake checkbox would lie about that.
  *
- * Why this exists: at the Released stage the dispatcher hasn't fired
- * Generate yet, so opening the invoice modal isn't a thing. This is
- * the "is the paperwork right?" preview before billing.
- *
- * The "included" rules mirror apps/api/src/lib/invoicePacket.ts:
- *   - Rate con is always in (when loads.rate_con_pdf is set).
- *   - load.invoiceDocIds (explicit selection) overrides the default;
- *     anything in that array is included.
- *   - Otherwise the server picks the NEWEST per-kind among
- *     PACKET_KINDS_ORDER, so we mirror that selection here.
+ * Initial selection mirrors apps/api/src/lib/invoicePacket.ts:
+ *   - explicit load.invoiceDocIds wins when non-empty
+ *   - otherwise newest-per-kind among PACKET_KINDS_ORDER
  */
+const ACCOUNTING_PACKET_KINDS: readonly string[] = ['pod', 'bol', 'lumper', 'scale', 'receipt', 'driver_sheet'];
+const ACCOUNTING_KIND_LABEL: Record<string, string> = {
+  rate_con: 'Rate Con', pod: 'POD', bol: 'BOL', lumper: 'Lumper',
+  scale: 'Scale', receipt: 'Receipt', driver_sheet: 'Driver Sheet',
+  invoice: 'Invoice', other: 'Other',
+};
+const ACCOUNTING_KIND_TINT: Record<string, { bg: string; fg: string }> = {
+  rate_con: { bg: '#f5f3ff', fg: '#7c3aed' },
+  pod:      { bg: '#dcfce7', fg: '#166534' },
+  bol:      { bg: '#fef3c7', fg: '#854d0e' },
+  lumper:   { bg: '#fce7f3', fg: '#9f1239' },
+  scale:    { bg: '#dbeafe', fg: '#1e40af' },
+  receipt:  { bg: '#fee2e2', fg: '#991b1b' },
+  driver_sheet: { bg: '#fed7aa', fg: '#9a3412' },
+  other:    { bg: 'var(--gc-bg)', fg: 'var(--gc-text-3)' },
+};
+const RATE_CON_ACTIVE_ID = '__rate_con__';
+
 function LoadDocsPreviewModal({ load, onClose }: { load: LoadSummary; onClose: () => void }) {
   type LoadDoc = import('@fleetcal/types').DocumentSummary;
-  const [docs, setDocs]     = useState<LoadDoc[] | null>(null);
-  const [error, setError]   = useState<string | null>(null);
+  const [docs, setDocs]               = useState<LoadDoc[] | null>(null);
+  const [error, setError]             = useState<string | null>(null);
+  // Active = the doc the user is currently viewing. Special sentinel
+  // RATE_CON_ACTIVE_ID means "show the rate con" since rate cons
+  // aren't always backed by a load_documents row.
+  const [activeId, setActiveId]       = useState<string | null>(null);
+  const [activeUrl, setActiveUrl]     = useState<string | null>(null);
+  const [urlLoading, setUrlLoading]   = useState(false);
+  const [urlError, setUrlError]       = useState<string | null>(null);
+  // Local selection — drives the checkboxes. Initialized once from the
+  // server's resolution rules and committed on Save.
+  const [included, setIncluded]       = useState<Set<string> | null>(null);
+  const [saving, setSaving]           = useState(false);
+  const [saveError, setSaveError]     = useState<string | null>(null);
+
+  const hasRateCon = !!load.rateConPdf;
 
   useEffect(() => {
     let cancelled = false;
@@ -1428,161 +1456,297 @@ function LoadDocsPreviewModal({ load, onClose }: { load: LoadSummary; onClose: (
     return () => { cancelled = true; };
   }, [load.loadId]);
 
-  // Mirror apps/api/src/lib/invoicePacket.ts → PACKET_DOC_KINDS_ORDER.
-  // Kept in sync with the server resolver so the UI's "Included" chip
-  // matches what generateInvoice actually attaches.
-  const PACKET_KINDS_ORDER: readonly string[] = ['pod', 'bol', 'lumper', 'scale', 'receipt', 'driver_sheet'];
-
-  // Build the set of doc ids the server would include. Note that
-  // load.invoiceDocIds is the explicit override; when set, the
-  // default per-kind selection is ignored.
-  const includedDocIds = useMemo(() => {
-    if (!docs) return new Set<string>();
+  // Seed `included` once docs arrive. Same logic as the server's
+  // resolvePacketDocsForLoad: explicit override wins, otherwise
+  // newest-per-kind among PACKET_KINDS_ORDER.
+  useEffect(() => {
+    if (!docs || included) return;
     const explicit = (load as { invoiceDocIds?: string[] }).invoiceDocIds;
     if (Array.isArray(explicit) && explicit.length > 0) {
-      return new Set(explicit);
+      setIncluded(new Set(explicit));
+      return;
     }
-    // Default rule: newest-per-kind in PACKET_KINDS_ORDER.
     const byKind = new Map<string, LoadDoc>();
-    // sort newest-first so the first match per kind wins.
     const sorted = [...docs].sort((a, b) =>
       (b.uploadedAt ?? '').localeCompare(a.uploadedAt ?? ''),
     );
     for (const d of sorted) {
-      if (PACKET_KINDS_ORDER.includes(d.kind) && !byKind.has(d.kind)) {
+      if (ACCOUNTING_PACKET_KINDS.includes(d.kind) && !byKind.has(d.kind)) {
         byKind.set(d.kind, d);
       }
     }
-    return new Set(Array.from(byKind.values()).map(d => d.id));
-  }, [docs, load]);
+    setIncluded(new Set(Array.from(byKind.values()).map(d => d.id)));
+  }, [docs, load, included]);
 
-  // Kind label + tint — same palette as ReviewQueue / EventModal.
-  const KIND_LABEL: Record<string, string> = {
-    rate_con: 'Rate Con', pod: 'POD', bol: 'BOL', lumper: 'Lumper',
-    scale: 'Scale', receipt: 'Receipt', driver_sheet: 'Driver Sheet',
-    invoice: 'Invoice', other: 'Other',
-  };
-  const KIND_TINT: Record<string, { bg: string; fg: string }> = {
-    rate_con: { bg: '#f5f3ff', fg: '#7c3aed' },
-    pod:      { bg: '#dcfce7', fg: '#166534' },
-    bol:      { bg: '#fef3c7', fg: '#854d0e' },
-    lumper:   { bg: '#fce7f3', fg: '#9f1239' },
-    scale:    { bg: '#dbeafe', fg: '#1e40af' },
-    receipt:  { bg: '#fee2e2', fg: '#991b1b' },
-    driver_sheet: { bg: '#fed7aa', fg: '#9a3412' },
-    other:    { bg: 'var(--gc-bg)', fg: 'var(--gc-text-3)' },
-  };
-  const tintFor = (k: string) => KIND_TINT[k] ?? KIND_TINT.other;
+  // Default the viewer to the rate con (or the first uploaded doc).
+  useEffect(() => {
+    if (activeId || !docs) return;
+    if (hasRateCon) setActiveId(RATE_CON_ACTIVE_ID);
+    else if (docs.length > 0) setActiveId(docs[0].id);
+  }, [docs, hasRateCon, activeId]);
 
-  const hasRateCon = !!load.rateConPdf;
-  // Suppress duplicate rate_con rows — when a load has both
-  // loads.rate_con_pdf AND a kind='rate_con' load_documents row, we'd
-  // otherwise show the same doc twice (once as the canonical, once
-  // as a row).
+  // Resolve signed URL for whatever's active. Rate con goes through
+  // a separate endpoint (loads.rate_con_pdf may live in legacy form);
+  // regular docs use the per-doc signer.
+  useEffect(() => {
+    if (!activeId) { setActiveUrl(null); return; }
+    let cancelled = false;
+    setUrlLoading(true);
+    setUrlError(null);
+    setActiveUrl(null);
+    const run = async () => {
+      try {
+        if (activeId === RATE_CON_ACTIVE_ID) {
+          const { url } = await railway.getRateConUrl(load.loadId);
+          if (!cancelled) setActiveUrl(url);
+        } else {
+          const { getLoadDocumentSignedUrl } = await import('@/lib/db');
+          const url = await getLoadDocumentSignedUrl(activeId);
+          if (!cancelled) setActiveUrl(url ?? null);
+        }
+      } catch (err) {
+        if (!cancelled) setUrlError((err as Error)?.message ?? 'load failed');
+      } finally {
+        if (!cancelled) setUrlLoading(false);
+      }
+    };
+    void run();
+    return () => { cancelled = true; };
+  }, [activeId, load.loadId]);
+
+  // Commit the explicit selection to loads.invoice_doc_ids. The
+  // server's generateInvoice flow reads from there directly when it
+  // resolves the packet's supporting docs.
+  async function handleSave() {
+    if (!included || saving) { onClose(); return; }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(load.loadId);
+      await railway.updateLoadCloseout(load.loadId, {
+        action: 'set_invoice_docs',
+        invoiceDocIds: Array.from(included),
+      });
+      onClose();
+    } catch (err) {
+      setSaveError((err as Error)?.message ?? 'save failed');
+      setSaving(false);
+    }
+  }
+
+  const toggle = (id: string) => {
+    if (!included) return;
+    setIncluded(prev => {
+      const next = new Set(prev ?? []);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const tintFor = (k: string) => ACCOUNTING_KIND_TINT[k] ?? ACCOUNTING_KIND_TINT.other;
   const nonRateConDocs = (docs ?? []).filter(d => d.kind !== 'rate_con');
-  const includedCount =
-    (hasRateCon ? 1 : 0) + nonRateConDocs.filter(d => includedDocIds.has(d.id)).length;
+  const includedSupportingCount = included
+    ? nonRateConDocs.filter(d => included.has(d.id)).length
+    : 0;
+  const totalAttached = (hasRateCon ? 1 : 0) + includedSupportingCount;
+
+  // Render the active doc — `<img>` for image MIME types, `<iframe>`
+  // otherwise (PDFs render natively in every modern browser; for
+  // anything else the iframe falls back to the browser's default
+  // viewer or the download prompt).
+  function renderViewer() {
+    if (!activeId) {
+      return (
+        <div className="flex items-center justify-center h-full text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+          Pick a doc on the left to preview.
+        </div>
+      );
+    }
+    if (urlLoading) {
+      return (
+        <div className="flex items-center justify-center h-full text-[13px] gap-2" style={{ color: 'var(--gc-text-3)' }}>
+          <Loader2 size={14} className="animate-spin" /> Loading preview…
+        </div>
+      );
+    }
+    if (urlError || !activeUrl) {
+      return (
+        <div className="flex items-center justify-center h-full text-[13px]" style={{ color: '#991b1b' }}>
+          {urlError ?? "Couldn't load preview."}
+        </div>
+      );
+    }
+    const activeDoc = nonRateConDocs.find(d => d.id === activeId);
+    const isImage =
+      activeId !== RATE_CON_ACTIVE_ID &&
+      activeDoc?.mimeType?.startsWith('image/');
+    if (isImage) {
+      return (
+        <div className="w-full h-full flex items-center justify-center" style={{ background: 'var(--gc-bg)' }}>
+          <img src={activeUrl} alt={activeDoc?.fileName ?? 'doc'}
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+        </div>
+      );
+    }
+    return (
+      <iframe
+        src={activeUrl}
+        title={activeId === RATE_CON_ACTIVE_ID ? 'Rate confirmation' : activeDoc?.fileName ?? 'doc'}
+        style={{ width: '100%', height: '100%', border: 'none', background: 'var(--gc-bg)' }}
+      />
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.45)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="rounded-2xl overflow-hidden flex flex-col"
-        style={{ width: 540, maxWidth: '94vw', maxHeight: '88vh', background: 'var(--gc-surface)', boxShadow: '0 16px 40px rgba(0,0,0,0.25)' }}
+        style={{ width: 1100, maxWidth: '96vw', height: '88vh', background: 'var(--gc-surface)', boxShadow: '0 16px 40px rgba(0,0,0,0.25)' }}
         onClick={e => e.stopPropagation()}>
+        {/* Header */}
         <div className="px-5 py-4 flex items-center gap-3 shrink-0" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <Eye size={16} style={{ color: '#1a73e8' }} />
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
-            Invoice packet preview
+            Invoice packet
             {load.loadNum && <span className="ml-1" style={{ color: 'var(--gc-text-3)' }}>· #{load.loadNum}</span>}
           </div>
+          <span className="text-[11px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ml-1"
+            style={{ background: '#dbeafe', color: '#1e40af' }}>
+            {totalAttached} attached
+          </span>
           <button onClick={onClose} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)]">
             <X size={14} />
           </button>
         </div>
-        <div className="px-5 py-4 flex-1 overflow-y-auto">
-          {!docs && !error && (
-            <div className="text-[12.5px] flex items-center gap-2" style={{ color: 'var(--gc-text-3)' }}>
-              <Loader2 size={13} className="animate-spin" /> Loading docs…
-            </div>
-          )}
-          {error && (
-            <div className="text-[12.5px] flex items-start gap-2 px-3 py-2 rounded-lg"
-              style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
-              <AlertCircle size={13} style={{ marginTop: 1 }} /> {error}
-            </div>
-          )}
-          {docs && !error && (
-            <>
-              <div className="text-[11px] font-bold uppercase tracking-wider mb-2"
-                style={{ color: 'var(--gc-text-3)' }}>
-                Will be attached · {includedCount}
-              </div>
-              <ul className="space-y-1">
-                {hasRateCon && (() => {
-                  const tint = tintFor('rate_con');
-                  return (
-                    <li className="flex items-center gap-2 px-2 py-2 rounded-lg"
-                      style={{ background: 'rgba(26,115,232,0.04)' }}>
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                        style={{ background: tint.bg, color: tint.fg }}>
-                        Rate Con
-                      </span>
-                      <span className="flex-1 truncate text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                        Rate confirmation
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider shrink-0"
-                        style={{ color: '#166534' }}>
-                        Included
-                      </span>
-                    </li>
-                  );
-                })()}
-                {nonRateConDocs.map(d => {
-                  const tint = tintFor(d.kind);
-                  const included = includedDocIds.has(d.id);
-                  return (
-                    <li key={d.id} className="flex items-center gap-2 px-2 py-2 rounded-lg"
-                      style={{ background: included ? 'rgba(26,115,232,0.04)' : 'transparent' }}>
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                        style={{ background: tint.bg, color: tint.fg }}>
-                        {KIND_LABEL[d.kind] ?? d.kind}
-                      </span>
-                      <span className="flex-1 truncate text-[12.5px]"
-                        style={{ color: included ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}
-                        title={d.fileName}>
-                        {d.fileName}
-                      </span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider shrink-0"
-                        style={{ color: included ? '#166534' : 'var(--gc-text-3)' }}>
-                        {included ? 'Included' : 'Skipped'}
-                      </span>
-                    </li>
-                  );
-                })}
-                {!hasRateCon && nonRateConDocs.length === 0 && (
-                  <li className="text-[12.5px] italic" style={{ color: 'var(--gc-text-3)' }}>
-                    No docs on this load yet.
-                  </li>
-                )}
-              </ul>
-              {(!hasRateCon || includedCount === 0) && (
-                <div className="text-[11.5px] mt-3 px-3 py-2 rounded-lg"
-                  style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}>
-                  {!hasRateCon
-                    ? 'No rate confirmation on file. Upload one from the load modal before generating the invoice.'
-                    : 'No supporting docs would land in the packet — brokers usually expect at least a POD.'}
+
+        {/* Two-pane body */}
+        <div className="flex-1 flex min-h-0">
+          {/* Left: doc list + checkboxes */}
+          <div className="shrink-0 flex flex-col" style={{ width: 320, borderRight: '1px solid var(--gc-border-light)' }}>
+            <div className="flex-1 overflow-y-auto px-3 py-3">
+              {!docs && !error && (
+                <div className="text-[12.5px] flex items-center gap-2" style={{ color: 'var(--gc-text-3)' }}>
+                  <Loader2 size={13} className="animate-spin" /> Loading docs…
                 </div>
               )}
-            </>
-          )}
+              {error && (
+                <div className="text-[12px] flex items-start gap-2 px-2 py-2 rounded-lg"
+                  style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
+                  <AlertCircle size={12} style={{ marginTop: 1 }} /> {error}
+                </div>
+              )}
+              {docs && !error && (
+                <ul className="space-y-1">
+                  {hasRateCon && (() => {
+                    const tint = tintFor('rate_con');
+                    const active = activeId === RATE_CON_ACTIVE_ID;
+                    return (
+                      <li>
+                        <button type="button" onClick={() => setActiveId(RATE_CON_ACTIVE_ID)}
+                          className="w-full flex items-center gap-2 px-2 py-2 rounded-lg text-left transition-colors"
+                          style={{
+                            background: active ? 'rgba(26,115,232,0.10)' : 'transparent',
+                            border: active ? '1px solid var(--gc-blue)' : '1px solid transparent',
+                          }}>
+                          {/* Rate con isn't user-toggleable — always
+                              auto-included via loads.rate_con_pdf.
+                              Use a non-interactive checkmark so the
+                              row visually balances with the doc rows
+                              below. */}
+                          <span className="flex items-center justify-center shrink-0"
+                            style={{ width: 14, height: 14, borderRadius: 3, background: '#86efac', color: '#166534' }}
+                            title="Rate con is always attached">
+                            <Check size={10} />
+                          </span>
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                            style={{ background: tint.bg, color: tint.fg }}>
+                            Rate Con
+                          </span>
+                          <span className="flex-1 truncate text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                            Rate confirmation
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })()}
+                  {nonRateConDocs.map(d => {
+                    const tint = tintFor(d.kind);
+                    const isIncluded = included?.has(d.id) ?? false;
+                    const active = activeId === d.id;
+                    return (
+                      <li key={d.id}>
+                        <div className="flex items-center gap-2 px-2 py-2 rounded-lg transition-colors"
+                          style={{
+                            background: active ? 'rgba(26,115,232,0.10)' : 'transparent',
+                            border: active ? '1px solid var(--gc-blue)' : '1px solid transparent',
+                          }}>
+                          <input type="checkbox" checked={isIncluded}
+                            onChange={() => toggle(d.id)}
+                            disabled={!included}
+                            style={{ width: 14, height: 14, accentColor: 'var(--gc-blue)', cursor: 'pointer' }}
+                            title={isIncluded ? 'Included in invoice packet' : 'Skipped'}
+                            onClick={e => e.stopPropagation()} />
+                          <button type="button" onClick={() => setActiveId(d.id)}
+                            className="flex-1 flex items-center gap-2 min-w-0 text-left">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                              style={{ background: tint.bg, color: tint.fg }}>
+                              {ACCOUNTING_KIND_LABEL[d.kind] ?? d.kind}
+                            </span>
+                            <span className="flex-1 truncate text-[12.5px]"
+                              style={{ color: isIncluded ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}
+                              title={d.fileName}>
+                              {d.fileName}
+                            </span>
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                  {!hasRateCon && nonRateConDocs.length === 0 && (
+                    <li className="text-[12.5px] italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
+                      No docs on this load yet.
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
+            {/* Warnings — same gaps the original peek modal surfaced. */}
+            {(!hasRateCon || (docs && includedSupportingCount === 0)) && (
+              <div className="px-3 py-2 text-[11.5px] shrink-0"
+                style={{ background: '#fff7ed', color: '#9a3412', borderTop: '1px solid #fed7aa' }}>
+                {!hasRateCon
+                  ? 'No rate confirmation on file.'
+                  : 'No supporting docs selected — brokers usually expect at least a POD.'}
+              </div>
+            )}
+          </div>
+
+          {/* Right: viewer */}
+          <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+            {renderViewer()}
+          </div>
         </div>
-        <div className="px-5 py-3 flex justify-end shrink-0"
+
+        {/* Footer */}
+        <div className="px-5 py-3 flex items-center gap-2 shrink-0"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-          <button onClick={onClose}
-            className="text-[12px] font-semibold px-4 py-1.5 rounded-lg"
+          {saveError && (
+            <div className="text-[11.5px] flex items-center gap-1.5" style={{ color: '#991b1b' }}>
+              <AlertCircle size={11} /> {saveError}
+            </div>
+          )}
+          <div className="flex-1" />
+          <button onClick={onClose} disabled={saving}
+            className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            Cancel
+          </button>
+          <button onClick={() => void handleSave()} disabled={saving || !included}
+            className="text-[12px] font-semibold px-4 py-1.5 rounded-lg disabled:opacity-60"
             style={{ background: '#1a73e8', color: '#fff' }}>
-            Done
+            {saving ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : null}
+            {saving ? 'Saving…' : 'Save selection'}
           </button>
         </div>
       </div>
