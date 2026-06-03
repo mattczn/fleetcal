@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
-import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Download } from 'lucide-react';
 import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
@@ -809,64 +809,83 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     });
   };
 
+  /**
+   * Core merge — pulls bytes for a list of docs, runs them through
+   * pdf-lib, uploads the result with the resolved kind. Extracted from
+   * handleMergeSelected so the same engine drives:
+   *   • the per-row checkbox merge (handleMergeSelected)
+   *   • the "Merge by type" auto-group flow (handleMergeByType), which
+   *     calls this once per kind-bucket.
+   * Returns the new doc on success, or null when the source list is
+   * too small. Caller is responsible for refreshing the docs list
+   * after a batch of calls.
+   *
+   * When `forceKind` is provided it wins over the per-doc resolution
+   * (used by Merge by type, which already knows the bucket's kind).
+   * Otherwise the same security-first rule from before applies:
+   * rate_con > invoice > driver_sheet > most-common(rest).
+   */
+  const mergeDocsToPdf = async (
+    sources: LoadDocument[],
+    forceKind?: import('@fleetcal/types').DocumentKind,
+  ): Promise<{ id: string } | null> => {
+    if (!loadId || sources.length < 2) return null;
+    const cache = docsCacheRef.current.get(loadId);
+    const files: File[] = [];
+    for (const d of sources) {
+      // The virtual rate-con entry has no load_documents row — its
+      // signed URL comes from the rate-con cache slot or a fresh
+      // getRateConUrl. Everything else routes through the regular
+      // per-doc URL cache.
+      let url: string | null = null;
+      if (d.id === RATE_CON_PRIMARY_ID) {
+        url = cache?.rateConUrl ?? (await railway.getRateConUrl(loadId).then(r => r.url).catch(() => null));
+      } else {
+        url = cache?.urlByDocId.get(d.id) ?? await getLoadDocumentSignedUrl(d.id);
+      }
+      if (!url) throw new Error(`No signed URL for ${d.fileName}`);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+      const blob = await res.blob();
+      files.push(new File([blob], d.fileName, { type: blob.type || 'application/octet-stream' }));
+    }
+    const { mergeFilesToPdf } = await import('@/lib/pdfMerge');
+    const mergedBlob = await mergeFilesToPdf(files);
+    const mergedFile = new File([mergedBlob], `merged.pdf`, { type: 'application/pdf' });
+    let mergedKind: import('@fleetcal/types').DocumentKind;
+    if (forceKind) {
+      mergedKind = forceKind;
+    } else {
+      // Determine the merged kind with a security-first rule: if ANY
+      // input is dispatcher-only (rate_con / invoice / driver_sheet),
+      // the merged file inherits the most-restrictive kind among the
+      // inputs. Order: rate_con > invoice > driver_sheet > most-common.
+      const DISPATCHER_ONLY_KINDS = new Set(['rate_con', 'invoice', 'driver_sheet']);
+      const RESTRICTIVENESS: Record<string, number> = { rate_con: 3, invoice: 2, driver_sheet: 1 };
+      const dispatcherKindsInSelection = sources
+        .map(d => d.kind)
+        .filter(k => DISPATCHER_ONLY_KINDS.has(k));
+      if (dispatcherKindsInSelection.length > 0) {
+        mergedKind = dispatcherKindsInSelection
+          .sort((a, b) => (RESTRICTIVENESS[b] ?? 0) - (RESTRICTIVENESS[a] ?? 0))[0] as import('@fleetcal/types').DocumentKind;
+      } else {
+        const kindCounts = new Map<string, number>();
+        for (const d of sources) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
+        mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? sources[0].kind) as import('@fleetcal/types').DocumentKind;
+      }
+    }
+    useCalendarStore.getState().markLoadSelfWrite(loadId);
+    const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
+    return { id: newDoc.id };
+  };
+
   const handleMergeSelected = async () => {
     if (!loadId || merging) return;
     const selected = mergeCandidates.filter(d => mergeSelection.has(d.id));
     if (selected.length < 2) return;
     setMerging(true);
     try {
-      // Fetch bytes for each selected doc (prefer cache).
-      const cache = docsCacheRef.current.get(loadId);
-      const files: File[] = [];
-      for (const d of selected) {
-        // The virtual rate-con entry has no load_documents row — its
-        // signed URL comes from the rate-con cache slot or a fresh
-        // getRateConUrl. Everything else routes through the regular
-        // per-doc URL cache.
-        let url: string | null = null;
-        if (d.id === RATE_CON_PRIMARY_ID) {
-          url = cache?.rateConUrl ?? (await railway.getRateConUrl(loadId).then(r => r.url).catch(() => null));
-        } else {
-          url = cache?.urlByDocId.get(d.id) ?? await getLoadDocumentSignedUrl(d.id);
-        }
-        if (!url) throw new Error(`No signed URL for ${d.fileName}`);
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-        const blob = await res.blob();
-        files.push(new File([blob], d.fileName, { type: blob.type || 'application/octet-stream' }));
-      }
-      const { mergeFilesToPdf } = await import('@/lib/pdfMerge');
-      const mergedBlob = await mergeFilesToPdf(files);
-      const mergedFile = new File([mergedBlob], `merged.pdf`, { type: 'application/pdf' });
-      // Determine the merged kind with a security-first rule: if ANY
-      // input is dispatcher-only (rate_con / invoice / driver_sheet),
-      // the merged file inherits the most-restrictive kind among the
-      // inputs. Previously we took the "most common" kind, which would
-      // happily produce kind=pod for a merge of [rate_con, pod, pod] —
-      // hiding a rate confirmation inside a driver-visible POD. The
-      // driver-visible filter would then expose it.
-      //
-      // Order: rate_con > invoice > driver_sheet > everything else
-      // (the higher in this list, the more restrictive). Among the
-      // "everything else" kinds (all driver-visible), we fall back to
-      // most-common-kind selection because that's the original intent.
-      const DISPATCHER_ONLY_KINDS = new Set(['rate_con', 'invoice', 'driver_sheet']);
-      const RESTRICTIVENESS: Record<string, number> = { rate_con: 3, invoice: 2, driver_sheet: 1 };
-      let mergedKind: import('@fleetcal/types').DocumentKind;
-      const dispatcherKindsInSelection = selected
-        .map(d => d.kind)
-        .filter(k => DISPATCHER_ONLY_KINDS.has(k));
-      if (dispatcherKindsInSelection.length > 0) {
-        // Sort by restrictiveness descending — most restrictive wins.
-        mergedKind = dispatcherKindsInSelection
-          .sort((a, b) => (RESTRICTIVENESS[b] ?? 0) - (RESTRICTIVENESS[a] ?? 0))[0] as import('@fleetcal/types').DocumentKind;
-      } else {
-        const kindCounts = new Map<string, number>();
-        for (const d of selected) kindCounts.set(d.kind, (kindCounts.get(d.kind) ?? 0) + 1);
-        mergedKind = ([...kindCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? selected[0].kind) as import('@fleetcal/types').DocumentKind;
-      }
-      useCalendarStore.getState().markLoadSelfWrite(loadId);
-      const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
+      const result = await mergeDocsToPdf(selected);
       // Originals are NOT deleted — the merged doc is appended.
       // Refresh: invalidate cache + re-prefetch.
       docsCacheRef.current.delete(loadId);
@@ -874,14 +893,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const fresh = docsCacheRef.current.get(loadId);
       if (fresh) {
         setDocs(fresh.docs);
-        // Switch the viewer to the newly merged doc so the user can
-        // sanity-check the result.
-        const newIdx = fresh.docs.findIndex(d => d.id === newDoc.id);
-        if (newIdx !== -1) setActiveDocIdx(newIdx);
-        // Auto-include the merged result in the invoice packet —
-        // typically that's what the user wants. Originals stay in
-        // their existing included/excluded state.
-        setIncludedDocIds(prev => new Set([...prev, newDoc.id]));
+        if (result) {
+          const newIdx = fresh.docs.findIndex(d => d.id === result.id);
+          if (newIdx !== -1) setActiveDocIdx(newIdx);
+          // Auto-include the merged result in the invoice packet —
+          // typically that's what the user wants. Originals stay in
+          // their existing included/excluded state.
+          setIncludedDocIds(prev => new Set([...prev, result.id]));
+        }
       }
     } catch (err) {
       console.error('[review queue] merge failed:', err);
@@ -890,6 +909,105 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setMerging(false);
       setMergeDialogOpen(false);
       setMergeSelection(new Set());
+    }
+  };
+
+  /**
+   * Merge by type — groups every doc on the load by kind, and for each
+   * kind with ≥2 docs runs the merge engine and tags the result with
+   * that same kind. Originals stay; the user can delete them after if
+   * they want to clean up. Runs groups sequentially to avoid hammering
+   * the storage signed-URL endpoint and to give pdf-lib room to work
+   * on one bucket at a time.
+   *
+   * Skips singletons (≥2 only) and the synthetic rate-con sentinel
+   * row (it doesn't have a real source URL pattern we can re-upload
+   * back into a new load_documents row safely). The user can still
+   * merge rate cons via the per-row checkbox flow.
+   */
+  const handleMergeByType = async () => {
+    if (!loadId || merging) return;
+    // Group all docs (incl. uploaded rate-con rows, excl. the virtual
+    // canonical sentinel) by kind.
+    const byKind = new Map<import('@fleetcal/types').DocumentKind, LoadDocument[]>();
+    for (const d of docs) {
+      if (d.id === RATE_CON_PRIMARY_ID) continue;
+      const k = d.kind as import('@fleetcal/types').DocumentKind;
+      const bucket = byKind.get(k) ?? [];
+      bucket.push(d);
+      byKind.set(k, bucket);
+    }
+    const mergeable = [...byKind.entries()].filter(([, list]) => list.length >= 2);
+    if (mergeable.length === 0) {
+      alert('Nothing to merge — no document type has two or more files on this load.');
+      return;
+    }
+    setMerging(true);
+    setMergeStatus(null);
+    try {
+      const newIds: string[] = [];
+      for (const [kind, group] of mergeable) {
+        setMergeStatus(`Merging ${group.length} ${KIND_LABEL[kind] ?? kind}…`);
+        const res = await mergeDocsToPdf(group, kind);
+        if (res) newIds.push(res.id);
+      }
+      // One refresh after all groups land — cheaper than refetching
+      // between each bucket.
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, !!current?.rateConPdf);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) {
+        setDocs(fresh.docs);
+        setIncludedDocIds(prev => {
+          const next = new Set(prev);
+          for (const id of newIds) next.add(id);
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('[review queue] merge-by-type failed:', err);
+      alert(`Merge by type failed: ${(err as Error).message ?? 'Unknown error'}`);
+    } finally {
+      setMergeStatus(null);
+      setMerging(false);
+    }
+  };
+
+  /**
+   * Per-row download — fetches the signed URL, pulls bytes, and
+   * triggers a same-origin <a download> click so the browser saves
+   * with the doc's fileName. <a download> doesn't honor cross-origin
+   * URLs (Supabase signed URLs are cross-origin), which is why we
+   * have to blob it locally first.
+   */
+  const handleDownloadDoc = async (id: string, fileName: string) => {
+    if (!loadId) return;
+    try {
+      let url: string | null = null;
+      const cache = docsCacheRef.current.get(loadId);
+      if (id === RATE_CON_PRIMARY_ID) {
+        url = cache?.rateConUrl ?? (await railway.getRateConUrl(loadId).then(r => r.url).catch(() => null));
+      } else {
+        url = cache?.urlByDocId.get(id) ?? await getLoadDocumentSignedUrl(id);
+      }
+      if (!url) throw new Error('No signed URL');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Give the click a tick to dispatch before revoking. Mobile
+      // Safari occasionally cancels the download if revoke fires same
+      // microtask.
+      setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
+    } catch (err) {
+      console.error('[review queue] download failed:', err);
+      alert(`Download failed: ${(err as Error).message ?? 'Unknown error'}`);
     }
   };
 
@@ -1598,6 +1716,34 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </div>
             )}
 
+            {/* Manage documents — opens the full CRUD popup (add /
+                rename / retype / delete / download / merge-by-type).
+                Lives ABOVE the Rate Confirmations + Documents sub-lists
+                because it's the entry point to bulk-manage them. Always
+                rendered once we have a loadId — the dialog itself
+                handles the empty state and exposes "+ Add Documents"
+                so users can populate the load from here without
+                leaving the right sidebar. */}
+            {loadId && (
+              <div className="shrink-0 px-3 py-2"
+                style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                <button type="button"
+                  onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
+                  disabled={merging}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors disabled:opacity-50"
+                  style={{
+                    background: 'transparent',
+                    color:      'var(--gc-text-2)',
+                    border:     '1px dashed var(--gc-border)',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  {merging ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
+                  Manage documents
+                </button>
+              </div>
+            )}
+
             {/* Two sections — Rate Confirmations + Documents.
                 Rate Confirmations always renders first (closer to the
                 top, mirrors workflow: review rate con, then verify
@@ -1804,27 +1950,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </div>
             </div>
 
-            {/* Manage documents — opens the merge/convert dialog. Hidden
-                only when neither workflow has any meaning on this load. */}
-            {(mergeCandidates.length >= 2 || convertCandidates.length >= 1) && (
-              <div className="shrink-0 px-3 py-2"
-                style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                <button type="button"
-                  onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
-                  disabled={merging}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors disabled:opacity-50"
-                  style={{
-                    background: 'transparent',
-                    color:      'var(--gc-text-2)',
-                    border:     '1px dashed var(--gc-border)',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  {merging ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
-                  Manage documents
-                </button>
-              </div>
-            )}
+            {/* Manage documents button used to live here — moved to
+                the top of the sidebar (above Rate Confirmations) so
+                it's discoverable before the user scans the doc lists. */}
 
             {/* Action buttons. Stack order top→bottom:
                   1. (optional) "Convert to PDF" when non-PDF docs exist
@@ -1989,7 +2117,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       {mergeDialogOpen && (
         <DocSelectionDialog
           title="Manage documents"
-          description="Add, rename, retype, delete — or pick documents to merge into one PDF."
+          description="Add, rename, retype, download, delete, or merge every doc of the same type into one PDF."
           docs={mergeCandidates}
           selected={mergeSelection}
           onToggle={(id) => setMergeSelection(prev => {
@@ -2019,6 +2147,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           onRename={async (id, newName) => { await railway.renameDocument(id, newName); setDocs(prev => prev.map(d => d.id === id ? { ...d, fileName: newName } : d)); if (loadId) { const entry = docsCacheRef.current.get(loadId); if (entry) docsCacheRef.current.set(loadId, { ...entry, docs: entry.docs.map(d => d.id === id ? { ...d, fileName: newName } : d) }); } }}
           onChangeKind={handleChangeKind}
           onDelete={handleDeleteDoc}
+          onDownload={handleDownloadDoc}
+          onMergeByType={handleMergeByType}
           kindOptions={KIND_OPTIONS}
           // Pending kind picker — when the user clicks "+ Add document"
           // and picks files, the OS file picker fires (via pickFile).
@@ -2413,6 +2543,8 @@ function DocSelectionDialog({
   onRename,
   onChangeKind,
   onDelete,
+  onDownload,
+  onMergeByType,
   kindOptions,
   pendingArea,
   zIndex = 240,
@@ -2457,8 +2589,18 @@ function DocSelectionDialog({
    *  Server may auto-rename the displayed fileName. */
   onChangeKind?: (id: string, newKind: import('@fleetcal/types').DocumentKind) => Promise<void>;
   /** Hard-delete the doc + its storage blob. Caller handles the
-   *  optimistic update. Dialog uses an inline 2-step confirm. */
+   *  optimistic update. Dialog renders an inline two-step confirm
+   *  (trash icon → red "Delete?" button → commits on second click)
+   *  so we don't stack a modal-inside-a-modal. */
   onDelete?: (id: string) => Promise<void>;
+  /** Per-row download — pulls bytes from the signed URL and saves
+   *  via a transient <a download>. Caller handles the actual fetch
+   *  (the dialog just needs to fire it). */
+  onDownload?: (id: string, fileName: string) => Promise<void>;
+  /** Header action — groups every doc by kind and merges each bucket
+   *  with ≥2 docs into a single PDF (kind preserved). Hidden when
+   *  nothing on the load qualifies. */
+  onMergeByType?: () => Promise<void> | void;
   /** Drives the kind <select> options in manageMode. Same shape as the
    *  parent's KIND_OPTIONS constant. ReadonlyArray so the parent's
    *  `as const` literal is assignable without a defensive copy. */
@@ -2543,8 +2685,19 @@ function DocSelectionDialog({
           background: 'var(--gc-surface)',
           boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
           border:     '1px solid var(--gc-border)',
+          // overflow:hidden is load-bearing — without it the footer's
+          // var(--gc-bg) background paints past the rounded corners
+          // and produces square bottom corners against the rounded
+          // outer modal (the ugly dark-corner artifact users were
+          // seeing). Clipping at the container forces every child
+          // background to respect the 16px radius.
+          overflow:   'hidden',
         }}>
-        {/* Header */}
+        {/* Header — title + close. In manage mode the "+ Add
+            Documents" CTA moves to the bottom of the doc list so the
+            primary upload affordance lives near where the new row
+            will appear; in non-manage (Convert) mode the header
+            stays compact with just the close X. */}
         <div className="flex items-center justify-between gap-3 px-5 pt-5 pb-3">
           <div className="min-w-0">
             <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
@@ -2555,18 +2708,6 @@ function DocSelectionDialog({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {onAdd && (
-              <button type="button" onClick={onAdd} disabled={busy}
-                className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50"
-                style={{
-                  background:  'var(--gc-blue)',
-                  color:       '#fff',
-                  textShadow:  '0 1px 1px rgba(0,0,0,0.2)',
-                  boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
-                }}>
-                <Plus size={11} /> Add document
-              </button>
-            )}
             <button onClick={onCancel} disabled={busy}
               className="p-1 rounded-full hover:bg-[var(--gc-hover)]" title="Close">
               <X size={16} />
@@ -2574,23 +2715,49 @@ function DocSelectionDialog({
           </div>
         </div>
 
-        {/* Select-all + select-none bar */}
-        <div className="flex items-center gap-2 px-5 pb-2">
-          <button type="button" onClick={onSelectAll} disabled={busy || docs.length === 0}
-            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-            Select all
-          </button>
-          <button type="button" onClick={onSelectNone} disabled={busy}
-            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-            None
-          </button>
+        {/* Action bar. Convert / standalone merge flows show the
+            classic Select-all / None pair (driven by the footer
+            confirm). Manage mode replaces both with the "Merge by
+            type" chip — there's no per-row confirm action, so the
+            selection-based UI would be misleading. The convert-flow
+            extraAction (Convert to PDF) still slots in either layout. */}
+        <div className="flex items-center gap-2 px-5 pb-2 flex-wrap">
+          {!manageMode && (
+            <>
+              <button type="button" onClick={onSelectAll} disabled={busy || docs.length === 0}
+                className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                Select all
+              </button>
+              <button type="button" onClick={onSelectNone} disabled={busy}
+                className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                None
+              </button>
+            </>
+          )}
+          {manageMode && onMergeByType && docs.length >= 2 && (
+            <button type="button" onClick={() => void onMergeByType()} disabled={busy}
+              className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+              style={{
+                background: 'var(--gc-surface)',
+                color:      '#7c3aed',
+                border:     '1px solid #ddd6fe',
+              }}
+              title="Merge every document type with 2+ files into one PDF per type">
+              {busy ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
+              Merge by type
+            </button>
+          )}
           <div className="flex-1" />
           {extraAction}
-          <span className="text-[11px] font-bold" style={{ color: canConfirm ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-            {count} selected
-          </span>
+          {/* The "N selected" hint only makes sense paired with the
+              footer Merge action — manage mode hides both. */}
+          {!manageMode && (
+            <span className="text-[11px] font-bold" style={{ color: canConfirm ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+              {count} selected
+            </span>
+          )}
         </div>
 
         {/* Pending kind picker (manage mode only). Lives above the doc
@@ -2599,7 +2766,7 @@ function DocSelectionDialog({
         {pendingArea}
 
         {/* Doc list */}
-        <div className="flex-1 overflow-y-auto px-5 pb-3" style={{ minHeight: 80 }}>
+        <div className="flex-1 overflow-y-auto px-5 pb-3" style={{ minHeight: 80, minWidth: 0 }}>
           {docs.length === 0 ? (
             <div className="text-[13px] italic py-8 text-center" style={{ color: 'var(--gc-text-3)' }}>
               {emptyMessage ?? 'No documents on this load.'}
@@ -2622,9 +2789,16 @@ function DocSelectionDialog({
                                   : isOn          ? 'rgba(26,115,232,0.06)'
                                   : 'transparent',
                       }}>
-                      <input type="checkbox" checked={isOn} disabled={rowDisabled}
-                        style={{ accentColor: 'var(--gc-blue)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
-                        onChange={() => onToggle(d.id)} />
+                      {/* Row checkbox only renders outside manage mode —
+                          the merge/convert flows need it to drive the
+                          footer action. Manage mode replaces per-row
+                          selection with the "Merge by type" header chip,
+                          so a checkbox column would be inert noise. */}
+                      {!manageMode && (
+                        <input type="checkbox" checked={isOn} disabled={rowDisabled}
+                          style={{ accentColor: 'var(--gc-blue)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
+                          onChange={() => onToggle(d.id)} />
+                      )}
 
                       {/* Kind chip — static label by default, native
                           <select> dropdown in manageMode so the user can
@@ -2664,7 +2838,11 @@ function DocSelectionDialog({
 
                       {/* Filename — inline editable in manageMode rename
                           state; otherwise a click on the row toggles the
-                          checkbox via label-for. */}
+                          checkbox via label-for. In manage mode we
+                          stack the upload date under the filename so
+                          the row carries enough context to find the
+                          right doc when there are several PODs / lumpers
+                          with similar names. */}
                       {isRenaming ? (
                         <input
                           autoFocus
@@ -2683,10 +2861,20 @@ function DocSelectionDialog({
                         <button type="button"
                           onClick={() => onToggle(d.id)}
                           disabled={rowDisabled}
-                          className="flex-1 text-left truncate text-[12px] font-semibold min-w-0"
-                          style={{ color: 'var(--gc-text-1)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
+                          className="flex-1 text-left min-w-0"
+                          style={{ cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
                           title={d.fileName}>
-                          {d.fileName}
+                          <div className="truncate text-[12px] font-semibold"
+                            style={{ color: 'var(--gc-text-1)' }}>
+                            {d.fileName}
+                          </div>
+                          {manageMode && d.uploadedAt && (
+                            <div className="text-[10px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                              Uploaded {new Date(d.uploadedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                              {' · '}
+                              {new Date(d.uploadedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                            </div>
+                          )}
                         </button>
                       )}
 
@@ -2695,6 +2883,17 @@ function DocSelectionDialog({
                         <div className="flex items-center gap-0.5 shrink-0">
                           {isPending && (
                             <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
+                          )}
+                          {onDownload && !isPending && (
+                            <button type="button"
+                              onClick={e => { e.stopPropagation(); void onDownload(d.id, d.fileName); }}
+                              className="rounded-full p-1 transition-colors"
+                              title={`Download — ${d.fileName}`}
+                              style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
+                              onMouseEnter={ev => (ev.currentTarget.style.background = 'var(--gc-hover)')}
+                              onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                              <Download size={12} />
+                            </button>
                           )}
                           {onRename && !isPending && (
                             <button type="button"
@@ -2749,23 +2948,59 @@ function DocSelectionDialog({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-4"
-          style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-          <button type="button" onClick={onCancel} disabled={busy}
-            className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
-            Cancel
-          </button>
-          <button type="button"
-            onClick={() => { if (canConfirm) onConfirm(); }}
-            disabled={!canConfirm}
-            className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-opacity text-white disabled:opacity-40"
-            style={{ background: 'var(--gc-blue)' }}>
-            {busy ? <Loader2 size={13} className="animate-spin" /> : actionIcon}
-            {busy ? busyLabel : count >= minSelect ? actionLabel(count) : ctaWhenLow}
-          </button>
-        </div>
+        {/* Bottom "+ Add Documents" — manage mode only. Sits inside
+            the scrollable list area (just under the last row) so
+            users land on it naturally after scanning what's already
+            attached. Full-width dashed primary so it reads as a
+            row-equivalent, not a footer action. */}
+        {manageMode && onAdd && (
+          <div className="px-5 pb-4">
+            <button type="button" onClick={onAdd} disabled={busy}
+              className="w-full flex items-center justify-center gap-1.5 text-[12px] font-extrabold uppercase tracking-wider px-3 py-2.5 rounded-lg transition-colors disabled:opacity-50"
+              style={{
+                background: 'transparent',
+                color:      'var(--gc-blue)',
+                border:     '1.5px dashed var(--gc-blue)',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(26,115,232,0.06)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+              <Plus size={13} /> Add Documents
+            </button>
+          </div>
+        )}
+
+        {/* Footer — manage mode is read/CRUD only, so the footer
+            collapses to a single Close button. Convert + standalone
+            merge flows still need their Cancel/Confirm action pair
+            (they're driven by selection counts, not row-level
+            mutations). */}
+        {manageMode ? (
+          <div className="flex items-center justify-end gap-2 px-5 py-4"
+            style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+            <button type="button" onClick={onCancel} disabled={busy}
+              className="text-[13px] font-extrabold px-5 py-2 rounded-lg transition-opacity text-white disabled:opacity-40"
+              style={{ background: 'var(--gc-blue)' }}>
+              Close
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-2 px-5 py-4"
+            style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+            <button type="button" onClick={onCancel} disabled={busy}
+              className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
+              Cancel
+            </button>
+            <button type="button"
+              onClick={() => { if (canConfirm) onConfirm(); }}
+              disabled={!canConfirm}
+              className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-opacity text-white disabled:opacity-40"
+              style={{ background: 'var(--gc-blue)' }}>
+              {busy ? <Loader2 size={13} className="animate-spin" /> : actionIcon}
+              {busy ? busyLabel : count >= minSelect ? actionLabel(count) : ctaWhenLow}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
