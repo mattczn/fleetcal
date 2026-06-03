@@ -156,6 +156,8 @@ export default function BrokerProfileModal({
   const detailRef                           = useRef<BrokerDetailHandle>(null);
   const [showUnsaved, setShowUnsaved]       = useState(false);
   const [panelDirty, setPanelDirty]         = useState(false);
+  const [saving, setSaving]                 = useState(false);
+  const [saveError, setSaveError]           = useState<string | null>(null);
   const pendingCloseFn                      = useRef<(() => void) | null>(null);
 
   const tryClose = (closeFn: () => void) => {
@@ -164,6 +166,27 @@ export default function BrokerProfileModal({
       setShowUnsaved(true);
     } else {
       closeFn();
+    }
+  };
+
+  /** Wraps the imperative save handle with await + UI feedback.
+   *  Previously the footer just fired-and-forgot the promise from
+   *  detailRef.current?.save(), so the user got zero indication
+   *  anything was happening — and gave up before the store finished
+   *  round-tripping the update. This shows a "Saving…" state on the
+   *  button, surfaces failures inline, and only treats the save as
+   *  done after the store actually patches in the new values (which
+   *  is what flips `dirty` back to false). */
+  const handleSaveChanges = async () => {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await detailRef.current?.save();
+    } catch (err) {
+      setSaveError((err as Error)?.message ?? 'Save failed');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -325,20 +348,28 @@ export default function BrokerProfileModal({
         {panelDirty && (
           <div className="shrink-0 flex items-center justify-end gap-2 px-7 py-3"
             style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-            <span className="text-xs mr-2" style={{ color: 'var(--gc-text-3)' }}>Unsaved changes</span>
+            {saveError ? (
+              <span className="text-xs mr-2" style={{ color: '#d93025' }}>{saveError}</span>
+            ) : (
+              <span className="text-xs mr-2" style={{ color: 'var(--gc-text-3)' }}>
+                {saving ? 'Saving…' : 'Unsaved changes'}
+              </span>
+            )}
             <button onClick={() => detailRef.current?.discard()}
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
               style={{ color: '#d93025', background: 'transparent' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,0.07)')}
+              onMouseEnter={e => { if (!saving) (e.currentTarget.style.background = 'rgba(217,48,37,0.07)'); }}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
               Discard
             </button>
-            <button onClick={() => detailRef.current?.save()}
-              className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
+            <button onClick={() => void handleSaveChanges()}
+              disabled={saving}
+              className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-opacity disabled:opacity-60"
               style={{ background: ACCENT }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+              onMouseEnter={e => { if (!saving) (e.currentTarget.style.background = 'var(--gc-blue-hover)'); }}
               onMouseLeave={e => (e.currentTarget.style.background = ACCENT)}>
-              Save changes
+              {saving ? 'Saving…' : 'Save changes'}
             </button>
           </div>
         )}
