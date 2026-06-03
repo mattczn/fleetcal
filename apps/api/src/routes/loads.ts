@@ -904,11 +904,69 @@ loads.patch("/:id", requireCapability("loads.edit"), async (c) => {
   if ("commodity"    in body) update.commodity      = body.commodity    ?? null;
   if ("weight"       in body) update.weight         = body.weight       ?? null;
   if ("rateConPdf"   in body) update.rate_con_pdf   = body.rateConPdf   ?? null;
-  if ("accessorials" in body) update.accessorials   = body.accessorials ?? null;
   if ("refNums"      in body) update.ref_nums       = body.refNums?.length ? JSON.stringify(body.refNums) : null;
   if ("notes"         in body) update.notes          = body.notes         ?? null;
   if ("internalNotes" in body) update.internal_notes = body.internalNotes ?? [];
   if ("auditLog"      in body) update.audit_log      = body.auditLog      ?? null;
+
+  // Accessorials get a per-id merge instead of a blind overwrite. The
+  // EventModal owns category / description / amount / billable /
+  // payToDriver / payDriverName, but closeout's ReviewQueue is the
+  // only surface that mutates `status` (approved / denied). Before
+  // this guard, an idle EventModal save would round-trip the loaded
+  // accessorials back without status — silently wiping closeout's
+  // approval decisions whenever a dispatcher edited any other field
+  // on the load. We read the existing JSONB, preserve status from
+  // each existing entry, and overlay the body's editable fields.
+  // New ids in the body get inserted; existing ids missing from the
+  // body get dropped (dispatcher deleted them).
+  if ("accessorials" in body) {
+    type AccessorialRow = {
+      id: string;
+      status?: string;
+      // We carry these through unchanged from existing rows too. The
+      // modal does set these, but they don't have a competing writer
+      // — so preserving them is safe whether the modal sends them
+      // back or not.
+      // Anything not enumerated here gets the body value or null.
+      [k: string]: unknown;
+    };
+    const incoming = (body.accessorials ?? []) as unknown as AccessorialRow[];
+    if (incoming.length === 0) {
+      // Empty array → wipe all accessorials. The dispatcher explicitly
+      // cleared them in the modal, so closeout state goes with them.
+      update.accessorials = null;
+    } else {
+      const { data: row, error: readErr } = await supabase
+        .from("loads")
+        .select("accessorials")
+        .eq("id", loadId)
+        .eq("org_id", orgId)
+        .maybeSingle();
+      if (readErr) {
+        console.error("[PATCH /v1/loads/:id] accessorials read failed:", readErr);
+        return c.json({ error: "accessorials_read_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
+      }
+      const existing = ((row?.accessorials ?? []) as AccessorialRow[]) || [];
+      const existingById = new Map<string, AccessorialRow>();
+      for (const a of existing) if (a?.id) existingById.set(a.id, a);
+      const merged = incoming.map((a) => {
+        const prev = existingById.get(a.id);
+        if (!prev) return a; // new accessorial — take as-is
+        // Preserve closeout-owned fields. `status` is the active one;
+        // include the approved/denied timestamps + actor if your
+        // schema later adds them and we'll keep these forwards-compatible.
+        const preserved: Partial<AccessorialRow> = {};
+        if (prev.status        !== undefined) preserved.status        = prev.status;
+        if (prev.approvedAt    !== undefined) preserved.approvedAt    = prev.approvedAt;
+        if (prev.approvedBy    !== undefined) preserved.approvedBy    = prev.approvedBy;
+        if (prev.deniedAt      !== undefined) preserved.deniedAt      = prev.deniedAt;
+        if (prev.deniedBy      !== undefined) preserved.deniedBy      = prev.deniedBy;
+        return { ...a, ...preserved };
+      });
+      update.accessorials = merged;
+    }
+  }
 
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);

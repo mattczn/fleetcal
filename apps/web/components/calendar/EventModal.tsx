@@ -2132,6 +2132,16 @@ export default function EventModal() {
 
   // Rate con attachment
   const [rateConPdf,    setRateConPdf]    = useState<string | undefined>(undefined);
+  // Snapshot of rateConPdf at modal-open / reinit time. The save
+  // payload only includes `rateConPdf` when the current value
+  // differs from this snapshot — otherwise an idle modal would
+  // overwrite loads.rate_con_pdf with the value it loaded, racing
+  // with concurrent uploads from ReviewQueue (which write straight
+  // to loads.rate_con_pdf via the mirror in POST /v1/loads/:id/
+  // documents). Re-seeded by reinitForm, the modal-close reset, and
+  // the batch / relay-split refetch paths so a saved storage path
+  // becomes the new "unchanged" baseline.
+  const [rateConOriginal, setRateConOriginal] = useState<string | undefined>(undefined);
   const [showPdfViewer,  setShowPdfViewer]  = useState(false);
   const [showMapPanel,   setShowMapPanel]   = useState(false);
   const [showDriverSummary, setShowDriverSummary] = useState(false);
@@ -2431,6 +2441,9 @@ export default function EventModal() {
     if (ev.customerId) vals['customerId'] = ev.customerId;
     setFieldValues(vals);
     setRateConPdf(ev.rateConPdf ?? undefined);
+    // Snapshot the loaded rate-con path so doSave can skip writing
+    // it when the user didn't touch it (see rateConOriginal docs).
+    setRateConOriginal(ev.rateConPdf ?? undefined);
     setAccessorials(ev.accessorials ?? []);
     setStops(ev.stops ?? []);
     setEventKind(ev.eventKind ?? 'revenue');
@@ -2442,9 +2455,9 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); setSuggestAssetSwap(null); setSuggestDriverSwap(null); setSuggestRelayDelivAssetSwap(null); setSuggestRelayDelivDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); setSuggestAssetSwap(null); setSuggestDriverSwap(null); setSuggestRelayDelivAssetSwap(null); setSuggestRelayDelivDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
-    setRateConPdf(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
+    setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
     setRelayGroupId(undefined); setRelayRole(undefined);
     setRelayActive(false); setRelayPartner(null);
@@ -2487,6 +2500,9 @@ export default function EventModal() {
       if (vals['specialInstructions'] === undefined && ev.notes) vals['specialInstructions'] = ev.notes;
       setFieldValues(vals);
       setRateConPdf(ev.rateConPdf ?? undefined);
+      // Mirror reinitForm's baseline snapshot so this path doesn't
+      // accidentally start the modal "dirty" with respect to rate con.
+      setRateConOriginal(ev.rateConPdf ?? undefined);
       setAccessorials(ev.accessorials ?? []);
       setStops(ev.stops ?? []);
       setEventKind(ev.eventKind ?? 'revenue');
@@ -2575,6 +2591,11 @@ export default function EventModal() {
           if (v !== undefined) vals[f.id] = v as string | number | boolean;
         });
         setRateConPdf(batchItem.rateConPdf);
+        // Don't reseed rateConOriginal — batch parse just dropped a
+        // fresh rate con into a load context; leaving the baseline
+        // alone (typically undefined for new loads) means the
+        // skip-if-unchanged check sees a real change and saves the
+        // new path. See rateConOriginal docs.
         setShowPdfViewer(true);
         if (Array.isArray(p.stops) && p.stops.length > 0) {
           setStops((p.stops as Stop[]).map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 })));
@@ -2931,9 +2952,14 @@ export default function EventModal() {
     const pickupId   = crypto.randomUUID();
     const delivId    = crypto.randomUUID();
 
-    // Upload PDF to storage; drop it if upload fails to prevent oversized row
+    // Upload PDF to storage; drop it if upload fails to prevent oversized row.
+    // Only run when the user actually touched rateConPdf — see
+    // rateConOriginal docs. An idle modal save shouldn't re-upload an
+    // unchanged storage path (and shouldn't race a concurrent
+    // ReviewQueue rate-con upload by overwriting loads.rate_con_pdf).
+    const rateConChanged = rateConPdf !== rateConOriginal;
     let storedPdf: string | undefined = rateConPdf?.startsWith('data:') ? undefined : rateConPdf;
-    if (rateConPdf?.startsWith('data:') && orgId) {
+    if (rateConChanged && rateConPdf?.startsWith('data:') && orgId) {
       const targetId = isEdit ? (modalEventId ?? newEventId) : newEventId;
       try { storedPdf = await uploadRateCon(rateConPdf, orgId, targetId); }
       catch (err) { console.error('PDF upload failed — rate con not saved, re-attach when editing:', err); }
@@ -2955,9 +2981,13 @@ export default function EventModal() {
     // Explicit null (not undefined) clears the column on the API. JSON
     // serialization drops undefined keys entirely, so an undefined here
     // would leave the column unchanged when the user just deleted the
-    // rate-con.
+    // rate-con. Only include rateConPdf in the payload when it actually
+    // changed (rateConChanged) — otherwise an idle modal save would
+    // overwrite a fresh upload from ReviewQueue with the stale value
+    // the modal loaded.
     const rateConField = storedPdf ?? null;
-    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, rateConPdf: rateConField, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, ...internalNoteFields };
+    const rateConPart = rateConChanged ? { rateConPdf: rateConField } : {};
+    const shared = { title: title.trim(), ...optionals, priority, trailerId: linkedTrailerId, ...rateConPart, accessorials: accessorials.length > 0 ? accessorials : undefined, stops, eventKind, nonRevenueType: eventKind === 'non_revenue' ? nonRevenueType : undefined, ...internalNoteFields };
 
     // Resolve the typed driverId FROM the current driverName string
     // so every save persists the FK as well as the legacy name. Without
@@ -4688,6 +4718,11 @@ export default function EventModal() {
                     ?? (legs as CalendarEvent[])[0];
                   if (updatedLeg?.rateConPdf) {
                     setRateConPdf(updatedLeg.rateConPdf);
+                    // Server is the source of truth post-split — reset
+                    // the baseline so the next save doesn't try to
+                    // re-write the rate con back to whatever we had
+                    // before fetching.
+                    setRateConOriginal(updatedLeg.rateConPdf);
                     setShowPdfViewer(true);
                     setDocsTab('rateCon');
                     setPdfRetryKey(k => k + 1);
