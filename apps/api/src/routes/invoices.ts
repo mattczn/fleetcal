@@ -1174,38 +1174,115 @@ invoices.post("/batch-generate", async (c) => {
       const prefix = invoiceSettings.invoiceNumberPrefix ?? "";
       const invoiceNumber = `${prefix}${load.internal_load_id}`;
 
-      const insertRow = {
-        org_id:          orgId,
-        load_id:         load.id,
-        customer_id:     load.customer_id,
-        invoice_number:  invoiceNumber,
-        status:          "draft" as InvoiceStatus,
-        total,
-        issued_at:       new Date().toISOString(),
-        due_at:          dueAt,
-        snapshot,
-      };
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error: insertErr } = await supabase
+      // ── Rescue existing draft ───────────────────────────────────
+      // If an active (non-void) invoice already exists for this
+      // load, "Create & Send" used to fail with a 23505 unique-
+      // constraint violation. That state shouldn't be reachable in
+      // a happy-path flow, but we've seen it in production: a load
+      // ends up in Released (billing_status='verified') even though
+      // an invoice row already exists — usually because a previous
+      // generate succeeded server-side but the billing_status flip
+      // didn't land (interrupted request, manual reset, etc.).
+      // The dispatcher then can't push the load forward without
+      // hand-fixing the DB.
+      //
+      // Instead: look for an existing draft first. If found, treat
+      // it as "this is the invoice for this load" and continue
+      // through the same packet-persist + thenSend pipeline a
+      // fresh insert would. Sent / paid existing invoices skip the
+      // rescue because the load was already invoiced — surface a
+      // softer message so the user knows it's the same row, not a
+      // dup attempt.
+      let invoiceRow: unknown = null;
+      let rescued = false;
+      const { data: existingRow } = await supabase
         .from("invoices")
-        .insert(insertRow as any)
         .select(INVOICE_COLS)
-        .single();
-      if (insertErr || !data) {
-        if ((insertErr as { code?: string } | null)?.code === "23505") {
-          failed.push({ loadId, error: "An active invoice already exists for this load." });
+        .eq("org_id", orgId)
+        .eq("load_id", load.id)
+        .neq("status", "void")
+        .maybeSingle();
+      if (existingRow) {
+        const existingTyped = existingRow as unknown as { id: string; status: string };
+        const existingStatus = existingTyped.status;
+        if (existingStatus === "draft") {
+          // Reuse the existing draft. Refresh snapshot/total/customer
+          // so any data corrections (rate edits, broker pick, etc.)
+          // since the original draft show up in the packet.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: upd, error: updErr } = await supabase
+            .from("invoices")
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            .update({
+              customer_id:     load.customer_id,
+              invoice_number:  invoiceNumber,
+              total,
+              issued_at:       new Date().toISOString(),
+              due_at:          dueAt,
+              snapshot,
+            } as any)
+            .eq("id", existingTyped.id)
+            .eq("org_id", orgId)
+            .eq("status", "draft")
+            .select(INVOICE_COLS)
+            .single();
+          if (updErr || !upd) {
+            failed.push({ loadId, error: updErr?.message ?? "rescue_update_failed" });
+            continue;
+          }
+          invoiceRow = upd;
+          rescued = true;
         } else {
-          failed.push({ loadId, error: insertErr?.message ?? "insert_failed" });
+          // Sent / paid — load was already invoiced; surface that
+          // and skip. The accounting page should self-heal the
+          // bucket on the next refresh (it groups by invoice.status).
+          failed.push({
+            loadId,
+            error: `Already invoiced (status: ${existingStatus}). Refresh to update the bucket.`,
+          });
+          continue;
         }
-        continue;
+      } else {
+        // No existing row — normal insert path.
+        const insertRow = {
+          org_id:          orgId,
+          load_id:         load.id,
+          customer_id:     load.customer_id,
+          invoice_number:  invoiceNumber,
+          status:          "draft" as InvoiceStatus,
+          total,
+          issued_at:       new Date().toISOString(),
+          due_at:          dueAt,
+          snapshot,
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error: insertErr } = await supabase
+          .from("invoices")
+          .insert(insertRow as any)
+          .select(INVOICE_COLS)
+          .single();
+        if (insertErr || !data) {
+          if ((insertErr as { code?: string } | null)?.code === "23505") {
+            // Lost the race with a concurrent insert — rare but
+            // possible. Surface a distinct error so logs can tell
+            // it apart from the older stale-state case.
+            failed.push({ loadId, error: "An active invoice already exists for this load (race)." });
+          } else {
+            failed.push({ loadId, error: insertErr?.message ?? "insert_failed" });
+          }
+          continue;
+        }
+        invoiceRow = data;
       }
 
+      // Always heal billing_status — covers both the fresh-insert
+      // case and the rescue case where the prior flip didn't land.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await supabase.from("loads").update({ billing_status: "invoiced" } as any)
         .eq("id", load.id).eq("org_id", orgId);
 
-      const newInvoice = rowToInvoice(data as unknown as InvoiceRow);
+      const newInvoice = rowToInvoice(invoiceRow as unknown as InvoiceRow);
+      void rescued; // info-only; UI doesn't distinguish today
 
       // Persist packet — best-effort, same as single-create path.
       try {
