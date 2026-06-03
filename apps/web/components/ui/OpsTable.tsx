@@ -66,7 +66,7 @@ import {
   type ColumnDef as TanColumnDef,
   type SortingState,
 } from '@tanstack/react-table';
-import { ChevronDown, Search as SearchIcon, ArrowUp, ArrowDown, X, Columns as ColumnsIcon, Calendar as CalendarIcon } from 'lucide-react';
+import { ChevronDown, Search as SearchIcon, ArrowUp, ArrowDown, X, Columns as ColumnsIcon, Calendar as CalendarIcon, GripVertical } from 'lucide-react';
 import DatePicker from '../calendar/DatePicker';
 
 // ── Public types ──────────────────────────────────────────────────────
@@ -582,33 +582,49 @@ export function OpsTable<T>({
 
   // Pickable columns for the visibility chip — excludes alwaysVisible.
   // Derived from orderedColumns (NOT raw columns) so the picker UI
-  // reflects the user's reorder choices. Without this, clicking the
-  // up/down arrows updates columnOrder state and re-renders the table
-  // correctly, but the picker keeps showing the original order — which
-  // looks like the buttons are broken AND breaks the atTop/atBottom
-  // computation for the next click.
+  // reflects the user's reorder choices. Without this, the drag-drop
+  // reorder updates columnOrder state and re-renders the table
+  // correctly, but the picker keeps showing the original order.
   const pickerColumns = useMemo(
     () => orderedColumns.filter(c => !c.alwaysVisible),
     [orderedColumns],
   );
 
-  // Move-up / move-down helpers for the picker dropdown. The slot
-  // arg here is "position in the picker's column list" (= pickerColumns
-  // index). We translate that into the full columnOrder array since
-  // pickerColumns excludes alwaysVisible entries. Pinned columns
-  // shouldn't be reorderable across the pinned/non-pinned boundary,
-  // but the picker doesn't list them so this is naturally enforced.
-  const moveColumn = useCallback((key: string, dir: -1 | 1) => {
+  // Drag-drop column reorder. The picker emits an absolute target
+  // position within ITS visible list (which excludes alwaysVisible
+  // columns); we translate that back into a slot in the full
+  // columnOrder array. Splicing in two steps (remove then re-insert)
+  // keeps the math simple regardless of which direction the move goes.
+  // Pinned columns shouldn't reorder across the pinned/non-pinned
+  // boundary, but the picker doesn't list them so it's naturally
+  // enforced.
+  const moveColumnTo = useCallback((key: string, targetPickerIdx: number) => {
     setColumnOrder(prev => {
       const next = [...prev];
-      const i = next.indexOf(key);
-      if (i === -1) return prev;
-      const j = i + dir;
-      if (j < 0 || j >= next.length) return prev;
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
+      const from = next.indexOf(key);
+      if (from === -1) return prev;
+      // Walk the columnOrder picking up alwaysVisible slots so the
+      // picker-index → columnOrder-index translation lands on the
+      // correct global position (the picker hides those rows but the
+      // underlying array still contains them).
+      const colByKey = new Map(columns.map(c => [c.key, c] as const));
+      const isPickable = (k: string) => !colByKey.get(k)?.alwaysVisible;
+      // Build the pickable-only sequence to determine the target slot.
+      const pickable = next.filter(isPickable);
+      // Remove the source from the pickable list and insert it at the
+      // requested index, then translate that ordering back to full
+      // columnOrder by reinserting alwaysVisible slots in place.
+      const pickedKey = pickable.splice(pickable.indexOf(key), 1)[0];
+      const clamped = Math.max(0, Math.min(targetPickerIdx, pickable.length));
+      pickable.splice(clamped, 0, pickedKey);
+      // Re-zip: stream through `next`, replacing each pickable slot in
+      // sequence with the new ordering, keeping alwaysVisible columns
+      // exactly where they were.
+      let p = 0;
+      const result = next.map(k => (isPickable(k) ? (pickable[p++] ?? k) : k));
+      return result;
     });
-  }, []);
+  }, [columns]);
 
   return (
     <div className={fillHeight ? 'w-full h-full flex flex-col min-h-0' : 'w-full'}>
@@ -683,7 +699,7 @@ export function OpsTable<T>({
               hidden={hiddenCols}
               onChange={setHiddenCols}
               reorder={columnReorder}
-              onMove={moveColumn}
+              onMoveTo={moveColumnTo}
             />
           )}
           {!selectionActive && toolbarRight}
@@ -1177,15 +1193,15 @@ function fmtShort(iso: string): string {
 }
 
 function ColumnPickerChip<T>({
-  columns, hidden, onChange, reorder, onMove,
+  columns, hidden, onChange, reorder, onMoveTo,
 }: {
   columns: OpsColumn<T>[];
   hidden: Set<string>;
   onChange: (next: Set<string>) => void;
-  /** Show up/down buttons to reorder columns inline. */
+  /** Show a drag handle on each row so the user can reorder columns. */
   reorder?: boolean;
-  /** Move a column up (-1) or down (+1) in the column order. */
-  onMove?: (key: string, dir: -1 | 1) => void;
+  /** Move a column to an absolute index within the picker's visible list. */
+  onMoveTo?: (key: string, targetIndex: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -1197,6 +1213,16 @@ function ColumnPickerChip<T>({
     window.addEventListener('mousedown', onDoc);
     return () => window.removeEventListener('mousedown', onDoc);
   }, [open]);
+
+  // ── Drag-drop reorder state ────────────────────────────────────────
+  // `dragKey` is the key of the row currently being dragged.
+  // `overIdx` is the index of the row hovered as drop target.
+  // `placement` tells the dragover-onto-row math which half is closer
+  // ("before" inserts above the hovered row, "after" below) so the
+  // visual indicator + the resolved drop index match.
+  const [dragKey,  setDragKey]  = useState<string | null>(null);
+  const [overIdx,  setOverIdx]  = useState<number  | null>(null);
+  const [placement, setPlacement] = useState<'before' | 'after'>('before');
 
   const hiddenCount = columns.filter(c => hidden.has(c.key)).length;
 
@@ -1237,20 +1263,98 @@ function ColumnPickerChip<T>({
           }}>
           {columns.map((c, idx) => {
             const isHidden = hidden.has(c.key);
-            const atTop    = idx === 0;
-            const atBottom = idx === columns.length - 1;
+            const isDragging = dragKey === c.key;
+            const dragEnabled = !!reorder && !!onMoveTo;
+            // Drop-line indicator: only paint when ANOTHER row is being
+            // dragged and the pointer is currently over this row. The
+            // line sits on whichever half the pointer entered last.
+            const showLineAbove = dragKey && dragKey !== c.key
+              && overIdx === idx && placement === 'before';
+            const showLineBelow = dragKey && dragKey !== c.key
+              && overIdx === idx && placement === 'after';
             return (
               <div
                 key={c.key}
+                draggable={dragEnabled}
+                onDragStart={(e) => {
+                  if (!dragEnabled) return;
+                  setDragKey(c.key);
+                  // Required for Firefox to actually start the drag.
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', c.key);
+                }}
+                onDragOver={(e) => {
+                  if (!dragEnabled || !dragKey || dragKey === c.key) return;
+                  // Vertical midpoint of THIS row decides whether the
+                  // drop lands above or below. Compare with bounding
+                  // rect each move so reordered rows stay accurate.
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  const midY = rect.top + rect.height / 2;
+                  setOverIdx(idx);
+                  setPlacement(e.clientY < midY ? 'before' : 'after');
+                }}
+                onDrop={(e) => {
+                  if (!dragEnabled || !dragKey || !onMoveTo) return;
+                  e.preventDefault();
+                  if (dragKey === c.key) { setDragKey(null); setOverIdx(null); return; }
+                  // Translate (target row + placement) to an absolute
+                  // index in the moved-out list. We send the target the
+                  // user pointed at; moveColumnTo splices into that slot.
+                  // "after" means insert at idx+1; if the source sits
+                  // above the target, removing it first shifts the
+                  // target index down by 1, so we adjust.
+                  const sourceIdx = columns.findIndex(col => col.key === dragKey);
+                  let target = placement === 'before' ? idx : idx + 1;
+                  if (sourceIdx !== -1 && sourceIdx < target) target -= 1;
+                  onMoveTo(dragKey, target);
+                  setDragKey(null);
+                  setOverIdx(null);
+                }}
+                onDragEnd={() => {
+                  // Catch-all so a drop outside any row clears state.
+                  setDragKey(null);
+                  setOverIdx(null);
+                }}
                 className="flex items-center gap-2 transition-colors"
                 style={{
+                  position:   'relative',
                   padding:    '6px 8px 6px 12px',
                   fontSize:   13,
                   color:      'var(--gc-text-1)',
                   background: 'transparent',
+                  opacity:    isDragging ? 0.4 : 1,
                 }}
-                onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = '#f8f9fa')}
+                onMouseEnter={e => { if (!dragKey) (e.currentTarget as HTMLElement).style.background = '#f8f9fa'; }}
                 onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = 'transparent')}>
+                {/* Top / bottom drop-line indicators — sit absolutely
+                    inside the row so they don't shift its height. */}
+                {showLineAbove && (
+                  <div aria-hidden style={{
+                    position: 'absolute', top: -1, left: 8, right: 8, height: 2,
+                    background: 'var(--gc-blue)', borderRadius: 1, pointerEvents: 'none',
+                  }} />
+                )}
+                {showLineBelow && (
+                  <div aria-hidden style={{
+                    position: 'absolute', bottom: -1, left: 8, right: 8, height: 2,
+                    background: 'var(--gc-blue)', borderRadius: 1, pointerEvents: 'none',
+                  }} />
+                )}
+                {dragEnabled && (
+                  <span
+                    aria-label={`Drag to reorder ${c.pickerLabel ?? c.header}`}
+                    title="Drag to reorder"
+                    className="flex items-center justify-center shrink-0"
+                    style={{
+                      width: 16, height: 22, marginLeft: -4,
+                      color: 'var(--gc-text-3)',
+                      cursor: 'grab',
+                    }}>
+                    <GripVertical size={13} />
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -1264,46 +1368,6 @@ function ColumnPickerChip<T>({
                   <CheckBox checked={!isHidden} onChange={() => { /* button handles */ }} aria-hidden />
                   <span className="flex-1">{c.pickerLabel ?? c.header}</span>
                 </button>
-                {reorder && onMove && (
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => onMove(c.key, -1)}
-                      disabled={atTop}
-                      aria-label={`Move ${c.pickerLabel ?? c.header} up`}
-                      className="flex items-center justify-center rounded transition-colors"
-                      style={{
-                        width: 22, height: 22,
-                        background: 'transparent',
-                        color: atTop ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
-                        opacity: atTop ? 0.4 : 1,
-                        cursor: atTop ? 'default' : 'pointer',
-                        border: 'none',
-                      }}
-                      onMouseEnter={e => { if (!atTop) (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
-                      <ArrowUp size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onMove(c.key, 1)}
-                      disabled={atBottom}
-                      aria-label={`Move ${c.pickerLabel ?? c.header} down`}
-                      className="flex items-center justify-center rounded transition-colors"
-                      style={{
-                        width: 22, height: 22,
-                        background: 'transparent',
-                        color: atBottom ? 'var(--gc-text-3)' : 'var(--gc-text-2)',
-                        opacity: atBottom ? 0.4 : 1,
-                        cursor: atBottom ? 'default' : 'pointer',
-                        border: 'none',
-                      }}
-                      onMouseEnter={e => { if (!atBottom) (e.currentTarget as HTMLElement).style.background = 'var(--gc-bg)'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
-                      <ArrowDown size={12} />
-                    </button>
-                  </div>
-                )}
               </div>
             );
           })}
