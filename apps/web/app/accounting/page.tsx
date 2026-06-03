@@ -89,7 +89,9 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
   total:        120,
   docs:         240,
   status:       110,
-  flags:         80,
+  // flags now carries 3 controls (star + notes + view/docs) so it
+  // needs more horizontal room than the original star-only cell.
+  flags:        150,
   view:          80,
 };
 
@@ -97,8 +99,9 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
 // hiding) so they don't show up in the Columns picker on the wrong
 // bucket. Released has no invoice yet, so invoice-specific cols
 // vanish; Invoiced/Paid have sent already, so Send-to vanishes.
-// `view` stays everywhere — Released uses it for a "Docs" peek
-// dialog, the rest open the invoice viewer.
+// The View / Docs button is rendered inline inside the flags cell
+// now, so the legacy `view` key no longer corresponds to a real
+// column — nothing to omit there.
 const COLS_OMITTED_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
   released: new Set(['invoiceNum', 'issued', 'due', 'status']),
   queued:   new Set(['status']),
@@ -404,45 +407,39 @@ function AccountingPageInner() {
   const tableColumns = useMemo<OpsColumn<Row>[]>(() => {
     const all: OpsColumn<Row>[] = [];
 
-    // Star + Notes pinned LEFT — utility column.
+    // Far-left utility cell: priority star, internal-notes button, and
+    // the row's primary action (View invoice / View docs). Merged into
+    // a single column so all three sit inline with each other —
+    // visually anchored to the row's left edge where the eye lands
+    // first. The action button is rendered with whitespace-nowrap so
+    // a "Docs" or "View" label can't wrap when the cell is tight.
     all.push({
       key: 'flags', header: '', width: DEFAULT_COL_WIDTHS.flags,
-      pinned: 'left', alwaysVisible: true, pickerLabel: 'Star / notes',
+      pinned: 'left', alwaysVisible: true, pickerLabel: 'Star / notes / view',
       render: r => {
         const notesCount = (r.load.internalNotes ?? []).length;
         return (
           <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             <PriorityToggle load={r.load} actorName={actorName} onAfter={() => void refresh()} />
             <NotesButton count={notesCount} onOpen={() => setNotesTarget(r.load)} />
+            {r.invoice ? (
+              <button onClick={() => setInvoiceModalId(r.invoice!.id)}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+                title="View invoice — PDF + actions">
+                <Eye size={11} /> View
+              </button>
+            ) : (
+              <button onClick={() => setDocsPreviewLoad(r.load)}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
+                title="Preview the docs that will be attached to the invoice packet">
+                <Eye size={11} /> Docs
+              </button>
+            )}
           </div>
         );
       },
-    });
-
-    // View pinned LEFT (right after flags) — the dispatcher's most-
-    // common action is "open this thing", so the button needs to sit
-    // where the eye lands first. Renders one of two things:
-    //   • Queued/Invoiced/Paid (r.invoice exists)  → View invoice
-    //   • Released (no invoice yet)                → View docs
-    //                                                 (preview what
-    //                                                  goes in the
-    //                                                  packet)
-    all.push({
-      key: 'view', header: '', width: DEFAULT_COL_WIDTHS.view,
-      pinned: 'left', alwaysVisible: true, pickerLabel: 'View invoice / docs',
-      render: r => r.invoice ? (
-        <button onClick={(e) => { e.stopPropagation(); setInvoiceModalId(r.invoice!.id); }}
-          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
-          style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-          title="View invoice — PDF + actions"><Eye size={11} /> View</button>
-      ) : (
-        <button onClick={(e) => { e.stopPropagation(); setDocsPreviewLoad(r.load); }}
-          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors"
-          style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-          title="Preview the docs that will be attached to the invoice packet">
-          <Eye size={11} /> Docs
-        </button>
-      ),
     });
 
     all.push({
