@@ -1198,14 +1198,21 @@ function InvoiceSummaryModal({
                 <div className="px-3 py-2 rounded-lg flex items-start gap-2 text-[12px]"
                   style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}>
                   <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                  Some brokers have no saved AP email — their invoices will be created but skipped at the send step.
+                  {/* Wrap message in a single span so it's one flex item.
+                      Bare text nodes inside flex containers get split into
+                      per-node flex items, which mangles emphasis tags
+                      (the inline elements become vertically-centered
+                      boxes that don't sit on the text baseline). */}
+                  <span>Some brokers have no saved AP email — their invoices will be created but skipped at the send step.</span>
                 </div>
               )}
               {hasPortal && (
                 <div className="px-3 py-2 rounded-lg flex items-start gap-2 text-[12px]"
                   style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
                   <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
-                  Portal brokers won't get an email — their invoices flip to <strong>Sent</strong> so you can upload the packet to the portal yourself. Turn on <em>Bcc me a copy</em> to get the packet emailed to yourself.
+                  <span>
+                    Portal brokers won't get an email — their invoices flip to <strong>Sent</strong> so you can upload the packet to the portal yourself. Turn on <em>Bcc me a copy</em> to get the packet emailed to yourself.
+                  </span>
                 </div>
               )}
 
