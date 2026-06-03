@@ -1161,20 +1161,51 @@ function InvoiceSummaryModal({
                     {loads.map(l => {
                       const customer = l.customerId ? customerById.get(l.customerId) : undefined;
                       const brokerName = customer?.name ?? l.broker ?? '—';
-                      const noEmail = willSend && customer && (customer.invoiceMethod ?? 'email') === 'email' && !customer.invoiceEmail;
+                      // Resolve where this invoice is actually heading
+                      // so the dispatcher can sanity-check the
+                      // destination before clicking Send. Email customers
+                      // show the AP address (or a red "no email" badge
+                      // when missing); portal customers show their
+                      // portal label; loads with no customer record fall
+                      // back to a muted "—".
+                      const method = customer?.invoiceMethod ?? 'email';
+                      const noEmail = customer && method === 'email' && !customer.invoiceEmail;
+                      let destination: { label: string; tone: 'normal' | 'missing' | 'portal' } | null = null;
+                      if (customer) {
+                        if (method === 'portal') {
+                          destination = { label: `Portal: ${customer.invoicePortal ?? '(no portal saved)'}`, tone: 'portal' };
+                        } else if (customer.invoiceEmail) {
+                          destination = { label: customer.invoiceEmail, tone: 'normal' };
+                        } else {
+                          destination = { label: 'No email saved', tone: 'missing' };
+                        }
+                      }
                       return (
                         <tr key={l.loadId} style={{ borderTop: '1px solid var(--gc-border-light)' }}>
                           <Td>
-                            <div className="flex items-center gap-1.5">
-                              {customer ? (
-                                <button onClick={() => onOpenBroker(customer.id)}
-                                  className="text-left hover:underline" style={{ color: 'var(--gc-text-1)' }}>
-                                  {brokerName}
-                                </button>
-                              ) : <span style={{ color: 'var(--gc-text-3)' }}>{brokerName}</span>}
-                              {noEmail && (
-                                <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full"
-                                  style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>No email</span>
+                            <div className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-1.5">
+                                {customer ? (
+                                  <button onClick={() => onOpenBroker(customer.id)}
+                                    className="text-left hover:underline" style={{ color: 'var(--gc-text-1)' }}>
+                                    {brokerName}
+                                  </button>
+                                ) : <span style={{ color: 'var(--gc-text-3)' }}>{brokerName}</span>}
+                                {willSend && noEmail && (
+                                  <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded-full"
+                                    style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>No email</span>
+                                )}
+                              </div>
+                              {destination && (
+                                <div className="text-[11px] truncate"
+                                  style={{
+                                    color: destination.tone === 'missing' ? '#991b1b'
+                                         : destination.tone === 'portal'  ? '#1d4ed8'
+                                         : 'var(--gc-text-3)',
+                                  }}
+                                  title={destination.label}>
+                                  {destination.label}
+                                </div>
                               )}
                             </div>
                           </Td>
@@ -1191,6 +1222,29 @@ function InvoiceSummaryModal({
                       );
                     })}
                   </tbody>
+                  {/* Total row — sums every row's billable amount.
+                      `totalAmount` is computed in the parent (same
+                      value that drives the header "$X,XXX" total),
+                      surfacing it here lets the dispatcher cross-check
+                      the math without scrolling back up to the
+                      title bar. */}
+                  <tfoot>
+                    <tr style={{ background: 'var(--gc-bg)', borderTop: '2px solid var(--gc-border-light)' }}>
+                      <Td>
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider" style={{ color: 'var(--gc-text-2)' }}>
+                          Total
+                        </span>
+                      </Td>
+                      <Td className="tabular-nums">
+                        <span style={{ color: 'var(--gc-text-3)' }}>
+                          {loads.length} {loads.length === 1 ? 'load' : 'loads'}
+                        </span>
+                      </Td>
+                      <Td align="right" className="tabular-nums font-extrabold">
+                        <span style={{ color: '#15803d' }}>{moneyFmt.format(totalAmount)}</span>
+                      </Td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
 
