@@ -551,11 +551,13 @@ function AccountingPageInner() {
                   Missing RC
                 </span>
               )}
-            {(counts.pod     ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}     />}
-            {(counts.bol     ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}     />}
-            {(counts.lumper  ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}  />}
-            {(counts.scale   ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}   />}
-            {(counts.invoice ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice} />}
+            {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}          />}
+            {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}          />}
+            {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}       />}
+            {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}        />}
+            {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt}      />}
+            {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
+            {(counts.invoice      ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice}      />}
           </div>
         );
       },
@@ -953,6 +955,10 @@ function AccountingPageInner() {
         <LoadDocsPreviewModal
           load={docsPreviewLoad}
           onClose={() => setDocsPreviewLoad(null)}
+          // After Save selection writes loads.invoice_doc_ids, refresh
+          // the parent so the next open seeds from the freshly-saved
+          // selection (the table reads invoiceDocIds off LoadSummary).
+          onSaved={() => { setDocsPreviewLoad(null); void refresh(); }}
         />
       )}
       {summaryAction && (
@@ -1434,7 +1440,14 @@ const ACCOUNTING_KIND_TINT: Record<string, { bg: string; fg: string }> = {
 };
 const RATE_CON_ACTIVE_ID = '__rate_con__';
 
-function LoadDocsPreviewModal({ load, onClose }: { load: LoadSummary; onClose: () => void }) {
+function LoadDocsPreviewModal({ load, onClose, onSaved }: {
+  load: LoadSummary;
+  onClose: () => void;
+  /** Fired after Save selection persists. Parent refreshes the
+   *  table so the next open seeds from the new invoiceDocIds. When
+   *  omitted, save just calls onClose (legacy behaviour). */
+  onSaved?: () => void;
+}) {
   type LoadDoc = import('@fleetcal/types').DocumentSummary;
   const [docs, setDocs]               = useState<LoadDoc[] | null>(null);
   const [error, setError]             = useState<string | null>(null);
@@ -1536,7 +1549,9 @@ function LoadDocsPreviewModal({ load, onClose }: { load: LoadSummary; onClose: (
         action: 'set_invoice_docs',
         invoiceDocIds: Array.from(included),
       });
-      onClose();
+      // Prefer onSaved (refreshes the parent) when wired; fall back
+      // to plain close for callers that don't care about a refetch.
+      if (onSaved) onSaved(); else onClose();
     } catch (err) {
       setSaveError((err as Error)?.message ?? 'save failed');
       setSaving(false);

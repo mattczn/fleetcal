@@ -165,6 +165,37 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
     console.error("[PATCH /v1/documents/:id] update failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
+  // Belt-and-suspenders: explicitly recompute loads.document_counts
+  // after a kind change. The AFTER UPDATE trigger
+  // (`load_documents_refresh_counts`) is supposed to do this, but
+  // we've seen stale counts in production where receipts show as
+  // "RC ×3" in the badge column — most likely because the trigger
+  // didn't fire (legacy data, migration not applied, etc.). Manually
+  // re-aggregating here makes the count match the actual kind values
+  // immediately for this load, no matter the trigger state.
+  if (hasKind && row.load_id) {
+    try {
+      const { data: agg } = await supabase
+        .from("load_documents")
+        .select("kind")
+        .eq("load_id", row.load_id)
+        .eq("org_id", orgId);
+      const next: Record<string, number> = {};
+      for (const r of (agg ?? []) as Array<{ kind: string }>) {
+        next[r.kind] = (next[r.kind] ?? 0) + 1;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await supabase
+        .from("loads")
+        .update({ document_counts: next } as any)
+        .eq("id", row.load_id)
+        .eq("org_id", orgId);
+    } catch (recountErr) {
+      // Non-fatal — the kind change landed; the badge column will
+      // self-heal once the trigger fires on the next mutation.
+      console.warn("[PATCH /v1/documents/:id] document_counts re-aggregate failed:", recountErr);
+    }
+  }
   return c.json({
     ok: true,
     ...(cleanName !== undefined ? { fileName: cleanName } : {}),
