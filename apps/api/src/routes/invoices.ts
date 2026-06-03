@@ -1229,14 +1229,26 @@ invoices.post("/batch-generate", async (c) => {
 
       const groups: BatchSendInvoicesResponse["groups"] = [];
       for (const inv of invs) {
-        if (!inv.customerId) continue; // brokerless invoices can't be auto-sent
+        const loadNumber = inv.snapshot.loadNumber || undefined;
+        if (!inv.customerId) {
+          // Brokerless invoices can't be auto-sent. Surface them in
+          // the result so the UI can show "Skipped — no broker on
+          // load" instead of silently dropping them — the count
+          // mismatch ("9 generated, only 6 sent") was the symptom.
+          groups.push({
+            customerId: "", brokerName: inv.snapshot.brokerName ?? "Unknown broker",
+            to: null, status: "skipped_no_customer", invoiceIds: [inv.id], loadNumber,
+            error: "No broker linked to this load — set a customer before sending.",
+          });
+          continue;
+        }
         const customer = customerById.get(inv.customerId);
         const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
         const recipient  = customer?.invoice_email?.trim() || undefined;
         if (!recipient) {
           groups.push({
             customerId: inv.customerId, brokerName, to: null,
-            status: "skipped_no_email", invoiceIds: [inv.id],
+            status: "skipped_no_email", invoiceIds: [inv.id], loadNumber,
           });
           continue;
         }
@@ -1255,7 +1267,7 @@ invoices.post("/batch-generate", async (c) => {
         } catch (err) {
           groups.push({
             customerId: inv.customerId, brokerName, to: recipient, status: "failed",
-            invoiceIds: [inv.id],
+            invoiceIds: [inv.id], loadNumber,
             error: `packet build failed: ${(err as Error)?.message}`,
           });
           continue;
@@ -1279,7 +1291,7 @@ invoices.post("/batch-generate", async (c) => {
         } catch (err) {
           groups.push({
             customerId: inv.customerId, brokerName, to: recipient, status: "failed",
-            invoiceIds: [inv.id],
+            invoiceIds: [inv.id], loadNumber,
             error: (err as Error)?.message ?? "email send failed",
           });
           continue;
@@ -1308,7 +1320,7 @@ invoices.post("/batch-generate", async (c) => {
 
         groups.push({
           customerId: inv.customerId, brokerName, to: recipient, status: "sent",
-          invoiceIds: [inv.id], messageId,
+          invoiceIds: [inv.id], loadNumber, messageId,
         });
       }
 
@@ -1472,6 +1484,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     const customer   = customerById.get(customerId);
     const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
     const recipient  = customer?.invoice_email?.trim() || undefined;
+    const loadNumber = inv.snapshot.loadNumber || undefined;
 
     if (!recipient) {
       groups.push({
@@ -1480,6 +1493,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         to:         null,
         status:     "skipped_no_email",
         invoiceIds: [inv.id],
+        loadNumber,
       });
       continue;
     }
@@ -1510,6 +1524,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         to:         recipient,
         status:     "failed",
         invoiceIds: [inv.id],
+        loadNumber,
         error:      `packet build failed: ${(err as Error)?.message}`,
       });
       continue;
@@ -1539,6 +1554,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
         to:         recipient,
         status:     "failed",
         invoiceIds: [inv.id],
+        loadNumber,
         error:      (err as Error)?.message ?? "email send failed",
       });
       continue;
@@ -1583,6 +1599,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       to:         recipient,
       status:     "sent",
       invoiceIds: [inv.id],
+      loadNumber,
       messageId,
     });
   }
@@ -1907,11 +1924,12 @@ invoices.post("/batch-resend", requireCapability("accounting.send_invoice"), asy
     const customer   = customerById.get(customerId);
     const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
     const recipient  = customer?.invoice_email?.trim() || undefined;
+    const loadNumber = inv.snapshot.loadNumber || undefined;
 
     if (!recipient) {
       groups.push({
         customerId, brokerName, to: null,
-        status: "skipped_no_email", invoiceIds: [inv.id],
+        status: "skipped_no_email", invoiceIds: [inv.id], loadNumber,
       });
       continue;
     }
@@ -1933,7 +1951,7 @@ invoices.post("/batch-resend", requireCapability("accounting.send_invoice"), asy
     } catch (err) {
       groups.push({
         customerId, brokerName, to: recipient, status: "failed",
-        invoiceIds: [inv.id],
+        invoiceIds: [inv.id], loadNumber,
         error: `packet build failed: ${(err as Error)?.message}`,
       });
       continue;
@@ -1957,7 +1975,7 @@ invoices.post("/batch-resend", requireCapability("accounting.send_invoice"), asy
     } catch (err) {
       groups.push({
         customerId, brokerName, to: recipient, status: "failed",
-        invoiceIds: [inv.id],
+        invoiceIds: [inv.id], loadNumber,
         error: (err as Error)?.message ?? "email send failed",
       });
       continue;
@@ -1990,7 +2008,7 @@ invoices.post("/batch-resend", requireCapability("accounting.send_invoice"), asy
 
     groups.push({
       customerId, brokerName, to: recipient, status: "sent",
-      invoiceIds: [inv.id], messageId,
+      invoiceIds: [inv.id], loadNumber, messageId,
     });
   }
 

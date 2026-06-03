@@ -1331,14 +1331,22 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
         <div className="space-y-1.5">
           {result.sent.map((g, i) => {
             const tone =
-              g.status === 'sent'             ? { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: `Sent · ${g.invoiceIds.length}` } :
-              g.status === 'skipped_no_email' ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no AP email' } :
-                                                { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Failed' };
+              g.status === 'sent'                ? { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: `Sent · ${g.invoiceIds.length}` } :
+              g.status === 'skipped_no_email'    ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no AP email' } :
+              g.status === 'skipped_no_customer' ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no broker' } :
+                                                   { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Failed' };
             return (
               <div key={i} className="px-3 py-2 rounded-lg flex items-center justify-between gap-3"
                 style={{ background: tone.bg, color: tone.fg, border: `1px solid ${tone.border}` }}>
                 <div className="min-w-0">
-                  <div className="font-semibold text-[12.5px] truncate">{g.brokerName}</div>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-[12.5px] truncate">{g.brokerName}</span>
+                    {g.loadNumber && (
+                      <span className="text-[11px] font-mono tabular-nums opacity-70 shrink-0">
+                        #{g.loadNumber}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[11.5px] opacity-80 truncate">{g.to ?? '—'}</div>
                   {g.error && <div className="text-[11.5px] opacity-90 mt-0.5">{g.error}</div>}
                 </div>

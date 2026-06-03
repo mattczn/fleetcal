@@ -1050,14 +1050,28 @@ export interface BatchSendInvoicesRequest {
 }
 
 export interface BatchSendInvoicesResponse {
-  /** Per-broker group results, in arbitrary order. */
+  /** Per-invoice group results, in arbitrary order. (Despite the name,
+   *  the send loop is per-invoice now — each entry's invoiceIds is
+   *  length 1. The shape is kept for backwards compat.) */
   groups: Array<{
+    /** May be empty when the invoice was created without a customer
+     *  link (legacy / hand-entered loads). The corresponding status is
+     *  'skipped_no_customer'. */
     customerId:  string;
     brokerName:  string;
     to:          string | null;
-    /** 'sent', 'skipped_no_email', 'failed'. */
-    status:      'sent' | 'skipped_no_email' | 'failed';
+    /** 'sent'                 — invoice email delivered.
+     *  'skipped_no_email'     — broker exists but has no AP email set.
+     *  'skipped_no_customer'  — invoice has no customer link (can't
+     *                            resolve a recipient at all).
+     *  'failed'               — packet build or email send threw. */
+    status:      'sent' | 'skipped_no_email' | 'skipped_no_customer' | 'failed';
     invoiceIds:  string[];
+    /** Internal load number for the (single) invoice in this group.
+     *  Falls back to load_num (the broker's load #) when internal
+     *  isn't set. Surfaced in the UI so a "Sent" row identifies
+     *  exactly which load shipped. */
+    loadNumber?: string;
     error?:      string;
     messageId?:  string;
   }>;

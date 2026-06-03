@@ -153,13 +153,30 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
     logoData:      args.invoice.snapshot.companyLogoUrl,
   });
 
+  // Packet order: invoice → POD / BOL / lumper / scale / etc.
+  // (the "proof" docs brokers actually need to approve payment) →
+  // rate confirmation last. Brokers want to verify delivery before
+  // matching the invoice to the original rate agreement, so the
+  // proof docs sit closer to the invoice and the rate con anchors
+  // the back of the packet as the contract reference.
+
   // Seed the packet with the invoice itself.
   const packet = await PDFDocument.create();
   const invoiceDoc = await PDFDocument.load(invoicePdfBytes);
   const invoicePages = await packet.copyPages(invoiceDoc, invoiceDoc.getPageIndices());
   for (const p of invoicePages) packet.addPage(p);
 
-  // Rate con next (if present + not a legacy data URL). New uploads
+  // Selected supporting docs (POD/BOL/lumper/scale/receipt/driver_sheet,
+  // in the kind order resolveDefaultPacketDocs already emits).
+  for (const path of args.extraDocPaths) {
+    const r = await appendSource(packet, {
+      bucket: "load-documents",
+      path,
+    });
+    if (!r.ok) skipped.push(path);
+  }
+
+  // Rate con last (if present + not a legacy data URL). New uploads
   // land in the rate-cons bucket (Phase 3.1 split); legacy rows may
   // still be in load-documents. Try rate-cons first, fall back.
   if (args.rateConPath && !args.rateConPath.startsWith("data:")) {
@@ -174,15 +191,6 @@ export async function buildInvoicePacket(args: PacketArgs): Promise<PacketResult
       if (r.ok) { appended = true; break; }
     }
     if (!appended) skipped.push(`rate-con:${args.rateConPath}`);
-  }
-
-  // Selected supporting docs.
-  for (const path of args.extraDocPaths) {
-    const r = await appendSource(packet, {
-      bucket: "load-documents",
-      path,
-    });
-    if (!r.ok) skipped.push(path);
   }
 
   const out = await packet.save();
