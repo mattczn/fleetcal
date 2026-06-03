@@ -2801,14 +2801,34 @@ export default function EventModal() {
     }
     if (customers.length === 0) return;
     const match = matchCustomer(brokerVal, customers);
+    // ── Strict assign-only-on-strong-match policy ────────────────────
+    // Previous behaviour also CLEARED currentId whenever the fuzzy
+    // score dropped below 'auto' (0.85). That silently broke explicit
+    // user picks: a dispatcher picks "England Logistics" from the
+    // combobox → customerId set, broker text = "England Logistics".
+    // Anything later that nudges the broker text — typo, AI re-parse,
+    // banner edit — drops the score under 0.85, clearCustomerId fires,
+    // and the FK is gone. The next save persists null and every
+    // downstream invoice surface (Send modal, generate, batch-send)
+    // shows "no broker linked" even though the dispatcher's table
+    // still resolves the name visually via findCustomerForLoad's
+    // text-fallback. That mismatch is exactly the "shows linked but
+    // isn't linked" complaint.
+    //
+    // Now: only auto-SET when matchCustomer is confident. Never
+    // auto-clear. An explicit pick stays sticky until the user
+    // manually changes it via the picker (which writes a new FK
+    // directly) or wipes the broker text (handled above).
     if (match.status === 'auto') {
-      if (currentId !== match.customer.id) setCustomerId(match.customer.id);
-    } else if (currentId) {
-      // Broker text no longer points at a known customer (typo, deletion,
-      // or pending banner confirmation). Clear the stale FK so we don't
-      // ship the wrong link downstream.
-      clearCustomerId();
+      if (!currentId) setCustomerId(match.customer.id);
+      // currentId already set → leave it. If the dispatcher's pick
+      // disagrees with what the fuzzy match would prefer, that's
+      // the dispatcher's intent — we don't second-guess.
     }
+    // 'confirm' / 'new' / 'none' with a currentId → keep currentId.
+    // The banner flow handles ambiguous broker text by surfacing a
+    // confirm UI; the auto-clear path here was racing that and
+    // resolving the wrong way.
   }, [fieldValues['broker'], customers, modalOpen, eventKind]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // If the asset list loads after the modal opened and the current assetId
