@@ -1619,9 +1619,19 @@ function FieldInput({ field, value, onChange, headerColor }: {
 }
 
 // Searchable combobox for selecting a customer/broker from the org's customer list
-function CustomerCombobox({ value, onChange, customers, inputRef, accentColor, onCreateNew }: {
+function CustomerCombobox({ value, onChange, onPick, customers, inputRef, accentColor, onCreateNew }: {
   value: string;
+  // Fires on every keystroke when the user is free-typing. Parent
+  // mirrors the text into the broker field; the sync effect decides
+  // whether to also bind customerId based on matchCustomer's score.
   onChange: (val: string) => void;
+  // Fires when the user clicks a customer in the dropdown. Carries
+  // the WHOLE customer record — including .id — so the parent can
+  // bind broker + customerId atomically. Without this, picking a
+  // customer only updated the text and left customerId stale: the
+  // sync effect won't overwrite an existing FK, so a re-pick from
+  // "Customer A" to "Customer B" left broker="B" but customer_id=A.
+  onPick?: (customer: import('@/lib/types').Customer) => void;
   customers: import('@/lib/types').Customer[];
   inputRef?: React.RefObject<HTMLInputElement | null>;
   accentColor?: string;
@@ -1691,7 +1701,12 @@ function CustomerCombobox({ value, onChange, customers, inputRef, accentColor, o
               onMouseDown={e => {
                 e.preventDefault();
                 setQuery(c.name);
-                onChange(c.name);
+                // Prefer onPick when wired — it lets the parent bind
+                // broker + customerId in a single setState so the FK
+                // can't drift. Fall back to onChange(name) for callers
+                // that only care about the text.
+                if (onPick) onPick(c);
+                else        onChange(c.name);
                 setOpen(false);
               }}
               style={{
@@ -2820,10 +2835,26 @@ export default function EventModal() {
     // manually changes it via the picker (which writes a new FK
     // directly) or wipes the broker text (handled above).
     if (match.status === 'auto') {
-      if (!currentId) setCustomerId(match.customer.id);
-      // currentId already set → leave it. If the dispatcher's pick
-      // disagrees with what the fuzzy match would prefer, that's
-      // the dispatcher's intent — we don't second-guess.
+      // Override when currentId is unset OR points to a different
+      // customer than the one the broker text now identifies. The
+      // common bug this catches:
+      //   1. Load opens with broker="AM Trans", customer_id=null
+      //   2. Sync auto-binds customerId → AM_TRANS_ID
+      //   3. Dispatcher opens the picker, clicks "ITS National LLC"
+      //      → onPick now writes both broker AND customerId. Done.
+      //   4. (Or older path) if broker text just changes to a new
+      //      customer's exact name via some other write — AI re-parse,
+      //      banner confirm, alias update — we now correct customerId
+      //      to match.
+      // Score is ≥0.85 here so this is a confident match: trusting it
+      // beats persisting a stale FK that the badge will lie about.
+      // The earlier comment worried about clobbering "explicit user
+      // picks" — those go through onPick now and set both fields
+      // atomically, so the only override path left is when the broker
+      // text itself definitively identifies a different customer.
+      if (!currentId || currentId !== match.customer.id) {
+        setCustomerId(match.customer.id);
+      }
     }
     // 'confirm' / 'new' / 'none' with a currentId → keep currentId.
     // The banner flow handles ambiguous broker text by surfacing a
@@ -3899,6 +3930,17 @@ export default function EventModal() {
         <CustomerCombobox
           value={String(fieldValues['broker'] ?? '')}
           onChange={val => { markDirty(); setField('broker', val); setBrokerSaveBlocked(false); setBrokerMatch({ status: 'none' }); }}
+          // Explicit dropdown pick → bind FK atomically. This is the
+          // only path that GUARANTEES customerId reflects the chosen
+          // customer regardless of what was there before. The sync
+          // effect can also bind it on text changes, but it's conservative
+          // about overwriting an existing FK; this callback isn't.
+          onPick={(customer) => {
+            markDirty();
+            setFieldValues(prev => ({ ...prev, broker: customer.name, customerId: customer.id }));
+            setBrokerSaveBlocked(false);
+            setBrokerMatch({ status: 'none' });
+          }}
           customers={customers}
           inputRef={brokerComboRef}
           accentColor={headerColor}
@@ -3929,8 +3971,16 @@ export default function EventModal() {
           />
         )}
         {(() => {
-          const brokerVal = String(fieldValues['broker'] ?? '').trim();
-          const linkedCustomer = brokerVal ? customers.find(c => c.name === brokerVal) : undefined;
+          // Read from the FK, NOT from broker-text equality. The badge
+          // is meant to confirm "this load is linked to this customer
+          // in the database" — basing it on text matching means the
+          // badge can light up green for an unlinked load whose broker
+          // text happens to equal a customer name, while the actual
+          // customer_id stays NULL (or points somewhere else after a
+          // re-pick that only updated broker text). That mismatch is
+          // exactly the "showed as linked, wasn't actually linked" bug.
+          const currentCid = fieldValues['customerId'] as string | undefined;
+          const linkedCustomer = currentCid ? customers.find(c => c.id === currentCid) : undefined;
           if (!linkedCustomer) return null;
           return (
             <>
