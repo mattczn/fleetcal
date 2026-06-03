@@ -239,6 +239,60 @@ async function buildSnapshot(
   }
   const load = loadRow as unknown as LoadRowForInvoice;
 
+  // ── Customer-id name fallback ────────────────────────────────────
+  // Mirrors the accounting page's findCustomerForLoad: when the FK
+  // is missing but the broker text-field matches a single customer
+  // by name or alias, treat that customer as the linked one. Without
+  // this every invoice generated from a load that was created via a
+  // path that didn't set customer_id (legacy rows, AI-parse imports
+  // that pre-date the FK plumbing, etc.) ended up with NULL
+  // customer_id even though the dispatcher's table clearly showed
+  // a broker — the user then had to manually re-pick from the
+  // InvoiceDetailModal.
+  //
+  // Conservative match: case-insensitive exact name OR exact alias.
+  // We skip ambiguous matches (>1 customer matched) to avoid
+  // silently picking the wrong broker. Backfilled to loads.customer_id
+  // best-effort so future ops see the FK.
+  if (!load.customer_id && load.broker?.trim()) {
+    const brokerText = load.broker.trim();
+    const lower = brokerText.toLowerCase();
+    // Fetch the org's customer roster and filter in code — simpler
+    // than wrestling with PostgREST's array-contains syntax for the
+    // alias side, and the customer table is small (~hundreds of rows
+    // per org) so the round-trip cost is negligible.
+    const { data: candidateRows, error: candErr } = await supabase
+      .from("customers")
+      .select("id,name,aliases")
+      .eq("org_id", orgId);
+    if (!candErr) {
+      const matches = ((candidateRows ?? []) as Array<{ id: string; name: string; aliases: string[] | null }>)
+        .filter(c =>
+          c.name.toLowerCase() === lower ||
+          (c.aliases ?? []).some(a => a.toLowerCase() === lower),
+        );
+      if (matches.length === 1) {
+        load.customer_id = matches[0].id;
+        // Best-effort backfill — don't fail invoice creation if the
+        // write is rejected (RLS, race with a concurrent edit, etc.).
+        // The .is('customer_id', null) guards against clobbering
+        // the FK if another writer set it between the read and write.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        void supabase
+          .from("loads")
+          .update({ customer_id: matches[0].id } as any)
+          .eq("id", loadId)
+          .eq("org_id", orgId)
+          .is("customer_id", null)
+          .then(({ error: backfillErr }) => {
+            if (backfillErr) {
+              console.warn("[buildSnapshot] customer_id backfill failed:", backfillErr);
+            }
+          });
+      }
+    }
+  }
+
   // 3. Events (sorted by start) + stops.
   //
   // For relay loads, the split-relay flow duplicates the FULL merged stop
