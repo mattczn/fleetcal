@@ -924,9 +924,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
    * row (it doesn't have a real source URL pattern we can re-upload
    * back into a new load_documents row safely). The user can still
    * merge rate cons via the per-row checkbox flow.
+   *
+   * Returns a result object so the dialog can surface a red inline
+   * error chip when nothing's mergeable (instead of a blocking alert).
+   * `ok: true` → at least one bucket merged; `ok: false` → the reason
+   * to show next to the Merge by type button.
    */
-  const handleMergeByType = async () => {
-    if (!loadId || merging) return;
+  const handleMergeByType = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!loadId || merging) return { ok: false };
     // Group all docs (incl. uploaded rate-con rows, excl. the virtual
     // canonical sentinel) by kind.
     const byKind = new Map<import('@fleetcal/types').DocumentKind, LoadDocument[]>();
@@ -939,8 +944,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
     const mergeable = [...byKind.entries()].filter(([, list]) => list.length >= 2);
     if (mergeable.length === 0) {
-      alert('Nothing to merge — no document type has two or more files on this load.');
-      return;
+      return { ok: false, error: 'No type has 2+ docs to merge.' };
     }
     setMerging(true);
     setMergeStatus(null);
@@ -964,9 +968,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           return next;
         });
       }
+      return { ok: true };
     } catch (err) {
       console.error('[review queue] merge-by-type failed:', err);
-      alert(`Merge by type failed: ${(err as Error).message ?? 'Unknown error'}`);
+      return { ok: false, error: `Merge failed: ${(err as Error).message ?? 'unknown'}` };
     } finally {
       setMergeStatus(null);
       setMerging(false);
@@ -2116,8 +2121,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
       {mergeDialogOpen && (
         <DocSelectionDialog
-          title="Manage documents"
-          description="Add, rename, retype, download, delete, or merge every doc of the same type into one PDF."
+          title="Manage Documents"
+          description=""
           docs={mergeCandidates}
           selected={mergeSelection}
           onToggle={(id) => setMergeSelection(prev => {
@@ -2598,9 +2603,11 @@ function DocSelectionDialog({
    *  (the dialog just needs to fire it). */
   onDownload?: (id: string, fileName: string) => Promise<void>;
   /** Header action — groups every doc by kind and merges each bucket
-   *  with ≥2 docs into a single PDF (kind preserved). Hidden when
-   *  nothing on the load qualifies. */
-  onMergeByType?: () => Promise<void> | void;
+   *  with ≥2 docs into a single PDF (kind preserved). Returns
+   *  `{ ok: false, error }` when nothing qualifies (or the merge
+   *  failed) so the dialog can show a red inline message next to the
+   *  button instead of a blocking alert. */
+  onMergeByType?: () => Promise<{ ok: boolean; error?: string }>;
   /** Drives the kind <select> options in manageMode. Same shape as the
    *  parent's KIND_OPTIONS constant. ReadonlyArray so the parent's
    *  `as const` literal is assignable without a defensive copy. */
@@ -2627,6 +2634,11 @@ function DocSelectionDialog({
   const [renameDraft, setRenameDraft]       = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  // Inline error shown next to the Merge by type button when the
+  // user clicks it and nothing on the load has 2+ docs of the same
+  // kind. Auto-clears on the next click (so retrying after adding
+  // docs doesn't leave a stale error chip).
+  const [mergeByTypeError, setMergeByTypeError] = useState<string | null>(null);
 
   const startRename = (id: string, currentName: string) => {
     // Strip the extension so the user edits only the human-readable part;
@@ -2703,9 +2715,11 @@ function DocSelectionDialog({
             <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
               {title}
             </div>
-            <div className="text-[12px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
-              {description}
-            </div>
+            {description && (
+              <div className="text-[12px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
+                {description}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={onCancel} disabled={busy}
@@ -2737,17 +2751,33 @@ function DocSelectionDialog({
             </>
           )}
           {manageMode && onMergeByType && docs.length >= 2 && (
-            <button type="button" onClick={() => void onMergeByType()} disabled={busy}
-              className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-              style={{
-                background: 'var(--gc-surface)',
-                color:      '#7c3aed',
-                border:     '1px solid #ddd6fe',
-              }}
-              title="Merge every document type with 2+ files into one PDF per type">
-              {busy ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
-              Merge by type
-            </button>
+            <>
+              <button type="button"
+                onClick={async () => {
+                  setMergeByTypeError(null);
+                  const result = await onMergeByType();
+                  if (!result.ok && result.error) setMergeByTypeError(result.error);
+                }}
+                disabled={busy}
+                className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                style={{
+                  background: 'var(--gc-surface)',
+                  color:      '#7c3aed',
+                  border:     '1px solid #ddd6fe',
+                }}
+                title="Merge every document type with 2+ files into one PDF per type">
+                {busy ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
+                Merge by type
+              </button>
+              {mergeByTypeError && (
+                <span className="flex items-center gap-1 text-[11px] font-bold"
+                  style={{ color: '#d93025' }}
+                  title={mergeByTypeError}>
+                  <AlertCircle size={11} />
+                  {mergeByTypeError}
+                </span>
+              )}
+            </>
           )}
           <div className="flex-1" />
           {extraAction}
