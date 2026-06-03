@@ -63,7 +63,8 @@ type ColKey =
   | 'invoiceNum' | 'loadNum' | 'customer' | 'title'
   | 'rate' | 'accessorials' | 'total'
   | 'docs'
-  | 'age' | 'released' | 'issued' | 'due' | 'method' | 'sendTo' | 'status'
+  | 'age' | 'pickupAt' | 'deliveryAt' | 'released' | 'issued' | 'due'
+  | 'method' | 'sendTo' | 'status'
   | 'flags' | 'view';
 
 // Default column widths in px. Passed to OpsColumn.width so the
@@ -72,6 +73,8 @@ type ColKey =
 // yet (deferred from v1 of the port).
 const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
   age:           80,
+  pickupAt:     100,
+  deliveryAt:   100,
   released:     100,
   issued:       100,
   due:          100,
@@ -563,6 +566,28 @@ function AccountingPageInner() {
       sortable: true,
       sortValue: r => r.invoice?.dueAt ?? '',
       render: r => r.invoice?.dueAt ? fmtShortDate(r.invoice.dueAt) : '—',
+    });
+
+    // Pickup / Delivery — load-level dates, opt-in via the column
+    // picker. Distinct from Released/Issued/Due (which are billing-
+    // lifecycle timestamps) — these answer "when did the freight
+    // actually move." Defaults hidden so the table stays narrow for
+    // accounting's primary workflow; bookkeepers reconciling against
+    // a pickup-week or delivery-week close can flip them on.
+    // r.load.deliveryAt is already resolved server-side to the
+    // delivery leg's end for relays (same source as the Age column).
+    all.push({
+      key: 'pickupAt', header: 'Pickup', width: DEFAULT_COL_WIDTHS.pickupAt,
+      sortable: true, defaultHidden: true,
+      sortValue: r => r.load.pickupAt ?? '',
+      render: r => r.load.pickupAt ? fmtShortDate(r.load.pickupAt) : '—',
+    });
+
+    all.push({
+      key: 'deliveryAt', header: 'Delivery', width: DEFAULT_COL_WIDTHS.deliveryAt,
+      sortable: true, defaultHidden: true,
+      sortValue: r => r.load.deliveryAt ?? '',
+      render: r => r.load.deliveryAt ? fmtShortDate(r.load.deliveryAt) : '—',
     });
 
     all.push({
