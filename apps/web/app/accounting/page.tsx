@@ -1129,6 +1129,10 @@ function InvoiceSummaryModal({
     const c = l.customerId ? customerById.get(l.customerId) : undefined;
     return c && (c.invoiceMethod ?? 'email') === 'email' && !c.invoiceEmail;
   });
+  const hasPortal = willSend && loads.some(l => {
+    const c = l.customerId ? customerById.get(l.customerId) : undefined;
+    return c?.invoiceMethod === 'portal';
+  });
 
   async function handleGo() {
     setBusy(true);
@@ -1175,6 +1179,13 @@ function InvoiceSummaryModal({
                   style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fed7aa' }}>
                   <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
                   Some brokers have no saved AP email — their invoices will be created but skipped at the send step.
+                </div>
+              )}
+              {hasPortal && (
+                <div className="px-3 py-2 rounded-lg flex items-start gap-2 text-[12px]"
+                  style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
+                  <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                  Portal brokers won't get an email — their invoices flip to <strong>Sent</strong> so you can upload the packet to the portal yourself. Turn on <em>Bcc me a copy</em> to get the packet emailed to yourself.
                 </div>
               )}
 
@@ -1362,6 +1373,7 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
           {result.sent.map((g, i) => {
             const tone =
               g.status === 'sent'                ? { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: `Sent · ${g.invoiceIds.length}` } :
+              g.status === 'sent_portal'         ? { bg: '#dbeafe', fg: '#1e40af', border: '#bfdbfe', label: 'Portal — marked sent' } :
               g.status === 'skipped_no_email'    ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no AP email' } :
               g.status === 'skipped_no_customer' ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no broker' } :
                                                    { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Failed' };
@@ -1799,7 +1811,13 @@ function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplet
   }, [rows]);
 
   const missingBroker = groups.some(g => !g.broker);
-  const missingEmail  = groups.some(g => g.broker && !g.broker.invoiceEmail);
+  // "Missing email" only counts brokers in email mode. Portal-mode
+  // brokers correctly have no AP email — they're not skipped, they
+  // get flipped to sent via sent_method='portal'.
+  const missingEmail  = groups.some(g =>
+    g.broker && (g.broker.invoiceMethod ?? 'email') === 'email' && !g.broker.invoiceEmail,
+  );
+  const hasPortal     = groups.some(g => g.broker?.invoiceMethod === 'portal');
 
   async function handleSend() {
     setBusy(true);
@@ -1856,6 +1874,13 @@ function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplet
                   Some brokers have no saved AP email — their invoices will be skipped.
                 </div>
               )}
+              {hasPortal && !missingBroker && (
+                <div className="px-3 py-2 rounded-lg flex items-start gap-2 text-[12px]"
+                  style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
+                  <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                  Portal brokers won't get an email — their invoices flip to <strong>Sent</strong> so you can upload the packet to the portal yourself. Turn on <em>Bcc me a copy</em> to get the packet emailed to yourself.
+                </div>
+              )}
 
               <div className="space-y-2">
                 {groups.map((g, i) => (
@@ -1876,13 +1901,28 @@ function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplet
                           <div className="font-semibold text-[13px] truncate" style={{ color: '#dc2626' }}>(no broker set)</div>
                         )}
                         <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
-                          {g.broker?.invoiceEmail ?? (
-                            <span style={{ color: '#9a3412' }}>
-                              (no AP email — {onOpenBroker && g.broker ? (
-                                <button onClick={() => onOpenBroker(g.broker!.id)} className="underline font-semibold">fix in profile</button>
-                              ) : 'set one in profile'})
-                            </span>
-                          )}
+                          {(() => {
+                            // Portal brokers: show the portal label
+                            // (or a generic note) in blue — they're
+                            // not "missing AP email", they just don't
+                            // get one.
+                            if (g.broker?.invoiceMethod === 'portal') {
+                              const portal = g.broker.invoicePortal?.trim();
+                              return (
+                                <span style={{ color: '#1e40af' }}>
+                                  Portal{portal ? `: ${portal}` : ' — marked sent, upload manually'}
+                                </span>
+                              );
+                            }
+                            if (g.broker?.invoiceEmail) return g.broker.invoiceEmail;
+                            return (
+                              <span style={{ color: '#9a3412' }}>
+                                (no AP email — {onOpenBroker && g.broker ? (
+                                  <button onClick={() => onOpenBroker(g.broker!.id)} className="underline font-semibold">fix in profile</button>
+                                ) : 'set one in profile'})
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
                       <div className="text-[12px] text-right shrink-0" style={{ color: 'var(--gc-text-2)' }}>

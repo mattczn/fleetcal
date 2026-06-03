@@ -1060,12 +1060,21 @@ export interface BatchSendInvoicesResponse {
     customerId:  string;
     brokerName:  string;
     to:          string | null;
-    /** 'sent'                 — invoice email delivered.
-     *  'skipped_no_email'     — broker exists but has no AP email set.
+    /** 'sent'                 — invoice email delivered to the broker.
+     *  'sent_portal'          — broker is portal-mode; no email went
+     *                            to the broker. The invoice is flipped
+     *                            to sent (sent_method='portal',
+     *                            sent_to=portal label) so it advances
+     *                            through the pipeline. When bccSelf
+     *                            was on, the dispatcher gets a copy of
+     *                            the packet so they can upload to the
+     *                            portal themselves.
+     *  'skipped_no_email'     — broker exists, email-mode, but has no
+     *                            AP email set.
      *  'skipped_no_customer'  — invoice has no customer link (can't
      *                            resolve a recipient at all).
      *  'failed'               — packet build or email send threw. */
-    status:      'sent' | 'skipped_no_email' | 'skipped_no_customer' | 'failed';
+    status:      'sent' | 'sent_portal' | 'skipped_no_email' | 'skipped_no_customer' | 'failed';
     invoiceIds:  string[];
     /** Internal load number for the (single) invoice in this group.
      *  Falls back to load_num (the broker's load #) when internal

@@ -1204,12 +1204,28 @@ invoices.post("/batch-generate", async (c) => {
       ));
       const { data: customerRows } = await supabase
         .from("customers")
-        .select("id,name,invoice_email")
+        .select("id,name,invoice_email,invoice_method,invoice_portal")
         .eq("org_id", orgId)
         .in("id", distinctCustomerIds);
-      const customerById = new Map<string, { name: string; invoice_email: string | null }>();
-      for (const row of (customerRows ?? []) as Array<{ id: string; name: string; invoice_email: string | null }>) {
-        customerById.set(row.id, { name: row.name, invoice_email: row.invoice_email });
+      const customerById = new Map<string, {
+        name: string;
+        invoice_email: string | null;
+        invoice_method: string | null;
+        invoice_portal: string | null;
+      }>();
+      for (const row of (customerRows ?? []) as Array<{
+        id: string;
+        name: string;
+        invoice_email: string | null;
+        invoice_method: string | null;
+        invoice_portal: string | null;
+      }>) {
+        customerById.set(row.id, {
+          name: row.name,
+          invoice_email: row.invoice_email,
+          invoice_method: row.invoice_method,
+          invoice_portal: row.invoice_portal,
+        });
       }
 
       let bccSender: string | undefined;
@@ -1245,7 +1261,11 @@ invoices.post("/batch-generate", async (c) => {
         const customer = customerById.get(inv.customerId);
         const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
         const recipient  = customer?.invoice_email?.trim() || undefined;
-        if (!recipient) {
+        const isPortal   = customer?.invoice_method === "portal";
+        const portalLabel = customer?.invoice_portal?.trim() || "portal";
+
+        // Email-mode broker with no AP email saved — skip.
+        if (!isPortal && !recipient) {
           groups.push({
             customerId: inv.customerId, brokerName, to: null,
             status: "skipped_no_email", invoiceIds: [inv.id], loadNumber,
@@ -1266,35 +1286,60 @@ invoices.post("/batch-generate", async (c) => {
           packet = built.buffer;
         } catch (err) {
           groups.push({
-            customerId: inv.customerId, brokerName, to: recipient, status: "failed",
+            customerId: inv.customerId, brokerName, to: recipient ?? null, status: "failed",
             invoiceIds: [inv.id], loadNumber,
             error: `packet build failed: ${(err as Error)?.message}`,
           });
           continue;
         }
 
+        // Portal brokers: skip the broker-bound email, optionally bcc
+        // a packet copy to the dispatcher for portal upload, and flip
+        // sent_method='portal' so the invoice advances. Email brokers
+        // take the normal path. (See batch-send route for the full
+        // explanation — kept in sync.)
         let messageId: string | undefined;
-        try {
-          const sendRes = await sendInvoiceEmail({
-            invoices:        [inv],
-            invoiceSettings: orgInvoiceSettings,
-            to:              recipient,
-            cc:              body.cc,
-            bccSender,
-            bodyText:        body.bodyText,
-            attachments: [{
-              filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
-              content:  packet,
-            }],
-          });
-          messageId = sendRes.messageId;
-        } catch (err) {
-          groups.push({
-            customerId: inv.customerId, brokerName, to: recipient, status: "failed",
-            invoiceIds: [inv.id], loadNumber,
-            error: (err as Error)?.message ?? "email send failed",
-          });
-          continue;
+        if (isPortal) {
+          if (bccSender) {
+            try {
+              const sendRes = await sendInvoiceEmail({
+                invoices:        [inv],
+                invoiceSettings: orgInvoiceSettings,
+                to:              bccSender,
+                bodyText:        body.bodyText,
+                attachments: [{
+                  filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
+                  content:  packet,
+                }],
+              });
+              messageId = sendRes.messageId;
+            } catch (err) {
+              console.warn("[batch-generate.thenSend] portal bcc-self failed for", inv.invoiceNumber, err);
+            }
+          }
+        } else {
+          try {
+            const sendRes = await sendInvoiceEmail({
+              invoices:        [inv],
+              invoiceSettings: orgInvoiceSettings,
+              to:              recipient!,
+              cc:              body.cc,
+              bccSender,
+              bodyText:        body.bodyText,
+              attachments: [{
+                filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
+                content:  packet,
+              }],
+            });
+            messageId = sendRes.messageId;
+          } catch (err) {
+            groups.push({
+              customerId: inv.customerId, brokerName, to: recipient!, status: "failed",
+              invoiceIds: [inv.id], loadNumber,
+              error: (err as Error)?.message ?? "email send failed",
+            });
+            continue;
+          }
         }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1303,8 +1348,8 @@ invoices.post("/batch-generate", async (c) => {
           .update({
             status:      "sent",
             sent_at:     new Date().toISOString(),
-            sent_to:     recipient,
-            sent_method: "email",
+            sent_to:     isPortal ? portalLabel : recipient!,
+            sent_method: isPortal ? "portal" : "email",
           } as any)
           .eq("id", inv.id)
           .eq("org_id", orgId)
@@ -1319,7 +1364,9 @@ invoices.post("/batch-generate", async (c) => {
         }
 
         groups.push({
-          customerId: inv.customerId, brokerName, to: recipient, status: "sent",
+          customerId: inv.customerId, brokerName,
+          to:         isPortal ? portalLabel : recipient!,
+          status:     isPortal ? "sent_portal" : "sent",
           invoiceIds: [inv.id], loadNumber, messageId,
         });
       }
@@ -1422,18 +1469,36 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     return badRequest(c, [`invoice(s) ${stillNoBroker.join(", ")} have no linked customer. Open the load and pick a broker from the customer picker (not just freeform text).`]);
   }
 
-  // Resolve broker metadata (name + AP email) for the customers
-  // referenced by the resolved-customer-by-invoice map. One DB hit
-  // covers every distinct customer in the batch.
+  // Resolve broker metadata (name + invoicing fields) for the
+  // customers referenced by the resolved-customer-by-invoice map.
+  // invoice_method + invoice_portal are needed so portal-mode brokers
+  // can advance to "sent" without an email actually leaving the
+  // server (the dispatcher uploads to the portal manually).
   const distinctCustomerIds = Array.from(new Set(resolvedCustomerByInvoiceId.values()));
   const { data: customerRows } = await supabase
     .from("customers")
-    .select("id,name,invoice_email")
+    .select("id,name,invoice_email,invoice_method,invoice_portal")
     .eq("org_id", orgId)
     .in("id", distinctCustomerIds);
-  const customerById = new Map<string, { name: string; invoice_email: string | null }>();
-  for (const row of (customerRows ?? []) as Array<{ id: string; name: string; invoice_email: string | null }>) {
-    customerById.set(row.id, { name: row.name, invoice_email: row.invoice_email });
+  const customerById = new Map<string, {
+    name: string;
+    invoice_email: string | null;
+    invoice_method: string | null;
+    invoice_portal: string | null;
+  }>();
+  for (const row of (customerRows ?? []) as Array<{
+    id: string;
+    name: string;
+    invoice_email: string | null;
+    invoice_method: string | null;
+    invoice_portal: string | null;
+  }>) {
+    customerById.set(row.id, {
+      name: row.name,
+      invoice_email: row.invoice_email,
+      invoice_method: row.invoice_method,
+      invoice_portal: row.invoice_portal,
+    });
   }
 
   // Resolve the sender's email once if bcc-self was requested.
@@ -1485,8 +1550,11 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     const brokerName = customer?.name ?? inv.snapshot.brokerName ?? "Unknown broker";
     const recipient  = customer?.invoice_email?.trim() || undefined;
     const loadNumber = inv.snapshot.loadNumber || undefined;
+    const isPortal   = customer?.invoice_method === "portal";
+    const portalLabel = customer?.invoice_portal?.trim() || "portal";
 
-    if (!recipient) {
+    // Email-mode broker with no AP email saved — can't send.
+    if (!isPortal && !recipient) {
       groups.push({
         customerId,
         brokerName,
@@ -1498,7 +1566,9 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       continue;
     }
 
-    // Build the merged packet for THIS invoice only.
+    // Build the merged packet for THIS invoice only. Same call whether
+    // the broker is email or portal — portal-mode still needs the PDF
+    // for the bcc-self copy + the persistent archive.
     let packet: Buffer;
     try {
       const [extraDocPaths, rateConPath] = await Promise.all([
@@ -1521,7 +1591,7 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       groups.push({
         customerId,
         brokerName,
-        to:         recipient,
+        to:         recipient ?? null,
         status:     "failed",
         invoiceIds: [inv.id],
         loadNumber,
@@ -1530,34 +1600,67 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
       continue;
     }
 
-    // Send the email — one invoice in, one attachment out.
+    // Branch on routing mode:
+    //   • Email broker: send the packet to recipient + cc + bcc, flip
+    //     invoice to sent_method='email'.
+    //   • Portal broker: NO email to the broker (they file the
+    //     packet via the portal manually). If bccSelf was on, send a
+    //     to-self copy so the dispatcher has the packet ready to
+    //     upload. Either way, flip invoice to sent_method='portal'
+    //     so it advances out of Queued.
     let messageId: string | undefined;
-    try {
-      const result = await sendInvoiceEmail({
-        invoices:        [inv],
-        invoiceSettings: orgInvoiceSettings,
-        to:              recipient,
-        cc:              mergedCc.length ? mergedCc : undefined,
-        bccSender,
-        bodyText:        body.bodyText,
-        attachments: [{
-          filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
-          content:  packet,
-        }],
-      });
-      messageId = result.messageId;
-    } catch (err) {
-      console.error("[batch-send] email send failed for", inv.invoiceNumber, err);
-      groups.push({
-        customerId,
-        brokerName,
-        to:         recipient,
-        status:     "failed",
-        invoiceIds: [inv.id],
-        loadNumber,
-        error:      (err as Error)?.message ?? "email send failed",
-      });
-      continue;
+    if (isPortal) {
+      // Optional courtesy send-to-self with the packet attached.
+      // Treat as best-effort; failure here doesn't block the
+      // status-flip — the dispatcher's "I uploaded to the portal"
+      // bookkeeping shouldn't depend on the email gateway.
+      if (bccSender) {
+        try {
+          const result = await sendInvoiceEmail({
+            invoices:        [inv],
+            invoiceSettings: orgInvoiceSettings,
+            to:              bccSender,
+            bodyText:        body.bodyText,
+            attachments: [{
+              filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
+              content:  packet,
+            }],
+          });
+          messageId = result.messageId;
+        } catch (err) {
+          console.warn("[batch-send] portal bcc-self failed for", inv.invoiceNumber, err);
+        }
+      }
+    } else {
+      // Standard email path — recipient is guaranteed non-null
+      // because the early-skip caught the no-email case above.
+      try {
+        const result = await sendInvoiceEmail({
+          invoices:        [inv],
+          invoiceSettings: orgInvoiceSettings,
+          to:              recipient!,
+          cc:              mergedCc.length ? mergedCc : undefined,
+          bccSender,
+          bodyText:        body.bodyText,
+          attachments: [{
+            filename: `invoice-packet-${inv.invoiceNumber}.pdf`,
+            content:  packet,
+          }],
+        });
+        messageId = result.messageId;
+      } catch (err) {
+        console.error("[batch-send] email send failed for", inv.invoiceNumber, err);
+        groups.push({
+          customerId,
+          brokerName,
+          to:         recipient ?? null,
+          status:     "failed",
+          invoiceIds: [inv.id],
+          loadNumber,
+          error:      (err as Error)?.message ?? "email send failed",
+        });
+        continue;
+      }
     }
 
     // Flip to sent + archive. If invoice.customer_id was null and we
@@ -1567,8 +1670,8 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     const updateRow: Record<string, unknown> = {
       status:      "sent",
       sent_at:     new Date().toISOString(),
-      sent_to:     recipient,
-      sent_method: "email",
+      sent_to:     isPortal ? portalLabel : recipient!,
+      sent_method: isPortal ? "portal" : "email",
     };
     if (!inv.customerId) {
       updateRow.customer_id = customerId;
@@ -1596,8 +1699,12 @@ invoices.post("/batch-send", requireCapability("accounting.send_invoice"), async
     groups.push({
       customerId,
       brokerName,
-      to:         recipient,
-      status:     "sent",
+      // For portal brokers, the "to" field carries the portal label
+      // (e.g. "TriumphPay (https://…)") so the UI shows what the
+      // dispatcher needs to upload to. Email brokers carry the AP
+      // email as before.
+      to:         isPortal ? portalLabel : recipient!,
+      status:     isPortal ? "sent_portal" : "sent",
       invoiceIds: [inv.id],
       loadNumber,
       messageId,
