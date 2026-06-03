@@ -1206,7 +1206,26 @@ function InvoiceSummaryModal({
                   </thead>
                   <tbody>
                     {loads.map(l => {
-                      const customer = l.customerId ? customerById.get(l.customerId) : undefined;
+                      // Resolve the customer with the SAME name-fallback
+                      // the server uses in buildSnapshot — exact
+                      // case-insensitive match on name or alias when
+                      // the FK is missing. Without this, the preview
+                      // lied to the dispatcher: the row showed the
+                      // broker name but no email, even though the
+                      // server-side path would happily resolve and
+                      // invoice the customer correctly (and backfill
+                      // loads.customer_id on the way through).
+                      const customer = (() => {
+                        if (l.customerId) return customerById.get(l.customerId);
+                        const broker = l.broker?.trim();
+                        if (!broker) return undefined;
+                        const lower = broker.toLowerCase();
+                        const matches = Array.from(customerById.values()).filter(c =>
+                          c.name.toLowerCase() === lower ||
+                          (c.aliases ?? []).some(a => a.toLowerCase() === lower),
+                        );
+                        return matches.length === 1 ? matches[0] : undefined;
+                      })();
                       const brokerName = customer?.name ?? l.broker ?? '—';
                       // Resolve where this invoice is actually heading
                       // so the dispatcher can sanity-check the
