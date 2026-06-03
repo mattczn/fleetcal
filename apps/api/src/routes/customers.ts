@@ -231,7 +231,7 @@ Return a single JSON object with this exact shape — no markdown, no explanatio
     "invoiceMethod":       "<'email' | 'portal' | '' — how this broker wants invoices submitted. 'portal' if any online billing system is named (TriumphPay, RMIS, McLeod, MyCarrierPortal, broker's own portal, etc.). 'email' if invoices go to a specific AP/billing email. Empty string if unclear.>",
     "invoiceEmail":        "<AP / billing email when invoiceMethod is 'email', otherwise empty string>",
     "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal', e.g. 'TriumphPay (https://app.triumphpay.com)'. Otherwise empty string.>",
-    "invoiceInstructions": "<everything else billing-relevant that doesn't fit above: payment terms (net 30, quickpay rates), required documents (BOL/POD/scale tickets/lumper receipts), factor preferences, special PO numbers needed on the invoice. 1-3 short bulleted lines. Empty if nothing else to add.>"
+    "invoiceInstructions": "<BROKER-WIDE billing policies only — things that apply to EVERY load from this broker, not just this one. Allowed: payment terms (net 30, quickpay rates), required documents that are always needed (BOL/POD/scale tickets/lumper receipts), factor preferences, remit-to address overrides, billing portal requirements, required line items the broker wants on every invoice. 1-3 short bulleted lines. STRICTLY EXCLUDE anything load-specific: this load's load number, PRO number, BOL number, PO number, shipment/order/confirmation number, references to 'this load' or 'this shipment', or any value that would change on the next load from the same broker. Empty string if there's nothing broker-wide to add.>"
   },
   "docType": "<rate_con | amendment | revised | other>"
 }
