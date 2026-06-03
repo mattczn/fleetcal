@@ -703,6 +703,14 @@ function AccountingPageInner() {
     // of them). Issued / Due only on buckets that have invoices.
     filters.push({ kind: 'date-range', key: 'released', label: 'Released',
       getDate: r => r.load.verifiedAt ?? null });
+    // Pickup / Delivery — load-level dates, available on every bucket
+    // since every row has them. Distinct from Released (billing-
+    // lifecycle): these answer "when did the freight actually move"
+    // for reconciling against a pickup-week or delivery-week close.
+    filters.push({ kind: 'date-range', key: 'pickup', label: 'Pickup',
+      getDate: r => r.load.pickupAt ?? null });
+    filters.push({ kind: 'date-range', key: 'delivery', label: 'Delivery',
+      getDate: r => r.load.deliveryAt ?? null });
     if (bucket !== 'released') {
       filters.push({ kind: 'date-range', key: 'issued', label: 'Issued',
         getDate: r => r.invoice?.issuedAt ?? null });

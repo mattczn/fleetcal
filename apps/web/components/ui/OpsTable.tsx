@@ -581,9 +581,15 @@ export function OpsTable<T>({
   const selectionActive = selectedIds.size > 0;
 
   // Pickable columns for the visibility chip — excludes alwaysVisible.
+  // Derived from orderedColumns (NOT raw columns) so the picker UI
+  // reflects the user's reorder choices. Without this, clicking the
+  // up/down arrows updates columnOrder state and re-renders the table
+  // correctly, but the picker keeps showing the original order — which
+  // looks like the buttons are broken AND breaks the atTop/atBottom
+  // computation for the next click.
   const pickerColumns = useMemo(
-    () => columns.filter(c => !c.alwaysVisible),
-    [columns],
+    () => orderedColumns.filter(c => !c.alwaysVisible),
+    [orderedColumns],
   );
 
   // Move-up / move-down helpers for the picker dropdown. The slot
