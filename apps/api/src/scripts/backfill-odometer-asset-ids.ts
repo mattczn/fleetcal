@@ -51,12 +51,14 @@ const supabase = createClient(url, key, { auth: { persistSession: false } }) as 
 interface ReadingRow {
   id: number;
   org_id: string;
-  vehicle_id: number | null;
+  // Bigint columns can deserialize as either type depending on driver
+  // settings — accept both and coerce to string at lookup time.
+  vehicle_id: number | string | null;
 }
 
 interface AssetRow {
   id: number;
-  motive_vehicle_id: number | null;
+  motive_vehicle_id: number | string | null;
 }
 
 const tally = { total: 0, linked: 0, noVehicleId: 0, noMatch: 0, errors: 0 };
@@ -69,7 +71,9 @@ async function main() {
 
   // Per-org asset cache: each org's vehicle_id→asset_id map is fetched
   // once.
-  const assetMapByOrg = new Map<string, Map<number, number>>();
+  // String keys to dodge the bigint number/string mismatch — same
+  // gotcha that bit the live summary endpoint.
+  const assetMapByOrg = new Map<string, Map<string, number>>();
 
   const PAGE = 1000;
   let offset = 0;
@@ -110,16 +114,16 @@ async function main() {
           tally.errors++;
           continue;
         }
-        map = new Map<number, number>();
+        map = new Map<string, number>();
         for (const a of (assets ?? []) as AssetRow[]) {
-          if (a.motive_vehicle_id != null) map.set(a.motive_vehicle_id, a.id);
+          if (a.motive_vehicle_id != null) map.set(String(a.motive_vehicle_id), a.id);
         }
         assetMapByOrg.set(row.org_id, map);
       }
-      const assetId = map.get(row.vehicle_id);
+      const assetId = map.get(String(row.vehicle_id));
       if (assetId == null) {
         tally.noMatch++;
-        orphans.push({ readingId: row.id, orgId: row.org_id, vehicleId: row.vehicle_id });
+        orphans.push({ readingId: row.id, orgId: row.org_id, vehicleId: Number(row.vehicle_id) });
         continue;
       }
       if (APPLY) {

@@ -554,9 +554,14 @@ export async function snapshotOdometers(orgId: string): Promise<OdometerSnapshot
     console.error("[motiveIngest] asset lookup failed:", assetErr);
     throw new Error(`asset lookup failed: ${assetErr.message}`);
   }
-  const vehicleIdToAssetId = new Map<number, number>();
-  for (const r of (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | null }>) {
-    if (r.motive_vehicle_id != null) vehicleIdToAssetId.set(r.motive_vehicle_id, r.id);
+  // STRING KEYS — Supabase returns bigint columns as strings or
+  // numbers depending on context, and Motive's API returns the
+  // vehicle id as a number. Coerce both ends so the Map lookup
+  // doesn't silently fail on a type mismatch. (See odometer-summary
+  // endpoint for the read-side counterpart of this fix.)
+  const vehicleIdToAssetId = new Map<string, number>();
+  for (const r of (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | string | null }>) {
+    if (r.motive_vehicle_id != null) vehicleIdToAssetId.set(String(r.motive_vehicle_id), r.id);
   }
 
   // Build snapshot rows for vehicles whose ELDs reported an odometer.
@@ -580,7 +585,7 @@ export async function snapshotOdometers(orgId: string): Promise<OdometerSnapshot
       // have vehicle_id from Motive), so vehicles whose asset doesn't
       // exist yet still land cleanly — they just won't roll up under
       // an asset in the dashboard until the asset is created.
-      asset_id:            vehicleIdToAssetId.get(v.vehicle.id) ?? null,
+      asset_id:            vehicleIdToAssetId.get(String(v.vehicle.id)) ?? null,
       odometer_miles:      loc.odometer ?? null,
       true_odometer_miles: loc.true_odometer ?? null,
       located_at:          loc.located_at ?? null,

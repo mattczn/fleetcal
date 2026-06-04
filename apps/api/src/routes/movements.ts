@@ -536,9 +536,18 @@ movements.get("/odometer-summary", async (c) => {
   const eldVehicleIds = eldAssets.map(a => a.motive_vehicle_id).filter((v): v is number => v != null);
   // Reverse map for grouping rows whose asset_id is NULL — we resolve
   // them back to the right asset via their Motive vehicle id.
-  const vehicleIdToAssetId = new Map<number, number>();
+  //
+  // STRING KEYS, deliberately. Supabase / PostgREST occasionally
+  // returns bigint columns as strings (large-value safety) and
+  // occasionally as numbers — and the two halves of this lookup come
+  // from different table queries, so one side can land as 12345 and
+  // the other as "12345". Map keys compare with === so they don't
+  // match, every row falls into the `unresolvedRows` bucket, and the
+  // dashboard reads 0 even with valid data on both sides. Coerce both
+  // ends to strings and the lookup is bulletproof.
+  const vehicleIdToAssetId = new Map<string, number>();
   for (const a of eldAssets) {
-    if (a.motive_vehicle_id != null) vehicleIdToAssetId.set(a.motive_vehicle_id, a.id);
+    if (a.motive_vehicle_id != null) vehicleIdToAssetId.set(String(a.motive_vehicle_id), a.id);
   }
 
   // Step 2: pull readings that match either axis. We deliberately
@@ -604,8 +613,11 @@ movements.get("/odometer-summary", async (c) => {
   let unresolvedRows = 0;
   let nullMilesRows = 0;
   for (const r of rows) {
+    // Same string-coercion guard as the map build above — see comment
+    // there for why. r.asset_id stays as-is (numeric column we own,
+    // group key is `number`).
     const assetId = r.asset_id
-      ?? (r.vehicle_id != null ? vehicleIdToAssetId.get(r.vehicle_id) : undefined);
+      ?? (r.vehicle_id != null ? vehicleIdToAssetId.get(String(r.vehicle_id)) : undefined);
     if (assetId == null) { unresolvedRows++; continue; }
     const miles = r.true_odometer_miles ?? r.odometer_miles;
     if (miles == null) { nullMilesRows++; continue; }
