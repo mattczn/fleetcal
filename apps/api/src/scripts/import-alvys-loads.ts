@@ -671,9 +671,10 @@ async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token:
     .select("id")
     .single();
   if (upErr || !upserted) {
-    tally1.loadsErrored++;
-    skipped.push({ alvysLoadId, reason: `load upsert: ${upErr?.message}` });
-    return;
+    // THROW so the worker's catch block surfaces this in the distinct-
+    // errors diagnostic. Returning quietly here meant the user saw "2028
+    // errored" with no idea why.
+    throw new Error(`loads upsert failed: ${upErr?.message ?? "no data returned"}`);
   }
   const loadId = upserted.id as string;
 
@@ -720,9 +721,7 @@ async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token:
       alvys_load_id: alvysLoadId,
     }).select("id").single();
     if (evErr || !createdEv) {
-      tally1.loadsErrored++;
-      skipped.push({ alvysLoadId, reason: `event insert: ${evErr?.message}` });
-      return;
+      throw new Error(`events insert failed: ${evErr?.message ?? "no data returned"}`);
     }
     eventId = createdEv.id as string;
   }
