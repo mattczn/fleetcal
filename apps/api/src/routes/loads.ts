@@ -356,26 +356,46 @@ loads.get("/", async (c) => {
     }
   }
 
-  // Joined fetch via PostgREST nested select
-  let q = supabase
-    .from("events")
-    .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
-    .eq("org_id", orgId)
-    .order("start", { ascending: true });
+  // Joined fetch via PostgREST nested select.
+  //
+  // Built as a factory so we can re-issue it with a fresh `.range()` on
+  // every page. PostgREST silently caps each response at 1000 rows; on
+  // a YTD-sized window with thousands of historical events this clips
+  // most of the dataset, which surfaces as "Revenue Over Time chart
+  // missing months" + "calendar looks unchanged" because the events
+  // store (useCalendarStore) is fed from this endpoint.
+  //
+  // Mirrors the paging pattern in /v1/reports/loads.
+  const buildEventsQuery = () => {
+    let q = supabase
+      .from("events")
+      .select(`${EVENT_COLS}, load:loads(${LOAD_COLS})`)
+      .eq("org_id", orgId)
+      .order("start", { ascending: true });
+    if (!includeDeleted) q = q.is("deleted_at", null);
+    if (from) q = q.gte("end", from);
+    if (to) q = q.lte("start", to);
+    if (statusList) q = q.in("status", statusList);
+    if (assetIds) q = q.in("asset_id", assetIds);
+    if (brokerLoadIds) q = q.in("load_id", brokerLoadIds);
+    return q;
+  };
 
-  if (!includeDeleted) q = q.is("deleted_at", null);
-  if (from) q = q.gte("end", from);
-  if (to) q = q.lte("start", to);
-  if (statusList) q = q.in("status", statusList);
-  if (assetIds) q = q.in("asset_id", assetIds);
-  if (brokerLoadIds) q = q.in("load_id", brokerLoadIds);
-
-  const { data: events, error } = await q;
-  if (error) {
-    console.error("[GET /v1/loads] query failed:", error);
-    return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  type EventRow = Record<string, unknown>;
+  const EVENT_PAGE = 1000;
+  const rows: EventRow[] = [];
+  let evOffset = 0;
+  while (true) {
+    const { data, error } = await buildEventsQuery().range(evOffset, evOffset + EVENT_PAGE - 1);
+    if (error) {
+      console.error(`[GET /v1/loads] query failed at offset ${evOffset}:`, error);
+      return c.json({ error: "list_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+    }
+    const batch = (data ?? []) as unknown as EventRow[];
+    rows.push(...batch);
+    if (batch.length < EVENT_PAGE) break;
+    evOffset += batch.length;
   }
-  const rows = events ?? [];
 
   // Fetch stops in one query for all events
   const eventIds = (rows as unknown as Array<Record<string, unknown>>).map((r) => r.id as string);
