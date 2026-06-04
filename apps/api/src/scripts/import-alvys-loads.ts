@@ -48,6 +48,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 const APPLY        = process.argv.includes("--apply");
 const STAGE1_ONLY  = process.argv.includes("--stage1-only");
 const STAGE2_ONLY  = process.argv.includes("--stage2-only");
+const AUTO_CREATE_CUSTOMERS = process.argv.includes("--auto-create-customers");
 const ORG_ID       = arg("--org");
 const FROM_DEFAULT = "2026-01-25";
 const FROM         = arg("--from") ?? FROM_DEFAULT;
@@ -318,19 +319,110 @@ async function getCustomers(): Promise<CustomerLite[]> {
   return customersCache!;
 }
 
+// ── Customer name matcher ─────────────────────────────────────────────
+//
+// Mirrors the frontend's apps/web/lib/customerMatch.ts. Stop-word
+// normalisation + Jaccard over words. Same thresholds: ≥0.85 'auto',
+// ≥0.5 'confirm', <0.35 'new'. We only bind on 'auto' here — anything
+// fuzzier than that we'd rather leave NULL than risk a wrong FK.
+//
+// Why a private copy: this script is a one-shot CLI run from a Node
+// context with no path to the web tsconfig. Easier to inline 30 lines
+// than wire up the package resolution. If the web scorer ever changes
+// materially, sync it here too.
+const STOP_WORDS = new Set([
+  "llc", "inc", "corp", "co", "company", "ltd", "limited", "group", "international",
+  "freight", "logistics", "transport", "transportation", "trucking", "carriers",
+  "carrier", "solutions", "services", "service", "systems", "global", "national",
+  "express", "direct", "lines", "line", "usa", "us",
+]);
+function normName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+    .filter(w => w.length > 1 && !STOP_WORDS.has(w)).join(" ").trim();
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  const inter = [...a].filter(x => b.has(x)).length;
+  const union = new Set([...a, ...b]).size;
+  return union === 0 ? 0 : inter / union;
+}
+function scoreAgainst(extracted: string, candidate: string): number {
+  const ne = normName(extracted), nc = normName(candidate);
+  const re = extracted.toLowerCase().trim(), rc = candidate.toLowerCase().trim();
+  if (!ne || !nc) {
+    if (re === rc) return 1.0;
+    if (rc.includes(re) || re.includes(rc)) return 0.85;
+    return 0;
+  }
+  if (ne === nc) return 1.0;
+  if (nc.includes(ne) || ne.includes(nc)) return 0.9;
+  return jaccard(new Set(ne.split(" ")), new Set(nc.split(" "))) * 0.95;
+}
+interface MatchResult {
+  status: "auto" | "confirm" | "new" | "none";
+  customer?: CustomerLite;
+  score?: number;
+}
+function matchCustomer(extracted: string, customers: CustomerLite[]): MatchResult {
+  if (!extracted.trim()) return { status: "none" };
+  if (customers.length === 0) return { status: "new" };
+  let best: { customer: CustomerLite; score: number } | null = null;
+  for (const c of customers) {
+    const candidates = [c.name, ...(c.aliases ?? [])];
+    const score = Math.max(...candidates.map(a => scoreAgainst(extracted, a)));
+    if (!best || score > best.score) best = { customer: c, score };
+  }
+  if (!best || best.score < 0.35) return { status: "new" };
+  if (best.score >= 0.85)         return { status: "auto",    customer: best.customer, score: best.score };
+  if (best.score >= 0.5)          return { status: "confirm", customer: best.customer, score: best.score };
+  return { status: "new" };
+}
+
+// Track unmatched broker names + their best-guess suggestion, so the
+// summary can surface a "needs review" CSV at the end. Map key is the
+// raw Alvys name (preserves case for display); value is the highest
+// fuzzy-but-not-auto match we found and the count of loads using it.
+interface UnmatchedEntry {
+  alvysName: string;
+  occurrences: number;
+  suggestionName?: string;
+  suggestionScore?: number;
+}
+const unmatchedByName = new Map<string, UnmatchedEntry>();
+
 async function resolveCustomer(name: string | undefined): Promise<{ id: string; name: string } | null> {
   const trimmed = (name ?? "").trim();
   if (!trimmed) return null;
   const customers = await getCustomers();
-  const lower = trimmed.toLowerCase();
-  const match = customers.find(c =>
-    c.name.toLowerCase() === lower ||
-    (c.aliases ?? []).some(a => a.toLowerCase() === lower),
-  );
-  if (match) return { id: match.id, name: match.name };
-  // No match — create one (tagged with imported_source so it can be
-  // merged later if it duplicates an existing customer the user has
-  // under a different name).
+  const match = matchCustomer(trimmed, customers);
+  if (match.status === "auto" && match.customer) {
+    return { id: match.customer.id, name: match.customer.name };
+  }
+  // Below the auto threshold — leave customer_id NULL on the load and
+  // log to the unmatched bucket for the post-run review report. The
+  // broker text is still preserved on the load row, so the load shows
+  // up in reports / accounting; only the FK is missing. The user can
+  // either add aliases / create customers and re-run the existing
+  // backfill-loads-customer-id.ts script, OR flip on
+  // --auto-create-customers and re-run this script.
+  const key = trimmed.toLowerCase();
+  const existing = unmatchedByName.get(key);
+  if (existing) {
+    existing.occurrences++;
+  } else {
+    unmatchedByName.set(key, {
+      alvysName: trimmed,
+      occurrences: 1,
+      suggestionName:  match.status === "confirm" ? match.customer?.name : undefined,
+      suggestionScore: match.status === "confirm" ? match.score          : undefined,
+    });
+  }
+
+  if (!AUTO_CREATE_CUSTOMERS) return null;
+
+  // --auto-create-customers path. Same behavior the importer had by
+  // default before — kept behind a flag for users who'd rather create
+  // duplicate-prone customer rows now than do reconciliation later.
   if (!APPLY) {
     log(`  (dry-run) Would create customer "${trimmed}"`);
     return null;
@@ -662,6 +754,26 @@ async function main(): Promise<void> {
   } else if (skipped.length > 50) {
     log(`(${skipped.length} skipped/errored — too many to list)`);
   }
+
+  if (unmatchedByName.size > 0) {
+    log("");
+    log("── Unmatched broker names (loads imported with customer_id=NULL) ──");
+    log("Add an alias on an existing FleetCal customer, or create the customer,");
+    log("then run: npx tsx src/scripts/backfill-loads-customer-id.ts --apply");
+    log("to link these loads up. The fuzzy-match score-column shows where the");
+    log("importer's best guess was — anything below the 0.85 auto threshold");
+    log("was left alone rather than risk a wrong FK.");
+    log("");
+    const sorted = Array.from(unmatchedByName.values()).sort((a, b) => b.occurrences - a.occurrences);
+    log("alvysName,occurrences,suggestion,suggestionScore");
+    for (const u of sorted) {
+      const esc = (x: string) => `"${x.replace(/"/g, '""')}"`;
+      const sug = u.suggestionName ?? "";
+      const sc  = u.suggestionScore != null ? u.suggestionScore.toFixed(2) : "";
+      log(`${esc(u.alvysName)},${u.occurrences},${esc(sug)},${sc}`);
+    }
+  }
+
   log("");
   if (!APPLY) log("(dry-run — re-run with --apply to actually write)");
 }
