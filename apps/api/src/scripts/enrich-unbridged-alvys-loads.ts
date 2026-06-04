@@ -191,9 +191,17 @@ async function main(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (fc as any)
       .from("events")
-      .select("id, asset_id, load:loads!inner(id, alvys_load_id, broker, imported_source)")
+      .select("id, asset_id, driver_name, driver_pay, load:loads!inner(id, alvys_load_id, broker, imported_source)")
       .eq("org_id", ORG)
       .eq("asset_id", unassignedId)
+      // Belt-and-suspenders: the bridge sets driver_name + driver_pay
+      // on every event it touches. Excluding rows that have either
+      // protects the ~5 my-calendar-bridged events whose rid couldn't
+      // decode to a truck (so they stayed on Unassigned) from getting
+      // their accurate times overwritten by Alvys' broker-appointment
+      // times.
+      .is("driver_name", null)
+      .is("driver_pay",  null)
       .eq("load.imported_source", "alvys")
       .not("load.alvys_load_id", "is", null)
       .is("deleted_at", null)
