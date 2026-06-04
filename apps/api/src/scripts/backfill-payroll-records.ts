@@ -148,13 +148,19 @@ async function main(): Promise<void> {
     if (evErr) { log(`  events fetch failed for ${sat}: ${evErr.message}`); continue; }
 
     const driverPayByName = new Map<string, number>();
+    let unattributedPay = 0;
     for (const e of (evs ?? []) as Array<{ driver_name: string | null; driver_pay: number | null; leg_driver_pay: number | null }>) {
       const raw = (e.driver_name ?? "").trim();
-      if (!raw) continue;
-      const lower = raw.toLowerCase();
-      if (NAME_SKIPS.has(lower) || /^\d+$/.test(raw)) continue;
       const pay = (e.driver_pay ?? 0) + (e.leg_driver_pay ?? 0);
       if (pay === 0) continue;
+      const lower = raw.toLowerCase();
+      // Empty / placeholder / fat-fingered unit-as-name → lump into
+      // an "Unattributed Loads" row instead of dropping. The pay was
+      // real, we just can't attribute it to a FleetCal driver record.
+      if (!raw || NAME_SKIPS.has(lower) || /^\d+$/.test(raw)) {
+        unattributedPay += pay;
+        continue;
+      }
       const fcName = resolveFleetcalName(raw, byFirst, byFull);
       driverPayByName.set(fcName, (driverPayByName.get(fcName) ?? 0) + pay);
     }
@@ -167,10 +173,10 @@ async function main(): Promise<void> {
       .eq("period_start", sat);
     const adjTotal = ((adj ?? []) as Array<{ amount: number }>).reduce((s, a) => s + (a.amount ?? 0), 0);
 
-    const weekTotal = [...driverPayByName.values()].reduce((s, v) => s + v, 0) + adjTotal;
+    const weekTotal = [...driverPayByName.values()].reduce((s, v) => s + v, 0) + adjTotal + unattributedPay;
     totalAcrossAllWeeks += weekTotal;
 
-    log(`── Week ${sat} → ${fri}  (${driverPayByName.size} drivers, adj=$${adjTotal.toFixed(2)})`);
+    log(`── Week ${sat} → ${fri}  (${driverPayByName.size} drivers, adj=$${adjTotal.toFixed(2)}${unattributedPay > 0 ? `, unattributed=$${unattributedPay.toFixed(2)}` : ""})`);
     log(`   week total: $${weekTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}`);
 
     if (!APPLY) continue;
@@ -192,6 +198,16 @@ async function main(): Promise<void> {
         total_pay:    adjTotal,
         finalized_at: wk.finalized_at,
         notes:        "Backfilled — lumped from my-calendar payroll_adjustments",
+      });
+    }
+    if (unattributedPay !== 0) {
+      rows.push({
+        org_id:       ORG,
+        driver_name:  "Unattributed Loads",
+        week_start:   sat,
+        total_pay:    unattributedPay,
+        finalized_at: wk.finalized_at,
+        notes:        "Backfilled — events with placeholder/empty driver_name (e.g. Unassigned, '2027' truck-as-name)",
       });
     }
     if (rows.length === 0) continue;
