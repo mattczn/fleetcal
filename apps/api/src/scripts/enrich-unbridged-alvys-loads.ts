@@ -103,6 +103,12 @@ interface AlvysStop {
   ScheduleType?: string;
   Status?: string;
   Sequence?: number;
+  CompanyId?: string;             // → look up name via /locations/search
+}
+interface AlvysLocation {
+  Id?: string;
+  Name?: string;
+  PhysicalAddress?: AlvysAddress;
 }
 interface AlvysLoad {
   Id?: string;
@@ -114,6 +120,17 @@ interface AlvysLoad {
   Status?: string;
   LoadType?: string;
   Stops?: AlvysStop[];
+}
+
+async function alvysSearchLocationsPage(token: string, page: number): Promise<{ items: AlvysLocation[]; total: number }> {
+  const res = await fetch(`${ALVYS_API_BASE}/locations/search`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ Page: page, PageSize: 100 }),
+  });
+  if (!res.ok) throw new Error(`/locations/search failed (${res.status}): ${await res.text()}`);
+  const body = await res.json() as { Items?: AlvysLocation[]; Total?: number };
+  return { items: body.Items ?? [], total: body.Total ?? 0 };
 }
 
 async function alvysSearchLoadsPage(token: string, page: number, fromIso: string, toIso: string): Promise<{ items: AlvysLoad[]; total: number }> {
@@ -252,9 +269,25 @@ async function main(): Promise<void> {
   }
   log("");
 
-  // ── 3. Pull Alvys loads in the window, build map ──
+  // ── 3a. Pull Alvys locations (for facility_name on stops) ──
   const token = await alvysToken();
-  log(`Got Alvys token, fetching /loads/search…`);
+  log(`Got Alvys token, fetching /locations/search…`);
+  const locationsById = new Map<string, string>();   // Id → Name
+  {
+    let lpage = 1;
+    while (true) {
+      const pr = await alvysSearchLocationsPage(token, lpage);
+      for (const loc of pr.items) {
+        if (loc.Id && loc.Name) locationsById.set(loc.Id, loc.Name);
+      }
+      if (pr.items.length < 100 || locationsById.size >= pr.total) break;
+      lpage++;
+    }
+    log(`  ${locationsById.size} locations indexed for facility_name lookup`);
+  }
+
+  // ── 3b. Pull Alvys loads in the window, build map ──
+  log(`Fetching /loads/search…`);
   const alvysById = new Map<string, AlvysLoad>();
   let page = 1;
   let total = 0;
@@ -375,7 +408,7 @@ async function main(): Promise<void> {
       event_id:       t.event_id,
       sequence:       idx + 1,
       type:           (s.StopType ?? "").toLowerCase() === "pickup" ? "pickup" : (s.StopType ?? "").toLowerCase() === "delivery" ? "delivery" : "stop",
-      facility_name:  null,
+      facility_name:  s.CompanyId ? (locationsById.get(s.CompanyId) ?? null) : null,
       address:        combineAddress(s.Address),
       city:           s.Address?.City ?? null,
       state:          s.Address?.State ?? null,
