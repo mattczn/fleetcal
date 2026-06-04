@@ -176,13 +176,45 @@ async function alvysSearchInvoices(token: string, page: number, dateFrom: string
   return { items: body.Items ?? [], total: body.Total ?? 0 };
 }
 
+// Track 429 retries so the summary can surface "we backed off N times".
+let totalRetries = 0;
+
 async function alvysGetLoad(token: string, loadId: string): Promise<AlvysLoad | null> {
-  const res = await fetch(`${ALVYS_API_BASE}/loads/${loadId}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Alvys loads/${loadId} failed (${res.status}): ${await res.text()}`);
-  return await res.json() as AlvysLoad;
+  // Cloudflare in front of Alvys throttles hard on /loads/{id}. Implement
+  // exponential backoff on 429 / 5xx, capped at 6 retries (~63s of waits).
+  // Respect Retry-After header when present; otherwise back off 1s, 2s,
+  // 4s, 8s, 16s, 32s.
+  const MAX_RETRIES = 6;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetch(`${ALVYS_API_BASE}/loads/${loadId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 404) return null;
+    if (res.ok) return await res.json() as AlvysLoad;
+    // Retryable? 429 always. 5xx usually. Anything else → fail fast.
+    const retryable = res.status === 429 || (res.status >= 500 && res.status < 600);
+    if (!retryable || attempt === MAX_RETRIES) {
+      const body = await res.text();
+      throw new Error(`Alvys loads/${loadId} failed (${res.status}) after ${attempt} retries: ${body.slice(0, 200)}`);
+    }
+    // Honor Retry-After when present; otherwise exponential. Cloudflare
+    // sometimes sends a seconds value, sometimes a date — handle both.
+    const retryAfter = res.headers.get("retry-after");
+    let waitMs = 1000 * Math.pow(2, attempt);
+    if (retryAfter) {
+      const asNum = Number(retryAfter);
+      if (Number.isFinite(asNum)) waitMs = Math.max(waitMs, asNum * 1000);
+      else {
+        const dateMs = Date.parse(retryAfter);
+        if (Number.isFinite(dateMs)) waitMs = Math.max(waitMs, dateMs - Date.now());
+      }
+    }
+    waitMs = Math.min(waitMs, 32_000);
+    totalRetries++;
+    await sleep(waitMs);
+  }
+  // Should be unreachable.
+  throw new Error(`Alvys loads/${loadId} unreachable retry path`);
 }
 
 /** Map Alvys status + invoice status → FleetCal billing_status. */
@@ -498,13 +530,18 @@ async function runStage1(): Promise<void> {
 
   // Process each load with a small concurrency cap. 4 in flight is well
   // within Alvys's tolerance and keeps wall-clock low without bursting.
-  // Concurrency: dropped to 2 (was 4) so we don't burst Alvys. Token
-  // is cached inside alvysToken() so workers share it.
+  // Concurrency: SEQUENTIAL (1 worker). Cloudflare sits in front of
+  // Alvys's /loads/{id} endpoint and throttles aggressively — even 2
+  // parallel workers get hit with 429 challenges. Run one-at-a-time
+  // and rely on alvysGetLoad's exponential backoff for transient
+  // failures. The 200ms inter-request sleep below paces us under the
+  // sustained-rate threshold.
   // Diagnostic logging: in dry-run mode (or when not too many already
   // logged), print the first N distinct error messages immediately so
   // a "every load errored" run shows WHY in real time instead of just
   // a useless count at the end.
-  const CONCURRENCY = 2;
+  const CONCURRENCY = 1;
+  const INTER_REQUEST_MS = 200;
   const queueCopy = queue.slice();
   const distinctErrors = new Map<string, number>();
   const ERROR_LOG_LIMIT = 5;
@@ -516,6 +553,8 @@ async function runStage1(): Promise<void> {
         tally1.loadsConsidered++;
         try {
           await processOneLoad(job.invoice, job.loadId, token, unassignedAssetId);
+          // Pace requests to stay under Cloudflare's rate threshold.
+          await sleep(INTER_REQUEST_MS);
         } catch (err) {
           tally1.loadsErrored++;
           const msg = (err as Error).message ?? String(err);
@@ -760,6 +799,7 @@ async function main(): Promise<void> {
     log(`  Loads skipped:           ${tally1.loadsSkipped}`);
     log(`  Loads errored:           ${tally1.loadsErrored}`);
     log(`  Customers created:       ${tally1.customersCreated}`);
+    log(`  Backoff retries:         ${totalRetries}  (transient 429 / 5xx)`);
   }
   if (!STAGE1_ONLY) {
     log(`Stage 2 (my-calendar miles enrichment):`);
