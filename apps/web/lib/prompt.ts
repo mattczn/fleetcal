@@ -143,6 +143,12 @@ Fill as many fields as possible. Use an empty string for any field not found —
 
 The "stops" array is REQUIRED. Extract every pickup, delivery, and intermediate stop in the order they appear in the document. Stop type rules: "pickup" = live load (driver waits), "delivery" = live unload, "drop" = drop loaded trailer (no hook of another), "drop_hook" = drop loaded AND hook empty/different, "stop" = intermediate non-loading stop. If a stop is both a pickup and delivery at the same location, create two entries.
 
+DATE EXTRACTION RULES — critical, read carefully:
+- Copy dates LITERALLY from the document. Do NOT compute, infer, or "add business days". If the rate con says "06/04/2026", write "2026-06-04" — never adjust.
+- The document's load-confirmation date / issue date / signature date is NOT the pickup date. Ignore it for stop times; use only the date printed next to each stop's PU/SO/Stop line.
+- Cross-check before returning: the FIRST stop's apptStart MUST match the load's "start" field exactly (same date AND time). The LAST stop's apptStart MUST match the load's "end" field exactly. Every other stop's date MUST fall between the start date and end date, inclusive.
+- If a stop date appears to fall outside the start→end window, you have misread it. Re-extract from the document; do not return a stop date that contradicts start/end.
+
 ${schema},
 ${stopsSchema}
 ${customBlock}${brokerRulesBlock}

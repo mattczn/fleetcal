@@ -188,6 +188,65 @@ function parseAiRefNums(raw: unknown): RefNum[] {
 
 const PRESET_REF_LABELS = ['Pickup #', 'Delivery #', 'BOL', 'PO #', 'PRO #', 'Order #'];
 
+/**
+ * Safety-net for the rate-con AI parser: snap any stop appointment
+ * dates that fall outside the load's [start, end] window back into
+ * range, preserving the time-of-day.
+ *
+ * Why: the model usually nails start/end (those come from the load
+ * confirmation header) but occasionally drifts on per-stop dates,
+ * producing rate cons where load = 6/4–6/5 but pickup stop = 6/7
+ * and delivery stop = 6/8 (real recurring failure mode observed in
+ * production). The prompt has explicit consistency rules now, but
+ * this catches the cases where the model ignores them.
+ *
+ * Heuristic per stop:
+ *   - If the date is already inside [startDate, endDate] inclusive,
+ *     leave it alone — the AI's stop date is trusted within range.
+ *   - Otherwise, snap the date to the closest valid date in the
+ *     window AND preserve the original HH:mm. First stop snaps to
+ *     startDate, last stop snaps to endDate, intermediates snap to
+ *     whichever bound they're closer to.
+ *   - Apply to both apptStart and apptEnd.
+ *
+ * Returns a NEW stops array; the input is not mutated. If start or
+ * end can't be parsed, returns the input unchanged (no false
+ * corrections on partial extractions).
+ */
+function snapStopsToLoadWindow<S extends { apptStart?: string; apptEnd?: string }>(
+  stops: S[],
+  start: string | undefined,
+  end:   string | undefined,
+): S[] {
+  if (!stops.length || !start || !end) return stops;
+  const startDate = start.split('T')[0];
+  const endDate   = end.split('T')[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return stops;
+  // String comparison works for YYYY-MM-DD — lexicographic order ==
+  // chronological order. No Date parsing needed (and no TZ surprises).
+  const inWindow = (d: string) => d >= startDate && d <= endDate;
+  const snap = (iso: string, isFirst: boolean, isLast: boolean): string => {
+    const [d, t] = iso.split('T');
+    if (!d || inWindow(d)) return iso;
+    // Pick the target date based on which end of the load the stop
+    // belongs to. Mid-load stops snap to the closer bound by string
+    // distance, which matches calendar distance for adjacent days.
+    let target: string;
+    if (isFirst) target = startDate;
+    else if (isLast) target = endDate;
+    else target = (d < startDate) ? startDate : endDate;
+    return t ? `${target}T${t}` : target;
+  };
+  return stops.map((s, i) => {
+    const isFirst = i === 0;
+    const isLast  = i === stops.length - 1;
+    const next: S = { ...s };
+    if (s.apptStart) next.apptStart = snap(s.apptStart, isFirst, isLast);
+    if (s.apptEnd)   next.apptEnd   = snap(s.apptEnd,   isFirst, isLast);
+    return next;
+  });
+}
+
 function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onChange: (v: RefNum[]) => void; headerColor: string }) {
   const [draftLabel, setDraftLabel] = useState('');
   const [draftValue, setDraftValue] = useState('');
@@ -3578,9 +3637,15 @@ export default function EventModal() {
         }
         if (parsed.trailerType) setField('trailerType', parsed.trailerType);
         if (parsed.specialInstructions) setField('specialInstructions', parsed.specialInstructions);
-        const parsedStops: Stop[] = Array.isArray(parsed.stops) && parsed.stops.length > 0
-          ? (parsed.stops as Stop[]).map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 }))
+        // Snap any drifted stop dates back into the load window before
+        // building the Stop[]. See snapStopsToLoadWindow docs for the
+        // recurring AI-parser drift this catches.
+        const rawStops = Array.isArray(parsed.stops) && parsed.stops.length > 0
+          ? snapStopsToLoadWindow(parsed.stops as Stop[], parsed.start, parsed.end)
           : [];
+        const parsedStops: Stop[] = rawStops.map((s, i) => ({
+          ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1,
+        }));
         if (parsedStops.length > 0) setStops(parsedStops);
         // Generate title from resolved broker + stops rather than AI summary
         setTitle(generateLoadTitle(resolvedBroker, parsedStops, customers) || (parsed.summary ? String(parsed.summary) : ''));
@@ -3712,7 +3777,10 @@ export default function EventModal() {
         setEndDate(ed); setEndTime(et.slice(0, 5));
       }
       if (Array.isArray(parsed.stops) && parsed.stops.length > 0) {
-        setStops((parsed.stops as Stop[]).map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 })));
+        // Same snap as the initial-parse path so reparse can't reintroduce
+        // drifted stop dates.
+        const snapped = snapStopsToLoadWindow(parsed.stops as Stop[], parsed.start, parsed.end);
+        setStops(snapped.map((s, i) => ({ ...s, id: crypto.randomUUID(), eventId: '', sequence: i + 1 })));
       }
       markDirty();
     } catch (err) {
