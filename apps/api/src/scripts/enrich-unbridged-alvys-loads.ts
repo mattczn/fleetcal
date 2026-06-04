@@ -46,7 +46,8 @@
 import "dotenv/config";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const APPLY = process.argv.includes("--apply");
+const APPLY         = process.argv.includes("--apply");
+const BRIDGED_ONLY  = process.argv.includes("--bridged-only");
 const ORG   = process.argv.find(a => a.startsWith("--org="))?.slice("--org=".length);
 const FROM  = process.argv.find(a => a.startsWith("--from="))?.slice("--from=".length) ?? "2026-01-01";
 const TO    = process.argv.find(a => a.startsWith("--to="))?.slice("--to=".length)   ?? new Date().toISOString().slice(0, 10);
@@ -177,7 +178,19 @@ async function main(): Promise<void> {
   const unassignedId = ua.id as number;
   log(`Unassigned asset id: ${unassignedId}`);
 
-  // ── 2. Target FleetCal loads (events on Unassigned, imported_source=alvys) ──
+  // ── 2. Target FleetCal events ──
+  //
+  // Default mode: events on Unassigned with driver_name + driver_pay
+  // both NULL — the original stubs the my-calendar bridge didn't
+  // touch. Full enrichment (start/end + load_num + ref_nums + stops).
+  //
+  // --bridged-only mode: events where driver_name IS NOT NULL on
+  // Alvys-imported loads — these got driver/asset/pay/start-end from
+  // my-calendar but still lack load_num, ref_nums, and stops.
+  // Conservative enrichment: load_num + ref_nums always; stops only
+  // for non-relay loads (we skip relays because Alvys returns one
+  // stop list per load and splitting it across legs requires
+  // judgment we don't want to automate).
   interface TargetRow {
     load_id:   string;
     alvys_id:  string;
@@ -189,23 +202,21 @@ async function main(): Promise<void> {
   let offset = 0;
   while (true) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (fc as any)
+    let q = (fc as any)
       .from("events")
       .select("id, asset_id, driver_name, driver_pay, load:loads!inner(id, alvys_load_id, broker, imported_source)")
       .eq("org_id", ORG)
-      .eq("asset_id", unassignedId)
-      // Belt-and-suspenders: the bridge sets driver_name + driver_pay
-      // on every event it touches. Excluding rows that have either
-      // protects the ~5 my-calendar-bridged events whose rid couldn't
-      // decode to a truck (so they stayed on Unassigned) from getting
-      // their accurate times overwritten by Alvys' broker-appointment
-      // times.
-      .is("driver_name", null)
-      .is("driver_pay",  null)
       .eq("load.imported_source", "alvys")
       .not("load.alvys_load_id", "is", null)
-      .is("deleted_at", null)
-      .range(offset, offset + PAGE - 1);
+      .is("deleted_at", null);
+    if (BRIDGED_ONLY) {
+      // Bridged events have driver_name set.
+      q = q.not("driver_name", "is", null);
+    } else {
+      // Default: untouched stubs only.
+      q = q.eq("asset_id", unassignedId).is("driver_name", null).is("driver_pay", null);
+    }
+    const { data, error } = await q.range(offset, offset + PAGE - 1);
     if (error) { log(`events fetch failed: ${error.message}`); process.exit(2); }
     const batch = (data ?? []) as Array<{ id: string; load: { id: string; alvys_load_id: string; broker: string | null } | { id: string; alvys_load_id: string; broker: string | null }[] }>;
     if (batch.length === 0) break;
@@ -218,7 +229,27 @@ async function main(): Promise<void> {
     offset += batch.length;
   }
   tally.fcUnbridgedScanned = targets.length;
-  log(`Target unbridged Alvys events: ${targets.length}`);
+  log(`Mode: ${BRIDGED_ONLY ? "BRIDGED-ONLY (preserve my-calendar times, add load_num/ref_nums/stops)" : "DEFAULT (full enrichment of stubs)"}`);
+  log(`Target events: ${targets.length}`);
+
+  // In bridged-only mode, detect relay loads (load_id with >1 event)
+  // so we can skip stops for them.
+  const relayLoadIds = new Set<string>();
+  if (BRIDGED_ONLY) {
+    const loadIds = [...new Set(targets.map(t => t.load_id))];
+    const countByLoad = new Map<string, number>();
+    const COUNT_BATCH = 100;
+    for (let i = 0; i < loadIds.length; i += COUNT_BATCH) {
+      const slice = loadIds.slice(i, i + COUNT_BATCH);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (fc as any).from("events").select("load_id").in("load_id", slice).is("deleted_at", null);
+      for (const r of (data ?? []) as Array<{ load_id: string }>) {
+        countByLoad.set(r.load_id, (countByLoad.get(r.load_id) ?? 0) + 1);
+      }
+    }
+    for (const [lid, n] of countByLoad) if (n > 1) relayLoadIds.add(lid);
+    log(`Relay loads in target set: ${relayLoadIds.size} (stops will be skipped for these)`);
+  }
   log("");
 
   // ── 3. Pull Alvys loads in the window, build map ──
@@ -301,14 +332,20 @@ async function main(): Promise<void> {
       return;
     }
 
-    // event.start / end
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: evErr } = await (fc as any).from("events").update({
-      start: pickupNaive,
-      end:   deliveryNaive ?? pickupNaive,
-    }).eq("id", t.event_id);
-    if (evErr) { tally.errors++; log(`  ✗ event update ${t.alvys_id.slice(0,8)}: ${evErr.message}`); return; }
-    tally.eventsUpdated++;
+    // event.start / end — only in default mode.
+    // Bridged events already have accurate times from my-calendar
+    // and we don't want broker-appointment times to clobber them.
+    if (!BRIDGED_ONLY) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: evErr } = await (fc as any).from("events").update({
+        start: pickupNaive,
+        end:   deliveryNaive ?? pickupNaive,
+      }).eq("id", t.event_id);
+      if (evErr) { tally.errors++; log(`  ✗ event update ${t.alvys_id.slice(0,8)}: ${evErr.message}`); return; }
+      tally.eventsUpdated++;
+    }
+    // In bridged mode we leave the event row alone (my-calendar's
+    // start/end are authoritative).
 
     // load: load_num + ref_nums (jsonb)
     const refNums: Array<{ label: string; value: string }> = [];
@@ -322,7 +359,13 @@ async function main(): Promise<void> {
     if (ldErr) { tally.errors++; log(`  ✗ load update ${t.alvys_id.slice(0,8)}: ${ldErr.message}`); return; }
     tally.loadsUpdated++;
 
-    // Replace stops
+    // Stops: skip entirely for relay loads in bridged-only mode.
+    // Alvys returns one stop list per load; my-calendar splits relays
+    // into 2 legs with their own (partial) stop sets. Auto-splitting
+    // the Alvys list across legs is judgment we don't want to make.
+    if (BRIDGED_ONLY && relayLoadIds.has(t.load_id)) return;
+
+    // Replace stops (delete then insert — idempotent on re-run)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: delErr } = await (fc as any).from("stops").delete().eq("event_id", t.event_id);
     if (delErr) { tally.errors++; log(`  ✗ stops delete ${t.alvys_id.slice(0,8)}: ${delErr.message}`); return; }
