@@ -540,8 +540,11 @@ async function runStage1(): Promise<void> {
   // logged), print the first N distinct error messages immediately so
   // a "every load errored" run shows WHY in real time instead of just
   // a useless count at the end.
-  const CONCURRENCY = 1;
-  const INTER_REQUEST_MS = 200;
+  // Invoice-only mode does no per-load Alvys calls, so we don't need
+  // to throttle. The DB writes are the bottleneck — keep concurrency
+  // modest to avoid hammering Supabase with parallel upserts.
+  const CONCURRENCY = 4;
+  const INTER_REQUEST_MS = 0;
   const queueCopy = queue.slice();
   const distinctErrors = new Map<string, number>();
   const ERROR_LOG_LIMIT = 5;
@@ -586,48 +589,65 @@ async function runStage1(): Promise<void> {
 }
 
 async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token: string, unassignedAssetId: number): Promise<void> {
-  const detail = await alvysGetLoad(token, alvysLoadId);
-  if (!detail || !detail.Id) {
-    tally1.loadsSkipped++;
-    skipped.push({ alvysLoadId, reason: "load not found in Alvys (deleted?)" });
-    return;
-  }
+  // INVOICE-ONLY MODE.
+  //
+  // The /loads/{id} endpoint on Alvys's partner API returns 405 Method
+  // Not Allowed regardless of GET / POST / etc. — either the endpoint
+  // was retired or the partner tier doesn't get load detail at all.
+  // Either way, hitting it for every invoice tanks the whole import.
+  //
+  // Pivot: build the FleetCal load row from the INVOICE response
+  // alone. That gives us broker, revenue, load number, Alvys UUID,
+  // and a date window. Miles come from the my-calendar bridge in
+  // stage 2 (which has them already, keyed by alvys_load_id).
+  // Stops are skipped — the user said they don't need perfect
+  // matching, and dispatching is already done for these historical
+  // loads anyway.
+  //
+  // Token + unassignedAssetId still params for parity with the
+  // original signature; token is unused now, kept so future
+  // /loads/{id} restoration is a smaller diff.
+  void token;
+
+  const invoiceLoadRef = invoice.Loads?.[0];
 
   // ── Customer / broker resolution ─────────────────────────────────────
-  const brokerName = (invoice.Customer?.Name ?? detail.Customer?.Name ?? "").trim();
+  const brokerName = (invoice.Customer?.Name ?? "").trim();
   const customer = await resolveCustomer(brokerName);
 
-  // ── Pricing — invoice total wins over CustomerRate (user's call) ─────
-  const invoiceAmount = invoice.Total?.Amount;
-  const customerRate  = detail.CustomerRate?.Amount;
-  const loadPrice = invoiceAmount ?? customerRate ?? 0;
+  // ── Pricing — invoice total (user's call) ────────────────────────────
+  const loadPrice = invoice.Total?.Amount ?? 0;
 
-  // ── Miles ─────────────────────────────────────────────────────────────
-  const milesRaw = detail.CustomerMileage?.Distance?.Value;
-  const loadedMiles = typeof milesRaw === "number" && Number.isFinite(milesRaw) ? milesRaw : null;
-
-  // ── Stops + times ─────────────────────────────────────────────────────
-  const stops = detail.Stops ?? [];
-  const firstPickup = stops.find(s => s.StopType === "Pickup");
-  const lastDelivery = [...stops].reverse().find(s => s.StopType === "Delivery");
-  const start = toNaiveDenver(firstPickup?.AppointmentStart ?? firstPickup?.ScheduledDate, "09:00")
-             ?? `${invoice.InvoicedDate?.slice(0, 10) ?? FROM}T09:00`;
-  const end   = toNaiveDenver(lastDelivery?.AppointmentStart ?? lastDelivery?.ScheduledDate, "12:00")
-             ?? `${invoice.InvoicedDate?.slice(0, 10) ?? FROM}T12:00`;
+  // ── Dates — invoiced date is our anchor since we don't have stop
+  // times. Use it as both start AND end so the load lands on the
+  // calendar on a known day; stage 2 / manual edits can tighten later.
+  const invoiceDateIso = invoice.InvoicedDate?.slice(0, 10);
+  const dateKey = invoiceDateIso && /^\d{4}-\d{2}-\d{2}$/.test(invoiceDateIso) ? invoiceDateIso : FROM;
+  const start = `${dateKey}T09:00`;
+  const end   = `${dateKey}T12:00`;
 
   // ── Status mapping ────────────────────────────────────────────────────
-  const billingStatus = mapBillingStatus(detail.Status, invoice.Status);
-  const eventStatus   = mapEventStatus(detail.Status);
+  // No load-level Status without /loads/{id}; rely on invoice status
+  // entirely. mapBillingStatus already handles the "no load status"
+  // case via the second arg, but invert: just pass invoice status
+  // for both, and "delivered" → "verified" path falls through to
+  // "pending" which we override below since these are historical
+  // invoiced loads (anything in the invoice list is at least invoiced).
+  let billingStatus: "pending" | "verified" | "invoiced" | "paid" = "verified";
+  const invStatus = (invoice.Status ?? "").toLowerCase();
+  if (invStatus === "paid") billingStatus = "paid";
+  else if (invStatus === "awaitingpayment") billingStatus = "invoiced";
+  else billingStatus = "verified"; // Draft → ready to send
+  const eventStatus = "delivered"; // historical = delivered
 
   // ── Title ─────────────────────────────────────────────────────────────
-  const pickupCity   = (firstPickup?.Address?.City ?? "").trim();
-  const deliveryCity = (lastDelivery?.Address?.City ?? "").trim();
-  const title = pickupCity && deliveryCity
-    ? `${brokerName || "Load"}: ${pickupCity} → ${deliveryCity}`
-    : brokerName || `Alvys ${detail.LoadNumber ?? alvysLoadId.slice(0, 8)}`;
+  const loadNum = invoiceLoadRef?.LoadNumber ?? "";
+  const title = brokerName
+    ? `${brokerName}${loadNum ? ` :: ${loadNum}` : ""}`
+    : `Alvys ${loadNum || alvysLoadId.slice(0, 8)}`;
 
   if (!APPLY) {
-    log(`  → ${detail.LoadNumber ?? alvysLoadId.slice(0, 8)} :: ${brokerName} :: $${loadPrice} :: ${loadedMiles ?? "??"}mi :: ${billingStatus}`);
+    log(`  → ${loadNum || alvysLoadId.slice(0, 8)} :: ${brokerName} :: $${loadPrice} :: ${billingStatus}`);
     tally1.loadsImported++;
     return;
   }
@@ -635,7 +655,7 @@ async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token:
   // ── Upsert load ───────────────────────────────────────────────────────
   const loadRow = {
     org_id:          ORG_ID,
-    load_num:        detail.LoadNumber ?? null,
+    load_num:        loadNum || null,
     broker:          brokerName || null,
     customer_id:     customer?.id ?? null,
     load_price:      loadPrice,
@@ -679,7 +699,9 @@ async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token:
       asset_id: unassignedAssetId,
       driver_id: null,
       driver_name: null,
-      loaded_miles: loadedMiles,
+      // loaded_miles deliberately NOT overwritten on update — stage 2
+      // / my-calendar bridge owns this field. Don't trash a value
+      // that's already there.
       event_kind: "revenue",
     }).eq("id", eventId);
   } else {
@@ -693,7 +715,7 @@ async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token:
       asset_id: unassignedAssetId,
       driver_id: null,
       driver_name: null,
-      loaded_miles: loadedMiles,
+      loaded_miles: null, // stage 2 fills this in via my-calendar bridge
       event_kind: "revenue",
       alvys_load_id: alvysLoadId,
     }).select("id").single();
@@ -705,20 +727,15 @@ async function processOneLoad(invoice: AlvysInvoice, alvysLoadId: string, token:
     eventId = createdEv.id as string;
   }
 
-  // ── Replace stops ─────────────────────────────────────────────────────
-  if (stops.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (fc as any).from("stops").delete().eq("event_id", eventId);
-    const stopRows = stops.map((s, i) => buildStop(s, i + 1, eventId));
-    if (stopRows.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: stopErr } = await (fc as any).from("stops").insert(stopRows);
-      if (stopErr) log(`  ⚠ stops insert failed for ${alvysLoadId}: ${stopErr.message}`);
-    }
-  }
+  // Stops are intentionally skipped in invoice-only mode — Alvys's
+  // /loads/{id} endpoint (the stops source) returns 405. The user's
+  // stated goal is core financial + mileage data, both of which we
+  // satisfy via invoice + my-calendar bridge. Stops can be added
+  // later via a dedicated /loads/{id} restoration if Alvys publishes
+  // the right method.
 
   tally1.loadsImported++;
-  log(`  ✓ ${detail.LoadNumber ?? alvysLoadId.slice(0, 8)} :: ${brokerName} :: $${loadPrice}`);
+  log(`  ✓ ${loadNum || alvysLoadId.slice(0, 8)} :: ${brokerName} :: $${loadPrice}`);
 }
 
 // ── Stage 2: my-calendar enrichment ─────────────────────────────────────
