@@ -297,12 +297,21 @@ async function main(): Promise<void> {
     if (evErr) { tally.errors++; log(`  ✗ event update ${t.alvys_id.slice(0,8)}: ${evErr.message}`); continue; }
     tally.eventsUpdated++;
 
-    // load: load_num + order_num
+    // load: load_num (scalar) + ref_nums (jsonb array of {label,value})
+    // The loads schema doesn't have a separate order_num column;
+    // OrderNumber + PONumber go into ref_nums alongside whatever else
+    // a broker tagged on the load. Labels match existing FleetCal
+    // convention ("Order #", "PO #").
+    const refNums: Array<{ label: string; value: string }> = [];
+    if (al.OrderNumber) refNums.push({ label: "Order #", value: al.OrderNumber });
+    if (al.PONumber)    refNums.push({ label: "PO #",    value: al.PONumber    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error: ldErr } = await (fc as any).from("loads").update({
-      load_num:  al.LoadNumber ?? null,
-      order_num: al.OrderNumber ?? null,
-    }).eq("id", t.load_id);
+    const loadPatch: Record<string, any> = {
+      load_num: al.LoadNumber ?? null,
+    };
+    if (refNums.length > 0) loadPatch.ref_nums = refNums;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: ldErr } = await (fc as any).from("loads").update(loadPatch).eq("id", t.load_id);
     if (ldErr) { tally.errors++; log(`  ✗ load update ${t.alvys_id.slice(0,8)}: ${ldErr.message}`); continue; }
     tally.loadsUpdated++;
 
