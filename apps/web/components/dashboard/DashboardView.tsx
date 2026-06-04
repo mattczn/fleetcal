@@ -491,6 +491,11 @@ export default function DashboardView() {
         const { loads } = await railway.listLoadSummaries({
           pickupFrom: periodIso.fromNaive,
           pickupTo:   periodIso.toNaive,
+          // Explicit large limit so we always get the full set even
+          // against an older API build that still defaults to 1000.
+          // The server now returns everything when limit is omitted,
+          // but this is belt-and-suspenders during the rolling deploy.
+          limit:      '10000',
         });
         if (!cancelled) setLoadSummaries(loads);
       } catch (err) {

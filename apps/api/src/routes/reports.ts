@@ -346,7 +346,14 @@ reports.get("/loads", async (c) => {
   const statusParam   = q.get("status")       ?? undefined;
   const billingParam  = q.get("billingStatus") ?? undefined;
   const includeDeleted = q.get("includeDeleted") === "true";
-  const limit  = Math.min(Math.max(parseInt(q.get("limit") ?? "1000", 10) || 1000, 1), 5000);
+  // Pagination is opt-in. When the caller passes ?limit explicitly
+  // (accounting page does this with its BUCKET_LIMIT), honor it. When
+  // omitted (dashboard's case), return EVERYTHING — capping silently
+  // at 1000 was the bug that made the dashboard report $768K when the
+  // real total was ~$1.84M. The inner loads-table query pages through
+  // Supabase already, so there's no perf reason to truncate here.
+  const explicitLimit = q.get("limit");
+  const limit  = explicitLimit ? Math.min(Math.max(parseInt(explicitLimit, 10) || 1000, 1), 10000) : Infinity;
   const offset = Math.max(parseInt(q.get("offset") ?? "0", 10) || 0, 0);
 
   // Validate status values up front.
