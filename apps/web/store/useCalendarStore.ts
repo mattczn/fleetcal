@@ -1234,6 +1234,13 @@ export const useCalendarStore = create<CalendarStore>()(
       ...(updates.dob            !== undefined ? { dob: updates.dob ?? null } : {}),
       ...(updates.activeFrom     !== undefined ? { activeFrom: updates.activeFrom } : {}),
       ...(updates.activeTo       !== undefined ? { activeTo: updates.activeTo ?? null } : {}),
+      // Owner-op flag — without this, the store's local optimistic
+      // update flips the checkbox on but the PATCH body never includes
+      // the field and the server keeps exclude_from_reports=false.
+      // Next refresh reverts the UI to the actual server state and the
+      // toggle appears unsticky. (Add other new Driver fields to this
+      // allowlist as they land; this is the bottleneck.)
+      ...(updates.excludeFromReports !== undefined ? { excludeFromReports: updates.excludeFromReports } : {}),
     };
     if (Object.keys(body).length === 0) return;
     railway.updateDriver(id, body).catch((err) => console.error('updateDriver:', err));
