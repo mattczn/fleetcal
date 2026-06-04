@@ -473,6 +473,12 @@ loads.get("/search", async (c) => {
   // loads via search without bouncing between the calendar and the
   // Recently Deleted tray. The status of each result (active /
   // cancelled / deleted) is rendered as a pill in the dropdown.
+  //
+  // ref_nums is a jsonb array of {label,value} pairs (Order #, PO #,
+  // BOL, etc). Cast to text and ilike for partial matching — the
+  // surface area is small (~2k loads org-wide) so a sequential scan
+  // is fine without an index. If this ever needs to scale, add a
+  // GIN index on to_tsvector(ref_nums::text).
   const loadOr = numericId !== null
     ? `internal_load_id.eq.${numericId},load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`
     : `load_num.ilike.${pattern},broker.ilike.${pattern},notes.ilike.${pattern}`;
@@ -481,6 +487,15 @@ loads.get("/search", async (c) => {
     .select("id")
     .eq("org_id", orgId)
     .or(loadOr)
+    .limit(50);
+  // Separate query for ref_nums — PostgREST .or() doesn't reliably
+  // accept ::text casts inside the filter string. Running it in
+  // parallel and unioning the result ids is the robust path.
+  const refNumsIdsP = supabase
+    .from("loads")
+    .select("id")
+    .eq("org_id", orgId)
+    .filter("ref_nums::text", "ilike", pattern)
     .limit(50);
 
   // 2) Event-side matches → joined events whose event-row fields hit.
@@ -493,17 +508,25 @@ loads.get("/search", async (c) => {
     .order("start", { ascending: false })
     .limit(limit);
 
-  const [loadIdsRes, eventMatchesRes] = await Promise.all([loadIdsP, eventMatchesP]);
+  const [loadIdsRes, refNumsIdsRes, eventMatchesRes] = await Promise.all([loadIdsP, refNumsIdsP, eventMatchesP]);
   if (loadIdsRes.error) {
     console.error("[GET /v1/loads/search] load-side query failed:", loadIdsRes.error);
     return c.json({ error: "search_failed", detail: loadIdsRes.error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (refNumsIdsRes.error) {
+    // Don't fail the whole search if the jsonb cast hiccups — log and
+    // fall through with the standard load-side matches only.
+    console.error("[GET /v1/loads/search] ref_nums query failed:", refNumsIdsRes.error);
   }
   if (eventMatchesRes.error) {
     console.error("[GET /v1/loads/search] event-side query failed:", eventMatchesRes.error);
     return c.json({ error: "search_failed", detail: eventMatchesRes.error.message } satisfies ApiErrorResponse, 500);
   }
 
-  const matchedLoadIds = ((loadIdsRes.data ?? []) as Array<{ id: string }>).map((r) => r.id);
+  const matchedLoadIds = [...new Set([
+    ...((loadIdsRes.data    ?? []) as Array<{ id: string }>).map(r => r.id),
+    ...((refNumsIdsRes.data ?? []) as Array<{ id: string }>).map(r => r.id),
+  ])];
   let loadMatches: unknown[] = [];
   if (matchedLoadIds.length > 0) {
     const { data, error } = await supabase
