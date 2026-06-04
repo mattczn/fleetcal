@@ -751,22 +751,35 @@ async function runStage2(): Promise<void> {
   log("══ STAGE 2 — my-calendar → FleetCal miles enrichment ═════════════");
   log("");
 
-  // Pull all imported loads + their event.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rows, error } = await (fc as any)
-    .from("loads")
-    .select("id, alvys_load_id, events:events(id, loaded_miles, alvys_load_id)")
-    .eq("org_id", ORG_ID)
-    .not("alvys_load_id", "is", null);
-  if (error) {
-    log(`Stage 2 load fetch failed: ${error.message}`);
-    return;
-  }
-  const importedLoads = (rows ?? []) as Array<{
+  // Page through all imported loads — Supabase/PostgREST caps each
+  // response at 1000 rows by default, so a flat query missed the
+  // upper 1000+ on the first apply.
+  type ImportedLoadRow = {
     id: string;
     alvys_load_id: string;
     events: Array<{ id: string; loaded_miles: number | null; alvys_load_id: string | null }>;
-  }>;
+  };
+  const importedLoads: ImportedLoadRow[] = [];
+  const PAGE = 1000;
+  let offset = 0;
+  while (true) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: rows, error } = await (fc as any)
+      .from("loads")
+      .select("id, alvys_load_id, events:events(id, loaded_miles, alvys_load_id)")
+      .eq("org_id", ORG_ID)
+      .not("alvys_load_id", "is", null)
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (error) {
+      log(`Stage 2 load fetch failed at offset ${offset}: ${error.message}`);
+      return;
+    }
+    const batch = (rows ?? []) as ImportedLoadRow[];
+    importedLoads.push(...batch);
+    if (batch.length < PAGE) break;
+    offset += batch.length;
+  }
   log(`Found ${importedLoads.length} imported loads to consider for enrichment`);
 
   for (const load of importedLoads) {
