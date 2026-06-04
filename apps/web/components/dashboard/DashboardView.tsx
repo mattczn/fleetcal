@@ -1009,20 +1009,46 @@ export default function DashboardView() {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
+    // Prefer the load-shaped report (one row per load, same source as the
+    // Total Revenue KPI tile). Bucket math now matches the tile exactly
+    // and includes loads on the Unassigned asset — important for the
+    // 758 historical Alvys imports we couldn't bridge to a real truck,
+    // which would otherwise be invisibly dropped here.
+    //
+    // Fall back to the events-store `deduped` array while the report
+    // is still loading, so the chart shows something instead of zeros
+    // during the initial paint.
+    const useLoadSummaries = loadSummaries !== null;
+    const loadRevenue = (l: LoadSummary): number => {
+      if (l.totalBillable != null) return l.totalBillable;
+      const accessorials = (l.accessorials ?? [])
+        .reduce((acc, a) => acc + (a.billable ? (a.amount ?? 0) : 0), 0);
+      return (l.loadPrice ?? 0) + accessorials;
+    };
+    // pickupAt on a LoadSummary is a NAIVE org-local string like
+    // "2026-03-15T08:00". Parsing with `new Date(...)` treats it as
+    // browser-local, which is the same tz the bucket boundaries are
+    // computed in below — so bucketing stays consistent.
+
     if (useDailyBuckets) {
       const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       const cur = new Date(pStart);
       while (cur <= pEnd) {
         const next = new Date(cur); next.setDate(cur.getDate() + 1);
-        const dayEvents = deduped.filter(e => {
-          const d = parseEventDate(e.start);
-          return d >= cur && d < next;
-        });
-        buckets.push({
-          label:   DAY_NAMES[cur.getDay()],
-          revenue: dayEvents.reduce((s, e) => s + eventRevenue(e), 0),
-          loads:   dayEvents.length,
-        });
+        let revenue = 0;
+        let count   = 0;
+        if (useLoadSummaries) {
+          for (const l of loadSummaries!) {
+            const d = parseEventDate(l.pickupAt);
+            if (d >= cur && d < next) { revenue += loadRevenue(l); count++; }
+          }
+        } else {
+          for (const e of deduped) {
+            const d = parseEventDate(e.start);
+            if (d >= cur && d < next) { revenue += eventRevenue(e); count++; }
+          }
+        }
+        buckets.push({ label: DAY_NAMES[cur.getDay()], revenue, loads: count });
         cur.setDate(cur.getDate() + 1);
       }
     } else {
@@ -1032,20 +1058,29 @@ export default function DashboardView() {
       cur.setDate(cur.getDate() - ((dow + 1) % 7));
       while (cur <= pEnd && cur <= today) {
         const wEnd = new Date(cur); wEnd.setDate(cur.getDate() + 6);
-        const wEvents = deduped.filter(e => {
-          const d = parseEventDate(e.start);
-          return d >= cur && d <= wEnd;
-        });
+        let revenue = 0;
+        let count   = 0;
+        if (useLoadSummaries) {
+          for (const l of loadSummaries!) {
+            const d = parseEventDate(l.pickupAt);
+            if (d >= cur && d <= wEnd) { revenue += loadRevenue(l); count++; }
+          }
+        } else {
+          for (const e of deduped) {
+            const d = parseEventDate(e.start);
+            if (d >= cur && d <= wEnd) { revenue += eventRevenue(e); count++; }
+          }
+        }
         buckets.push({
-          label:   cur.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          revenue: wEvents.reduce((s, e) => s + eventRevenue(e), 0),
-          loads:   wEvents.length,
+          label: cur.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          revenue,
+          loads: count,
         });
         cur.setDate(cur.getDate() + 7);
       }
     }
     return buckets;
-  }, [deduped, pStart, pEnd, period]);
+  }, [loadSummaries, deduped, pStart, pEnd, period]);
 
   const maxBucketRev = Math.max(...timeBuckets.map(b => b.revenue), 1);
 
