@@ -24,6 +24,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { loadExcludedDrivers } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 
@@ -169,6 +170,14 @@ payroll.get("/records", async (c) => {
   const weekStartFrom  = url.searchParams.get("weekStartFrom");
   const weekStartTo    = url.searchParams.get("weekStartTo");
 
+  // Owner-op exclusion. Records are stored keyed by driver_name (no
+  // FK column). Drop any record whose driver matches the excluded
+  // set so the dashboard Total Payroll KPI + the payroll list don't
+  // count settlements that go outside the carrier's own payroll. An
+  // explicit driverName filter overrides — if you query a specific
+  // owner-op by name, you still get their records (you asked).
+  const excluded = await loadExcludedDrivers(orgId);
+
   let q = supabase
     .from("payroll_records")
     .select(REC_COLS)
@@ -184,9 +193,11 @@ payroll.get("/records", async (c) => {
     console.error("[GET /v1/payroll/records] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const res: ListPayrollRecordsResponse = {
-    records: ((data ?? []) as RecRow[]).map(rowToRec),
-  };
+  const records = ((data ?? []) as RecRow[]).map(rowToRec);
+  const filtered = driverName
+    ? records // explicit name query — caller asked for this driver
+    : records.filter(r => !excluded.nameSet.has((r.driverName ?? "").trim()));
+  const res: ListPayrollRecordsResponse = { records: filtered };
   return c.json(res);
 });
 

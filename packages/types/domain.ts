@@ -170,6 +170,14 @@ export interface Driver {
   locationPermission?:      'granted' | 'denied' | 'undetermined' | null;
   /** Last time the driver app reported its permission state. */
   permissionsUpdatedAt?: string | null;
+
+  /** Owner-operator flag. When true, this driver's loads are excluded
+   *  from aggregate revenue reports (dashboard Total Revenue, Fleet
+   *  Performance, payroll). Loads still appear in the calendar,
+   *  accounting, and closeout — only the rollup math skips them.
+   *  The fleet may dispatch for an owner-op without their numbers
+   *  being part of the carrier's own KPIs. */
+  excludeFromReports?: boolean;
 }
 
 export type DriverDocumentKind = 'license' | 'medical_card' | 'mvr' | 'other';

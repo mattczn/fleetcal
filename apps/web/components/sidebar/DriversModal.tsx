@@ -1043,6 +1043,31 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
         onSave={(changes) => updateDriver(driver.id, changes)}
       />
 
+      {/* Owner-operator flag. When true, loads driven by this driver
+          are excluded from aggregate revenue reports (dashboard Total
+          Revenue, fleet performance, payroll). Loads still appear in
+          calendar / accounting / closeout — only the rollup math
+          skips them. Most fleets won't toggle this; surfacing in the
+          edit modal keeps the field discoverable without dominating
+          the layout for the common case. */}
+      <div className="mt-6 pt-6 flex items-start gap-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+        <input
+          id={`exclude-${driver.id}`}
+          type="checkbox"
+          checked={!!driver.excludeFromReports}
+          disabled={!canEdit}
+          onChange={(e) => updateDriver(driver.id, { excludeFromReports: e.target.checked })}
+          style={{ marginTop: 2, accentColor: '#1a73e8', cursor: canEdit ? 'pointer' : 'not-allowed' }}
+        />
+        <label htmlFor={`exclude-${driver.id}`} className="text-sm" style={{ color: 'var(--gc-text-1)', cursor: canEdit ? 'pointer' : 'not-allowed' }}>
+          <div className="font-semibold">Owner-operator (exclude from reports)</div>
+          <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)', maxWidth: 480 }}>
+            Their loads stay in calendar, accounting, and closeout — but their revenue,
+            payroll, and performance numbers won't roll up into your fleet KPIs.
+          </div>
+        </label>
+      </div>
+
       {/* Retire — gated on drivers.delete. API now stamps active_to
           rather than hard-deleting; historical loads keep the driver
           reference intact. Skipped when already retired (the lifecycle

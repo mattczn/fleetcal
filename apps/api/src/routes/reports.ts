@@ -40,6 +40,7 @@ import {
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { loadExcludedDrivers, isExcludedEvent } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -439,9 +440,18 @@ reports.get("/loads", async (c) => {
     }
     for (const e of (data ?? []) as unknown as EventRow[]) eventRows.push(e);
   }
+  // Drop events whose driver is flagged exclude_from_reports (owner-op
+  // support). Filtering events — rather than loads — means a mixed
+  // load (one leg owner-op, one leg company) loses just the excluded
+  // leg from rollups; the load itself still surfaces if any leg
+  // remains. Loads whose every leg was excluded fall out of the
+  // report naturally because buildLoadSummary requires at least one
+  // surviving event.
+  const excluded = await loadExcludedDrivers(orgId);
   const eventsByLoad = new Map<string, EventRow[]>();
   for (const e of eventRows) {
     if (!e.load_id) continue;
+    if (isExcludedEvent(excluded, e)) continue;
     const arr = eventsByLoad.get(e.load_id) ?? [];
     arr.push(e);
     eventsByLoad.set(e.load_id, arr);

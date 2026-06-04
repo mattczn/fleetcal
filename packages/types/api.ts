@@ -596,6 +596,8 @@ export interface UpdateDriverRequest {
   activeFrom?:     string;
   /** Stamp/clear the retire date. null = currently active (unretire). */
   activeTo?:       string | null;
+  /** Owner-operator flag. See Driver.excludeFromReports for semantics. */
+  excludeFromReports?: boolean;
 }
 export interface UpdateDriverResponse { driver: Driver; }
 

@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import type { ApiErrorResponse } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
+import { loadExcludedDrivers, isExcludedEvent } from "../lib/reportExclusions.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -146,19 +147,29 @@ fleet.get("/performance", async (c) => {
   const assetIds = assets.map((a) => a.id);
 
   // ── Events for all assets in window (start in window) ─────────
+  // driver_id + driver_name pulled along so we can drop events whose
+  // driver is flagged owner-op (exclude_from_reports). Filtering at
+  // event level rather than asset level is intentional — a company
+  // truck briefly driven by the owner-op is still excluded for that
+  // leg; the asset itself stays in the leaderboard with its other
+  // legs counted.
+  const excluded = await loadExcludedDrivers(orgId);
   const { data: eventRows } = await sb
     .from("events")
-    .select("id, asset_id, start, \"end\", event_kind, driver_pay, load:loads(load_price, total_billable)")
+    .select("id, asset_id, start, \"end\", event_kind, driver_id, driver_name, driver_pay, load:loads(load_price, total_billable)")
     .eq("org_id", orgId)
     .in("asset_id", assetIds)
     .is("deleted_at", null)
     .gte("start", fromNaive)
     .lt("start", toNaive);
-  const events = ((eventRows ?? []) as Array<{
+  const eventsRaw = ((eventRows ?? []) as Array<{
     id: string; asset_id: number; start: string; end: string;
-    event_kind: string | null; driver_pay: number | null;
+    event_kind: string | null;
+    driver_id: number | null; driver_name: string | null;
+    driver_pay: number | null;
     load: { load_price: number | null; total_billable: number | null } | null;
   }>);
+  const events = eventsRaw.filter(e => !isExcludedEvent(excluded, e));
 
   // Build per-event maps used by movement attribution + per-asset rollup.
   const eventAssetId = new Map<string, number>();

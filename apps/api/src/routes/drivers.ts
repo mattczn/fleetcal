@@ -39,13 +39,15 @@ interface DbDriverRow {
   notifications_permission: string | null;
   location_permission:      string | null;
   permissions_updated_at:   string | null;
+  exclude_from_reports:     boolean | null;
 }
 
 export const DRIVER_COLS =
   "id,name,first_name,last_name,phone,notes," +
   "email,address,license_number,license_state,license_exp,medical_card_exp,dob," +
   "active_from,active_to,last_seen_at," +
-  "notifications_permission,location_permission,permissions_updated_at";
+  "notifications_permission,location_permission,permissions_updated_at," +
+  "exclude_from_reports";
 
 export function rowToDriver(r: DbDriverRow): Driver {
   const asPerm = (v: string | null): Driver["notificationsPermission"] => {
@@ -72,6 +74,7 @@ export function rowToDriver(r: DbDriverRow): Driver {
     notificationsPermission: asPerm(r.notifications_permission),
     locationPermission:      asPerm(r.location_permission),
     permissionsUpdatedAt:    r.permissions_updated_at ?? null,
+    excludeFromReports:      r.exclude_from_reports ?? false,
   };
 }
 
@@ -153,6 +156,7 @@ drivers.patch("/:id", requireCapability("drivers.edit"), async (c) => {
   if ("dob"            in body) update.dob              = body.dob ?? null;
   if ("activeFrom"     in body) update.active_from      = body.activeFrom;
   if ("activeTo"       in body) update.active_to        = body.activeTo ?? null;
+  if ("excludeFromReports" in body) update.exclude_from_reports = body.excludeFromReports ?? false;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }
