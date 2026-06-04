@@ -389,12 +389,19 @@ fleet.get("/performance", async (c) => {
     };
   });
 
-  // Drop rows that were utterly idle in this window — no loads, no
-  // movements at all. The dispatcher doesn't want a wall of zeros
-  // from trucks that were parked the whole period.
-  const activeAssets = assetsOut.filter(
-    (a) => a.loadCount > 0 || a.totalMiles > 0 || a.activeDays > 0,
-  );
+  // Show an asset only when at least one of YOUR drivers ran a
+  // revenue load on it during the window. loadCount here is the
+  // post-exclusion count (events from owner-op drivers were already
+  // dropped above), so:
+  //   - Owner-op's dedicated truck — loadCount=0 after filter → hidden
+  //   - Mixed truck (owner-op + company driver) — loadCount≥1 from the
+  //     company leg(s) → still shown with the surviving legs counted
+  //   - Truck with only Motive miles but no dispatched loads → hidden
+  //     (we used to show these via the OR with totalMiles/activeDays,
+  //     but that's the same path that surfaced the owner-op's truck
+  //     with $0; if the dispatcher wants idle-asset visibility back,
+  //     it should be a separate report rather than padding this one).
+  const activeAssets = assetsOut.filter((a) => a.loadCount > 0);
 
   const res: FleetPerformanceResponse = {
     windowFrom: from,
