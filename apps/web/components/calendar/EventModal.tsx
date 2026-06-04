@@ -2721,8 +2721,30 @@ export default function EventModal() {
   // the form repopulates without them having to hit the refresh button.
   // Guarded on isEdit + a real event + non-relay (relay legs can
   // legitimately have a leg with empty draft stops mid-creation).
+  //
+  // ONE-SHOT — refetchedEventIdsRef tracks which event ids we've
+  // already attempted recovery for in this modal session. Without it,
+  // a load that genuinely has zero stops (or whose server response
+  // doesn't include stops) sticks in an infinite refetch loop:
+  // refetchEvent → updateEventFromRemote → `events` array gets a new
+  // reference (even when the payload is identical) → this effect's
+  // `events` dep fires again → stops still empty → refetch again.
+  // The set is wiped when the modal closes or modalEventId changes,
+  // so a stale recovery flag never leaks between loads.
+  const refetchedEventIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!modalOpen) {
+      refetchedEventIdsRef.current.clear();
+    }
+  }, [modalOpen]);
+  useEffect(() => {
+    refetchedEventIdsRef.current.clear();
+  }, [modalEventId]);
   useEffect(() => {
     if (!modalOpen || !isEdit || !modalEventId) return;
+    // Already attempted recovery for this event in this session —
+    // accept whatever state the cache is in, don't loop.
+    if (refetchedEventIdsRef.current.has(modalEventId)) return;
     const ev = events.find(e => e.id === modalEventId);
     // Don't stack refetches on top of an in-flight one.
     if (refetchingEventIds.has(modalEventId)) return;
@@ -2735,6 +2757,7 @@ export default function EventModal() {
     // sees when "View doesn't show the correct event". Refetch by id
     // pulls just that row in and re-initializes the form.
     if (!ev) {
+      refetchedEventIdsRef.current.add(modalEventId);
       void refetchEvent(modalEventId).then(() => {
         const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
         if (fresh) reinitForm(fresh);
@@ -2745,6 +2768,7 @@ export default function EventModal() {
     // in a partial state). Retry to fill stops.
     if (ev.eventKind === 'non_revenue') return;
     if ((ev.stops?.length ?? 0) > 0) return;
+    refetchedEventIdsRef.current.add(modalEventId);
     void refetchEvent(modalEventId).then(() => {
       const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
       if (fresh) reinitForm(fresh);
