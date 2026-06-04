@@ -779,6 +779,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     () => docs.filter(d => d.kind !== 'rate_con'),
     [docs],
   );
+  // Visual split: invoices render in their own section above Documents
+  // so the dispatcher can find the generated invoice PDF without
+  // hunting through PODs / BOLs / scales. Both lists still index into
+  // the same nonRateConDocs array because the middle-pane viewer keys
+  // off `activeDocIdx` against that combined list — splitting the
+  // backing arrays would break click→preview, keyboard nav, and the
+  // index-fixup after delete. So we filter for rendering only.
+  const invoiceDocs = useMemo<LoadDocument[]>(
+    () => nonRateConDocs.filter(d => d.kind === 'invoice'),
+    [nonRateConDocs],
+  );
+  const otherDocs = useMemo<LoadDocument[]>(
+    () => nonRateConDocs.filter(d => d.kind !== 'invoice'),
+    [nonRateConDocs],
+  );
 
   // Click handler for a row in the Rate Confirmations section: swap the
   // left-panel viewer to the selected rate-con. The canonical (virtual)
@@ -1850,109 +1865,155 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 </div>
               )}
 
-              {/* DOCUMENTS */}
-              <div>
-                <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
-                  style={{ color: 'var(--gc-text-3)' }}>
-                  Documents · {nonRateConDocs.length}
-                </div>
-                {nonRateConDocs.length === 0 ? (
-                  <div className="text-xs italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
-                    {docsLoading ? 'Loading…' : 'No documents uploaded yet for this load.'}
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {nonRateConDocs.map((d, i) => {
-                      const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
-                      const active   = i === activeDocIdx;
-                      const included = includedDocIds.has(d.id);
-                      const sameKindCount = nonRateConDocs.filter(x => x.kind === d.kind).length;
-                      const seq           = nonRateConDocs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
-                      const labelText     = KIND_LABEL[d.kind] ?? d.kind;
-                      const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
-                      return (
-                        <div key={d.id}
-                          className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
-                          style={{
-                            background: active ? tint.bg + '14' : 'transparent',
-                            border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
+              {/* Both Invoices and Documents render the same row shape;
+                  factor it once and reuse below. The `i` we compute is
+                  the original index inside nonRateConDocs (not the
+                  per-section position) so:
+                    - active highlighting matches activeDocIdx, which
+                      keys off the unified list the middle-pane viewer
+                      uses
+                    - "Invoice 1 / Invoice 2" / "POD 1 / POD 2"
+                      numbering stays globally consistent (the dispatcher
+                      sees the same labels in the row as in the merge
+                      dialog and the audit log) */}
+              {(() => {
+                const renderDocRow = (d: LoadDocument) => {
+                  const i = nonRateConDocs.indexOf(d);
+                  const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
+                  const active   = i === activeDocIdx;
+                  const included = includedDocIds.has(d.id);
+                  const sameKindCount = nonRateConDocs.filter(x => x.kind === d.kind).length;
+                  const seq           = nonRateConDocs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
+                  const labelText     = KIND_LABEL[d.kind] ?? d.kind;
+                  const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                  return (
+                    <div key={d.id}
+                      className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
+                      style={{
+                        background: active ? tint.bg + '14' : 'transparent',
+                        border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
+                      }}
+                      onClick={() => setActiveDocIdx(i)}
+                      onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
+                        style={{ background: tint.bg, color: tint.fg }}>
+                        {rowKindLabel}
+                      </span>
+                      {renamingDocId === d.id ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          disabled={renameSaving}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => setRenameDraft(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
                           }}
-                          onClick={() => setActiveDocIdx(i)}
-                          onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                          onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                            style={{ background: tint.bg, color: tint.fg }}>
-                            {rowKindLabel}
-                          </span>
-                          {renamingDocId === d.id ? (
-                            <input
-                              autoFocus
-                              value={renameDraft}
-                              disabled={renameSaving}
-                              onClick={e => e.stopPropagation()}
-                              onChange={e => setRenameDraft(e.target.value)}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
-                                if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                              }}
-                              onBlur={() => { if (!renameSaving) void commitRename(); }}
-                              className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
-                              style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
-                            />
-                          ) : (
-                            <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
-                              title={d.fileName}>
-                              {d.fileName}
-                            </span>
-                          )}
-                          {renamingDocId !== d.id && (
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
-                                className="rounded-full p-1 transition-colors"
-                                title={`Rename — ${d.fileName}`}
-                                style={{ color: tint.bg, background: 'transparent' }}
-                                onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
-                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                                <Pencil size={11} />
-                              </button>
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                                className="rounded-full p-1 transition-colors"
-                                title={`Delete — ${d.fileName}`}
-                                style={{ color: '#d93025', background: 'transparent' }}
-                                onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                                <Trash2 size={11} />
-                              </button>
-                            </div>
-                          )}
-                          {/* Per-row include-in-invoice toggle. */}
+                          onBlur={() => { if (!renameSaving) void commitRename(); }}
+                          className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
+                          style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                        />
+                      ) : (
+                        <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
+                          title={d.fileName}>
+                          {d.fileName}
+                        </span>
+                      )}
+                      {renamingDocId !== d.id && (
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                           <button type="button"
-                            onClick={e => {
-                              e.stopPropagation();
-                              setIncludedDocIds(prev => {
-                                const next = new Set(prev);
-                                if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
-                                return next;
-                              });
-                            }}
-                            className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
-                            style={{
-                              background: included ? '#dcfce7' : 'var(--gc-bg)',
-                              color:      included ? '#166534' : 'var(--gc-text-3)',
-                              border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
-                            }}
-                            title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
-                            {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
-                            Invoice
+                            onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
+                            className="rounded-full p-1 transition-colors"
+                            title={`Rename — ${d.fileName}`}
+                            style={{ color: tint.bg, background: 'transparent' }}
+                            onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                            <Pencil size={11} />
+                          </button>
+                          <button type="button"
+                            onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
+                            className="rounded-full p-1 transition-colors"
+                            title={`Delete — ${d.fileName}`}
+                            style={{ color: '#d93025', background: 'transparent' }}
+                            onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
+                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                            <Trash2 size={11} />
                           </button>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                      )}
+                      {/* Per-row include-in-invoice toggle. Rendered for
+                          every doc kind including invoices — the
+                          dispatcher gets to decide whether a prior
+                          invoice file ships inside the new packet
+                          (usually no, but the toggle is harmless and
+                          consistent). */}
+                      <button type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setIncludedDocIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+                            return next;
+                          });
+                        }}
+                        className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                        style={{
+                          background: included ? '#dcfce7' : 'var(--gc-bg)',
+                          color:      included ? '#166534' : 'var(--gc-text-3)',
+                          border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
+                        }}
+                        title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
+                        {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                        Invoice
+                      </button>
+                    </div>
+                  );
+                };
+                return (
+                  <>
+                    {/* INVOICES — only renders when there's at least
+                        one invoice. Placed above Documents so the
+                        generated packet PDF is the first thing the
+                        dispatcher sees when reopening a load. */}
+                    {invoiceDocs.length > 0 && (
+                      <div>
+                        <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                          style={{ color: 'var(--gc-text-3)' }}>
+                          Invoices · {invoiceDocs.length}
+                        </div>
+                        <div className="space-y-1">
+                          {invoiceDocs.map(renderDocRow)}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* DOCUMENTS — everything that isn't a rate con and
+                        isn't an invoice. Count reflects this section
+                        only (invoices have their own count above). */}
+                    <div>
+                      <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                        style={{ color: 'var(--gc-text-3)' }}>
+                        Documents · {otherDocs.length}
+                      </div>
+                      {otherDocs.length === 0 ? (
+                        <div className="text-xs italic px-2 py-3" style={{ color: 'var(--gc-text-3)' }}>
+                          {docsLoading
+                            ? 'Loading…'
+                            : invoiceDocs.length > 0
+                              ? 'No PODs / BOLs / receipts uploaded yet.'
+                              : 'No documents uploaded yet for this load.'}
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          {otherDocs.map(renderDocRow)}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             {/* Manage documents button used to live here — moved to
