@@ -254,13 +254,27 @@ async function main(): Promise<void> {
   log(`Pulled ${alvysById.size} Alvys loads total.`);
   log("");
 
-  // ── 4. Walk targets, enrich ──
-  for (const t of targets) {
+  // ── 4. Walk targets, enrich (parallel batches) ──
+  //
+  // Each target needs 4 sequential Supabase writes (event update,
+  // load update, stops delete, stops insert). 728 × 4 × ~150ms RTT
+  // from a laptop is ~7 min serially. Running batches of 8 in
+  // parallel drops that to ~1 min and gives the progress log
+  // something to print.
+  const CONCURRENCY = 8;
+  let processed = 0;
+  const logProgress = (): void => {
+    if (processed % 25 === 0 || processed === targets.length) {
+      log(`  progress: ${processed}/${targets.length}  (matched=${tally.matchedInAlvys}, applied=${tally.eventsUpdated}, errors=${tally.errors})`);
+    }
+  };
+
+  async function processOne(t: typeof targets[number]): Promise<void> {
     const al = alvysById.get(t.alvys_id);
     if (!al) {
       tally.noAlvysMatch++;
       if (unmatchedSamples.length < 10) unmatchedSamples.push({ alvys_load_id: t.alvys_id, broker: t.broker });
-      continue;
+      return;
     }
     tally.matchedInAlvys++;
 
@@ -273,7 +287,7 @@ async function main(): Promise<void> {
 
     if (!pickupNaive) {
       tally.noUsablePickupDate++;
-      continue;
+      return;
     }
 
     if (!APPLY) {
@@ -284,41 +298,34 @@ async function main(): Promise<void> {
       tally.eventsUpdated++;
       tally.loadsUpdated++;
       tally.stopsInserted += stops.length;
-      continue;
+      return;
     }
 
-    // ── apply updates ─────────────────────────────────────────────
     // event.start / end
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: evErr } = await (fc as any).from("events").update({
       start: pickupNaive,
       end:   deliveryNaive ?? pickupNaive,
     }).eq("id", t.event_id);
-    if (evErr) { tally.errors++; log(`  ✗ event update ${t.alvys_id.slice(0,8)}: ${evErr.message}`); continue; }
+    if (evErr) { tally.errors++; log(`  ✗ event update ${t.alvys_id.slice(0,8)}: ${evErr.message}`); return; }
     tally.eventsUpdated++;
 
-    // load: load_num (scalar) + ref_nums (jsonb array of {label,value})
-    // The loads schema doesn't have a separate order_num column;
-    // OrderNumber + PONumber go into ref_nums alongside whatever else
-    // a broker tagged on the load. Labels match existing FleetCal
-    // convention ("Order #", "PO #").
+    // load: load_num + ref_nums (jsonb)
     const refNums: Array<{ label: string; value: string }> = [];
     if (al.OrderNumber) refNums.push({ label: "Order #", value: al.OrderNumber });
     if (al.PONumber)    refNums.push({ label: "PO #",    value: al.PONumber    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const loadPatch: Record<string, any> = {
-      load_num: al.LoadNumber ?? null,
-    };
+    const loadPatch: Record<string, any> = { load_num: al.LoadNumber ?? null };
     if (refNums.length > 0) loadPatch.ref_nums = refNums;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: ldErr } = await (fc as any).from("loads").update(loadPatch).eq("id", t.load_id);
-    if (ldErr) { tally.errors++; log(`  ✗ load update ${t.alvys_id.slice(0,8)}: ${ldErr.message}`); continue; }
+    if (ldErr) { tally.errors++; log(`  ✗ load update ${t.alvys_id.slice(0,8)}: ${ldErr.message}`); return; }
     tally.loadsUpdated++;
 
     // Replace stops
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: delErr } = await (fc as any).from("stops").delete().eq("event_id", t.event_id);
-    if (delErr) { tally.errors++; log(`  ✗ stops delete ${t.alvys_id.slice(0,8)}: ${delErr.message}`); continue; }
+    if (delErr) { tally.errors++; log(`  ✗ stops delete ${t.alvys_id.slice(0,8)}: ${delErr.message}`); return; }
 
     const stopRows = stops.map((s, idx) => ({
       org_id:         ORG,
@@ -341,9 +348,17 @@ async function main(): Promise<void> {
     if (stopRows.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: stErr } = await (fc as any).from("stops").insert(stopRows);
-      if (stErr) { tally.errors++; log(`  ✗ stops insert ${t.alvys_id.slice(0,8)}: ${stErr.message}`); continue; }
+      if (stErr) { tally.errors++; log(`  ✗ stops insert ${t.alvys_id.slice(0,8)}: ${stErr.message}`); return; }
       tally.stopsInserted += stopRows.length;
     }
+  }
+
+  // Process in parallel batches.
+  for (let i = 0; i < targets.length; i += CONCURRENCY) {
+    const batch = targets.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(t => processOne(t)));
+    processed += batch.length;
+    logProgress();
   }
 
   // ── Report ──
