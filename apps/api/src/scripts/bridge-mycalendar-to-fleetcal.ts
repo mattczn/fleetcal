@@ -98,6 +98,37 @@ const UNIT_OVERRIDES: Record<number, string> = {
   7: "296084",
 };
 
+// Driver-name aliases — for my-calendar events whose driver_name is a
+// nickname / partial / shortened form that doesn't first-name-match
+// any FleetCal driver. Key is the my-calendar text (case-insensitive),
+// value is the FleetCal driver's full name as stored in drivers.name.
+//
+// Coverage based on first dry-run unresolved list:
+//   Blade (125)       — nickname for Blessing Munguri
+//   Dilson (24)       — short for Adilson Peroza
+//   Lenny (7)         — short for Lennin Ramirez
+//   Jean Carlos (8)   — exact, but FleetCal stores last name; first-name
+//                       match misses because my-calendar text has TWO words
+//
+// Pure-junk entries are routed to NAME_SKIPS below instead — we leave
+// the driver_name column blank rather than storing garbage.
+const NAME_ALIASES: Record<string, string> = {
+  "blade":       "Blessing Munguri",
+  "dilson":      "Adilson Peroza",
+  "lenny":       "Lennin Ramirez",
+  "jean carlos": "Jean Carlos Polo",
+};
+
+// Driver-name strings that should be treated as "no driver" — usually
+// my-calendar placeholder rids or one-off data-entry mistakes. We do
+// not store these as plaintext driver_name; the row keeps NULL.
+const NAME_SKIPS = new Set<string>([
+  "extra",       // rid=1 placeholder ("any extra driver")
+  "unassigned",
+  "—",
+  "-",
+]);
+
 // ── Build rid → unit map by overlaying sources ──────────────────────────
 
 async function buildRidToUnit(): Promise<Map<number, string>> {
@@ -288,14 +319,18 @@ async function main(): Promise<void> {
     if (!mcEvent) { tally.noMatchInMyCalendar++; continue; }
     tally.matchedInMyCalendar++;
 
-    // Resolve driver by first-name. Fall back to full-name match.
+    // Resolve driver: alias → full-name → first-name. Skip junk.
     let driverId: number | null = null;
     let driverName: string | null = null;
     const rawName = (mcEvent.driver_name ?? "").trim();
-    if (rawName) {
-      const first = rawName.split(/\s+/)[0].toLowerCase();
-      const full  = rawName.toLowerCase();
-      const matched = driverByFullName.get(full) ?? driverByFirstName.get(first);
+    const lowerName = rawName.toLowerCase();
+    const isNumeric = /^\d+$/.test(rawName);
+    if (rawName && !NAME_SKIPS.has(lowerName) && !isNumeric) {
+      const aliasTarget = NAME_ALIASES[lowerName];
+      const matched =
+        (aliasTarget && driverByFullName.get(aliasTarget.toLowerCase())) ??
+        driverByFullName.get(lowerName) ??
+        driverByFirstName.get(rawName.split(/\s+/)[0].toLowerCase());
       if (matched) {
         driverId = matched.id;
         driverName = matched.name ?? `${matched.first_name ?? ""} ${matched.last_name ?? ""}`.trim();
