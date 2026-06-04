@@ -33,10 +33,15 @@ const COLORS = {
   ruleHard:    "#dadce0",
 };
 
+// Font scale: every size dropped ~1pt from the previous version. The
+// invoice was reading slightly larger than the rate cons brokers stack
+// it against — quieting the type makes the page look more "official"
+// and closer to what AP teams expect. lineHeight stays at 1.35 so the
+// vertical rhythm doesn't tighten too much.
 const styles = StyleSheet.create({
   page: {
     fontFamily: "Helvetica",
-    fontSize: 10,
+    fontSize: 9,                   // was 10
     color: COLORS.text,
     padding: 36,                   // ~0.5"
     lineHeight: 1.35,
@@ -52,44 +57,44 @@ const styles = StyleSheet.create({
   sectionTopRule: { borderTopWidth: 1, borderTopColor: COLORS.rule, paddingTop: 10, marginTop: 0 },
 
   // Header
-  invoiceMetaLabel: { fontFamily: "Helvetica-Bold", fontSize: 9, color: COLORS.faded, letterSpacing: 0.6 },
-  invoiceNumber:    { fontFamily: "Helvetica-Bold", fontSize: 26, color: COLORS.accent, marginTop: 2 },
+  invoiceMetaLabel: { fontFamily: "Helvetica-Bold", fontSize: 8, color: COLORS.faded, letterSpacing: 0.6 },
+  invoiceNumber:    { fontFamily: "Helvetica-Bold", fontSize: 22, color: COLORS.accent, marginTop: 2 },
 
   // Company identity
-  companyName: { fontFamily: "Helvetica-Bold", fontSize: 12, letterSpacing: 0.4 },
+  companyName: { fontFamily: "Helvetica-Bold", fontSize: 11, letterSpacing: 0.4 },
 
   // Bill-to
-  billToLabel: { fontFamily: "Helvetica-Bold", fontSize: 9, color: COLORS.faded, letterSpacing: 0.6, marginBottom: 2 },
-  brokerName:  { fontFamily: "Helvetica-Bold", fontSize: 11 },
+  billToLabel: { fontFamily: "Helvetica-Bold", fontSize: 8, color: COLORS.faded, letterSpacing: 0.6, marginBottom: 2 },
+  brokerName:  { fontFamily: "Helvetica-Bold", fontSize: 10 },
 
   // LabelRow (right-side label/value pairs)
   labelRow:      { flexDirection: "row", justifyContent: "space-between", paddingVertical: 1, gap: 12 },
-  labelRowLabel: { fontFamily: "Helvetica-Bold", fontSize: 9, color: COLORS.faded, letterSpacing: 0.6 },
-  labelRowValue: { fontFamily: "Helvetica-Bold", fontSize: 10 },
+  labelRowLabel: { fontFamily: "Helvetica-Bold", fontSize: 8, color: COLORS.faded, letterSpacing: 0.6 },
+  labelRowValue: { fontFamily: "Helvetica-Bold", fontSize: 9 },
 
   // Stops
-  stopKind:     { fontFamily: "Helvetica-Bold", fontSize: 10, letterSpacing: 0.4 },
-  stopFacility: { fontFamily: "Helvetica-Bold", fontSize: 10 },
-  stopCity:     { fontSize: 10, color: COLORS.muted },
-  stopRefs:     { fontSize: 9.5, color: COLORS.faded, marginTop: 1 },
+  stopKind:     { fontFamily: "Helvetica-Bold", fontSize: 9, letterSpacing: 0.4 },
+  stopFacility: { fontFamily: "Helvetica-Bold", fontSize: 9 },
+  stopCity:     { fontSize: 9, color: COLORS.muted },
+  stopRefs:     { fontSize: 8.5, color: COLORS.faded, marginTop: 1 },
 
   // Line items table
   thead: { flexDirection: "row", borderTopWidth: 1.5, borderTopColor: COLORS.text, borderBottomWidth: 1, borderBottomColor: COLORS.ruleHard, paddingVertical: 5 },
   tbodyRow: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: COLORS.ruleSoft, paddingVertical: 5 },
-  th:       { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: COLORS.muted, letterSpacing: 0.6 },
-  td:       { fontSize: 10 },
+  th:       { fontFamily: "Helvetica-Bold", fontSize: 7.5, color: COLORS.muted, letterSpacing: 0.6 },
+  td:       { fontSize: 9 },
 
   // Totals
-  totalsLabel:     { fontFamily: "Helvetica-Bold", fontSize: 9, color: COLORS.muted, letterSpacing: 0.6 },
-  totalsValue:     { fontFamily: "Helvetica-Bold", fontSize: 10 },
-  balanceDueLabel: { fontFamily: "Helvetica-Bold", fontSize: 9.5, color: COLORS.accent, letterSpacing: 0.6 },
-  balanceDueValue: { fontFamily: "Helvetica-Bold", fontSize: 12, color: COLORS.accent },
+  totalsLabel:     { fontFamily: "Helvetica-Bold", fontSize: 8, color: COLORS.muted, letterSpacing: 0.6 },
+  totalsValue:     { fontFamily: "Helvetica-Bold", fontSize: 9 },
+  balanceDueLabel: { fontFamily: "Helvetica-Bold", fontSize: 8.5, color: COLORS.accent, letterSpacing: 0.6 },
+  balanceDueValue: { fontFamily: "Helvetica-Bold", fontSize: 11, color: COLORS.accent },
 
   // Remit-to
-  remitHeader: { fontFamily: "Helvetica-Bold", fontSize: 12, color: COLORS.accent, marginBottom: 3 },
+  remitHeader: { fontFamily: "Helvetica-Bold", fontSize: 11, color: COLORS.accent, marginBottom: 3 },
 
   // Footer notes
-  footerNotes: { fontSize: 9, color: COLORS.faded, borderTopWidth: 1, borderTopColor: COLORS.rule, paddingTop: 8, marginTop: 12 },
+  footerNotes: { fontSize: 8, color: COLORS.faded, borderTopWidth: 1, borderTopColor: COLORS.rule, paddingTop: 8, marginTop: 12 },
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -152,7 +157,7 @@ function InvoicePdfDoc({ snapshot, invoiceNumber, issuedDate, dueDate, logoData 
               ? <Image src={logoData} style={{ maxWidth: 110, maxHeight: 60, objectFit: "contain" }} />
               : null}
             {taxIds ? (
-              <Text style={{ marginTop: 6, fontFamily: "Helvetica-Bold", fontSize: 9.5, color: COLORS.muted, maxWidth: 220 }}>
+              <Text style={{ marginTop: 6, fontFamily: "Helvetica-Bold", fontSize: 8.5, color: COLORS.muted, maxWidth: 220 }}>
                 {taxIds}
               </Text>
             ) : null}
