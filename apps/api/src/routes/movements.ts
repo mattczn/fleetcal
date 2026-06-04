@@ -510,31 +510,50 @@ movements.get("/odometer-summary", async (c) => {
   }
 
   // Step 1: which assets have ELDs? `motive_vehicle_id IS NOT NULL` is
-  // the canonical signal. We use this to filter — readings for a
-  // truck we manually imported odometers for but that has no ELD
-  // shouldn't count toward "ELD-equipped fleet miles."
+  // the canonical signal. Pull both the asset id AND the Motive vehicle
+  // id — we need the vehicle id to match Motive-sourced readings, since
+  // those rows historically (and currently, until backfill catches up)
+  // have asset_id IS NULL. The 2026-05-29 migration added asset_id but
+  // its own comment punted the ingest update to "eventually", which
+  // meant every daily snapshot kept landing as asset_id=NULL. The
+  // dashboard's Total Miles tile then read 0 for every org with only
+  // Motive-sourced rows.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: assetRows, error: assetErr } = await (supabase as any)
     .from("assets")
-    .select("id")
+    .select("id, motive_vehicle_id")
     .eq("org_id", orgId)
     .not("motive_vehicle_id", "is", null);
   if (assetErr) {
     console.error("[GET /v1/movements/odometer-summary] assets fetch:", assetErr);
     return c.json({ error: "fetch_failed", detail: assetErr.message }, 500);
   }
-  const eldAssetIds = (assetRows ?? []).map((r: { id: number }) => r.id);
-  if (eldAssetIds.length === 0) {
+  const eldAssets = (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | null }>;
+  if (eldAssets.length === 0) {
     return c.json({ totalMiles: 0, eldAssetCount: 0, perAsset: {} });
   }
+  const eldAssetIds   = eldAssets.map(a => a.id);
+  const eldVehicleIds = eldAssets.map(a => a.motive_vehicle_id).filter((v): v is number => v != null);
+  // Reverse map for grouping rows whose asset_id is NULL — we resolve
+  // them back to the right asset via their Motive vehicle id.
+  const vehicleIdToAssetId = new Map<number, number>();
+  for (const a of eldAssets) {
+    if (a.motive_vehicle_id != null) vehicleIdToAssetId.set(a.motive_vehicle_id, a.id);
+  }
 
-  // Step 2: pull all odometer readings for those assets in the window.
+  // Step 2: pull readings that match EITHER axis. Postgres .or() chains
+  // OR filters; format is `field.operator.value,field2.operator.value`.
+  // `in.(...)` takes a parenthesized comma list of ids. Both arrays
+  // are guaranteed non-empty (eldVehicleIds may be empty if every ELD
+  // asset somehow has NULL motive_vehicle_id — guard inline).
+  const orFilters: string[] = [`asset_id.in.(${eldAssetIds.join(",")})`];
+  if (eldVehicleIds.length > 0) orFilters.push(`vehicle_id.in.(${eldVehicleIds.join(",")})`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rows, error: rowsErr } = await (supabase as any)
     .from("motive_odometer_readings")
-    .select("asset_id, captured_at, odometer_miles, true_odometer_miles")
+    .select("asset_id, vehicle_id, captured_at, odometer_miles, true_odometer_miles")
     .eq("org_id", orgId)
-    .in("asset_id", eldAssetIds)
+    .or(orFilters.join(","))
     .gte("captured_at", from)
     .lte("captured_at", to);
   if (rowsErr) {
@@ -542,20 +561,24 @@ movements.get("/odometer-summary", async (c) => {
     return c.json({ error: "fetch_failed", detail: rowsErr.message }, 500);
   }
 
-  // Step 3: group by asset, compute max - min. true_odometer_miles
-  // wins when present (Motive provides a back-calculated true reading
-  // that survives sensor resets); otherwise fall back to the raw
-  // odometer_miles.
+  // Step 3: group by RESOLVED asset_id (asset_id when set, otherwise
+  // look up via vehicle_id). Compute max - min per asset.
+  // true_odometer_miles wins when present (Motive provides a
+  // back-calculated true reading that survives sensor resets);
+  // otherwise fall back to the raw odometer_miles.
   const byAsset = new Map<number, { min: number; max: number }>();
   for (const r of (rows ?? []) as Array<{
-    asset_id: number; captured_at: string;
+    asset_id: number | null; vehicle_id: number | null;
+    captured_at: string;
     odometer_miles: number | null; true_odometer_miles: number | null;
   }>) {
-    if (r.asset_id == null) continue;
+    const assetId = r.asset_id
+      ?? (r.vehicle_id != null ? vehicleIdToAssetId.get(r.vehicle_id) : undefined);
+    if (assetId == null) continue;
     const miles = r.true_odometer_miles ?? r.odometer_miles;
     if (miles == null) continue;
-    const cur = byAsset.get(r.asset_id);
-    if (!cur) byAsset.set(r.asset_id, { min: miles, max: miles });
+    const cur = byAsset.get(assetId);
+    if (!cur) byAsset.set(assetId, { min: miles, max: miles });
     else {
       cur.min = Math.min(cur.min, miles);
       cur.max = Math.max(cur.max, miles);

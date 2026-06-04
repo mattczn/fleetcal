@@ -538,10 +538,32 @@ export async function snapshotOdometers(orgId: string): Promise<OdometerSnapshot
     pageNo++;
   }
 
+  // Build a Motive-vehicle-id → fleetcal-asset-id map so we can stamp
+  // asset_id on each new reading. Without this, every snapshot row
+  // landed as asset_id=NULL, which broke the dashboard's Total Miles
+  // tile (the summary endpoint joins by asset_id). The migration that
+  // added asset_id (20260529) deferred this step to "eventually" —
+  // doing it now.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: assetRows, error: assetErr } = await (supabase as any)
+    .from("assets")
+    .select("id, motive_vehicle_id")
+    .eq("org_id", orgId)
+    .not("motive_vehicle_id", "is", null);
+  if (assetErr) {
+    console.error("[motiveIngest] asset lookup failed:", assetErr);
+    throw new Error(`asset lookup failed: ${assetErr.message}`);
+  }
+  const vehicleIdToAssetId = new Map<number, number>();
+  for (const r of (assetRows ?? []) as Array<{ id: number; motive_vehicle_id: number | null }>) {
+    if (r.motive_vehicle_id != null) vehicleIdToAssetId.set(r.motive_vehicle_id, r.id);
+  }
+
   // Build snapshot rows for vehicles whose ELDs reported an odometer.
   const today = new Date().toISOString().slice(0, 10); // UTC day for idempotency probe
   const rows: Array<{
     org_id: string; vehicle_id: number; vehicle_number: string | null;
+    asset_id: number | null;
     odometer_miles: number | null; true_odometer_miles: number | null;
     located_at: string | null;
   }> = [];
@@ -553,6 +575,12 @@ export async function snapshotOdometers(orgId: string): Promise<OdometerSnapshot
       org_id:              orgId,
       vehicle_id:          v.vehicle.id,
       vehicle_number:      v.vehicle.number ?? null,
+      // Resolve to the matching asset row. Null is allowed (the
+      // schema CHECK requires vehicle_id OR asset_id, and we always
+      // have vehicle_id from Motive), so vehicles whose asset doesn't
+      // exist yet still land cleanly — they just won't roll up under
+      // an asset in the dashboard until the asset is created.
+      asset_id:            vehicleIdToAssetId.get(v.vehicle.id) ?? null,
       odometer_miles:      loc.odometer ?? null,
       true_odometer_miles: loc.true_odometer ?? null,
       located_at:          loc.located_at ?? null,
