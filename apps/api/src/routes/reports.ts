@@ -364,45 +364,60 @@ reports.get("/loads", async (c) => {
   }
 
   // ── Stage 1: query the loads table ─────────────────────────────────
-  let loadsQ = supabase
-    .from("loads")
-    .select(LOAD_COLS)
-    .eq("org_id", orgId);
+  //
+  // Page through results — Supabase / PostgREST caps a single response
+  // at 1000 rows by default. Without paging, an org with >1000 loads
+  // (e.g. after the Alvys historical import) silently truncates to
+  // the first 1000, which the dashboard shows as "$768K across 990
+  // loads" when the actual total should be much higher.
+  const buildLoadsQuery = () => {
+    let q = supabase
+      .from("loads")
+      .select(LOAD_COLS)
+      .eq("org_id", orgId)
+      .order("id", { ascending: true });
 
-  if (!includeDeleted) loadsQ = loadsQ.is("deleted_at", null);
+    if (!includeDeleted) q = q.is("deleted_at", null);
 
-  if (brokersParam) {
-    const names = brokersParam.split(",").map(s => s.trim()).filter(Boolean);
-    if (names.length === 0) {
-      return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
+    if (brokersParam) {
+      const names = brokersParam.split(",").map(s => s.trim()).filter(Boolean);
+      const escaped = names.map(n => n.replace(/[%,()"]/g, "\\$&"));
+      const orFilter = escaped.map(n => `broker.ilike."${n}"`).join(",");
+      q = q.or(orFilter);
     }
-    const escaped = names.map(n => n.replace(/[%,()"]/g, "\\$&"));
-    const orFilter = escaped.map(n => `broker.ilike."${n}"`).join(",");
-    loadsQ = loadsQ.or(orFilter);
-  }
 
-  if (customersParam) {
-    const ids = customersParam.split(",").map(s => s.trim()).filter(Boolean);
-    if (ids.length === 0) {
-      return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
+    if (customersParam) {
+      const ids = customersParam.split(",").map(s => s.trim()).filter(Boolean);
+      q = q.in("customer_id", ids);
     }
-    loadsQ = loadsQ.in("customer_id", ids);
-  }
 
-  if (billingParam) {
-    const statuses = billingParam.split(",").map(s => s.trim()).filter(Boolean);
-    if (statuses.length === 0) {
-      return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
+    if (billingParam) {
+      const statuses = billingParam.split(",").map(s => s.trim()).filter(Boolean);
+      q = q.in("billing_status", statuses);
     }
-    loadsQ = loadsQ.in("billing_status", statuses);
-  }
 
-  const { data: loadRows, error: loadErr } = await loadsQ;
-  if (loadErr) {
-    console.error("[GET /v1/reports/loads] loads query failed:", loadErr);
-    return c.json({ error: "list_failed", detail: loadErr.message } satisfies ApiErrorResponse, 500);
+    return q;
+  };
+
+  // Short-circuit when a filter param was supplied but empty (matches old behavior).
+  if (brokersParam   && brokersParam.split(",").map(s => s.trim()).filter(Boolean).length   === 0) return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
+  if (customersParam && customersParam.split(",").map(s => s.trim()).filter(Boolean).length === 0) return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
+  if (billingParam   && billingParam.split(",").map(s => s.trim()).filter(Boolean).length   === 0) return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
+
+  const LOAD_PAGE = 1000;
+  let allLoads: LoadRow[] = [];
+  let loadOffset = 0;
+  while (true) {
+    const { data: loadRows, error: loadErr } = await buildLoadsQuery().range(loadOffset, loadOffset + LOAD_PAGE - 1);
+    if (loadErr) {
+      console.error(`[GET /v1/reports/loads] loads query failed at offset ${loadOffset}:`, loadErr);
+      return c.json({ error: "list_failed", detail: loadErr.message } satisfies ApiErrorResponse, 500);
+    }
+    const batch = (loadRows ?? []) as unknown as LoadRow[];
+    allLoads = allLoads.concat(batch);
+    if (batch.length < LOAD_PAGE) break;
+    loadOffset += batch.length;
   }
-  const allLoads = (loadRows ?? []) as unknown as LoadRow[];
   if (allLoads.length === 0) {
     return c.json({ loads: [], total: 0 } satisfies ListLoadSummariesResponse);
   }
