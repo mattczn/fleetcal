@@ -498,8 +498,16 @@ async function runStage1(): Promise<void> {
 
   // Process each load with a small concurrency cap. 4 in flight is well
   // within Alvys's tolerance and keeps wall-clock low without bursting.
-  const CONCURRENCY = 4;
+  // Concurrency: dropped to 2 (was 4) so we don't burst Alvys. Token
+  // is cached inside alvysToken() so workers share it.
+  // Diagnostic logging: in dry-run mode (or when not too many already
+  // logged), print the first N distinct error messages immediately so
+  // a "every load errored" run shows WHY in real time instead of just
+  // a useless count at the end.
+  const CONCURRENCY = 2;
   const queueCopy = queue.slice();
+  const distinctErrors = new Map<string, number>();
+  const ERROR_LOG_LIMIT = 5;
   await Promise.all(
     Array.from({ length: CONCURRENCY }, async () => {
       while (queueCopy.length > 0) {
@@ -510,11 +518,29 @@ async function runStage1(): Promise<void> {
           await processOneLoad(job.invoice, job.loadId, token, unassignedAssetId);
         } catch (err) {
           tally1.loadsErrored++;
-          skipped.push({ alvysLoadId: job.loadId, reason: `error: ${(err as Error).message}` });
+          const msg = (err as Error).message ?? String(err);
+          const existing = distinctErrors.get(msg) ?? 0;
+          distinctErrors.set(msg, existing + 1);
+          if (existing < ERROR_LOG_LIMIT) {
+            log(`  ✗ ${job.loadId}: ${msg.slice(0, 300)}`);
+          }
+          skipped.push({ alvysLoadId: job.loadId, reason: `error: ${msg}` });
         }
       }
     }),
   );
+
+  // Distinct-error summary so the final report shows what failed and how often,
+  // even when individual log lines were truncated by the per-message limit.
+  if (distinctErrors.size > 0) {
+    log("");
+    log(`── Distinct errors (${distinctErrors.size} kinds across ${tally1.loadsErrored} loads) ──`);
+    const sorted = Array.from(distinctErrors.entries()).sort((a, b) => b[1] - a[1]);
+    for (const [msg, count] of sorted.slice(0, 10)) {
+      log(`  ${count}× ${msg.slice(0, 250)}`);
+    }
+    if (sorted.length > 10) log(`  …${sorted.length - 10} more kinds suppressed`);
+  }
 
   const customersAfter = (await getCustomers()).length;
   tally1.customersCreated = Math.max(0, customersAfter - customersBefore);
