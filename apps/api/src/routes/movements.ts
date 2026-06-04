@@ -541,24 +541,57 @@ movements.get("/odometer-summary", async (c) => {
     if (a.motive_vehicle_id != null) vehicleIdToAssetId.set(a.motive_vehicle_id, a.id);
   }
 
-  // Step 2: pull readings that match EITHER axis. Postgres .or() chains
-  // OR filters; format is `field.operator.value,field2.operator.value`.
-  // `in.(...)` takes a parenthesized comma list of ids. Both arrays
-  // are guaranteed non-empty (eldVehicleIds may be empty if every ELD
-  // asset somehow has NULL motive_vehicle_id — guard inline).
-  const orFilters: string[] = [`asset_id.in.(${eldAssetIds.join(",")})`];
-  if (eldVehicleIds.length > 0) orFilters.push(`vehicle_id.in.(${eldVehicleIds.join(",")})`);
+  // Step 2: pull readings that match either axis. We deliberately
+  // run TWO queries instead of a single `.or()` with nested
+  // `in.(...)` — PostgREST's OR parsing splits on commas, which can
+  // misinterpret the commas inside the in-list under some versions
+  // and silently return zero rows. Two queries cost the same
+  // wall-clock when run in parallel; deduping by row id in TS is
+  // trivial.
+  type ReadingRow = {
+    id: number; asset_id: number | null; vehicle_id: number | null;
+    captured_at: string;
+    odometer_miles: number | null; true_odometer_miles: number | null;
+  };
+  const select = "id, asset_id, vehicle_id, captured_at, odometer_miles, true_odometer_miles";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rows, error: rowsErr } = await (supabase as any)
+  const byAssetIdP = (supabase as any)
     .from("motive_odometer_readings")
-    .select("asset_id, vehicle_id, captured_at, odometer_miles, true_odometer_miles")
+    .select(select)
     .eq("org_id", orgId)
-    .or(orFilters.join(","))
+    .in("asset_id", eldAssetIds)
     .gte("captured_at", from)
     .lte("captured_at", to);
-  if (rowsErr) {
-    console.error("[GET /v1/movements/odometer-summary] readings fetch:", rowsErr);
-    return c.json({ error: "fetch_failed", detail: rowsErr.message }, 500);
+  const byVehicleIdP = eldVehicleIds.length > 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ? (supabase as any)
+        .from("motive_odometer_readings")
+        .select(select)
+        .eq("org_id", orgId)
+        .in("vehicle_id", eldVehicleIds)
+        .gte("captured_at", from)
+        .lte("captured_at", to)
+    : Promise.resolve({ data: [], error: null });
+  const [
+    { data: rowsAsset,   error: rowsAssetErr },
+    { data: rowsVehicle, error: rowsVehicleErr },
+  ] = await Promise.all([byAssetIdP, byVehicleIdP]);
+  if (rowsAssetErr) {
+    console.error("[GET /v1/movements/odometer-summary] by-asset fetch:", rowsAssetErr);
+    return c.json({ error: "fetch_failed", detail: rowsAssetErr.message }, 500);
+  }
+  if (rowsVehicleErr) {
+    console.error("[GET /v1/movements/odometer-summary] by-vehicle fetch:", rowsVehicleErr);
+    return c.json({ error: "fetch_failed", detail: rowsVehicleErr.message }, 500);
+  }
+
+  // Dedup: rows with both asset_id and vehicle_id set match both queries.
+  const seen = new Set<number>();
+  const rows: ReadingRow[] = [];
+  for (const r of [...(rowsAsset ?? []), ...(rowsVehicle ?? [])] as ReadingRow[]) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    rows.push(r);
   }
 
   // Step 3: group by RESOLVED asset_id (asset_id when set, otherwise
@@ -567,16 +600,16 @@ movements.get("/odometer-summary", async (c) => {
   // back-calculated true reading that survives sensor resets);
   // otherwise fall back to the raw odometer_miles.
   const byAsset = new Map<number, { min: number; max: number }>();
-  for (const r of (rows ?? []) as Array<{
-    asset_id: number | null; vehicle_id: number | null;
-    captured_at: string;
-    odometer_miles: number | null; true_odometer_miles: number | null;
-  }>) {
+  let countedRows = 0;
+  let unresolvedRows = 0;
+  let nullMilesRows = 0;
+  for (const r of rows) {
     const assetId = r.asset_id
       ?? (r.vehicle_id != null ? vehicleIdToAssetId.get(r.vehicle_id) : undefined);
-    if (assetId == null) continue;
+    if (assetId == null) { unresolvedRows++; continue; }
     const miles = r.true_odometer_miles ?? r.odometer_miles;
-    if (miles == null) continue;
+    if (miles == null) { nullMilesRows++; continue; }
+    countedRows++;
     const cur = byAsset.get(assetId);
     if (!cur) byAsset.set(assetId, { min: miles, max: miles });
     else {
@@ -593,10 +626,34 @@ movements.get("/odometer-summary", async (c) => {
     total += delta;
   }
 
+  // Diagnostic logging — Railway logs will show exactly where the
+  // pipeline collapsed if total ever comes back as 0 again.
+  console.log(
+    `[odometer-summary] org=${orgId} window=${from}→${to} ` +
+    `eldAssets=${eldAssets.length} eldVehicles=${eldVehicleIds.length} ` +
+    `rowsAsset=${(rowsAsset ?? []).length} rowsVehicle=${(rowsVehicle ?? []).length} ` +
+    `deduped=${rows.length} counted=${countedRows} ` +
+    `unresolved=${unresolvedRows} nullMiles=${nullMilesRows} ` +
+    `groups=${byAsset.size} totalMiles=${total}`,
+  );
+
   return c.json({
     totalMiles:    total,
     eldAssetCount: byAsset.size,
     perAsset,
+    // Surface the raw counts so the dashboard (or curl) can see which
+    // pipeline stage is empty without digging into Railway logs.
+    debug: {
+      eldAssets:        eldAssets.length,
+      eldVehicleIds:    eldVehicleIds.length,
+      rowsByAssetId:    (rowsAsset ?? []).length,
+      rowsByVehicleId:  (rowsVehicle ?? []).length,
+      rowsDeduped:      rows.length,
+      countedRows,
+      unresolvedRows,
+      nullMilesRows,
+      groupedAssets:    byAsset.size,
+    },
   });
 });
 
