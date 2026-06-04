@@ -19,7 +19,7 @@
  * to send the packet without the POD than to fail the whole email.
  */
 
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, degrees } from "pdf-lib";
 import type { Invoice, DocumentKind } from "@fleetcal/types";
 import { renderInvoicePdf } from "./invoicePdf.js";
 import { supabase } from "./supabase.js";
@@ -74,6 +74,86 @@ async function downloadBytes(src: SourceDoc): Promise<Uint8Array | null> {
 }
 
 /**
+ * Read the EXIF Orientation tag (0x0112) out of a JPEG byte stream.
+ * Returns 1 (no rotation) when:
+ *   • the file isn't a JPEG,
+ *   • there's no APP1/EXIF segment,
+ *   • the segment is malformed,
+ *   • or the orientation value is missing / out of range / a mirrored
+ *     variant (2/4/5/7 — those need a flip too, which pdf-lib can't
+ *     do, so we fall back to no rotation rather than show a mirrored
+ *     POD).
+ *
+ * Why this exists: pdf-lib's embedJpg ignores EXIF entirely. Phones
+ * almost always save raw landscape pixels and set an EXIF orientation
+ * tag (6 or 8) telling viewers to rotate to portrait. Without honoring
+ * that, every portrait phone photo would land sideways in the packet.
+ *
+ * Spec ref: TIFF 6.0 / EXIF 2.32 IFD0 tag 0x0112.
+ *
+ *   1 = top-left (normal)        — 0°
+ *   2 = top-right                — mirror horizontal
+ *   3 = bottom-right             — 180°
+ *   4 = bottom-left              — mirror vertical
+ *   5 = left-top                 — mirror horizontal + 90° CCW
+ *   6 = right-top                — 90° CW
+ *   7 = right-bottom             — mirror horizontal + 90° CW
+ *   8 = left-bottom              — 90° CCW
+ */
+function readJpegOrientation(bytes: Uint8Array): 1 | 3 | 6 | 8 {
+  if (bytes.length < 12) return 1;
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return 1; // not JPEG
+  // Walk JPEG segments looking for APP1 (FFE1) that starts with "Exif\0\0".
+  let off = 2;
+  while (off + 4 <= bytes.length) {
+    if (bytes[off] !== 0xff) return 1; // every segment starts with 0xFF
+    const marker = bytes[off + 1];
+    // SOS (start-of-scan) means we've reached image data; no more EXIF.
+    if (marker === 0xda) return 1;
+    const segLen = (bytes[off + 2] << 8) | bytes[off + 3];
+    if (segLen < 2) return 1;
+    // APP1 with EXIF identifier "Exif\0\0"
+    if (
+      marker === 0xe1 &&
+      off + 4 + 6 <= bytes.length &&
+      bytes[off + 4] === 0x45 && bytes[off + 5] === 0x78 &&
+      bytes[off + 6] === 0x69 && bytes[off + 7] === 0x66 &&
+      bytes[off + 8] === 0x00 && bytes[off + 9] === 0x00
+    ) {
+      const tiff = off + 10;
+      if (tiff + 8 > bytes.length) return 1;
+      const le = bytes[tiff] === 0x49 && bytes[tiff + 1] === 0x49;
+      const be = bytes[tiff] === 0x4d && bytes[tiff + 1] === 0x4d;
+      if (!le && !be) return 1;
+      const read16 = (p: number) => le
+        ? (bytes[p] | (bytes[p + 1] << 8))
+        : ((bytes[p] << 8) | bytes[p + 1]);
+      const read32 = (p: number) => le
+        ? (bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24))
+        : ((bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3]);
+      if (read16(tiff + 2) !== 0x002a) return 1; // TIFF magic
+      const ifd0 = tiff + read32(tiff + 4);
+      if (ifd0 + 2 > bytes.length) return 1;
+      const entries = read16(ifd0);
+      for (let i = 0; i < entries; i++) {
+        const e = ifd0 + 2 + i * 12;
+        if (e + 12 > bytes.length) return 1;
+        if (read16(e) === 0x0112) {
+          // Type SHORT (3) with count 1 → value lives in the first 2 bytes
+          // of the value-or-offset field. Just read it as a SHORT.
+          const v = read16(e + 8);
+          if (v === 1 || v === 3 || v === 6 || v === 8) return v;
+          return 1; // mirrored variants 2/4/5/7 — give up on rotation
+        }
+      }
+      return 1;
+    }
+    off += 2 + segLen;
+  }
+  return 1;
+}
+
+/**
  * Sniff the file kind from the magic bytes. We can't trust the path
  * extension — some uploads come in as `.jpeg.pdf` etc. PDF starts
  * with `%PDF-`, JPEG with FFD8FF, PNG with 89 50 4E 47.
@@ -114,20 +194,81 @@ async function appendSource(target: PDFDocument, src: SourceDoc): Promise<{ ok: 
       const image = fmt === "jpeg"
         ? await target.embedJpg(bytes)
         : await target.embedPng(bytes);
-      // US Letter at 72 DPI = 612 × 792 pt. Fit image inside a small
-      // margin, preserve aspect.
-      const page = target.addPage([612, 792]);
+
+      // EXIF orientation only applies to JPEG; PNG has no equivalent
+      // metadata flag (chunks for orientation are nonstandard and
+      // unsupported by phone cameras).
+      const orient = fmt === "jpeg" ? readJpegOrientation(bytes) : 1;
+
+      // Intended display dimensions AFTER honoring EXIF rotation.
+      // Orientations 6 and 8 need a 90° spin, swapping the visible
+      // width and height. 1 and 3 keep the raw aspect.
+      const intendedW = (orient === 6 || orient === 8) ? image.height : image.width;
+      const intendedH = (orient === 6 || orient === 8) ? image.width  : image.height;
+
+      // Pick the page orientation that matches the intended display
+      // aspect. A landscape POD on a portrait page renders tiny with
+      // 50% wasted whitespace; a landscape page lets it fill the sheet
+      // at full readable size. US Letter = 612 × 792 pt @ 72 DPI.
+      const portrait = intendedH >= intendedW;
+      const pageW = portrait ? 612 : 792;
+      const pageH = portrait ? 792 : 612;
+      const page = target.addPage([pageW, pageH]);
+
       const margin = 24;
-      const maxW = page.getWidth()  - margin * 2;
-      const maxH = page.getHeight() - margin * 2;
-      const scale = Math.min(maxW / image.width, maxH / image.height, 1);
-      const w = image.width  * scale;
+      const maxW = pageW - margin * 2;
+      const maxH = pageH - margin * 2;
+      const scale = Math.min(maxW / intendedW, maxH / intendedH, 1);
+
+      // Compute (x, y, width, height, rotate) for page.drawImage.
+      // `width` and `height` are in the IMAGE's pre-rotation coord
+      // system. `rotate` is applied around the (x, y) pivot, which is
+      // the image's bottom-left in PDF's Y-up space. For non-zero
+      // rotations we shift (x, y) so the rotated bounding box lands
+      // centered on the page. Derivations live in the comments next
+      // to each branch.
+      const w = image.width  * scale; // pre-rotation width in image coords
       const h = image.height * scale;
+      let x: number, y: number, rot: number;
+      switch (orient) {
+        case 6: {
+          // 90° CW. Rotated corners (relative to pivot):
+          //   x ∈ [0, h], y ∈ [-w, 0]
+          // Centering on page: x = (pageW - h) / 2, y = (pageH + w) / 2.
+          rot = -90;
+          x = (pageW - h) / 2;
+          y = (pageH + w) / 2;
+          break;
+        }
+        case 8: {
+          // 90° CCW. Rotated corners: x ∈ [-h, 0], y ∈ [0, w].
+          // Centering: x = (pageW + h) / 2, y = (pageH - w) / 2.
+          rot = 90;
+          x = (pageW + h) / 2;
+          y = (pageH - w) / 2;
+          break;
+        }
+        case 3: {
+          // 180°. Rotated corners: x ∈ [-w, 0], y ∈ [-h, 0].
+          // Centering: x = (pageW + w) / 2, y = (pageH + h) / 2.
+          rot = 180;
+          x = (pageW + w) / 2;
+          y = (pageH + h) / 2;
+          break;
+        }
+        default: {
+          // 0°. Standard bottom-left placement.
+          rot = 0;
+          x = (pageW - w) / 2;
+          y = (pageH - h) / 2;
+        }
+      }
+
       page.drawImage(image, {
-        x: (page.getWidth()  - w) / 2,
-        y: (page.getHeight() - h) / 2,
+        x, y,
         width:  w,
         height: h,
+        rotate: degrees(rot),
       });
       return { ok: true };
     } catch (err) {
