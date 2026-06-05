@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { MVP_LAUNCH_DEFAULTS } from '@fleetcal/types';
 import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trailer } from '@/lib/types';
 import { buildDefaultFieldSettings, DEFAULT_SECTION_ORDER, FieldSection } from '@/lib/fields';
 import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
@@ -572,7 +573,12 @@ export const useCalendarStore = create<CalendarStore>()(
   },
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  assetCategories: ['OTR', 'Local', 'Dedicated', 'Regional'],
+  // Starter category set — Local + OTR only. Carriers add their own
+  // (Dedicated, Regional, Reefer, etc.) via Settings → Assets if they
+  // need more axes. Keeping the default short avoids cluttering the
+  // category chips for a 1-4 truck operation that may only run one
+  // type of freight.
+  assetCategories: ['Local', 'OTR'],
   assets:        [],
   events:        [],
   deletedEvents: [],
@@ -635,7 +641,16 @@ export const useCalendarStore = create<CalendarStore>()(
   hydrateRoleOverrides: (overrides) =>
     set({ roleOverrides: overrides ?? {} }),
 
-  orgModules: {},
+  // Initialize to the MVP-launch defaults instead of `{}` so the first
+  // render is already pessimistic — gated nav items + settings panels
+  // start HIDDEN rather than flashing visible and then hiding once the
+  // DataLoader-driven GET /v1/org-settings response lands. For Curzon
+  // (or any existing org with all flags), there's a brief MVP-flash
+  // before hydration replaces these with the actual flags. Tradeoff
+  // accepted: new-org test cases are the common case for the launch
+  // window, and Curzon's flash → full-nav transition is less jarring
+  // than the inverse.
+  orgModules: { ...MVP_LAUNCH_DEFAULTS },
   hydrateOrgModules: (flags) =>
     set({ orgModules: flags ?? {} }),
 

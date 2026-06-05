@@ -1,6 +1,7 @@
 'use client';
 
 import { Layers, LayoutDashboard, ChevronUp } from 'lucide-react';
+import { useModules } from '@/lib/useModules';
 
 /**
  * Bottom-tray placeholder shown while initial data is loading. Mirrors the
@@ -8,6 +9,7 @@ import { Layers, LayoutDashboard, ChevronUp } from 'lucide-react';
  * shimmer block where the load count + filter chips would go.
  */
 export default function TodaysTraySkeleton() {
+  const { enabled: moduleEnabled } = useModules();
   return (
     <div
       className="fixed bottom-0 left-0 right-0 z-40 flex flex-col"
@@ -20,13 +22,15 @@ export default function TodaysTraySkeleton() {
         <div className="skeleton-pulse-blue rounded-full" style={{ width: 36, height: 18 }} />
         <div className="skeleton-pulse-blue rounded-full" style={{ width: 86, height: 18 }} />
         <div className="flex-1" />
-        <div
-          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0"
-          style={{ background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.65)', border: '1px solid rgba(255,255,255,0.3)' }}
-        >
-          <LayoutDashboard size={12} />
-          Command Center
-        </div>
+        {moduleEnabled('dispatch_board') && (
+          <div
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0"
+            style={{ background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.65)', border: '1px solid rgba(255,255,255,0.3)' }}
+          >
+            <LayoutDashboard size={12} />
+            Command Center
+          </div>
+        )}
         <ChevronUp size={16} style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }} />
       </div>
     </div>

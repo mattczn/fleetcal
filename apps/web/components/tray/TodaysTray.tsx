@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronUp, ChevronDown, Layers, Truck, User, LayoutDashboard, EyeOff, Eye } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { useModules } from '@/lib/useModules';
 import { sanitizeTimezone, parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { CalendarEvent, EventStatus, Asset } from '@/lib/types';
 import CopyChip from '@/components/ui/CopyChip';
@@ -284,6 +285,11 @@ function LoadRow({
 
 export default function TodaysTray() {
   const { events, assets, updateEvent, openEditModal, setTrayOpen, calendarTimezone, cardFontScale } = useCalendarStore();
+  // Gates the inline "Command Center" jump button on the tray header.
+  // The /board route itself is RequireCap-protected; this hides the
+  // dead-end link from MVP orgs that don't have dispatch_board enabled.
+  const { enabled: moduleEnabled } = useModules();
+  const showCommandCenterButton = moduleEnabled('dispatch_board');
   // Org's configured timezone — drives the header pivot timestamp +
   // every load row's time range. Stored as a raw IANA string in
   // store.calendarTimezone (NOT promptVariables.timezone, which holds
@@ -422,17 +428,19 @@ export default function TodaysTray() {
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => router.push('/board')}
-          className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors shrink-0"
-          style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)', cursor: 'pointer' }}
-          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
-        >
-          <LayoutDashboard size={12} />
-          Command Center
-        </button>
+        {showCommandCenterButton && (
+          <button
+            type="button"
+            onClick={() => router.push('/board')}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors shrink-0"
+            style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)', cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
+          >
+            <LayoutDashboard size={12} />
+            Command Center
+          </button>
+        )}
         <div role="button" tabIndex={0} onClick={toggleExpanded}
           onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') toggleExpanded(); }}
           style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
