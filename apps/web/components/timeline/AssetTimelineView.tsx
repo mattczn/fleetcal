@@ -342,6 +342,9 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
   const [weekProgress, setWeekProgress] = useState<{ done: number; total: number } | null>(null);
   const [weekLinkResult, setWeekLinkResult] = useState<{
     daysLinked: number; totalLinksWritten: number; totalManualSkipped: number; failures: number;
+    /** Per-day failure reason for the result banner — surfaces WHY a
+     *  day failed so the user can tell rate-limit from data-shape. */
+    failureDetails?: Array<{ day: string; reason: string }>;
   } | null>(null);
 
   // Week-summary fetch state (per-day P&L for the week strip).
@@ -393,21 +396,30 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     let totalLinks = 0;
     let totalSkipped = 0;
     let failures = 0;
+    const failureDetails: Array<{ day: string; reason: string }> = [];
     const results = await Promise.allSettled(
-      windows.map(async (w) => {
-        const r = await railway.autoLinkAssetTimeline(effectiveAssetId!, w.from, w.to);
-        return r;
+      windows.map(async (w, i) => {
+        try {
+          return { ok: true as const, day: dayKeys[i], value: await railway.autoLinkAssetTimeline(effectiveAssetId!, w.from, w.to) };
+        } catch (err) {
+          // Wrap the failure with the dayKey so the result banner can
+          // show "Tue 6/3 — rate_limit" instead of just a counter.
+          return { ok: false as const, day: dayKeys[i], reason: err instanceof Error ? err.message : String(err) };
+        }
       }).map((p) => p.finally(() => {
         done++;
         setWeekProgress({ done, total: 7 });
       })),
     );
     for (const r of results) {
-      if (r.status === 'fulfilled') {
-        totalLinks   += r.value.linksWritten;
-        totalSkipped += r.value.manualSkipped;
+      if (r.status === 'fulfilled' && r.value.ok) {
+        totalLinks   += r.value.value.linksWritten;
+        totalSkipped += r.value.value.manualSkipped;
       } else {
         failures++;
+        const day    = r.status === 'fulfilled' ? r.value.day    : 'unknown';
+        const reason = r.status === 'fulfilled' && !r.value.ok ? r.value.reason : 'Promise rejected';
+        failureDetails.push({ day, reason });
       }
     }
 
@@ -416,6 +428,7 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
       totalLinksWritten:  totalLinks,
       totalManualSkipped: totalSkipped,
       failures,
+      failureDetails:     failureDetails.length > 0 ? failureDetails : undefined,
     });
     setWeekLinking(false);
     setWeekProgress(null);
@@ -758,21 +771,38 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
         {/* Week-link result banner */}
         {weekLinkResult ? (
           <div
-            className="mb-3 px-3 py-2 rounded-lg text-[12px] flex items-center gap-2"
+            className="mb-3 px-3 py-2 rounded-lg text-[12px]"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}
           >
-            <Sparkles size={14} style={{ color: '#a142f4' }} />
-            <span>
-              Week relink: {weekLinkResult.daysLinked} of 7 days · {weekLinkResult.totalLinksWritten} links written
-              {weekLinkResult.totalManualSkipped > 0 ? `; ${weekLinkResult.totalManualSkipped} manual skipped` : ''}
-              {weekLinkResult.failures > 0 ? `; ${weekLinkResult.failures} day(s) failed` : ''}
-            </span>
-            <button
-              onClick={() => setWeekLinkResult(null)}
-              className="ml-auto w-5 h-5 rounded flex items-center justify-center hover:bg-black/5"
-            >
-              <X size={12} />
-            </button>
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} style={{ color: '#a142f4' }} />
+              <span>
+                Week relink: {weekLinkResult.daysLinked} of 7 days · {weekLinkResult.totalLinksWritten} links written
+                {weekLinkResult.totalManualSkipped > 0 ? `; ${weekLinkResult.totalManualSkipped} manual skipped` : ''}
+                {weekLinkResult.failures > 0 ? `; ${weekLinkResult.failures} day(s) failed` : ''}
+              </span>
+              <button
+                onClick={() => setWeekLinkResult(null)}
+                className="ml-auto w-5 h-5 rounded flex items-center justify-center hover:bg-black/5"
+              >
+                <X size={12} />
+              </button>
+            </div>
+            {weekLinkResult.failureDetails && weekLinkResult.failureDetails.length > 0 ? (
+              <details className="mt-2 ml-5">
+                <summary className="cursor-pointer text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                  Show {weekLinkResult.failureDetails.length} failure detail{weekLinkResult.failureDetails.length === 1 ? '' : 's'}
+                </summary>
+                <div className="mt-1 space-y-0.5 text-[11px] font-mono" style={{ color: 'var(--gc-text-2)' }}>
+                  {weekLinkResult.failureDetails.map((f, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>{f.day}</span>
+                      <span className="break-all">{f.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
 
