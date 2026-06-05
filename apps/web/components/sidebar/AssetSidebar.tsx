@@ -238,7 +238,7 @@ export default function AssetSidebar() {
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           >
             <Truck size={16} />
-            Manage assets
+            Manage trucks
           </button>
           <button
             onClick={() => setShowDrivers(true)}

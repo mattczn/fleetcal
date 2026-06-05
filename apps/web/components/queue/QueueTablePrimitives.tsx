@@ -731,7 +731,7 @@ export function DriverFilterDropdown(props: { options: string[]; selected: strin
 }
 
 export function AssetFilterDropdown(props: { options: string[]; selected: string[]; onChange: (next: string[]) => void }) {
-  return <MultiSelectFilter label="Asset" icon={TruckIcon} {...props} />;
+  return <MultiSelectFilter label="Truck" icon={TruckIcon} {...props} />;
 }
 
 // ─── useColumnOrder ─────────────────────────────────────────────────────

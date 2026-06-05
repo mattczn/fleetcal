@@ -999,8 +999,8 @@ export default function DashboardView() {
     // in the load modal applies here so the export doesn't smuggle
     // the data back out for a Dispatcher/Maintenance user.
     const headers = canViewDriverPay
-      ? ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Load Value', 'Driver Pay', 'Accessorials']
-      : ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Asset', 'Status', 'Linehaul', 'Accessorials'];
+      ? ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Truck', 'Status', 'Load Value', 'Driver Pay', 'Accessorials']
+      : ['Pickup Date', 'Load #', 'Customer', 'Title', 'Driver(s)', 'Truck', 'Status', 'Linehaul', 'Accessorials'];
 
     const rows = weekLoads.map(load => {
       const partner = load.relayGroupId && load.relayRole
@@ -1337,7 +1337,7 @@ export default function DashboardView() {
           <div className="grid grid-cols-2 gap-4">
             <Card>
               <div className="flex items-center justify-between mb-3">
-                <CardTitle>Revenue by Asset</CardTitle>
+                <CardTitle>Revenue by Truck</CardTitle>
                 {/* Cost overlay toggles — show fuel and payroll as
                     secondary bars beneath the revenue bar so a
                     dispatcher can eyeball margin per truck. */}

@@ -325,7 +325,7 @@ export default function DriverSummaryPanel({ event, asset, trailer, driverName, 
         <div className="rounded-lg p-3 space-y-1 text-[12px]"
           style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
           {asset?.name && (
-            <div><span style={{ color: 'var(--gc-text-3)' }}>Asset:</span> <span style={{ fontWeight: 600 }}>{asset.name}</span></div>
+            <div><span style={{ color: 'var(--gc-text-3)' }}>Truck:</span> <span style={{ fontWeight: 600 }}>{asset.name}</span></div>
           )}
           {driverName && (
             <div><span style={{ color: 'var(--gc-text-3)' }}>Driver:</span> <span style={{ fontWeight: 600 }}>{driverName}</span></div>

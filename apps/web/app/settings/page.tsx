@@ -164,7 +164,7 @@ function ModalPreview({ fieldSettings, sectionOrder }: { fieldSettings: Record<s
         </div>
         {/* Asset / Driver */}
         <div className="grid grid-cols-2 gap-4">
-          <PField label="Asset" placeholder="Truck 01 (#142)" />
+          <PField label="Truck" placeholder="Truck 01 (#142)" />
           <PField label="Driver" placeholder="— No driver —" />
         </div>
 
@@ -2033,7 +2033,7 @@ function AssetsPanel() {
   return (
     <div style={{ width: 560 }} className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Asset Categories</h2>
+        <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Truck Categories</h2>
         <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
           Define the categories available when creating or editing assets. Renaming a category updates all assigned assets.
         </p>
@@ -4603,7 +4603,7 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'members',          label: 'Members',          icon: <UserCog size={15} /> },
       { id: 'role-permissions', label: 'Role Permissions', icon: <Shield size={15} /> },
       { id: 'modules',          label: 'Modules',          icon: <Layers size={15} /> },
-      { id: 'assets',           label: 'Assets',           icon: <Truck size={15} /> },
+      { id: 'assets',           label: 'Trucks',           icon: <Truck size={15} /> },
       { id: 'trailers',         label: 'Trailers',         icon: <Truck size={15} /> },
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
       { id: 'customers',        label: 'Customers',        icon: <Truck size={15} /> },

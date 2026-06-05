@@ -54,7 +54,7 @@ export default function EditAssetDialog({ asset, onClose }: { asset: Asset; onCl
         >
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wider mb-0.5" style={{ color }}>
-              Edit Asset
+              Edit Truck
             </div>
             <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>
               {asset.name}{asset.unit ? ` #${asset.unit}` : ''}
@@ -76,7 +76,7 @@ export default function EditAssetDialog({ asset, onClose }: { asset: Asset; onCl
           {/* Name + Unit side by side */}
           <div className="grid grid-cols-2 gap-2.5">
             <div>
-              <label className={LABEL} style={{ color: 'var(--gc-text-3)' }}>Asset Name *</label>
+              <label className={LABEL} style={{ color: 'var(--gc-text-3)' }}>Truck Name *</label>
               <input
                 autoFocus
                 type="text"
@@ -91,7 +91,7 @@ export default function EditAssetDialog({ asset, onClose }: { asset: Asset; onCl
               />
             </div>
             <div>
-              <label className={LABEL} style={{ color: 'var(--gc-text-3)' }}>Asset # (Unit)</label>
+              <label className={LABEL} style={{ color: 'var(--gc-text-3)' }}>Truck # (Unit)</label>
               <input
                 type="text"
                 value={unit}
@@ -108,7 +108,7 @@ export default function EditAssetDialog({ asset, onClose }: { asset: Asset; onCl
           {/* Truck + Type side by side */}
           <div className="grid grid-cols-2 gap-2.5">
             <div>
-              <label className={LABEL} style={{ color: 'var(--gc-text-3)' }}>Truck</label>
+              <label className={LABEL} style={{ color: 'var(--gc-text-3)' }}>Make/Model</label>
               <input
                 type="text"
                 value={truck}

@@ -1773,7 +1773,7 @@ function HistorySection({
               <table className="w-full text-sm">
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
-                    {['Completed', 'Asset', 'Work order', 'Priority', 'Category', 'By'].map(h => (
+                    {['Completed', 'Truck', 'Work order', 'Priority', 'Category', 'By'].map(h => (
                       <th
                         key={h}
                         className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide"

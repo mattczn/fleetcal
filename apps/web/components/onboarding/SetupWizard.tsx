@@ -49,7 +49,7 @@ function ManualTab({ onAdded }: { onAdded: () => void }) {
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
-          <label className="text-[12px] font-medium" style={{ color: 'var(--gc-text-3)' }}>Asset Name *</label>
+          <label className="text-[12px] font-medium" style={{ color: 'var(--gc-text-3)' }}>Truck Name *</label>
           <input style={INPUT} placeholder="e.g. Truck 42 or John D." value={name} onChange={e => setName(e.target.value)}
             onFocus={e => (e.currentTarget.style.borderColor = color)}
             onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
@@ -61,7 +61,7 @@ function ManualTab({ onAdded }: { onAdded: () => void }) {
             onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label className="text-[12px] font-medium" style={{ color: 'var(--gc-text-3)' }}>Truck</label>
+          <label className="text-[12px] font-medium" style={{ color: 'var(--gc-text-3)' }}>Make/Model</label>
           <input style={INPUT} placeholder="e.g. 2024 Freightliner" value={truck} onChange={e => setTruck(e.target.value)}
             onFocus={e => (e.currentTarget.style.borderColor = color)}
             onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
@@ -100,7 +100,7 @@ function ManualTab({ onAdded }: { onAdded: () => void }) {
         className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-[14px] font-semibold text-white mt-1"
         style={{ background: saved ? '#16a34a' : color, opacity: !name.trim() ? 0.5 : 1, transition: 'background 300ms' }}
       >
-        {saving ? <Loader2 size={15} className="animate-spin" /> : saved ? <><Check size={15} /> Added!</> : <><Plus size={15} /> Add Asset</>}
+        {saving ? <Loader2 size={15} className="animate-spin" /> : saved ? <><Check size={15} /> Added!</> : <><Plus size={15} /> Add Truck</>}
       </button>
     </div>
   );

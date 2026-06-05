@@ -350,7 +350,7 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
                 onMouseEnter={e => { if (selected !== 'asset-prefs') e.currentTarget.style.background = 'var(--gc-hover)'; }}
                 onMouseLeave={e => { if (selected !== 'asset-prefs') e.currentTarget.style.background = 'transparent'; }}>
                 <Truck size={14} />
-                Asset Preferences
+                Truck Preferences
               </button>
             </div>
           </div>
@@ -1246,10 +1246,10 @@ function AssetPreferencesPanel({ assets, drivers, driverPrefs, driverPrefsSecond
     <div className="px-8 py-7">
       <div className="text-[10px] font-bold uppercase tracking-widest mb-1"
         style={{ color: 'var(--gc-text-3)' }}>
-        Asset Preferences
+        Truck Preferences
       </div>
       <p className="text-sm mb-1" style={{ color: 'var(--gc-text-2)' }}>
-        Assign drivers to each asset. The <strong>Primary</strong> driver auto-fills when the asset is picked on a load; picking either driver in the load modal auto-fills this asset.
+        Assign drivers to each truck. The <strong>Primary</strong> driver auto-fills when the truck is picked on a load; picking either driver in the load modal auto-fills this truck.
       </p>
       <p className="text-xs mb-6" style={{ color: 'var(--gc-text-3)' }}>
         The <strong>Secondary</strong> slot is for drivers who don&apos;t have their own truck and share this one when they work.
@@ -1272,7 +1272,7 @@ function AssetPreferencesPanel({ assets, drivers, driverPrefs, driverPrefsSecond
         )}
 
         {assets.length === 0 && (
-          <p className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No assets added yet.</p>
+          <p className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No trucks added yet.</p>
         )}
 
         {assets.map(asset => {

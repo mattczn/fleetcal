@@ -45,7 +45,7 @@ export interface AssetSelectProps {
 }
 
 export function AssetSelect({
-  value, options, onChange, style, focusColor = '#1a73e8', placeholder = 'Select asset',
+  value, options, onChange, style, focusColor = '#1a73e8', placeholder = 'Select truck',
 }: AssetSelectProps) {
   const [open, setOpen] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -155,7 +155,7 @@ function AssetRowContent({ asset, placeholder }: { asset: AssetSelectOption | nu
   if (!asset) {
     return (
       <span style={{ flex: 1, fontSize: 14, color: 'var(--gc-text-3)' }}>
-        {placeholder ?? 'Select asset'}
+        {placeholder ?? 'Select truck'}
       </span>
     );
   }

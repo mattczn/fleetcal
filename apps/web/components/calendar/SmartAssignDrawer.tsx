@@ -130,7 +130,7 @@ function MatchRow({ match, load, onAssign }: {
             </div>
           )}
           <button type="button" onClick={() => onAssign(match.asset.id)}
-            title={match.hasConflict ? 'This asset has an overlapping load — assign anyway?' : 'Assign this load to the asset'}
+            title={match.hasConflict ? 'This truck has an overlapping load — assign anyway?' : 'Assign this load to the truck'}
             style={{
               padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer',
               background: match.hasConflict ? '#d97706' : match.asset.color,
@@ -149,7 +149,7 @@ function MatchRow({ match, load, onAssign }: {
               label="Deadhead in"
               value={`${match.inboundMiles}mi`}
               color={match.inboundMiles > 80 ? '#d97706' : '#16a34a'}
-              tooltip={`Straight-line miles from ${match.prevEvent ? `the delivery point of "${match.prevEvent.title.split(':')[0]}"` : 'the asset\'s last known position'} to this load's pickup. Lower = less empty driving.`}
+              tooltip={`Straight-line miles from ${match.prevEvent ? `the delivery point of "${match.prevEvent.title.split(':')[0]}"` : 'the truck\'s last known position'} to this load's pickup. Lower = less empty driving.`}
             />
           )}
           {match.outboundMiles !== null && (
@@ -337,7 +337,7 @@ export default function SmartAssignDrawer() {
         {/* Match list — ranked by score, best first */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           {matches.length === 0 && (
-            <div style={{ textAlign: 'center', color: 'var(--gc-text-3)', fontSize: 13, marginTop: 40 }}>No assets found</div>
+            <div style={{ textAlign: 'center', color: 'var(--gc-text-3)', fontSize: 13, marginTop: 40 }}>No trucks found</div>
           )}
           {matches.map(m => (
             <MatchRow key={m.asset.id} match={m} load={load} onAssign={handleAssign} />

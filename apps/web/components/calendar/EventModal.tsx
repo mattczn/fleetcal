@@ -4653,7 +4653,7 @@ export default function EventModal() {
               </div>
               <div className="flex items-center gap-2 flex-wrap text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                 <span>
-                  {selectedAsset?.name ?? 'Select asset'}
+                  {selectedAsset?.name ?? 'Select truck'}
                   {selectedAsset?.unit ? ` · #${selectedAsset.unit}` : ''}
                   {selectedAsset?.truck ? ` · ${selectedAsset.truck}` : ''}
                 </span>
@@ -5259,7 +5259,7 @@ export default function EventModal() {
                   );
                 })()}
               </Field>
-              <Field label="Asset *">
+              <Field label="Truck *">
                 <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <AssetSelect
@@ -5633,7 +5633,7 @@ export default function EventModal() {
                                 )}
                               </div>
                             </Field>
-                            <Field label="Delivery Asset *">
+                            <Field label="Delivery Truck *">
                               <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                   <AssetSelect

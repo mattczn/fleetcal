@@ -68,7 +68,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
     // should preserve. If the row was already deleted explicitly,
     // .find returns undefined and we skip.
     const fresh = useCalendarStore.getState().assets.find(a => a.id === id);
-    if (fresh && fresh.name === 'New asset' && !fresh.unit && !fresh.truck && !fresh.notes) {
+    if (fresh && fresh.name === 'New truck' && !fresh.unit && !fresh.truck && !fresh.notes) {
       removeAsset(id);
     }
   };
@@ -99,7 +99,7 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
       // field focused so the dispatcher just types their real name
       // and the placeholder disappears.
       const newId = await addAsset({
-        name:  'New asset',
+        name:  'New truck',
         color: PRESET_COLORS[assets.length % PRESET_COLORS.length],
         type:  assetCategories[0] ?? 'OTR',
         hidden: false,
@@ -166,20 +166,20 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
               <button
                 onClick={() => void handleAdd()}
                 disabled={adding}
-                title="Add asset"
+                title="Add truck"
                 className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
                 style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
                 onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                 <Plus size={12} />
-                {adding ? 'Adding…' : 'Asset'}
+                {adding ? 'Adding…' : 'Truck'}
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {assets.length === 0 && (
                 <p className="text-xs px-2 py-2" style={{ color: 'var(--gc-text-3)' }}>
-                  No assets yet.
+                  No trucks yet.
                 </p>
               )}
               {assets.map(a => (
@@ -403,7 +403,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
 
         {/* Name + Unit */}
         <div className="grid grid-cols-2 gap-4 mb-4">
-          <PField label="Asset Name">
+          <PField label="Truck Name">
             <input type="text" value={name} onChange={e => setName(e.target.value)}
               placeholder="Name" style={P_INPUT}
               onFocus={focusBorder}
@@ -428,7 +428,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
 
         {/* Truck + Category */}
         <div className="grid grid-cols-2 gap-4 mb-4">
-          <PField label="Truck">
+          <PField label="Make/Model">
             <input type="text" value={truck} onChange={e => setTruck(e.target.value)}
               placeholder="e.g. 2024 Freightliner" style={P_INPUT}
               onFocus={focusBorder}
@@ -475,7 +475,7 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
         {/* Notes */}
         <PField label="Notes">
           <textarea value={notes} onChange={e => setNotes(e.target.value)}
-            placeholder="Add notes about this asset…" rows={3}
+            placeholder="Add notes about this truck…" rows={3}
             style={{ ...P_INPUT, resize: 'vertical', paddingTop: 10, paddingBottom: 10, lineHeight: '1.5', fontFamily: 'inherit' }}
             onFocus={focusBorder}
             onBlur={e => {

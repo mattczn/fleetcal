@@ -1176,7 +1176,7 @@ function LoadDetailPanel({ load, assets, onClose, onOpenEditor }: {
           <DetailSectionLabel>Dispatch</DetailSectionLabel>
           <div className="space-y-2">
             {asset && (
-              <DetailRow icon={<Truck size={13} />} label="Asset">
+              <DetailRow icon={<Truck size={13} />} label="Truck">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset.color }} />
                   <span>{asset.name}{asset.unit ? ` #${asset.unit}` : ''}</span>

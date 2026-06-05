@@ -283,7 +283,7 @@ export default function AssetPerformanceView() {
         <div className="flex items-start justify-between mb-4 gap-4">
           <div>
             <h1 className="text-[24px] font-semibold" style={{ color: 'var(--gc-text-1)', letterSpacing: '-0.3px' }}>
-              Asset performance
+              Truck performance
             </h1>
             <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
               Compare trucks on revenue, RPM, deadhead %, and more · inbound attribution

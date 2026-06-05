@@ -123,7 +123,7 @@ const COLUMNS: ColumnDef[] = [
   } },
   { id: 'pickupDriver', label: 'Pickup Driver', get: (l) => l.pickupDriverName ?? '' },
   { id: 'deliveryDriver', label: 'Delivery Driver', get: (l) => l.deliveryDriverName ?? '' },
-  { id: 'asset',        label: 'Asset',       get: (l, ctx) => {
+  { id: 'asset',        label: 'Truck',       get: (l, ctx) => {
     const a = ctx.assets.find(x => x.id === l.pickupAssetId);
     return a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
   }},
@@ -852,7 +852,7 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
           />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={labelStyle}>Asset</label>
+          <label style={labelStyle}>Truck</label>
           <MultiSelect
             label="assets"
             options={assets.filter(a => !a.hidden)}

@@ -39,7 +39,7 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}
         >
           <span className="text-base font-medium" style={{ color: 'var(--gc-text-1)' }}>
-            Add asset
+            Add truck
           </span>
           <button
             onClick={onClose}
