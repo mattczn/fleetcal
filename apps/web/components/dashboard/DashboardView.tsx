@@ -336,7 +336,7 @@ function CostBar({
 }
 
 function KpiCard({
-  label, value, sub, icon, accent, badge,
+  label, value, sub, icon, accent, badge, loading,
 }: {
   label: string; value: string; sub: string;
   icon: React.ReactNode; accent: string;
@@ -344,6 +344,12 @@ function KpiCard({
    *  payroll tile to signal whether the period's weeks are finalized,
    *  partial, or still pending. */
   badge?: { text: string; color: string };
+  /** When true, replaces the value + sub line with shimmer placeholders
+   *  so the user sees the tile is still gathering data rather than
+   *  reading a stale "—" or partial value. Each tile decides its own
+   *  loading state based on whichever async fetch backs it (most use
+   *  loadSummaries, a few have their own sources). */
+  loading?: boolean;
 }) {
   return (
     <Card>
@@ -361,20 +367,46 @@ function KpiCard({
           {icon}
         </div>
       </div>
-      <div className="flex items-baseline gap-2 mb-1.5">
-        <span className="text-[26px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
-          {value}
-        </span>
-        {badge ? (
-          <span
-            className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{ background: badge.color + '22', color: badge.color }}
-          >
-            {badge.text}
-          </span>
-        ) : null}
-      </div>
-      <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
+      {loading ? (
+        <>
+          <div
+            className="mb-2 rounded"
+            style={{
+              height: 26, width: '60%',
+              background: 'linear-gradient(90deg, var(--gc-hover) 0%, var(--gc-border-light) 50%, var(--gc-hover) 100%)',
+              backgroundSize: '200% 100%',
+              animation: 'skeleton-shimmer 1.4s ease-in-out infinite',
+            }}
+          />
+          <div
+            className="rounded"
+            style={{
+              height: 12, width: '80%',
+              background: 'linear-gradient(90deg, var(--gc-hover) 0%, var(--gc-border-light) 50%, var(--gc-hover) 100%)',
+              backgroundSize: '200% 100%',
+              animation: 'skeleton-shimmer 1.4s ease-in-out infinite',
+              animationDelay: '0.2s',
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <div className="flex items-baseline gap-2 mb-1.5">
+            <span className="text-[26px] font-semibold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+              {value}
+            </span>
+            {badge ? (
+              <span
+                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                style={{ background: badge.color + '22', color: badge.color }}
+              >
+                {badge.text}
+              </span>
+            ) : null}
+          </div>
+          <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>{sub}</div>
+        </>
+      )}
     </Card>
   );
 }
@@ -1148,7 +1180,17 @@ export default function DashboardView() {
           {/* KPI grid — 8 cards in two rows of four. Row 1 covers the
               top-line financials (revenue + costs); row 2 covers the
               operational volume (miles + loads). The grid wraps to 2×4
-              on lg, 4×2 on smaller screens. */}
+              on lg, 4×2 on smaller screens.
+
+              Each tile shows a shimmer placeholder while its source
+              fetch is in flight, so the user sees the tile is still
+              gathering data instead of reading "0" / "—" as if the
+              answer were really zero.
+
+              The fetches are independent — loadSummaries powers most
+              tiles (revenue, loads, miles, avgs), payrollData powers
+              Total Payroll, fuelSpend powers Total Fuel Spend, and
+              eldMiles powers Total Miles. */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Row 1 ─ financials */}
             <KpiCard
@@ -1157,6 +1199,7 @@ export default function DashboardView() {
               sub={`${kpis.loads} load${kpis.loads !== 1 ? 's' : ''} in period`}
               icon={<DollarSign size={17} />}
               accent="#1a73e8"
+              loading={loadSummaries === null}
             />
             <KpiCard
               label="Avg Revenue / Asset"
@@ -1164,6 +1207,7 @@ export default function DashboardView() {
               sub={`across ${kpis.activeAssets} active asset${kpis.activeAssets !== 1 ? 's' : ''}`}
               icon={<CheckCircle2 size={17} />}
               accent="#f9ab00"
+              loading={loadSummaries === null}
             />
             <KpiCard
               label="Total Payroll"
@@ -1172,6 +1216,7 @@ export default function DashboardView() {
               badge={payrollBadge}
               icon={<Wallet size={17} />}
               accent="#5e35b1"
+              loading={payrollData === null}
             />
             <KpiCard
               label="Total Fuel Spend"
@@ -1179,6 +1224,7 @@ export default function DashboardView() {
               sub="across all fuel transactions"
               icon={<Fuel size={17} />}
               accent="#ea4335"
+              loading={fuelSpend === null}
             />
             {/* Row 2 ─ volume */}
             <KpiCard
@@ -1187,6 +1233,7 @@ export default function DashboardView() {
               sub="sum of leg loaded miles"
               icon={<Route size={17} />}
               accent="#00838f"
+              loading={loadSummaries === null}
             />
             <KpiCard
               label="Total Miles"
@@ -1194,6 +1241,7 @@ export default function DashboardView() {
               sub="ELD-equipped trucks only"
               icon={<Gauge size={17} />}
               accent="#0288d1"
+              loading={eldMiles === null}
             />
             <KpiCard
               label="Total Loads"
@@ -1201,6 +1249,7 @@ export default function DashboardView() {
               sub="loads dispatched this period"
               icon={<Truck size={17} />}
               accent="#1e8e3e"
+              loading={loadSummaries === null}
             />
             <KpiCard
               label="Avg Revenue / Load"
@@ -1208,6 +1257,7 @@ export default function DashboardView() {
               sub={kpis.loads > 0 ? `across ${kpis.loads} load${kpis.loads !== 1 ? 's' : ''}` : 'No loads this period'}
               icon={<TrendingUp size={17} />}
               accent="#a142f4"
+              loading={loadSummaries === null}
             />
           </div>
 
