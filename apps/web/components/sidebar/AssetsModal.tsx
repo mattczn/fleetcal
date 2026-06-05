@@ -5,6 +5,7 @@ import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink } from
 import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import { PRESET_COLORS } from '@/lib/asset-colors';
 import LoadHistorySection from './LoadHistorySection';
@@ -323,6 +324,14 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
   const { can: canDo } = usePermissions();
   const canDelete = canDo('assets.delete');
   const canEdit   = canDo('assets.edit');
+  // Module gates — hide Motive-only / Fuel / Maintenance affordances
+  // when the org doesn't have those modules. MVP orgs see a cleaner
+  // truck profile without ELD-integration plumbing or Equipment links.
+  const { enabled: moduleEnabled } = useModules();
+  const showMotiveField  = moduleEnabled('motive_integration');
+  const showFuelLink     = moduleEnabled('fuel');
+  const showMaintLink    = moduleEnabled('maintenance');
+  const showEquipmentRow = showFuelLink || showMaintLink;
   // Hard delete is only safe when there are no loads referencing this
   // asset (events.asset_id has ON DELETE RESTRICT). We count both live
   // events AND soft-deleted ones — the FK constraint doesn't care
@@ -486,7 +495,8 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
             }} />
         </PField>
 
-        {/* Motive integration */}
+        {/* Motive integration — only when the org has motive_integration ON */}
+        {showMotiveField && (
         <PField label="Motive Vehicle ID">
           {motiveEditing ? (
             <div className="flex gap-2">
@@ -533,12 +543,17 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
             </div>
           )}
         </PField>
+        )}
       </div>
 
-      {/* Quick links to the asset-scoped views on the Fuel and
+      {/* Quick links to the truck-scoped views on the Fuel and
           Maintenance pages. Each pre-fills its respective filter via
-          ?asset=<name> so the dispatcher lands on a filtered table. */}
-      <div className="grid grid-cols-2 gap-3 mb-8">
+          ?asset=<name> so the dispatcher lands on a filtered table.
+          Hidden entirely when both modules are OFF (MVP). When only
+          one is on, only that card renders. */}
+      {showEquipmentRow && (
+      <div className={showFuelLink && showMaintLink ? "grid grid-cols-2 gap-3 mb-8" : "grid grid-cols-1 gap-3 mb-8"}>
+        {showFuelLink && (
         <Link
           href={`/fuel?asset=${encodeURIComponent(asset.name)}`}
           className="flex items-center gap-2 px-4 py-3 rounded-xl transition-colors"
@@ -555,6 +570,8 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
           </div>
           <ExternalLink size={13} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
         </Link>
+        )}
+        {showMaintLink && (
         <Link
           href={`/maintenance?asset=${encodeURIComponent(asset.name)}`}
           className="flex items-center gap-2 px-4 py-3 rounded-xl transition-colors"
@@ -571,7 +588,9 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
           </div>
           <ExternalLink size={13} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
         </Link>
+        )}
       </div>
+      )}
 
       </fieldset>
 

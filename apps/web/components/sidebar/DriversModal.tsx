@@ -5,6 +5,7 @@ import { X, Check, Plus, Truck, Users, Phone, Clock, Trash2, DollarSign, Downloa
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import {
   fetchPayrollRecordsForDriver, fetchPayrollAdjustments, fetchEventsInRange,
@@ -419,6 +420,11 @@ function NavDriverRow({ driver, selected, onSelect }: {
   // Retirement check matches the AssetsModal pill — activeTo set and
   // already in the past. Future-dated retirement isn't flagged here.
   const retired = !isActiveOn(driver, dateKeyOf(new Date()));
+  // Hide the driver-app activity dot when the org doesn't have the
+  // driver_app module — it's a signal for "is this driver opening the
+  // companion app?" and that question doesn't make sense without one.
+  const { enabled: moduleEnabled } = useModules();
+  const showDriverAppDot = moduleEnabled('driver_app');
 
   return (
     <div
@@ -444,8 +450,9 @@ function NavDriverRow({ driver, selected, onSelect }: {
       </span>
       {/* Driver-app activity dot — at-a-glance signal for which
           drivers are actually using the app. Title shows the exact
-          relative time on hover. */}
-      {!retired && (
+          relative time on hover. Hidden when the org doesn't have
+          the driver_app module (MVP). */}
+      {!retired && showDriverAppDot && (
         <span
           className="shrink-0 w-1.5 h-1.5 rounded-full"
           style={{ background: lastSeenDotColor(driver.lastSeenAt) }}
@@ -482,6 +489,15 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
   const canDelete       = canDo('drivers.delete');
   const canViewPayroll  = canDo('payroll.access');
   const canEdit         = canDo('drivers.edit');
+  // Module gates — hide driver-app status / owner-op exclusion when
+  // the corresponding modules are OFF. MVP orgs see a cleaner driver
+  // profile without the "Driver app: never opened" row (driver_app)
+  // and without the owner-op-exclude-from-reports checkbox
+  // (performance: that toggle only matters when fleet KPIs roll up
+  // through the performance module).
+  const { enabled: moduleEnabled } = useModules();
+  const showDriverAppRow      = moduleEnabled('driver_app');
+  const showOwnerOpExclusion  = moduleEnabled('performance');
   // Hard delete only safe when no loads reference this driver as the
   // primary. events.driver_id is ON DELETE RESTRICT; secondary_driver_id
   // is ON DELETE SET NULL, so a driver who only ever appeared as secondary
@@ -652,7 +668,9 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
               logged in and is the API's last_seen_at timestamp from
               their most recent authenticated request. "Never" means
               the driver has not yet opened the app on a device
-              wired up with their phone / test-OTP. */}
+              wired up with their phone / test-OTP. Hidden when the
+              org doesn't have the driver_app module (MVP). */}
+          {showDriverAppRow && (
           <div className="text-xs mt-1 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
             <span
               className="inline-block w-2 h-2 rounded-full shrink-0"
@@ -660,12 +678,16 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
             />
             <span>Driver app: {lastSeenLabel(driver.lastSeenAt)}</span>
           </div>
+          )}
           {/* OS-level permission state on the driver's device. Pushed
               up by the driver app on launch + on AppState foreground
               change. "Denied" here usually means the driver tapped
               Don't Allow on the iOS prompt or revoked permission in
               Settings — explains why their pushes never land or why
-              their inspection submits have no GPS coords. */}
+              their inspection submits have no GPS coords. Hidden
+              when the org doesn't have the driver_app module (MVP). */}
+          {showDriverAppRow && (
+          <>
           <PermissionRow
             icon={<Bell size={11} />}
             label="Notifications"
@@ -678,6 +700,8 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
             status={driver.locationPermission}
             never={!driver.lastSeenAt}
           />
+          </>
+          )}
         </div>
       </div>
 
@@ -1047,9 +1071,10 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
           are excluded from aggregate revenue reports (dashboard Total
           Revenue, fleet performance, payroll). Loads still appear in
           calendar / accounting / closeout — only the rollup math
-          skips them. Most fleets won't toggle this; surfacing in the
-          edit modal keeps the field discoverable without dominating
-          the layout for the common case. */}
+          skips them. Hidden when the org doesn't have the performance
+          module (MVP) — without rollup KPIs the toggle has nowhere
+          to apply, and the affordance is a Curzon-specific carryover. */}
+      {showOwnerOpExclusion && (
       <div className="mt-6 pt-6 flex items-start gap-3" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
         <input
           id={`exclude-${driver.id}`}
@@ -1067,6 +1092,7 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
           </div>
         </label>
       </div>
+      )}
 
       {/* Retire — gated on drivers.delete. API now stamps active_to
           rather than hard-deleting; historical loads keep the driver
