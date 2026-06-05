@@ -404,7 +404,21 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
         } catch (err) {
           // Wrap the failure with the dayKey so the result banner can
           // show "Tue 6/3 — rate_limit" instead of just a counter.
-          return { ok: false as const, day: dayKeys[i], reason: err instanceof Error ? err.message : String(err) };
+          // RailwayError has a `.detail` field with the parsed JSON
+          // response body — that's where the real reason lives (e.g.
+          // {"error":"ai_failed","detail":"...Anthropic 429..."}).
+          // err.message is just the URL + status code.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const e = err as any;
+          let reason = err instanceof Error ? err.message : String(err);
+          if (e?.detail != null) {
+            const d = e.detail;
+            const detailStr = typeof d === 'string'
+              ? d
+              : (d.detail ?? d.error ?? d.message ?? JSON.stringify(d));
+            reason = `${reason} — ${detailStr}`;
+          }
+          return { ok: false as const, day: dayKeys[i], reason };
         }
       }).map((p) => p.finally(() => {
         done++;
