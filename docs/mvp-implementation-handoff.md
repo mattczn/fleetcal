@@ -10,9 +10,75 @@
 ## What changed since v1
 
 - **Row 57 (Notify Driver popover) restored to MVP as a placeholder.** UI ships; the actual send action is gated by an `sms_enabled` integration config flag (not a module flag), defaulting to `false`. While off, the popover shows a friendly "SMS provisioning in progress — text your driver manually for now" state. Flip the flag to `true` when Twilio A2P 10DLC approval lands; no code change required.
-- **Row 41 (Modules settings) implementation simplified.** Barebones toggle screen for whatever handful of flags actually warrant user control (likely none in MVP). All tier-gated flags are server-controlled via Clerk org metadata.
+- **Row 41 (Modules settings) implementation simplified.** Barebones toggle screen for whatever handful of flags actually warrant user control (likely none in MVP). All tier-gated flags are server-controlled.
 - **Q1 (Row 57 demotion) removed from open questions** — resolved.
 - **Q4 (MVP scope) softened** — 46 rows decompose to four workflows (calendar / load detail / closeout / accounting), so the count is fine. Verification protocol still applies.
+
+---
+
+## Validation corrections (2026-06-05, before Day 1 starts)
+
+The v2 plan above made several assumptions about existing infrastructure. They were verified against the codebase. Use **this section** as ground truth for implementation; the sections below are useful for planning but defer to the corrections here when they conflict.
+
+### Storage location
+
+**Correction:** Module flags live in **Supabase `org_settings.modules` JSONB**, NOT Clerk `publicMetadata`. The migration is `20260515_org_modules.sql`. Read into the calendar Zustand store as `orgModules` and accessed via the `useModules()` hook in `apps/web/lib/useModules.ts`. The Day 1 task "add flags to Clerk metadata model" should target `packages/types/modules.ts` and the signup-side defaults instead.
+
+### Existing module taxonomy
+
+**Correction:** Today's `OrgModule` union has 5 entries, not 6. Two flags the v2 plan said were "existing" — `driver_app` and `performance` — **do not exist yet**:
+
+```ts
+// Pre-corrections actual
+type OrgModule = "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
+```
+
+So the launch needs **8 new flags added** (not 6): the original 6 + `driver_app` + `performance`. As of commit `f5a773b` follow-up, all 8 are added to `packages/types/modules.ts` with labels and blurbs. Storage-side and signup-side wiring remain Day 1 / Day 2 tasks.
+
+### Default-when-absent behavior
+
+**Correction:** `isModuleEnabled` treats an **absent key as ENABLED**, not disabled. Quote from `packages/types/modules.ts`:
+
+> An absent key in the flags map is treated as ENABLED — this matters when a new module is added in code before the DB column ships its default, and avoids accidentally locking everyone out during a deploy.
+
+This is the inverse of what the v2 plan assumed. Implication for Day 1:
+
+- **Existing orgs (just Curzon today):** all 8 new flags are automatically ON because the keys are absent from the existing JSONB. No migration or manual update needed for Curzon to keep working as today.
+- **New orgs at launch:** to ship them OFF, the signup flow must **explicitly write `false`** to the org_settings row at org creation. Not by inverting the default in `isModuleEnabled` — that would break existing orgs.
+
+### No integration-config pattern exists
+
+**Correction:** There is **no existing `useIntegrationConfig` hook, integration_config table, sms_enabled flag, or Twilio code** anywhere in the repo. The Row 57 placeholder pattern requires inventing this. Recommended shape:
+
+- `process.env.SMS_ENABLED === 'true'`, server-side read in the notify-driver send endpoint.
+- Endpoint returns `503 SMS_UNAVAILABLE` when the env var is unset/false.
+- Client `NotifyDriverPopover` catches the 503 and renders the placeholder state. The popover UI ships unconditionally — only the send action is gated.
+- No new DB table, no UI exposure, no per-org override. Single Vercel env var. ~30 min to wire end-to-end.
+
+Resist building a full integration-config layer for one flag.
+
+### Payroll is substantially built — watchlist concern downgraded
+
+**Correction:** `apps/web/components/payroll/PayrollView.tsx` is **1,675 lines** with real `updateEvent({driverPay})`, `fetchPayrollAdjustments`, week-start handling, driver alias matching. This isn't a stub. The Row 28 watchlist item is **still valid as a "verify the math on real data" dogfood task**, but downgraded from the original "verify it's even shippable" concern.
+
+### File paths to correct in v2 references
+
+- AppSidebar lives at `apps/web/components/nav/AppSidebar.tsx`, not `apps/web/components/AppSidebar.tsx`. It already uses `useModules()` and gates nav entries on `module` props correctly. The new flags will gate their respective nav items automatically once nav items declare `module: 'performance'`, `module: 'driver_app'`, etc.
+- There is no standalone `ModulesPanel.tsx` file — the Modules toggle UI lives inline in `apps/web/app/settings/page.tsx`.
+
+### Done in commit f5a773b (Sunday Jun 7)
+
+- ✅ Added 8 new flags to `packages/types/modules.ts`: `motive_integration`, `trailers`, `performance`, `driver_app`, `dispatch_board`, `custom_documents`, `mini_calendar`, `relay_advanced`. Each has a label and blurb suitable for the Modules settings UI.
+- ✅ Typecheck passes; existing behavior unchanged (all 8 default to ON for existing orgs).
+- ✅ Validation corrections added to this doc above.
+
+### Remaining for Day 1 (Mon Jun 8)
+
+- Wire the signup flow to write all 8 new flags as `false` to the new org_settings row.
+- Curzon's existing row already has them implicitly true (absent key = enabled). No action needed unless you want to be explicit for clarity.
+- Define `SMS_ENABLED` env var on Vercel (don't ship Row 57 placeholder yet without it).
+- Skim Payroll for ~10 min to confirm dogfood-readiness.
+- Decide Q1 (mini calendar promotion vs Later) before nav gating starts in Day 2.
 
 ---
 

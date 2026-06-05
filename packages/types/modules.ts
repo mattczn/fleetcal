@@ -25,11 +25,28 @@ import type { OrgModuleFlags } from "./domain.js";
 // ── Module taxonomy ────────────────────────────────────────────────
 
 export type OrgModule =
+  // Pre-launch core modules — see migration 20260515_org_modules.sql
   | "closeout"
   | "accounting"
   | "fuel"
   | "payroll"
-  | "maintenance";
+  | "maintenance"
+  // ── MVP-launch additions (2026-06-05) ───────────────────────────────
+  // Added for the Starter/Growth/Fleet tier rollout. Each gates a
+  // family of features that were promoted from CUT/DEFER/HIDE in the
+  // MVP inventory (docs/mvp-feature-inventory.md + docs/mvp-
+  // implementation-handoff.md). isModuleEnabled treats absent keys as
+  // enabled, so existing orgs (Curzon) keep all features ON without
+  // touching their org_settings row. New-org defaults of `false` for
+  // these are set in the signup flow (Day 1 of launch week, not here).
+  | "motive_integration" // gates the Motive ELD surfaces (asset live location, movements toggle, integration settings)
+  | "trailers"           // gates trailer fleet map + trailer settings
+  | "performance"        // gates the analytics surfaces (drivers scorecards, performance page, asset timeline, driver summary panel)
+  | "driver_app"         // gates the driver-mobile companion features (notifications bell, driver-app settings)
+  | "dispatch_board"     // gates the real-time Command Center board + the follow-up modal
+  | "custom_documents"   // gates document-type customization in settings
+  | "mini_calendar"      // gates the sidebar month-view mini calendar
+  | "relay_advanced";    // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
 
 export const ORG_MODULES: readonly OrgModule[] = [
   "closeout",
@@ -37,25 +54,49 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "fuel",
   "payroll",
   "maintenance",
+  "motive_integration",
+  "trailers",
+  "performance",
+  "driver_app",
+  "dispatch_board",
+  "custom_documents",
+  "mini_calendar",
+  "relay_advanced",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
  *  and the "module disabled" empty-state messaging. */
 export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
-  closeout:    "Closeout",
-  accounting:  "Accounting",
-  fuel:        "Fuel",
-  payroll:     "Payroll",
-  maintenance: "Maintenance",
+  closeout:           "Closeout",
+  accounting:         "Accounting",
+  fuel:               "Fuel",
+  payroll:            "Payroll",
+  maintenance:        "Maintenance",
+  motive_integration: "Motive ELD",
+  trailers:           "Trailers",
+  performance:        "Performance & Analytics",
+  driver_app:         "Driver mobile app",
+  dispatch_board:     "Command Center",
+  custom_documents:   "Custom document types",
+  mini_calendar:      "Sidebar mini calendar",
+  relay_advanced:     "Relay handoff documentation",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
 export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
-  closeout:    "POD verification queue — review uploaded PODs and release loads to billing.",
-  accounting:  "Billing pipeline — draft invoices, send to brokers, track payments.",
-  fuel:        "Driver fuel-up reports — track gallons, DEF, and per-asset spend.",
-  payroll:     "Per-driver weekly pay totals + adjustments (TONU, layover, deductions).",
-  maintenance: "Maintenance reports + action items — defects, repairs, asset history.",
+  closeout:           "POD verification queue — review uploaded PODs and release loads to billing.",
+  accounting:         "Billing pipeline — draft invoices, send to brokers, track payments.",
+  fuel:               "Driver fuel-up reports — track gallons, DEF, and per-asset spend.",
+  payroll:            "Per-driver weekly pay totals + adjustments (TONU, layover, deductions).",
+  maintenance:        "Maintenance reports + action items — defects, repairs, asset history.",
+  motive_integration: "Live truck location, driving-period history, and ELD movements view (requires Motive API key).",
+  trailers:           "Trailer fleet roster + map view of last-known trailer locations.",
+  performance:        "Per-driver and per-asset scorecards, revenue analytics, asset activity timeline.",
+  driver_app:         "Companion mobile app for drivers — push notifications, POD upload from the road, in-app messaging.",
+  dispatch_board:     "Real-time Command Center board for active dispatch with quick-action shortcuts and follow-up tasks.",
+  custom_documents:   "Define your own document types (custom POD variants, broker-specific paperwork) for upload + tagging.",
+  mini_calendar:      "Month-view mini calendar in the sidebar showing load counts per day and quick jump-to-date.",
+  relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
 };
 
 // ── Check API ─────────────────────────────────────────────────────
