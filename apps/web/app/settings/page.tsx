@@ -5,6 +5,7 @@ import { parseTimeInput } from '@/lib/time-utils';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
 import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import {
   CAPABILITY_CATALOG,
   ORG_ROLES,
@@ -4641,6 +4642,20 @@ const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
   // can't tune the prompts.
 };
 
+// Per-nav-item module-flag gates. Hides a settings panel when the
+// org's plan doesn't include the underlying feature module. Curzon
+// (and any existing org without explicit flag values) sees everything
+// because absent keys are treated as enabled. MVP-launch orgs see only
+// the panels whose flags are ON in MVP_LAUNCH_DEFAULTS.
+const NAV_MODULE: Partial<Record<NavItem, OrgModule>> = {
+  'trailers':         'trailers',
+  'dispatchers':      'team_roles',
+  'integrations':     'motive_integration',
+  'driver-app':       'driver_app',
+  'role-permissions': 'team_roles',
+  'documents':        'custom_documents',
+};
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 function ResetDemoButton() {
@@ -4697,17 +4712,23 @@ function ResetDemoButton() {
 export default function SettingsPage() {
   const [active, setActive] = useState<NavItem>('appearance');
   const { can, isLoading: permsLoading } = usePermissions();
+  const { enabled: moduleEnabled } = useModules();
 
-  // Filter the nav by the active user's capabilities. While Clerk is
-  // still hydrating the membership, render everything so we don't
-  // flicker — gated items disappear as soon as perms resolve.
+  // Filter the nav by the active user's capabilities AND the org's
+  // enabled modules. While Clerk is still hydrating the membership,
+  // render everything so we don't flicker — gated items disappear as
+  // soon as perms resolve. Module gates use isModuleEnabled semantics:
+  // absent flag = enabled, explicit false = hidden.
   const visibleNav = NAV.map(group => ({
     ...group,
     items: group.items.filter(item => {
+      // Capability gate (role-based)
       const cap = NAV_CAPABILITY[item.id];
-      if (!cap) return true;
-      if (permsLoading) return true;
-      return can(cap);
+      if (cap && !permsLoading && !can(cap)) return false;
+      // Module-flag gate (subscription-tier based)
+      const mod = NAV_MODULE[item.id];
+      if (mod && !moduleEnabled(mod)) return false;
+      return true;
     }),
   })).filter(group => group.items.length > 0);
 

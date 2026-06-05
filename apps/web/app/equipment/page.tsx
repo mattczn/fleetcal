@@ -108,7 +108,17 @@ type PanelData = {
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
+import RequireCap from '@/components/auth/RequireCap';
+
 export default function EquipmentPage() {
+  return (
+    <RequireCap cap="maintenance.access" module="maintenance">
+      <EquipmentPageInner />
+    </RequireCap>
+  );
+}
+
+function EquipmentPageInner() {
   const searchParams = useSearchParams();
   const initialTab = (() => {
     const t = searchParams?.get('tab');

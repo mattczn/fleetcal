@@ -54,7 +54,7 @@ export default function DriversPage() {
   // modal opened, and the form-init effect bailed silently). Same
   // pattern the accounting page uses for its "open this load" handoff.
   return (
-    <RequireCap cap="drivers.view">
+    <RequireCap cap="drivers.view" module="performance">
       <DataLoader />
       <DriversView />
       <EventModal />

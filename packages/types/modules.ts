@@ -45,6 +45,7 @@ export type OrgModule =
   | "driver_app"         // gates the driver-mobile companion features (notifications bell, driver-app settings)
   | "dispatch_board"     // gates the real-time Command Center board + the follow-up modal
   | "custom_documents"   // gates document-type customization in settings
+  | "team_roles"         // gates multi-role / multi-dispatcher team management (Settings → Dispatchers + Role Permissions). OFF for MVP — every team member is an owner/admin to keep onboarding simple.
   | "relay_advanced";    // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -59,6 +60,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "driver_app",
   "dispatch_board",
   "custom_documents",
+  "team_roles",
   "relay_advanced",
 ] as const;
 
@@ -76,6 +78,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   driver_app:         "Driver mobile app",
   dispatch_board:     "Command Center",
   custom_documents:   "Custom document types",
+  team_roles:         "Multi-role team management",
   relay_advanced:     "Relay handoff documentation",
 };
 
@@ -92,6 +95,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   driver_app:         "Companion mobile app for drivers — push notifications, POD upload from the road, in-app messaging.",
   dispatch_board:     "Real-time Command Center board for active dispatch with quick-action shortcuts and follow-up tasks.",
   custom_documents:   "Define your own document types (custom POD variants, broker-specific paperwork) for upload + tagging.",
+  team_roles:         "Manage multi-role teams with distinct dispatcher accounts + customize per-role permissions. Without this, every team member is an admin.",
   relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
 };
 
@@ -132,7 +136,7 @@ export function isModuleEnabled(
 export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   | "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
   | "motive_integration" | "trailers" | "performance" | "driver_app"
-  | "dispatch_board" | "custom_documents" | "relay_advanced"
+  | "dispatch_board" | "custom_documents" | "team_roles" | "relay_advanced"
 >> = {
   // Pre-launch core modules
   // - closeout / accounting / payroll: core to the rate-con-to-paid
@@ -153,5 +157,6 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   driver_app:         false,
   dispatch_board:     false,
   custom_documents:   false,
+  team_roles:         false,
   relay_advanced:     false,
 };

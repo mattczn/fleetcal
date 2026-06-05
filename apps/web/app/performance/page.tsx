@@ -20,7 +20,7 @@ import PerformanceView from '@/components/performance/PerformanceView';
 
 export default function PerformancePage() {
   return (
-    <RequireCap cap="drivers.view">
+    <RequireCap cap="drivers.view" module="performance">
       <DataLoader />
       <Suspense fallback={null}>
         <PerformanceView />
