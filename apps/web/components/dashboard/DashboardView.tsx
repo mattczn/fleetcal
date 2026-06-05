@@ -1403,48 +1403,65 @@ export default function DashboardView() {
                             {showOverlays ? (
                               // Segmented bar reads cost → margin left-to-right:
                               //   [payroll (purple)] [fuel (red)] [margin (asset color)]
-                              // So the eye lands on what's left over (margin)
-                              // at the right side — closer to the dollar total
-                              // and easier to compare across rows.
-                              <div className="absolute inset-x-0 flex" style={{ height: 7, top: '50%', transform: 'translateY(-50%)' }}>
-                                {showPayrollOverlay && visiblePayroll > 0 ? (
+                              //
+                              // Hovering any segment shows the same multi-line
+                              // breakdown so the dispatcher gets full context
+                              // without having to land on a specific segment.
+                              // Native title attribute renders \n as newlines
+                              // in most browsers' default tooltip.
+                              (() => {
+                                const breakdown = [
+                                  `Revenue:  ${fmt(revenue)}`,
+                                  showPayrollOverlay ? `Payroll: −${fmt(payroll)}` : null,
+                                  showFuelOverlay    ? `Fuel:    −${fmt(fuel)}`    : null,
+                                  `Margin:   ${net >= 0 ? fmt(net) : `−${fmt(-net)}`}`,
+                                ].filter(Boolean).join('\n');
+                                return (
                                   <div
-                                    style={{
-                                      width: `${pctPayroll}%`,
-                                      background: '#5e35b1',
-                                      borderTopLeftRadius: 3, borderBottomLeftRadius: 3,
-                                      borderTopRightRadius: (showFuelOverlay && visibleFuel > 0) || pctMargin > 0 ? 0 : 3,
-                                      borderBottomRightRadius: (showFuelOverlay && visibleFuel > 0) || pctMargin > 0 ? 0 : 3,
-                                    }}
-                                    title={`Payroll: ${fmt(payroll)}`}
-                                  />
-                                ) : null}
-                                {showFuelOverlay && visibleFuel > 0 ? (
-                                  <div
-                                    style={{
-                                      width: `${pctFuel}%`,
-                                      background: '#ea4335',
-                                      borderTopLeftRadius: visiblePayroll === 0 ? 3 : 0,
-                                      borderBottomLeftRadius: visiblePayroll === 0 ? 3 : 0,
-                                      borderTopRightRadius: pctMargin > 0 ? 0 : 3,
-                                      borderBottomRightRadius: pctMargin > 0 ? 0 : 3,
-                                    }}
-                                    title={`Fuel: ${fmt(fuel)}`}
-                                  />
-                                ) : null}
-                                {pctMargin > 0 ? (
-                                  <div
-                                    style={{
-                                      width: `${pctMargin}%`,
-                                      background: asset.color,
-                                      borderTopLeftRadius: visibleCosts === 0 ? 3 : 0,
-                                      borderBottomLeftRadius: visibleCosts === 0 ? 3 : 0,
-                                      borderTopRightRadius: 3, borderBottomRightRadius: 3,
-                                    }}
-                                    title={`Margin: ${fmt(margin)}`}
-                                  />
-                                ) : null}
-                              </div>
+                                    className="absolute inset-x-0 flex"
+                                    style={{ height: 7, top: '50%', transform: 'translateY(-50%)' }}
+                                    title={breakdown}
+                                  >
+                                    {showPayrollOverlay && visiblePayroll > 0 ? (
+                                      <div
+                                        style={{
+                                          width: `${pctPayroll}%`,
+                                          background: '#5e35b1',
+                                          borderTopLeftRadius: 3, borderBottomLeftRadius: 3,
+                                          borderTopRightRadius: (showFuelOverlay && visibleFuel > 0) || pctMargin > 0 ? 0 : 3,
+                                          borderBottomRightRadius: (showFuelOverlay && visibleFuel > 0) || pctMargin > 0 ? 0 : 3,
+                                        }}
+                                        title={breakdown}
+                                      />
+                                    ) : null}
+                                    {showFuelOverlay && visibleFuel > 0 ? (
+                                      <div
+                                        style={{
+                                          width: `${pctFuel}%`,
+                                          background: '#ea4335',
+                                          borderTopLeftRadius: visiblePayroll === 0 ? 3 : 0,
+                                          borderBottomLeftRadius: visiblePayroll === 0 ? 3 : 0,
+                                          borderTopRightRadius: pctMargin > 0 ? 0 : 3,
+                                          borderBottomRightRadius: pctMargin > 0 ? 0 : 3,
+                                        }}
+                                        title={breakdown}
+                                      />
+                                    ) : null}
+                                    {pctMargin > 0 ? (
+                                      <div
+                                        style={{
+                                          width: `${pctMargin}%`,
+                                          background: asset.color,
+                                          borderTopLeftRadius: visibleCosts === 0 ? 3 : 0,
+                                          borderBottomLeftRadius: visibleCosts === 0 ? 3 : 0,
+                                          borderTopRightRadius: 3, borderBottomRightRadius: 3,
+                                        }}
+                                        title={breakdown}
+                                      />
+                                    ) : null}
+                                  </div>
+                                );
+                              })()
                             ) : (
                               // No overlays — show single asset-color bar at revenue width.
                               <div
