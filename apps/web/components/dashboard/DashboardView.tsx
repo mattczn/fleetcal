@@ -1368,10 +1368,22 @@ export default function DashboardView() {
                 <>
                   <div className="space-y-3">
                     {revenueByAsset.map(({ asset, revenue, loads, fuel, payroll, net }) => {
-                      const pctRev     = (revenue / maxAssetRev) * 100;
-                      const pctPayroll = (payroll / maxAssetRev) * 100;
-                      const pctFuel    = (fuel    / maxAssetRev) * 100;
                       const showOverlays = showPayrollOverlay || showFuelOverlay;
+                      // Inside the bar: margin (asset color) | payroll (purple) | fuel (red).
+                      // Each segment is its share of maxAssetRev so widths are
+                      // comparable across rows. When costs exceed revenue,
+                      // margin = 0 and the cost segments visibly extend
+                      // past where revenue ended (no clamping — honest).
+                      const visiblePayroll = showPayrollOverlay ? payroll : 0;
+                      const visibleFuel    = showFuelOverlay    ? fuel    : 0;
+                      const visibleCosts   = visiblePayroll + visibleFuel;
+                      const margin         = Math.max(0, revenue - visibleCosts);
+                      const pctMargin  = (margin       / maxAssetRev) * 100;
+                      const pctPayroll = (visiblePayroll / maxAssetRev) * 100;
+                      const pctFuel    = (visibleFuel    / maxAssetRev) * 100;
+                      // When neither overlay is on, render the whole bar as
+                      // revenue in the asset color (the original behavior).
+                      const pctRev     = (revenue / maxAssetRev) * 100;
                       const assetLabel = asset.unit
                         ? `#${asset.unit} · ${asset.name}`
                         : asset.name;
@@ -1379,20 +1391,59 @@ export default function DashboardView() {
                         ? `${loads} load${loads !== 1 ? 's' : ''}`
                         : `${loads.toFixed(1)} loads`;
                       return (
-                        <div key={asset.id} className="flex items-start gap-3">
+                        <div key={asset.id} className="flex items-center gap-3">
                           <div
                             className="w-[120px] shrink-0 text-[13px] truncate font-medium"
-                            style={{ color: 'var(--gc-text-1)', lineHeight: '20px' }}
+                            style={{ color: 'var(--gc-text-1)' }}
                             title={assetLabel}
                           >
                             {assetLabel}
                           </div>
-                          {/* Bar column — revenue bar on top, optional
-                              cost bars stacked beneath. Each bar is
-                              scaled to maxAssetRev so they read against
-                              the same scale. */}
-                          <div className="flex-1 flex flex-col gap-0.5 py-0.5">
-                            <div className="h-3 relative">
+                          <div className="flex-1 h-5 relative flex items-center">
+                            {showOverlays ? (
+                              // Segmented bar: margin → payroll → fuel.
+                              // Absolute-positioned to share the same baseline.
+                              <div className="absolute inset-x-0 flex" style={{ height: 7, top: '50%', transform: 'translateY(-50%)' }}>
+                                {pctMargin > 0 ? (
+                                  <div
+                                    style={{
+                                      width: `${pctMargin}%`,
+                                      background: asset.color,
+                                      borderTopLeftRadius: 3, borderBottomLeftRadius: 3,
+                                      borderTopRightRadius: visibleCosts > 0 ? 0 : 3,
+                                      borderBottomRightRadius: visibleCosts > 0 ? 0 : 3,
+                                    }}
+                                    title={`Margin: ${fmt(margin)}`}
+                                  />
+                                ) : null}
+                                {showPayrollOverlay && visiblePayroll > 0 ? (
+                                  <div
+                                    style={{
+                                      width: `${pctPayroll}%`,
+                                      background: '#5e35b1',
+                                      borderTopLeftRadius: pctMargin === 0 ? 3 : 0,
+                                      borderBottomLeftRadius: pctMargin === 0 ? 3 : 0,
+                                      borderTopRightRadius: showFuelOverlay && visibleFuel > 0 ? 0 : 3,
+                                      borderBottomRightRadius: showFuelOverlay && visibleFuel > 0 ? 0 : 3,
+                                    }}
+                                    title={`Payroll: ${fmt(payroll)}`}
+                                  />
+                                ) : null}
+                                {showFuelOverlay && visibleFuel > 0 ? (
+                                  <div
+                                    style={{
+                                      width: `${pctFuel}%`,
+                                      background: '#ea4335',
+                                      borderTopLeftRadius: pctMargin === 0 && visiblePayroll === 0 ? 3 : 0,
+                                      borderBottomLeftRadius: pctMargin === 0 && visiblePayroll === 0 ? 3 : 0,
+                                      borderTopRightRadius: 3, borderBottomRightRadius: 3,
+                                    }}
+                                    title={`Fuel: ${fmt(fuel)}`}
+                                  />
+                                ) : null}
+                              </div>
+                            ) : (
+                              // No overlays — show single asset-color bar at revenue width.
                               <div
                                 className="absolute rounded"
                                 style={{
@@ -1401,63 +1452,24 @@ export default function DashboardView() {
                                   top: '50%', transform: 'translateY(-50%)',
                                   minWidth: revenue > 0 ? 4 : 0,
                                 }}
-                                title={`Revenue: ${fmt(revenue)}`}
                               />
-                            </div>
-                            {showPayrollOverlay ? (
-                              <div className="h-2 relative">
-                                <div
-                                  className="absolute rounded"
-                                  style={{
-                                    width: `${pctPayroll}%`, height: 4,
-                                    background: '#5e35b1',
-                                    top: '50%', transform: 'translateY(-50%)',
-                                    minWidth: payroll > 0 ? 4 : 0,
-                                  }}
-                                  title={`Payroll: ${fmt(payroll)}`}
-                                />
-                              </div>
-                            ) : null}
-                            {showFuelOverlay ? (
-                              <div className="h-2 relative">
-                                <div
-                                  className="absolute rounded"
-                                  style={{
-                                    width: `${pctFuel}%`, height: 4,
-                                    background: '#ea4335',
-                                    top: '50%', transform: 'translateY(-50%)',
-                                    minWidth: fuel > 0 ? 4 : 0,
-                                  }}
-                                  title={`Fuel: ${fmt(fuel)}`}
-                                />
-                              </div>
-                            ) : null}
+                            )}
                           </div>
-                          <div className="shrink-0 text-right flex flex-col" style={{ minWidth: 70 }}>
-                            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', lineHeight: '20px' }}>
+                          <div className="shrink-0 text-right" style={{ minWidth: 80 }}>
+                            <div className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
                               {fmt(revenue)}
-                            </span>
-                            {showPayrollOverlay ? (
-                              <span className="text-[11px] tabular-nums" style={{ color: '#5e35b1', lineHeight: '14px' }}>
-                                −{fmt(payroll)}
-                              </span>
-                            ) : null}
-                            {showFuelOverlay ? (
-                              <span className="text-[11px] tabular-nums" style={{ color: '#ea4335', lineHeight: '14px' }}>
-                                −{fmt(fuel)}
-                              </span>
-                            ) : null}
+                            </div>
                             {showOverlays ? (
-                              <span
-                                className="text-[11px] tabular-nums font-semibold"
-                                style={{ color: net >= 0 ? '#1e8e3e' : '#d93025', lineHeight: '14px', borderTop: '1px dashed var(--gc-border-light)', paddingTop: 1, marginTop: 1 }}
-                                title="Revenue − payroll − fuel"
+                              <div
+                                className="text-[11px] tabular-nums font-medium"
+                                style={{ color: net >= 0 ? '#1e8e3e' : '#d93025' }}
+                                title={`Margin = ${fmt(revenue)}${showPayrollOverlay ? ` − ${fmt(payroll)} payroll` : ''}${showFuelOverlay ? ` − ${fmt(fuel)} fuel` : ''}`}
                               >
-                                {fmt(net)}
-                              </span>
+                                {net >= 0 ? fmt(net) : `−${fmt(-net)}`} margin
+                              </div>
                             ) : null}
                           </div>
-                          <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60, lineHeight: '20px' }}>
+                          <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60 }}>
                             {loadsLabel}
                           </div>
                         </div>
