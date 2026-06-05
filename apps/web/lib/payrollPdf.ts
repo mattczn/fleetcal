@@ -56,25 +56,27 @@ export function printPayroll(opts: {
     const loadPay = d.loads.reduce((s, l) => s + (l.driverPay ?? 0), 0);
     const adjPay  = d.adjustments.reduce((s, a) => s + a.amount, 0);
     const total   = loadPay + adjPay;
+    // Miles column intentionally omitted from the printable PDF — the
+    // driver-facing stub hides the dispatcher's loaded-miles metric so
+    // drivers can't reverse-engineer rate-per-mile or load profitability.
+    // The on-screen PayrollView keeps the miles column for dispatchers.
     const loadRows = d.loads.map(l => {
       const date = parseDate(l.start).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       const leg  = l.relayRole === 'pickup' ? 'Pickup' : l.relayRole === 'delivery' ? 'Delivery' : 'Both';
-      const miles = l.loadedMiles != null
-        ? `${Math.round(l.loadedMiles).toLocaleString()} mi`
-        : '—';
       return `<tr>
         <td>${date}</td>
         <td>${leg}</td>
         <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.title ?? ''}</td>
         <td>${l.loadNum ? `#${l.loadNum}` : '—'}</td>
-        <td class="num">${miles}</td>
         <td class="num">${l.driverPay != null ? fmtMoney(l.driverPay) : '—'}</td>
       </tr>`;
     }).join('');
+    // 5 columns total (Date, Leg, Event, Load #, Driver Pay).
+    // Adjustment spans first 4 columns for the description, last column
+    // is the amount.
     const adjRows = d.adjustments.map(a => `
       <tr class="adj-row">
         <td colspan="4" style="padding-left:16px;color:#444">${a.category}${a.description ? ` — ${a.description}` : ''}</td>
-        <td></td>
         <td class="num" style="color:${a.amount >= 0 ? '#1e8e3e' : '#d93025'}">${a.amount >= 0 ? '+' : ''}${fmtMoney(a.amount)}</td>
       </tr>`).join('');
     const finBadge = d.record ? `<span class="paid-badge">✓ Paid</span>` : '';
@@ -92,7 +94,7 @@ export function printPayroll(opts: {
           </div>
         </div>
         <table>
-          <thead><tr><th>Date</th><th>Leg</th><th>Event Title</th><th>Load #</th><th class="num">Miles</th><th class="num">Driver Pay</th></tr></thead>
+          <thead><tr><th>Date</th><th>Leg</th><th>Event Title</th><th>Load #</th><th class="num">Driver Pay</th></tr></thead>
           <tbody>${loadRows}${adjRows}</tbody>
         </table>
       </div>`;
