@@ -138,6 +138,11 @@ interface DeliveredRow {
    *  the timer; the 24h notification dedup keeps re-fires bounded to
    *  one extra ping in that edge case. */
   updated_at:   string;
+  /** Naive ISO end time. Fed into sendAutoPushToDriver's stale-load
+   *  guard so loads whose end is >24h ago skip the push regardless of
+   *  what updated_at says. Catches the imported-Alvys case where
+   *  enrichment bumped updated_at on long-past deliveries. */
+  end:          string;
   load:         { load_num: string | null } | { load_num: string | null }[] | null;
 }
 
@@ -337,7 +342,7 @@ async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
     const windowStart = new Date(Date.now() - (target + 1) * 3_600_000).toISOString();
     const { data: events, error: evErr } = await supabase
       .from("events")
-      .select("id, org_id, driver_id, load_id, updated_at, title, load:loads(load_num)")
+      .select("id, org_id, driver_id, load_id, updated_at, title, \"end\", load:loads(load_num)")
       .eq("org_id", orgRow.org_id)
       .eq("status", "delivered")
       .is("deleted_at", null)
@@ -386,7 +391,7 @@ async function runMissingPodSweep(rulesCache: Map<string, NotificationRules>) {
         title: "Reminder: Upload Paperwork",
         body:  `We still need the POD for ${row.title}. Please upload ASAP.`,
         data:  { type: "upload_pod", eventId: row.id, url: `/load/${row.id}` },
-      });
+      }, { eventEnd: row.end });
       if (!did) { suppressed++; continue; }
       await recordNudge(row.org_id, row.id, row.load_id, row.driver_id!, "upload_pod", "Auto: missing POD");
       sent++;

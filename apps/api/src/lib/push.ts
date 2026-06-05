@@ -142,11 +142,33 @@ export async function sendAutoPushToDriver(
     rules?: NotificationRules;
     driverPrefs?: Record<string, boolean>;
     eventStart?: string | null;
+    /** Naive ISO of the event's end time. Used to suppress notifications
+     *  on stale loads — any auto-push for a load whose `end` is more than
+     *  24h in the past gets dropped. Catches backfilled status changes,
+     *  late-arriving historical imports, and any other case where a
+     *  long-past event accidentally re-enters a notification window.
+     *  Callers that don't pass eventEnd opt out of the guard. */
+    eventEnd?: string | null;
   },
 ): Promise<boolean> {
   const rules = opts?.rules ?? await loadOrgNotificationRules(orgId);
   const rule  = rules[NOTIFICATION_RULE_FIELD_FROM_KEY[ruleKey]];
   if (!rule.enabled) return false;
+
+  // Stale-load guard. An auto-push for a load that ended >24h ago is
+  // almost certainly a misfire (e.g. an Alvys import that bumped
+  // updated_at without resetting event.end). Block at the library
+  // layer so every cron rule benefits without per-site code.
+  if (opts?.eventEnd) {
+    const endMs = Date.parse(opts.eventEnd.includes(" ") ? opts.eventEnd.replace(" ", "T") : opts.eventEnd);
+    if (isFinite(endMs)) {
+      const ageHours = (Date.now() - endMs) / 3_600_000;
+      if (ageHours > 24) {
+        console.warn(`[sendAutoPushToDriver] suppressed ${ruleKey} to driver ${driverId}: load ended ${ageHours.toFixed(1)}h ago (>24h stale)`);
+        return false;
+      }
+    }
+  }
 
   if (ruleKey === "on_assignment") {
     if (opts?.eventStart) {
