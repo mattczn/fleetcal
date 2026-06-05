@@ -10,11 +10,18 @@ import BatchNotification from '@/components/calendar/BatchNotification';
 import DataLoader from '@/components/DataLoader';
 import OnboardingController from '@/components/onboarding/OnboardingController';
 import AssistantChat from '@/components/AssistantChat';
-import TodaysTray from '@/components/tray/TodaysTray';
-import TodaysTraySkeleton from '@/components/tray/TodaysTraySkeleton';
 import EldSync from '@/components/EldSync';
 import RealtimeSync from '@/components/RealtimeSync';
 import { useCalendarStore } from '@/store/useCalendarStore';
+
+// TodaysTray + TodaysTraySkeleton mounts removed 2026-06-05. The
+// bottom-of-screen tray was leaving an empty 48px reservation that
+// the founder decided isn't earning its space anywhere right now.
+// Component files are kept on disk (apps/web/components/tray/) for
+// a future reimplementation — to bring it back, re-add the two
+// imports + the `{dbReady ? <TodaysTray /> : <TodaysTraySkeleton />}`
+// mount and restore `paddingBottom: 48` on the root div so the
+// fixed tray header doesn't overlap the grid.
 
 export default function CalendarPage() {
   const { viewMode, dbReady } = useCalendarStore();
@@ -26,7 +33,7 @@ export default function CalendarPage() {
   // "where am I going" affordance the AssetSidebar's bottom nav now
   // covers natively.
   return (
-    <div className="flex h-full overflow-hidden" style={{ paddingBottom: 48 }}>
+    <div className="flex h-full overflow-hidden">
       <DataLoader />
       <EldSync />
       <RealtimeSync />
@@ -39,7 +46,6 @@ export default function CalendarPage() {
       <BatchNotification />
       <OnboardingController />
       <AssistantChat />
-      {dbReady ? <TodaysTray /> : <TodaysTraySkeleton />}
     </div>
   );
 }
