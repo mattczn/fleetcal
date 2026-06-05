@@ -2237,6 +2237,23 @@ export const useCalendarStore = create<CalendarStore>()(
           delete pv.notesFormat;
           p.promptVariables = { ...current.promptVariables, ...pv } as typeof current.promptVariables;
         }
+        // assetCategories migration: if the persisted value is exactly
+        // the OLD 4-category default (['OTR','Local','Dedicated','Regional']
+        // in any order), replace with the new 2-category default
+        // (['Local','OTR']). Anyone who customized their list keeps it.
+        // This catches every browser that visited the app before the
+        // 2026-06-05 default trim — without it, the new default never
+        // takes effect for anyone who already had localStorage written.
+        if (Array.isArray(p.assetCategories)) {
+          const OLD_DEFAULT = ['OTR', 'Local', 'Dedicated', 'Regional'];
+          const persistedSet = new Set(p.assetCategories);
+          const matchesOldDefault =
+            p.assetCategories.length === OLD_DEFAULT.length &&
+            OLD_DEFAULT.every(c => persistedSet.has(c));
+          if (matchesOldDefault) {
+            p.assetCategories = ['Local', 'OTR'];
+          }
+        }
         return { ...current, ...p };
       },
       partialize: (state) => ({
