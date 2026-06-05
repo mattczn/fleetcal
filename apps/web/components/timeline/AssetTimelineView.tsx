@@ -397,43 +397,57 @@ export default function AssetTimelineView({ assetId }: { assetId: number | null 
     let totalSkipped = 0;
     let failures = 0;
     const failureDetails: Array<{ day: string; reason: string }> = [];
-    const results = await Promise.allSettled(
-      windows.map(async (w, i) => {
-        try {
-          return { ok: true as const, day: dayKeys[i], value: await railway.autoLinkAssetTimeline(effectiveAssetId!, w.from, w.to) };
-        } catch (err) {
-          // Wrap the failure with the dayKey so the result banner can
-          // show "Tue 6/3 — rate_limit" instead of just a counter.
-          // RailwayError has a `.detail` field with the parsed JSON
-          // response body — that's where the real reason lives (e.g.
-          // {"error":"ai_failed","detail":"...Anthropic 429..."}).
-          // err.message is just the URL + status code.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const e = err as any;
-          let reason = err instanceof Error ? err.message : String(err);
-          if (e?.detail != null) {
-            const d = e.detail;
-            const detailStr = typeof d === 'string'
-              ? d
-              : (d.detail ?? d.error ?? d.message ?? JSON.stringify(d));
-            reason = `${reason} — ${detailStr}`;
-          }
-          return { ok: false as const, day: dayKeys[i], reason };
+
+    // Batched fanout. Anthropic's 529 (overloaded) hits when 7 parallel
+    // calls slam the API simultaneously — even with server-side retry
+    // it can stay overloaded through all attempts. Running 2 days at a
+    // time with brief pauses lets Claude recover between batches and
+    // gives the server-side retry a clear runway.
+    //
+    // Per-call attempt to call the API and capture detail on error.
+    const runOne = async (idx: number): Promise<{ ok: true; day: string; value: Awaited<ReturnType<typeof railway.autoLinkAssetTimeline>> } | { ok: false; day: string; reason: string }> => {
+      const day = dayKeys[idx];
+      const w = windows[idx];
+      try {
+        const value = await railway.autoLinkAssetTimeline(effectiveAssetId!, w.from, w.to);
+        return { ok: true, day, value };
+      } catch (err) {
+        // RailwayError has .detail with the parsed JSON response body —
+        // that's where the real Anthropic error lives.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e = err as any;
+        let reason = err instanceof Error ? err.message : String(err);
+        if (e?.detail != null) {
+          const d = e.detail;
+          const detailStr = typeof d === 'string'
+            ? d
+            : (d.detail ?? d.error ?? d.message ?? JSON.stringify(d));
+          reason = `${reason} — ${detailStr}`;
         }
-      }).map((p) => p.finally(() => {
+        return { ok: false, day, reason };
+      }
+    };
+
+    const BATCH = 2;
+    const PAUSE_MS = 1500;
+    for (let i = 0; i < windows.length; i += BATCH) {
+      const slice = Array.from({ length: Math.min(BATCH, windows.length - i) }, (_, k) => i + k);
+      const batchResults = await Promise.all(slice.map(runOne));
+      for (const r of batchResults) {
+        if (r.ok) {
+          totalLinks   += r.value.linksWritten;
+          totalSkipped += r.value.manualSkipped;
+        } else {
+          failures++;
+          failureDetails.push({ day: r.day, reason: r.reason });
+        }
         done++;
-        setWeekProgress({ done, total: 7 });
-      })),
-    );
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value.ok) {
-        totalLinks   += r.value.value.linksWritten;
-        totalSkipped += r.value.value.manualSkipped;
-      } else {
-        failures++;
-        const day    = r.status === 'fulfilled' ? r.value.day    : 'unknown';
-        const reason = r.status === 'fulfilled' && !r.value.ok ? r.value.reason : 'Promise rejected';
-        failureDetails.push({ day, reason });
+        setWeekProgress({ done, total: windows.length });
+      }
+      // Small pause between batches so Claude has a breather. Skip on
+      // the last batch — no point waiting before the finish.
+      if (i + BATCH < windows.length) {
+        await new Promise((r) => setTimeout(r, PAUSE_MS));
       }
     }
 
