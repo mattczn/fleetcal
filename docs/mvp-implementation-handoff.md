@@ -1,9 +1,9 @@
 # FleetCal MVP Implementation Handoff
 
-> Updated 2026-06-05 (v2) — Row 57 placeholder pattern + Modules settings simplification.
+> Updated 2026-06-05 (v2.1) — Row 57 placeholder pattern + Modules settings simplification + MiniCalendar promoted to MVP (Q1 resolved).
 > Target launch: **Friday, 2026-06-12** (7 days out).
-> Source decisions: 46 MVP / 19 Later / 0 Cut.
-> Architecture: feature-flagged modules via Clerk org metadata, multi-tenant Supabase.
+> Source decisions: **47 MVP / 18 Later / 0 Cut**.
+> Architecture: feature-flagged modules via Supabase `org_settings.modules` JSONB, multi-tenant Supabase.
 
 ---
 
@@ -33,7 +33,7 @@ The v2 plan above made several assumptions about existing infrastructure. They w
 type OrgModule = "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
 ```
 
-So the launch needs **8 new flags added** (not 6): the original 6 + `driver_app` + `performance`. As of commit `f5a773b` follow-up, all 8 are added to `packages/types/modules.ts` with labels and blurbs. Storage-side and signup-side wiring remain Day 1 / Day 2 tasks.
+So the launch needs **7 new flags added** (not 6): `driver_app`, `performance`, `motive_integration`, `trailers`, `dispatch_board`, `custom_documents`, `relay_advanced`. (Originally I added an 8th, `mini_calendar`, but it was removed in v2.1 after founder pushback — date pickers don't warrant tier toggles. See Q1 resolution in Section 5.) As of commit follow-up to `42b3203`, all 7 live in `packages/types/modules.ts` with labels and blurbs. Storage-side and signup-side wiring remain Day 1 / Day 2 tasks.
 
 ### Default-when-absent behavior
 
@@ -66,19 +66,19 @@ Resist building a full integration-config layer for one flag.
 - AppSidebar lives at `apps/web/components/nav/AppSidebar.tsx`, not `apps/web/components/AppSidebar.tsx`. It already uses `useModules()` and gates nav entries on `module` props correctly. The new flags will gate their respective nav items automatically once nav items declare `module: 'performance'`, `module: 'driver_app'`, etc.
 - There is no standalone `ModulesPanel.tsx` file — the Modules toggle UI lives inline in `apps/web/app/settings/page.tsx`.
 
-### Done in commit f5a773b (Sunday Jun 7)
+### Done in Sunday Jun 7 work
 
-- ✅ Added 8 new flags to `packages/types/modules.ts`: `motive_integration`, `trailers`, `performance`, `driver_app`, `dispatch_board`, `custom_documents`, `mini_calendar`, `relay_advanced`. Each has a label and blurb suitable for the Modules settings UI.
-- ✅ Typecheck passes; existing behavior unchanged (all 8 default to ON for existing orgs).
+- ✅ Added 7 new flags to `packages/types/modules.ts`: `motive_integration`, `trailers`, `performance`, `driver_app`, `dispatch_board`, `custom_documents`, `relay_advanced`. Each has a label and blurb suitable for the Modules settings UI. (commit `42b3203` introduced 8 incl. `mini_calendar`; the follow-up commit removed `mini_calendar` after founder review.)
+- ✅ Typecheck passes; existing behavior unchanged (all 7 default to ON for existing orgs).
 - ✅ Validation corrections added to this doc above.
+- ✅ Q1 resolved: MiniCalendar promoted to MVP (Section 1, Sidebar group).
 
 ### Remaining for Day 1 (Mon Jun 8)
 
-- Wire the signup flow to write all 8 new flags as `false` to the new org_settings row.
+- Wire the signup flow to write the 7 new flags as `false` on the new org_settings row.
 - Curzon's existing row already has them implicitly true (absent key = enabled). No action needed unless you want to be explicit for clarity.
 - Define `SMS_ENABLED` env var on Vercel (don't ship Row 57 placeholder yet without it).
 - Skim Payroll for ~10 min to confirm dogfood-readiness.
-- Decide Q1 (mini calendar promotion vs Later) before nav gating starts in Day 2.
 
 ---
 
@@ -185,14 +185,17 @@ Grouped by surface. File paths from the audit; verify they still match after Cla
 > 4. If `true`, fire the SMS via the existing send path
 > No code change needed when approval lands — just flip the config.
 
-### Sidebar (5)
+### Sidebar (6)
 | Row | Feature | Path |
 |---|---|---|
+| 59 | Mini calendar (sidebar date picker) | `apps/web/components/sidebar/MiniCalendar.tsx` |
 | 60 | Category filters | `apps/web/components/sidebar/AssetSidebar.tsx` |
 | 61 | Manage assets button | `apps/web/components/sidebar/AssetSidebar.tsx` |
 | 62 | Manage drivers button | `apps/web/components/sidebar/AssetSidebar.tsx` |
 | 63 | Assets modal | `apps/web/components/sidebar/AssetsModal.tsx` |
 | 64 | Drivers modal | `apps/web/components/sidebar/DriversModal.tsx` |
+
+> **Note on row 59 (added 2026-06-05):** MiniCalendar is the month-view date picker in the calendar sidebar — prev/next month arrows + day cells that jump `currentDate`. It's plumbing, not a billable feature. Module-flagging it failed the "does this earn a tier toggle?" sanity check, so it was demoted out of the flag schema and promoted to MVP-always-on. See Q1 in Section 5 for the original question.
 
 ---
 
@@ -248,11 +251,6 @@ Grouped by suggested module flag:
 |---|---|---|
 | 43 | Documents settings | `apps/web/app/settings/page.tsx` |
 
-### `mini_calendar` (new flag — gates sidebar month view)
-| Row | Feature | Path |
-|---|---|---|
-| 59 | Mini calendar | `apps/web/components/sidebar/MiniCalendar.tsx` |
-
 ### `relay_advanced` (new flag — gates relay handoff documentation)
 | Row | Feature | Path |
 |---|---|---|
@@ -284,10 +282,13 @@ Existing flags (assumed, from audit description of row 41):
 New flags to add:
 - `motive_integration` — default OFF
 - `trailers` — default OFF
+- `performance` — default OFF (corrected: not previously existing)
+- `driver_app` — default OFF (corrected: not previously existing)
 - `dispatch_board` — default OFF
 - `custom_documents` — default OFF
-- `mini_calendar` — default OFF
 - `relay_advanced` — default OFF
+
+(`mini_calendar` was originally listed as a new flag but was removed 2026-06-05 — see Q1 resolution in Section 5.)
 
 ### Integration config flags (system-wide, not per-org)
 
@@ -363,8 +364,8 @@ For each row above, do one round-trip in a clean test org (not Curzon's data). D
 
 ## 5. Open questions / deltas to revisit
 
-### Q1 — Row 59 (Mini calendar) kept in Later
-Earlier discussion called this a "quiet dispatcher favorite" and the founder flagged it for possible promotion. The final selection kept it Later behind a `mini_calendar` flag. Intentional, or oversight? If intentional, the rationale is presumably: month view is more useful at scale (more loads to scan), so it earns its way into Growth tier rather than Starter.
+### Q1 — Row 59 (Mini calendar) ✅ RESOLVED 2026-06-05
+**Decision: promote to MVP, remove from module-flag schema.** Founder pushback during v2.1 review: MiniCalendar is just the sidebar month-view date picker, not a feature that warrants a billing-tier toggle. Module flags exist for things that cost money to run (Motive), need external infra (driver app), customize the product fundamentally (custom documents), or map to a competitive tier (performance analytics). A date picker is plumbing. Demoted from Section 2 to Section 1 (Sidebar group, Row 59) and removed from the `OrgModule` union.
 
 ### Q2 — Row 41 (Modules settings) in Later, role-gated
 The settled approach: visible only to org owners, with a minimal toggle UI (or empty for now), all tier-controlled flags managed server-side. Verify Claude Code implements the role check correctly so you can still toggle module flags for yourself when needed — and that the page doesn't accidentally surface tier-locked flags to end users.

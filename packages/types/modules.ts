@@ -45,7 +45,6 @@ export type OrgModule =
   | "driver_app"         // gates the driver-mobile companion features (notifications bell, driver-app settings)
   | "dispatch_board"     // gates the real-time Command Center board + the follow-up modal
   | "custom_documents"   // gates document-type customization in settings
-  | "mini_calendar"      // gates the sidebar month-view mini calendar
   | "relay_advanced";    // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -60,7 +59,6 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "driver_app",
   "dispatch_board",
   "custom_documents",
-  "mini_calendar",
   "relay_advanced",
 ] as const;
 
@@ -78,7 +76,6 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   driver_app:         "Driver mobile app",
   dispatch_board:     "Command Center",
   custom_documents:   "Custom document types",
-  mini_calendar:      "Sidebar mini calendar",
   relay_advanced:     "Relay handoff documentation",
 };
 
@@ -95,7 +92,6 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   driver_app:         "Companion mobile app for drivers — push notifications, POD upload from the road, in-app messaging.",
   dispatch_board:     "Real-time Command Center board for active dispatch with quick-action shortcuts and follow-up tasks.",
   custom_documents:   "Define your own document types (custom POD variants, broker-specific paperwork) for upload + tagging.",
-  mini_calendar:      "Month-view mini calendar in the sidebar showing load counts per day and quick jump-to-date.",
   relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
 };
 
