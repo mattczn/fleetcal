@@ -2316,6 +2316,13 @@ function LoadProfitCard({
   fs: (px: number) => number;
 }) {
   const noMiles = load.attributedMiles === 0;
+  // Relay leg revenue is prorated by per-leg loaded_miles. Surface
+  // this with a badge so dispatchers don't think the truck only
+  // earned 60% of the load — it earned its share of a shared run.
+  // Full load price = load.revenue / load.relayShare.
+  const isProrated = load.relayShare != null && load.relayShare > 0 && load.relayShare < 1;
+  const proratedPct = isProrated ? Math.round((load.relayShare ?? 0) * 100) : 0;
+  const fullLoadRev = isProrated ? load.revenue / (load.relayShare ?? 1) : null;
   return (
     <div
       className="flex-shrink-0 rounded-lg p-3"
@@ -2326,8 +2333,24 @@ function LoadProfitCard({
         borderLeft: `3px solid ${accent}`,
       }}
     >
-      <div className="font-semibold truncate" style={{ color: 'var(--gc-text-1)', fontSize: fs(12) }} title={load.title ?? ''}>
-        {load.title ?? '(no title)'}
+      <div className="flex items-start gap-1.5">
+        <div className="font-semibold truncate flex-1 min-w-0" style={{ color: 'var(--gc-text-1)', fontSize: fs(12) }} title={load.title ?? ''}>
+          {load.title ?? '(no title)'}
+        </div>
+        {isProrated ? (
+          <span
+            className="shrink-0 rounded px-1.5 py-0.5 font-semibold uppercase tracking-wider"
+            style={{
+              background: 'rgba(161, 66, 244, 0.12)',
+              color:      '#7e22ce',
+              fontSize:   fs(9),
+              letterSpacing: '0.04em',
+            }}
+            title={`Relay leg — ${proratedPct}% of ${fmtMoney(fullLoadRev ?? 0)} full load revenue, prorated by leg miles`}
+          >
+            Prorated {proratedPct}%
+          </span>
+        ) : null}
       </div>
 
       <div className="mt-2 flex items-baseline gap-2">
@@ -2338,6 +2361,11 @@ function LoadProfitCard({
           {fmtRpm(load.rpmAllIn)} all-in
         </span>
       </div>
+      {isProrated ? (
+        <div className="tabular-nums" style={{ color: 'var(--gc-text-3)', fontSize: fs(10) }}>
+          leg share of {fmtMoney(fullLoadRev ?? 0)} full load
+        </div>
+      ) : null}
       <div className="tabular-nums mt-0.5" style={{ color: 'var(--gc-text-3)', fontSize: fs(11) }}>
         {fmtRpm(load.rpmLoaded)} loaded · {fmtPct(load.deadheadPct)} dh
       </div>

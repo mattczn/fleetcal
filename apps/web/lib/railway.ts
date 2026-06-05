@@ -205,6 +205,10 @@ export interface TimelineProfitabilityLoad {
   rpmLoaded:        number | null;
   rpmAllIn:         number | null;
   deadheadPct:      number | null;
+  /** Present (0..1) only when this load is a relay leg and its revenue
+   *  has been prorated by leg miles. NULL for non-relay loads. UI shows
+   *  a "Prorated 60% of $1k" badge when this is set. */
+  relayShare?:      number | null;
 }
 
 export interface TimelineProfitabilityDay {

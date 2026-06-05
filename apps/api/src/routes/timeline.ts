@@ -233,7 +233,7 @@ interface TimelineEvent {
 interface ProfitabilityLoad {
   eventId:           string;
   title:             string | null;
-  revenue:           number;       // load_price (0 if missing)
+  revenue:           number;       // prorated leg share for relays, full load_price otherwise
   driverPay:         number;       // event.driver_pay (0 if missing)
   netToTruck:        number;       // revenue - driverPay
   loadedMiles:       number;       // sum of movement.miles where link.role='loaded' → this event
@@ -243,6 +243,11 @@ interface ProfitabilityLoad {
   rpmLoaded:         number | null;  // revenue / loadedMiles
   rpmAllIn:          number | null;  // revenue / attributedMiles
   deadheadPct:       number | null;  // inboundDhMiles / attributedMiles (0..1)
+  /** Present (0..1) only when this event is a relay leg and its
+   *  revenue is the prorated leg share. NULL/omitted for non-relay
+   *  loads. The full load price is `revenue / relayShare`. UI shows
+   *  a "Prorated 60%" badge when this is set. */
+  relayShare?:       number | null;
 }
 
 interface ProfitabilityDay {
@@ -581,6 +586,7 @@ function computeProfitability(
       const loadRevenue = e.totalBillable ?? e.loadPrice ?? 0;
       const share = relayShareByEventId.get(e.id) ?? 1;
       const revenue   = loadRevenue * share;
+      const isRelayLeg = relayShareByEventId.has(e.id);
       const driverPay = e.driverPay ?? 0;
       const attributedMiles = acc.loadedMiles + acc.inboundDhMiles;
       const rpmLoaded = acc.loadedMiles > 0 ? revenue / acc.loadedMiles : null;
@@ -599,6 +605,7 @@ function computeProfitability(
         rpmLoaded,
         rpmAllIn,
         deadheadPct,
+        relayShare:      isRelayLeg ? share : null,
       };
     });
 
