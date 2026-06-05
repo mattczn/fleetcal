@@ -68,7 +68,7 @@ type NavItem = NavLeaf | NavGroup;
 const PRIMARY_NAV: NavItem[] = [
   { kind: 'leaf', href: '/calendar',    label: 'Calendar',       icon: Calendar,        cap: 'loads.view' },
   { kind: 'leaf', href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
+  { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view',        module: 'dispatch_board' },
   { kind: 'leaf', href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
   { kind: 'leaf', href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
   {
@@ -85,7 +85,7 @@ const PRIMARY_NAV: NavItem[] = [
     ],
   },
   { kind: 'leaf', href: '/payroll',     label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },
-  { kind: 'leaf', href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view' },
+  { kind: 'leaf', href: '/drivers',     label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },
 ];
 
 const SECONDARY_NAV: NavItem[] = [

@@ -25,6 +25,7 @@ import {
   type DocumentTypeConfig,
   DOCUMENT_KINDS,
   DRIVER_HIDDEN_DOC_KINDS,
+  MVP_LAUNCH_DEFAULTS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -55,13 +56,20 @@ orgSettings.get("/", async (c) => {
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
   } | null;
+  // orgModules fallback when no row exists yet: return MVP launch
+  // defaults (5 core flags ON + 7 MVP-launch additions OFF) so a
+  // brand-new org's DataLoader hydrate immediately sees the locked
+  // MVP view. Existing orgs (Curzon) hit the `row?.modules` branch —
+  // their stored 5-flag map keeps absent-key-as-enabled semantics
+  // for the 7 new flags, so they continue seeing everything ON
+  // without any row migration.
   const res: GetOrgSettingsResponse = {
     settings: {
       showDriverPay:         row?.show_driver_pay         ?? false,
       rateConSettings:       row?.rate_con_settings       ?? {},
       invoiceSettings:       row?.invoice_settings        ?? {},
       roleOverrides:         row?.role_overrides          ?? {},
-      orgModules:            row?.modules                 ?? {},
+      orgModules:            row?.modules                 ?? MVP_LAUNCH_DEFAULTS,
       driverVisibleDocKinds: row?.driver_visible_doc_kinds ?? null,
       documentTypes:         row?.document_types          ?? null,
       notificationRules:     row?.notification_rules      ?? null,
@@ -157,9 +165,17 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // Module flags merge — single-toggle PATCH ships e.g. {fuel: false}
   // and the API preserves the rest of the map. Reset to defaults by
   // sending an empty object.
+  //
+  // When no existing row, seed the merge base with MVP_LAUNCH_DEFAULTS
+  // so a brand-new org's first-write creates the row with the full
+  // 12-flag MVP-locked default, not a sparse `{toggledField: value}`
+  // that would leave the 7 new flags absent and silently re-enabled.
+  // Existing orgs (Curzon) hit the `existingRow?.modules` branch and
+  // their stored 5-flag map merges in unchanged.
+  const moduleMergeBase: OrgModuleFlags = existingRow?.modules ?? MVP_LAUNCH_DEFAULTS;
   const mergedModules: OrgModuleFlags = body.orgModules === undefined
-    ? (existingRow?.modules ?? {})
-    : { ...(existingRow?.modules ?? {}), ...body.orgModules };
+    ? moduleMergeBase
+    : { ...moduleMergeBase, ...body.orgModules };
   // driverVisibleDocKinds is a full REPLACE — kept for backwards-compat
   // with older clients. New clients should send documentTypes instead.
   const nextDriverVisibleDocKinds: string[] | null =

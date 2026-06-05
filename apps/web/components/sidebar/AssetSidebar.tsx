@@ -293,12 +293,12 @@ interface PageNavLink {
 
 const PAGE_NAV: PageNavLink[] = [
   { href: '/dashboard',  label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
+  { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view',        module: 'dispatch_board' },
   { href: '/closeout',   label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
   { href: '/accounting', label: 'Accounting',     icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
   { href: '/equipment?tab=maintenance', label: 'Equipment', icon: Package, cap: 'maintenance.access', module: 'maintenance', matchPrefix: true },
   { href: '/payroll',    label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },
-  { href: '/drivers',    label: 'Drivers',        icon: Gauge,           cap: 'drivers.view' },
+  { href: '/drivers',    label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },
 ];
 
 function PageNavSection() {

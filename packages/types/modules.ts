@@ -113,3 +113,39 @@ export function isModuleEnabled(
   if (!flags) return true;
   return flags[module] !== false;
 }
+
+/**
+ * The flag set for a brand-new org signing up after the MVP launch
+ * (Friday 2026-06-12). Returned by GET /v1/org-settings when no row
+ * exists yet, and used as the base for the PATCH upsert merge on a
+ * first-write so the row gets seeded with explicit `false` for the
+ * 7 MVP-launch additions instead of leaving them absent (= enabled).
+ *
+ * Existing orgs (pre-2026-06-12, e.g. Curzon) keep working without
+ * a row migration because the 7 new flag keys are simply absent from
+ * their stored modules JSONB, and `isModuleEnabled` treats absent
+ * as enabled. So this constant changes behaviour ONLY for new orgs.
+ *
+ * To upgrade a customer's tier later, PATCH the specific flags from
+ * `false` to `true` via Settings → Modules (or a Stripe webhook).
+ */
+export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
+  | "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
+  | "motive_integration" | "trailers" | "performance" | "driver_app"
+  | "dispatch_board" | "custom_documents" | "relay_advanced"
+>> = {
+  // Pre-launch core modules — ON for MVP
+  closeout:           true,
+  accounting:         true,
+  fuel:               true,
+  payroll:            true,
+  maintenance:        true,
+  // MVP-launch additions — OFF by default, flip ON via tier upgrade
+  motive_integration: false,
+  trailers:           false,
+  performance:        false,
+  driver_app:         false,
+  dispatch_board:     false,
+  custom_documents:   false,
+  relay_advanced:     false,
+};
