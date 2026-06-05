@@ -1378,20 +1378,49 @@ timeline.post("/assets/:assetId/auto-link", requireCapability("loads.edit"), asy
     `Classify every cluster above via submit_cluster_links.`,
   ].join("\n");
 
-  // ── Call Claude ─────────────────────────────────────────────────
+  // ── Call Claude with retry on transient errors ──────────────────
+  // Anthropic returns these statuses with x-should-retry: true:
+  //   429 — per-org rate limit
+  //   503 — service unavailable
+  //   529 — overloaded (Claude itself is at capacity)
+  // The week-relink button fires 7 calls in parallel and lands on
+  // 529s frequently during busy hours. Up to 4 attempts with
+  // jittered exponential backoff (1s, 2s, 4s, 8s) gives Claude time
+  // to recover without making the user click again.
   let response;
-  try {
-    response = await anthropic.messages.create({
-      model:      AI_MODEL,
-      max_tokens: 8000,
-      system:     [{ type: "text", text: AUTO_LINK_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-      tools:      [AUTO_LINK_TOOL],
-      tool_choice: { type: "tool", name: "submit_cluster_links" },
-      messages:   [{ role: "user", content: userMessage }],
-    });
-  } catch (err) {
-    console.error("[timeline auto-link] anthropic call failed:", err);
-    return c.json({ error: "ai_failed", detail: (err as Error).message } satisfies ApiErrorResponse, 500);
+  const RETRIABLE = new Set([429, 503, 529]);
+  const MAX_ATTEMPTS = 4;
+  let lastErr: Error | null = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      response = await anthropic.messages.create({
+        model:      AI_MODEL,
+        max_tokens: 8000,
+        system:     [{ type: "text", text: AUTO_LINK_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+        tools:      [AUTO_LINK_TOOL],
+        tool_choice: { type: "tool", name: "submit_cluster_links" },
+        messages:   [{ role: "user", content: userMessage }],
+      });
+      break; // success
+    } catch (err) {
+      lastErr = err as Error;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const status = (err as any)?.status as number | undefined;
+      if (status && RETRIABLE.has(status) && attempt < MAX_ATTEMPTS) {
+        const baseMs = 1000 * Math.pow(2, attempt - 1);
+        const jitter = Math.floor(Math.random() * 500);
+        const waitMs = baseMs + jitter;
+        console.warn(`[timeline auto-link] Anthropic ${status} attempt ${attempt}/${MAX_ATTEMPTS} — retrying after ${waitMs}ms`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      // Non-retriable or out of retries.
+      console.error("[timeline auto-link] anthropic call failed:", err);
+      return c.json({ error: "ai_failed", detail: (err as Error).message } satisfies ApiErrorResponse, 500);
+    }
+  }
+  if (!response) {
+    return c.json({ error: "ai_failed", detail: lastErr?.message ?? "no response after retries" } satisfies ApiErrorResponse, 500);
   }
 
   const toolUse = response.content.find((b) => b.type === "tool_use");
