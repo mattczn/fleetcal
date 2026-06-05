@@ -545,6 +545,9 @@ export default function DashboardView() {
   // YYYY-MM-DD (no time portion — Mudflap receipts are date-only) and
   // a generous limit since this is a sum, not a paged display.
   const [fuelSpend, setFuelSpend] = useState<number | null>(null);
+  // Per-asset fuel totals — feeds the Revenue by Asset cost overlay.
+  // Built from the same transaction fetch so we don't double-call the API.
+  const [fuelByAsset, setFuelByAsset] = useState<Map<number, number>>(new Map());
   useEffect(() => {
     if (!dbReady) return;
     let cancelled = false;
@@ -557,10 +560,16 @@ export default function DashboardView() {
         );
         if (cancelled) return;
         const sum = fuelTransactions.reduce((s, t) => s + (t.totalCharged ?? 0), 0);
+        const byAsset = new Map<number, number>();
+        for (const t of fuelTransactions) {
+          if (t.assetId == null) continue;
+          byAsset.set(t.assetId, (byAsset.get(t.assetId) ?? 0) + (t.totalCharged ?? 0));
+        }
         setFuelSpend(sum);
+        setFuelByAsset(byAsset);
       } catch (err) {
         console.error('[DashboardView] listFuelTransactions failed:', err);
-        if (!cancelled) setFuelSpend(0);
+        if (!cancelled) { setFuelSpend(0); setFuelByAsset(new Map()); }
       }
     })();
     return () => { cancelled = true; };
@@ -834,6 +843,43 @@ export default function DashboardView() {
   // attribute the full price to the single asset that ran them.
   // Falls back to a 50/50 split when one of the legs has no usable
   // geocoded stops.
+  // Per-asset driver pay totals — sourced from loadSummaries (one entry
+  // per load), splitting by leg. pickup_driver_pay goes to pickupAssetId,
+  // delivery_driver_pay goes to deliveryAssetId. For non-relay loads
+  // both fields point at the same asset so the totals work out the
+  // same. Mirrors how the payroll backfill computed weekly totals.
+  const payrollByAsset = useMemo(() => {
+    const m = new Map<number, number>();
+    if (!loadSummaries) return m;
+    for (const l of loadSummaries) {
+      if (l.pickupAssetId != null && l.pickupDriverPay != null) {
+        m.set(l.pickupAssetId, (m.get(l.pickupAssetId) ?? 0) + l.pickupDriverPay);
+      }
+      if (l.deliveryAssetId != null && l.deliveryDriverPay != null && l.deliveryAssetId !== l.pickupAssetId) {
+        m.set(l.deliveryAssetId, (m.get(l.deliveryAssetId) ?? 0) + l.deliveryDriverPay);
+      }
+    }
+    return m;
+  }, [loadSummaries]);
+
+  // Cost-overlay visibility on the Revenue by Asset chart. Persisted in
+  // localStorage so the dispatcher's preference survives reloads. Both
+  // off by default so first-time users see the clean bar layout.
+  const [showFuelOverlay, setShowFuelOverlay]       = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('dashboard.assetChart.showFuel') === '1';
+  });
+  const [showPayrollOverlay, setShowPayrollOverlay] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('dashboard.assetChart.showPayroll') === '1';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('dashboard.assetChart.showFuel', showFuelOverlay ? '1' : '0');
+  }, [showFuelOverlay]);
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('dashboard.assetChart.showPayroll', showPayrollOverlay ? '1' : '0');
+  }, [showPayrollOverlay]);
+
   const revenueByAsset = useMemo(() => {
     // Index relay legs by group so we can find the partner cheaply.
     const partnerByGroup = new Map<string, CalendarEvent>();
@@ -883,15 +929,20 @@ export default function DashboardView() {
           // the dashboard "loads" KPI uses the dedup'd list separately.
           loads += 0.5;
         }
+        const fuel    = fuelByAsset.get(asset.id) ?? 0;
+        const payroll = payrollByAsset.get(asset.id) ?? 0;
         return {
           asset,
           revenue,
           loads,
           miles: 0,
+          fuel,
+          payroll,
+          net: revenue - fuel - payroll,
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [assets, filtered, unassignedAssetId, pStart, pEnd]);
+  }, [assets, filtered, unassignedAssetId, pStart, pEnd, fuelByAsset, payrollByAsset]);
 
 
   // ── Sortable weekly loads list ──
@@ -1285,47 +1336,128 @@ export default function DashboardView() {
           {/* Revenue by Asset + Revenue by Broker */}
           <div className="grid grid-cols-2 gap-4">
             <Card>
-              <CardTitle>Revenue by Asset</CardTitle>
+              <div className="flex items-center justify-between mb-3">
+                <CardTitle>Revenue by Asset</CardTitle>
+                {/* Cost overlay toggles — show fuel and payroll as
+                    secondary bars beneath the revenue bar so a
+                    dispatcher can eyeball margin per truck. */}
+                <div className="flex items-center gap-3 text-[11px]" style={{ color: 'var(--gc-text-2)' }}>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showPayrollOverlay}
+                      onChange={(e) => setShowPayrollOverlay(e.target.checked)}
+                      style={{ accentColor: '#5e35b1' }}
+                    />
+                    <span style={{ color: '#5e35b1', fontWeight: 600 }}>Payroll</span>
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showFuelOverlay}
+                      onChange={(e) => setShowFuelOverlay(e.target.checked)}
+                      style={{ accentColor: '#ea4335' }}
+                    />
+                    <span style={{ color: '#ea4335', fontWeight: 600 }}>Fuel</span>
+                  </label>
+                </div>
+              </div>
               {revenueByAsset.length === 0 ? (
                 <Empty label="No load data for this period" />
               ) : (
                 <>
                   <div className="space-y-3">
-                    {revenueByAsset.map(({ asset, revenue, loads }) => {
-                      const pct = (revenue / maxAssetRev) * 100;
+                    {revenueByAsset.map(({ asset, revenue, loads, fuel, payroll, net }) => {
+                      const pctRev     = (revenue / maxAssetRev) * 100;
+                      const pctPayroll = (payroll / maxAssetRev) * 100;
+                      const pctFuel    = (fuel    / maxAssetRev) * 100;
+                      const showOverlays = showPayrollOverlay || showFuelOverlay;
                       const assetLabel = asset.unit
                         ? `#${asset.unit} · ${asset.name}`
                         : asset.name;
-                      // loads can be a half-step (relay legs are 0.5 each).
-                      // Round to 1 decimal only when fractional so whole
-                      // counts still render as integers.
                       const loadsLabel = loads % 1 === 0
                         ? `${loads} load${loads !== 1 ? 's' : ''}`
                         : `${loads.toFixed(1)} loads`;
                       return (
-                        <div key={asset.id} className="flex items-center gap-3">
+                        <div key={asset.id} className="flex items-start gap-3">
                           <div
                             className="w-[120px] shrink-0 text-[13px] truncate font-medium"
-                            style={{ color: 'var(--gc-text-1)' }}
+                            style={{ color: 'var(--gc-text-1)', lineHeight: '20px' }}
                             title={assetLabel}
                           >
                             {assetLabel}
                           </div>
-                          <div className="flex-1 h-5 relative flex items-center">
-                            <div
-                              className="absolute rounded"
-                              style={{
-                                width: `${pct}%`, height: 7,
-                                background: asset.color,
-                                top: '50%', transform: 'translateY(-50%)',
-                                minWidth: revenue > 0 ? 4 : 0,
-                              }}
-                            />
+                          {/* Bar column — revenue bar on top, optional
+                              cost bars stacked beneath. Each bar is
+                              scaled to maxAssetRev so they read against
+                              the same scale. */}
+                          <div className="flex-1 flex flex-col gap-0.5 py-0.5">
+                            <div className="h-3 relative">
+                              <div
+                                className="absolute rounded"
+                                style={{
+                                  width: `${pctRev}%`, height: 7,
+                                  background: asset.color,
+                                  top: '50%', transform: 'translateY(-50%)',
+                                  minWidth: revenue > 0 ? 4 : 0,
+                                }}
+                                title={`Revenue: ${fmt(revenue)}`}
+                              />
+                            </div>
+                            {showPayrollOverlay ? (
+                              <div className="h-2 relative">
+                                <div
+                                  className="absolute rounded"
+                                  style={{
+                                    width: `${pctPayroll}%`, height: 4,
+                                    background: '#5e35b1',
+                                    top: '50%', transform: 'translateY(-50%)',
+                                    minWidth: payroll > 0 ? 4 : 0,
+                                  }}
+                                  title={`Payroll: ${fmt(payroll)}`}
+                                />
+                              </div>
+                            ) : null}
+                            {showFuelOverlay ? (
+                              <div className="h-2 relative">
+                                <div
+                                  className="absolute rounded"
+                                  style={{
+                                    width: `${pctFuel}%`, height: 4,
+                                    background: '#ea4335',
+                                    top: '50%', transform: 'translateY(-50%)',
+                                    minWidth: fuel > 0 ? 4 : 0,
+                                  }}
+                                  title={`Fuel: ${fmt(fuel)}`}
+                                />
+                              </div>
+                            ) : null}
                           </div>
-                          <div className="text-[13px] font-semibold shrink-0 text-right" style={{ color: 'var(--gc-text-1)', minWidth: 64 }}>
-                            {fmt(revenue)}
+                          <div className="shrink-0 text-right flex flex-col" style={{ minWidth: 70 }}>
+                            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)', lineHeight: '20px' }}>
+                              {fmt(revenue)}
+                            </span>
+                            {showPayrollOverlay ? (
+                              <span className="text-[11px] tabular-nums" style={{ color: '#5e35b1', lineHeight: '14px' }}>
+                                −{fmt(payroll)}
+                              </span>
+                            ) : null}
+                            {showFuelOverlay ? (
+                              <span className="text-[11px] tabular-nums" style={{ color: '#ea4335', lineHeight: '14px' }}>
+                                −{fmt(fuel)}
+                              </span>
+                            ) : null}
+                            {showOverlays ? (
+                              <span
+                                className="text-[11px] tabular-nums font-semibold"
+                                style={{ color: net >= 0 ? '#1e8e3e' : '#d93025', lineHeight: '14px', borderTop: '1px dashed var(--gc-border-light)', paddingTop: 1, marginTop: 1 }}
+                                title="Revenue − payroll − fuel"
+                              >
+                                {fmt(net)}
+                              </span>
+                            ) : null}
                           </div>
-                          <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60 }}>
+                          <div className="text-xs shrink-0 text-right" style={{ color: 'var(--gc-text-3)', minWidth: 60, lineHeight: '20px' }}>
                             {loadsLabel}
                           </div>
                         </div>
