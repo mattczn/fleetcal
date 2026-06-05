@@ -89,7 +89,7 @@ export default function LearningCenter() {
             <ProgressRing pct={pct} size={38} stroke={3.5} />
             <div className="flex-1 min-w-0">
               <p className="text-[14px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                Get started with Curzon Dispatch
+                Get started with FleetCal
               </p>
               <p className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
                 {completedCount} of {totalSteps} completed

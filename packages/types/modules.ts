@@ -134,12 +134,18 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   | "motive_integration" | "trailers" | "performance" | "driver_app"
   | "dispatch_board" | "custom_documents" | "relay_advanced"
 >> = {
-  // Pre-launch core modules — ON for MVP
+  // Pre-launch core modules
+  // - closeout / accounting / payroll: core to the rate-con-to-paid
+  //   hero workflow → ON.
+  // - fuel / maintenance: Equipment workflows (Maintenance / Inspections /
+  //   Fuel sub-tabs) are explicitly out of MVP scope per founder
+  //   definition → OFF. Hides the Equipment nav group entirely for new
+  //   orgs via the existing module: 'maintenance' gate in AppSidebar.
   closeout:           true,
   accounting:         true,
-  fuel:               true,
   payroll:            true,
-  maintenance:        true,
+  fuel:               false,
+  maintenance:        false,
   // MVP-launch additions — OFF by default, flip ON via tier upgrade
   motive_integration: false,
   trailers:           false,

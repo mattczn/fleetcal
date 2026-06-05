@@ -14,8 +14,8 @@ const font = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: 'Curzon Dispatch',
-  description: 'Curzon Trucking dispatch scheduling',
+  title: 'FleetCal',
+  description: 'The TMS built by a 13-truck fleet owner, for fleets like yours.',
 };
 
 const darkModeCSS = `
