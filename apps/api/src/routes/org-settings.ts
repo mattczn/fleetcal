@@ -56,20 +56,30 @@ orgSettings.get("/", async (c) => {
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
   } | null;
-  // orgModules fallback when no row exists yet: return MVP launch
-  // defaults (5 core flags ON + 7 MVP-launch additions OFF) so a
-  // brand-new org's DataLoader hydrate immediately sees the locked
-  // MVP view. Existing orgs (Curzon) hit the `row?.modules` branch —
-  // their stored 5-flag map keeps absent-key-as-enabled semantics
-  // for the 7 new flags, so they continue seeing everything ON
-  // without any row migration.
+  // orgModules fallback: return MVP launch defaults when either (a) no
+  // row exists at all, or (b) a row exists but `modules` is null /
+  // empty `{}`. The empty-object case fires when a settings PATCH ran
+  // against a brand-new org BEFORE this file's PATCH handler started
+  // seeding with MVP_LAUNCH_DEFAULTS — that path used to write
+  // `modules: {}`, and an empty-object isn't caught by `??`, so without
+  // this check the org silently saw absent-key-as-enabled for every
+  // module (all features re-enabled) for the lifetime of the row.
+  //
+  // Curzon's row has the OLD 5-flag default ({closeout:true, ...,
+  // maintenance:true}) — that's >0 keys, so this branch returns it
+  // unchanged and Curzon keeps absent-key-as-enabled for the 7 new
+  // flags = everything ON. No migration needed.
+  const storedModules    = row?.modules ?? null;
+  const hasStoredModules = storedModules !== null && Object.keys(storedModules).length > 0;
+  const orgModulesOut    = hasStoredModules ? storedModules! : MVP_LAUNCH_DEFAULTS;
+
   const res: GetOrgSettingsResponse = {
     settings: {
       showDriverPay:         row?.show_driver_pay         ?? false,
       rateConSettings:       row?.rate_con_settings       ?? {},
       invoiceSettings:       row?.invoice_settings        ?? {},
       roleOverrides:         row?.role_overrides          ?? {},
-      orgModules:            row?.modules                 ?? MVP_LAUNCH_DEFAULTS,
+      orgModules:            orgModulesOut,
       driverVisibleDocKinds: row?.driver_visible_doc_kinds ?? null,
       documentTypes:         row?.document_types          ?? null,
       notificationRules:     row?.notification_rules      ?? null,
@@ -166,13 +176,19 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // and the API preserves the rest of the map. Reset to defaults by
   // sending an empty object.
   //
-  // When no existing row, seed the merge base with MVP_LAUNCH_DEFAULTS
-  // so a brand-new org's first-write creates the row with the full
-  // 12-flag MVP-locked default, not a sparse `{toggledField: value}`
-  // that would leave the 7 new flags absent and silently re-enabled.
-  // Existing orgs (Curzon) hit the `existingRow?.modules` branch and
-  // their stored 5-flag map merges in unchanged.
-  const moduleMergeBase: OrgModuleFlags = existingRow?.modules ?? MVP_LAUNCH_DEFAULTS;
+  // Seed the merge base with MVP_LAUNCH_DEFAULTS when there's no
+  // existing row OR when an existing row has an empty `{}` modules
+  // map. The empty-object case fires for orgs whose row was created
+  // by a PATCH that ran BEFORE this seeding logic was deployed —
+  // without this check, those orgs would have absent keys for every
+  // flag (silently re-enabled per isModuleEnabled semantics) for the
+  // lifetime of the row. Curzon's stored 5-flag map has keys, so
+  // hits the `existingRow?.modules` branch and merges in unchanged.
+  const existingStored   = existingRow?.modules ?? null;
+  const hasExistingFlags = existingStored !== null && Object.keys(existingStored).length > 0;
+  const moduleMergeBase: OrgModuleFlags = hasExistingFlags
+    ? existingStored!
+    : MVP_LAUNCH_DEFAULTS;
   const mergedModules: OrgModuleFlags = body.orgModules === undefined
     ? moduleMergeBase
     : { ...moduleMergeBase, ...body.orgModules };
