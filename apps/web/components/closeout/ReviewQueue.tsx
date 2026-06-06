@@ -878,6 +878,34 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     setMergeSelection(new Set());
   };
 
+  // Promote a kind='rate_con' doc to primary — server mirrors
+  // loads.rate_con_pdf onto its storage_path, then we refetch so the
+  // sidebar's Primary badge + the viewer's default doc both reflect
+  // the new selection.
+  const handleSetRateConPrimary = async (docId: string): Promise<void> => {
+    if (!loadId) return;
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
+      await railway.setRateConPrimary(docId);
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, true);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) {
+        setDocs(fresh.docs);
+        setRateConUrl(fresh.rateConUrl);
+        // Drop secondary-rate-con override so the viewer falls back
+        // to the new primary (rateConUrl) on next render. Without
+        // this, the panel would still show whatever historical
+        // rate-con the user was looking at when they clicked.
+        setSecondaryRateConUrl(null);
+        setActiveRateConId(null);
+      }
+    } catch (err) {
+      console.error('[set-rate-con-primary] failed', err);
+      alert(`Make primary failed: ${(err as Error).message ?? 'Unknown error'}`);
+    }
+  };
+
   // Sentinel id for the primary rate-con (loads.rate_con_pdf). When
   // the rate con isn't represented by a kind=rate_con row in
   // load_documents — which is the case for legacy loads + the
@@ -928,6 +956,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     () => docs.filter(d => d.kind !== 'rate_con'),
     [docs],
   );
+  // Which rate-con is currently primary? Server-side rule:
+  // POST /v1/loads/:id/documents mirrors loads.rate_con_pdf to each
+  // new rate_con upload, so most-recent-uploadedAt wins. Mirror that
+  // here so the sidebar's Primary badge + the Manage Documents
+  // dialog's Primary badge agree on which file the packet uses.
+  // Falls back to the synthetic when no real kind='rate_con' rows
+  // exist (legacy loads that haven't seen an upload through the new
+  // preserve-then-mirror flow yet).
+  const primaryRateConId = useMemo<string | undefined>(() => {
+    const real = rateConDocs.filter(x => x.id !== RATE_CON_PRIMARY_ID);
+    if (real.length > 0) {
+      return [...real].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0].id;
+    }
+    return rateConDocs.some(x => x.id === RATE_CON_PRIMARY_ID) ? RATE_CON_PRIMARY_ID : undefined;
+  }, [rateConDocs]);
   // Visual split: invoices render in their own section above Documents
   // so the dispatcher can find the generated invoice PDF without
   // hunting through PODs / BOLs / scales. Both lists still index into
@@ -1988,25 +2031,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     style={{ color: 'var(--gc-text-3)' }}>
                     Rate Confirmations · {rateConDocs.length}
                   </div>
-                  {(() => {
-                  // Compute which rate-con is "primary" — i.e. the
-                  // one the invoice packet uses. Server-side rule:
-                  // POST /v1/loads/:id/documents mirrors
-                  // loads.rate_con_pdf onto each new rate_con
-                  // upload, so the most recent rate-con wins. Mirror
-                  // that here by picking the latest uploadedAt
-                  // (falls back to the synthetic when no real rows
-                  // exist). Drives the "Primary" badge below.
-                  const realConDocs = rateConDocs.filter(x => x.id !== RATE_CON_PRIMARY_ID);
-                  const primaryId   = realConDocs.length > 0
-                    ? [...realConDocs].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0].id
-                    : RATE_CON_PRIMARY_ID;
-                  return (
                   <div className="space-y-1">
                     {rateConDocs.map((d) => {
                       const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
                       const isVirtual = d.id === RATE_CON_PRIMARY_ID;
-                      const isPrimary = d.id === primaryId;
+                      const isPrimary = d.id === primaryRateConId;
                       // The canonical highlights when nothing else is
                       // explicitly selected (activeRateConId === null),
                       // matching the default left-viewer state.
@@ -2090,8 +2119,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       );
                     })}
                   </div>
-                  );
-                  })()}
                 </div>
               )}
 
@@ -2593,6 +2620,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           // mirrors there instantly.
           includedIds={includedDocIds}
           onToggleIncluded={(id) => setInvoiceInclude(id, !includedDocIds.has(id))}
+          // Surface the Primary rate-con badge + Make Primary button
+          // inside the dialog. Excludes the virtual sentinel id
+          // because the virtual row doesn't even render inside the
+          // dialog (it's not a real load_documents row).
+          primaryRateConId={primaryRateConId !== RATE_CON_PRIMARY_ID ? primaryRateConId : undefined}
+          onSetRateConPrimary={handleSetRateConPrimary}
           kindOptions={KIND_OPTIONS}
           // Pending kind picker — when the user clicks "+ Add document"
           // and picks files, the OS file picker fires (via pickFile).
@@ -2983,6 +3016,8 @@ function DocSelectionDialog({
   onConvertSelected,
   includedIds,
   onToggleIncluded,
+  primaryRateConId,
+  onSetRateConPrimary,
   kindOptions,
   pendingArea,
   zIndex = 240,
@@ -3055,6 +3090,13 @@ function DocSelectionDialog({
   /** Flip a doc's invoice-include state. Parent owns the actual state
    *  (includedDocIds); we just bubble the click up. */
   onToggleIncluded?: (id: string) => void;
+  /** Id of the kind='rate_con' doc that's currently the load's
+   *  primary (i.e. backs loads.rate_con_pdf). Drives the "Primary"
+   *  badge + the "Make Primary" button on each rate-con row. */
+  primaryRateConId?: string;
+  /** Promote a kind='rate_con' doc to primary. Click handler for the
+   *  "Make Primary" button. Parent fires the PATCH + refetch. */
+  onSetRateConPrimary?: (id: string) => Promise<void>;
   /** Drives the kind <select> options in manageMode. Same shape as the
    *  parent's KIND_OPTIONS constant. ReadonlyArray so the parent's
    *  `as const` literal is assignable without a defensive copy. */
@@ -3312,6 +3354,21 @@ function DocSelectionDialog({
                         </span>
                       )}
 
+                      {/* Primary rate-con badge — only on the doc whose
+                          storage_path matches loads.rate_con_pdf. Same
+                          pill recipe as the Invoice badge so they read
+                          as a family. */}
+                      {d.kind === 'rate_con' && d.id === primaryRateConId && (
+                        <span className="flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                          style={{
+                            background: '#dcfce7', color: '#166534',
+                            border: '1px solid #86efac', borderRadius: 999,
+                          }}
+                          title="This rate-con is the one the invoice packet uses">
+                          <CheckCircle2 size={11} /> Primary
+                        </span>
+                      )}
+
                       {/* Filename — inline editable in manageMode rename
                           state; otherwise a click on the row toggles the
                           checkbox via label-for. In manage mode we
@@ -3375,6 +3432,32 @@ function DocSelectionDialog({
                               is auto-mirrored on every upload), so
                               giving the user a toggle here would imply
                               control they don't actually have. */}
+                          {/* Make Primary — only on non-primary
+                              rate-cons. Demotes whichever rate-con
+                              is currently primary by mirroring
+                              loads.rate_con_pdf onto this row's
+                              storage_path. Pill recipe matches the
+                              Invoice toggle's gray-when-off state so
+                              the actionable nature reads as "click
+                              me to switch state." */}
+                          {d.kind === 'rate_con'
+                            && onSetRateConPrimary
+                            && d.id !== primaryRateConId
+                            && (
+                              <button type="button"
+                                onClick={async e => { e.stopPropagation(); await onSetRateConPrimary(d.id); }}
+                                disabled={busy || isPending}
+                                className="flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 transition-colors disabled:opacity-50"
+                                style={{
+                                  background: 'transparent',
+                                  color:      'var(--gc-text-2)',
+                                  border:     '1px solid var(--gc-border)',
+                                  borderRadius: 999,
+                                }}
+                                title="Promote this rate-con to primary (invoice packet will use it)">
+                                Make Primary
+                              </button>
+                            )}
                           {includedIds && onToggleIncluded && d.kind !== 'rate_con' && (() => {
                             const isOn = includedIds.has(d.id);
                             return (

@@ -70,16 +70,26 @@ documents.get("/:id/url", async (c) => {
 documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
-  const body = await c.req.json<{ fileName?: string; kind?: string; includedInInvoice?: boolean | null }>();
+  const body = await c.req.json<{
+    fileName?: string;
+    kind?: string;
+    includedInInvoice?: boolean | null;
+    /** When true on a kind='rate_con' doc, points loads.rate_con_pdf
+     *  at this doc's storage_path — making it the load's "primary"
+     *  rate-con (the one the invoice packet uses + the closeout
+     *  viewer defaults to). Doesn't touch any other column. */
+    setAsRateConPrimary?: boolean;
+  }>();
 
   const hasName     = body.fileName !== undefined && body.fileName !== null;
   const hasKind     = body.kind !== undefined && body.kind !== null;
   // includedInInvoice may legitimately be sent as `null` to reset
   // back to the heuristic, so the presence check uses `in` semantics.
   const hasInclude  = Object.prototype.hasOwnProperty.call(body, 'includedInInvoice');
-  if (!hasName && !hasKind && !hasInclude) {
+  const hasPromote  = body.setAsRateConPrimary === true;
+  if (!hasName && !hasKind && !hasInclude && !hasPromote) {
     return c.json(
-      { error: "validation_failed", errors: ["fileName, kind, or includedInInvoice required"] } satisfies ApiErrorResponse,
+      { error: "validation_failed", errors: ["fileName, kind, includedInInvoice, or setAsRateConPrimary required"] } satisfies ApiErrorResponse,
       400,
     );
   }
@@ -109,7 +119,7 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   // and miss the auto-rename opportunity.
   const { data: existing, error: readErr } = await supabase
     .from("load_documents")
-    .select("file_name, kind, load_id, event_id")
+    .select("file_name, kind, load_id, event_id, storage_path")
     .eq("id", docId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -118,7 +128,37 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
     return c.json({ error: "fetch_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
   }
   if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
-  const row = existing as { file_name: string; kind: string; load_id: string | null; event_id: string | null };
+  const row = existing as { file_name: string; kind: string; load_id: string | null; event_id: string | null; storage_path: string };
+
+  // Promote-to-primary path: only legal on a kind='rate_con' row
+  // that already has a load. We mirror loads.rate_con_pdf to this
+  // doc's storage_path so the closeout viewer + the invoice packet
+  // see this file as the primary. No other column changes.
+  if (hasPromote) {
+    if (row.kind !== "rate_con") {
+      return c.json(
+        { error: "validation_failed", errors: ["setAsRateConPrimary requires kind='rate_con'"] } satisfies ApiErrorResponse,
+        400,
+      );
+    }
+    if (!row.load_id) {
+      return c.json(
+        { error: "validation_failed", errors: ["doc has no load_id — cannot promote"] } satisfies ApiErrorResponse,
+        400,
+      );
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: mirrorErr } = await supabase
+      .from("loads")
+      .update({ rate_con_pdf: row.storage_path } as any)
+      .eq("id", row.load_id)
+      .eq("org_id", orgId);
+    if (mirrorErr) {
+      console.error("[PATCH /v1/documents/:id] promote mirror failed:", mirrorErr);
+      return c.json({ error: "update_failed", detail: mirrorErr.message } satisfies ApiErrorResponse, 500);
+    }
+    return c.json({ ok: true } as { ok: true });
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {};

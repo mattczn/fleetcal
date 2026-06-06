@@ -629,6 +629,13 @@ class RailwayClient {
   updateDocumentInvoiceInclude(documentId: string, includedInInvoice: boolean | null) {
     return this.req<{ ok: true }>('PATCH', `/v1/documents/${documentId}`, { includedInInvoice });
   }
+  /** Promote a kind='rate_con' doc to the load's primary rate-con —
+   *  points loads.rate_con_pdf at the doc's storage_path so the
+   *  invoice packet + closeout viewer use it. Only valid on
+   *  kind='rate_con' rows. */
+  setRateConPrimary(documentId: string) {
+    return this.req<{ ok: true }>('PATCH', `/v1/documents/${documentId}`, { setAsRateConPrimary: true });
+  }
   /** Change a document's kind. When fileName is omitted, the server
    *  auto-renames the display fileName to match the new kind using
    *  the same {LOAD_NUM}_{KIND}{_N}.{ext} convention as upload. */
