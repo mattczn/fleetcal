@@ -41,6 +41,7 @@ import {
   moneyFmt, fmtShortDate, daysSince,
 } from '@/components/queue/QueueTablePrimitives';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import type {
   Invoice, InvoiceStatus, Customer, LoadSummary,
   BatchGenerateInvoicesResponse, BatchSendInvoicesResponse,
@@ -63,6 +64,7 @@ const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ s
 type ColKey =
   | 'internalId' | 'loadNum' | 'customer' | 'driver' | 'truck' | 'title'
   | 'rate' | 'accessorials' | 'total'
+  | 'stops' | 'miles' | 'rpm'
   | 'docs'
   | 'age' | 'pickupAt' | 'deliveryAt' | 'released' | 'issued' | 'due' | 'paidAt'
   | 'method' | 'sendTo' | 'status'
@@ -91,11 +93,16 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
   rate:         110,
   accessorials: 130,
   total:        120,
+  stops:         70,
+  miles:         80,
+  rpm:           80,
   docs:         240,
   status:       110,
-  // flags now carries 3 controls (star + notes + view/docs) so it
-  // needs more horizontal room than the original star-only cell.
-  flags:        150,
+  // flags carries 3 controls (star + notes + Invoice/Docs button).
+  // The "Invoice" label is wider than the original "View"/"Docs" so
+  // the cell needs ~170 to keep the rightmost chip from clipping at
+  // the column boundary.
+  flags:        170,
   view:          80,
 };
 
@@ -107,11 +114,17 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
 // now, so the legacy `view` key no longer corresponds to a real
 // column — nothing to omit there.
 const COLS_OMITTED_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
+  // Per the operator's spec:
+  //   Method + Send to  → Released and Queued only (pre-send buckets)
+  //   Issued + Due      → Queued / Invoiced / Paid (have an invoice)
+  //   Paid              → Paid bucket only
+  // status is the invoice's draft/sent/paid/void pill — only useful in
+  // the catch-all "all" view where mixed statuses appear.
   released: new Set(['issued', 'due', 'paidAt', 'status']),
   queued:   new Set(['paidAt', 'status']),
-  invoiced: new Set(['paidAt', 'status', 'sendTo']),
-  paid:     new Set(['status', 'sendTo']),
-  all:      new Set(['sendTo']),
+  invoiced: new Set(['method', 'sendTo', 'paidAt', 'status']),
+  paid:     new Set(['method', 'sendTo', 'status']),
+  all:      new Set(['method', 'sendTo', 'paidAt']),
 };
 
 const PAGE_SIZE = 50;
@@ -558,15 +571,24 @@ function AccountingPageInner() {
   // loads.billing_status from 'paid' to 'invoiced' server-side; the
   // silent refresh brings the row back into the Invoiced bucket.
   const [unmarkPaidBusy, setUnmarkPaidBusy] = useState(false);
-  async function handleUnmarkPaidBulk() {
+  // Holds the invoices the user just clicked "Unmark paid" on while
+  // the styled ConfirmDialog asks them to confirm. We can't use a
+  // bool because the confirm body needs the count + a stable list
+  // even if the selection mutates between click and confirm.
+  const [unmarkPaidConfirm, setUnmarkPaidConfirm] = useState<Invoice[] | null>(null);
+
+  /** Opens the styled ConfirmDialog. The actual API calls live in
+   *  `runUnmarkPaidBulk` and only fire on confirm. */
+  function handleUnmarkPaidBulk() {
     if (selectedInvoices.length === 0 || unmarkPaidBusy) return;
     const paidOnes = selectedInvoices.filter(inv => inv.status === 'paid');
     if (paidOnes.length === 0) return;
-    const ok = window.confirm(
-      `Unmark ${paidOnes.length} invoice${paidOnes.length === 1 ? '' : 's'} as paid? ` +
-      `They'll return to the Invoiced bucket.`
-    );
-    if (!ok) return;
+    setUnmarkPaidConfirm(paidOnes);
+  }
+
+  async function runUnmarkPaidBulk(paidOnes: Invoice[]) {
+    setUnmarkPaidConfirm(null);
+    if (paidOnes.length === 0 || unmarkPaidBusy) return;
     setUnmarkPaidBusy(true);
     const failed: string[] = [];
     try {
@@ -581,7 +603,9 @@ function AccountingPageInner() {
       setSelectedIds([]);
       setTableResetKey(k => k + 1);
       if (failed.length > 0) {
-        window.alert(`Unmarked ${paidOnes.length - failed.length} of ${paidOnes.length}. Failed: ${failed.join(', ')}`);
+        // Partial-failure case — surface via setError so it appears
+        // in the in-page error band rather than another native popup.
+        setError(`Unmarked ${paidOnes.length - failed.length} of ${paidOnes.length}. Failed: ${failed.join(', ')}`);
       }
     } finally {
       setUnmarkPaidBusy(false);
@@ -699,10 +723,11 @@ function AccountingPageInner() {
         const id = String(r.load.internalLoadId);
         // Prefer the actual invoice number when an invoice exists —
         // gracefully handles the rare case where a custom invoice #
-        // was set via createInvoice({ invoiceNumber }).
+        // was set via createInvoice({ invoiceNumber }). Bare digits;
+        // no `#` prefix — operator just wants the number.
         const invNum = r.invoice?.invoiceNumber;
-        const display = invNum ? `#${invNum}` : id;
-        const copy    = invNum ?? id;
+        const display = invNum ?? id;
+        const copy    = display;
         return <CopyableCell value={copy} displayValue={display}
           title={invNum ? 'Copy invoice #' : 'Copy load ID'} />;
       },
@@ -821,6 +846,62 @@ function AccountingPageInner() {
         return (
           <span className="font-extrabold tabular-nums">
             {tot != null ? moneyFmt.format(tot) : '—'}
+          </span>
+        );
+      },
+    });
+
+    // Stops / Miles / RPM — same shape as Paperwork. LoadSummary already
+    // carries the deduped stop list and an aggregate totalLoadedMiles
+    // across legs, so no client-side math beyond RPM division.
+    all.push({
+      key: 'stops', header: 'Stops', width: DEFAULT_COL_WIDTHS.stops,
+      align: 'right', sortable: true,
+      sortValue: r => (r.load.stops ?? []).length,
+      render: r => {
+        const n = (r.load.stops ?? []).length;
+        return n === 0
+          ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+          : <span className="tabular-nums">{n}</span>;
+      },
+    });
+
+    all.push({
+      key: 'miles', header: 'Miles', width: DEFAULT_COL_WIDTHS.miles,
+      align: 'right', sortable: true,
+      // totalLoadedMiles sums both legs for relays; falls back to the
+      // pickup leg's miles when the aggregate isn't available.
+      sortValue: r => r.load.totalLoadedMiles ?? r.load.pickupLoadedMiles ?? 0,
+      render: r => {
+        const m = r.load.totalLoadedMiles ?? r.load.pickupLoadedMiles ?? null;
+        return m != null && m > 0
+          ? <span className="tabular-nums">{Math.round(m).toLocaleString()}</span>
+          : <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+      },
+    });
+
+    all.push({
+      key: 'rpm', header: 'RPM', width: DEFAULT_COL_WIDTHS.rpm,
+      align: 'right', sortable: true,
+      // Linehaul ÷ loaded miles. Colour band mirrors Paperwork:
+      // <$1.75 red, $1.75–$2.25 amber, ≥$2.25 green. Tonu / 0-mile /
+      // missing-price rows fall to the bottom on sort.
+      sortValue: r => {
+        const m = r.load.totalLoadedMiles ?? r.load.pickupLoadedMiles ?? 0;
+        return m > 0 && r.load.loadPrice != null ? r.load.loadPrice / m : 0;
+      },
+      render: r => {
+        const m = r.load.totalLoadedMiles ?? r.load.pickupLoadedMiles ?? 0;
+        if (m <= 0 || r.load.loadPrice == null) {
+          return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        }
+        const rpm = r.load.loadPrice / m;
+        const fg = rpm >= 2.25 ? '#15803d'
+                 : rpm >= 1.75 ? '#92400e'
+                 :               '#991b1b';
+        return (
+          <span className="tabular-nums font-semibold" style={{ color: fg }}>
+            ${rpm.toFixed(2)}
           </span>
         );
       },
@@ -1042,7 +1123,30 @@ function AccountingPageInner() {
     // picker doesn't expose useless toggles. e.g. Released has no
     // invoice yet → no invoice #, Issued, Due, View, or Status.
     const omit = COLS_OMITTED_PER_BUCKET[bucket];
-    return all.filter(c => !omit.has(c.key as ColKey));
+    const filtered = all.filter(c => !omit.has(c.key as ColKey));
+
+    // Default column order — drives the table's seed layout. Operator
+    // reorders are persisted by OpsTable via the per-bucket persistKey,
+    // so this only affects the first time a user lands on a bucket
+    // (and any newly-added column, which OpsTable's mergeOrder slots
+    // adjacent to its declared neighbour).
+    const BILLING_ORDER: string[] = [
+      'flags',
+      'age', 'loadNum', 'title', 'customer',
+      'rate', 'accessorials', 'total',
+      'driver', 'truck',
+      'internalId',
+      'pickupAt', 'deliveryAt', 'released',
+      'stops', 'miles', 'rpm',
+      'method', 'sendTo',
+      'issued', 'due', 'paidAt',
+      'docs', 'status',
+    ];
+    const rank = (k: string) => {
+      const i = BILLING_ORDER.indexOf(k);
+      return i === -1 ? BILLING_ORDER.length : i;
+    };
+    return [...filtered].sort((a, b) => rank(a.key) - rank(b.key));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customers, bucket, actorName, assetNameById, patchLoadInState]);
 
@@ -1458,6 +1562,22 @@ function AccountingPageInner() {
             }
             setNotesTarget(null);
           }} />
+      )}
+
+      {/* Styled confirm for bulk unmark-paid — replaces the browser
+          native window.confirm so the prompt doesn't look like a 1998
+          alert. Lives at the bottom of the modal stack on z=260 so it
+          floats above the InvoiceDetailModal if the user somehow
+          triggered both. */}
+      {unmarkPaidConfirm && (
+        <ConfirmDialog
+          title={`Unmark ${unmarkPaidConfirm.length} invoice${unmarkPaidConfirm.length === 1 ? '' : 's'} as paid?`}
+          message={`They'll return to the Invoiced bucket and loads.billing_status rolls back from 'paid' to 'invoiced'. Use this for payment reversals (bounced check, wrong invoice marked).`}
+          confirmLabel={`Unmark ${unmarkPaidConfirm.length} paid`}
+          cancelLabel="Cancel"
+          destructive
+          onConfirm={() => { const list = unmarkPaidConfirm; void runUnmarkPaidBulk(list); }}
+          onCancel={() => setUnmarkPaidConfirm(null)} />
       )}
     </AppShell>
   );

@@ -554,12 +554,18 @@ export default function CloseoutView() {
     cols.push({
       key: 'age', header: 'Age', width: DEFAULT_COL_WIDTHS.age,
       sortable: true,
+      headerTooltip: 'Days since delivery.',
       sortValue: r => ageDays(effectiveDeliveryEnd(r)),
       render: r => {
         const days = ageDays(effectiveDeliveryEnd(r));
         const c = ageColor(days);
+        const iso = effectiveDeliveryEnd(r);
+        const cellTooltip = iso
+          ? `Delivered ${fmtDate(iso)} — ${days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`}`
+          : 'No delivery date';
         return (
-          <span style={{ background: c.bg, color: c.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+          <span title={cellTooltip}
+            style={{ background: c.bg, color: c.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
           </span>
         );
@@ -671,9 +677,33 @@ export default function CloseoutView() {
       key: 'truck', header: 'Truck', width: DEFAULT_COL_WIDTHS.truck,
       sortable: true,
       sortValue: r => r.assetName ?? '',
-      render: r => r.assetName
-        ? <span className="font-semibold tabular-nums">{r.assetName}</span>
-        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+      render: r => {
+        // Mirror the Driver column's relay-aware lookup so the second
+        // leg's truck shows alongside the pickup leg's. Local rows
+        // lookup first (both legs visible on the same page); fall back
+        // to the server-provided relayPartners sidecar for the common
+        // case where server-side dedup dropped the partner leg before
+        // it reached the client.
+        const localPartner = r.relayGroupId
+          ? rows.find(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
+          : null;
+        const partnerAssetName =
+          localPartner?.assetName
+          ?? (r.loadId ? relayPartners[r.loadId]?.assetName : undefined);
+        const trucks: string[] = [];
+        if (r.assetName) trucks.push(r.assetName);
+        if (partnerAssetName && partnerAssetName !== r.assetName) trucks.push(partnerAssetName);
+        if (trucks.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        if (trucks.length === 1) {
+          return <span className="font-semibold tabular-nums">{trucks[0]}</span>;
+        }
+        return (
+          <div>
+            <div className="text-[12.5px] font-semibold tabular-nums">{trucks[0]}</div>
+            <div className="text-[10.5px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>+ {trucks[1]}</div>
+          </div>
+        );
+      },
     });
 
     cols.push({
@@ -941,7 +971,28 @@ export default function CloseoutView() {
       },
     });
 
-    return cols;
+    // Default column order — drives the table's seed layout. Operator
+    // reorders are persisted by OpsTable via the persistKey, so this
+    // only affects the first time a user lands on a given tab (and
+    // also any column that gets added later — mergeOrder slots new
+    // ones in adjacent to their declared neighbour).
+    const PAPERWORK_ORDER: string[] = [
+      'flags',
+      'age', 'loadNum', 'title', 'customer',
+      'rate', 'accessorials', 'total',
+      'driver', 'truck',
+      'internalId',
+      'pickedUp', 'delivered',
+      'stops', 'miles', 'rpm',
+      'billingStatus', 'docs',
+      'actions',
+    ];
+    const rank = (k: string) => {
+      const i = PAPERWORK_ORDER.indexOf(k);
+      // Unranked columns push to the end without scrambling each other.
+      return i === -1 ? PAPERWORK_ORDER.length : i;
+    };
+    return [...cols].sort((a, b) => rank(a.key) - rank(b.key));
     // Cell renderers capture handler closures via this scope —
     // exhaustive deps would be noisy because every state setter is
     // captured. The actual values that influence DISPLAY are listed
@@ -1394,7 +1445,9 @@ function RequiredDocBadge({
 
 /** Load # button with a 1.5s "Copied" confirmation flip. */
 function CopyableLoadNum({ value }: { value: string }) {
-  return <CopyableCell value={value} displayValue={`#${value}`} title="Copy load #" />;
+  // Bare number — drop the `#` prefix so the column reads as the raw
+  // identifier the operator pastes into broker portals.
+  return <CopyableCell value={value} displayValue={value} title="Copy load #" />;
 }
 
 /** Click-to-copy text cell with a 1.5s "Copied!" green flip. Used for

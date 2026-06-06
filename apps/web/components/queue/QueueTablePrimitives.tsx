@@ -468,7 +468,10 @@ function PopoverContents({ list, sum }: { list: AccessorialItem[]; sum: number }
 // ─── Copy-to-clipboard cells ────────────────────────────────────────────
 
 export function CopyableLoadNum({ value }: { value: string }) {
-  return <CopyableCell value={value} displayValue={`#${value}`} title="Copy load #" />;
+  // Bare number — the `#` prefix made columns feel decorated when the
+  // operator just wants the identifier. Tooltip still names the field
+  // as "load #" so the meaning of the unprefixed digits stays clear.
+  return <CopyableCell value={value} displayValue={value} title="Copy load #" />;
 }
 
 /** Click-to-copy text cell with a 1.5s "Copied!" green flip. Used for
