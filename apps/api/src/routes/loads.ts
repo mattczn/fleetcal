@@ -704,6 +704,7 @@ loads.get("/:id/documents", async (c) => {
     uploadedAt:         d.uploaded_at,
     signedUrl:          urlByPath.get(d.storage_path),
     includedInInvoice:  d.included_in_invoice,
+    storagePath:        d.storage_path,
   }));
 
   const res: ListDocumentsResponse = { documents };

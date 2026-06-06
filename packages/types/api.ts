@@ -521,6 +521,13 @@ export interface DocumentSummary {
    *  Replaces the legacy loads.invoice_doc_ids array column — see
    *  the 20260607_load_documents_included_in_invoice migration. */
   includedInInvoice?: boolean | null;
+  /** Internal storage_path on Supabase. Surfaced so the client can
+   *  compare against loads.rate_con_pdf to identify which kind='rate_con'
+   *  row is currently the load's primary — uploadedAt alone isn't
+   *  enough since the dispatcher can promote an older rate-con via
+   *  the Make Primary button. Not a security concern; signed URLs
+   *  already encode the same path. */
+  storagePath?: string;
 }
 
 // GET /v1/loads/:loadId/documents
@@ -1202,6 +1209,15 @@ export interface MarkInvoicePaidRequest {
   note?:    string;
 }
 export interface MarkInvoicePaidResponse { invoice: Invoice; }
+
+/** POST /v1/invoices/:id/unmark-paid — reverts paid → sent.
+ *  Clears paid_at / paid_amount / paid_method / paid_note and rolls
+ *  loads.billing_status back from 'paid' to 'invoiced'. Use for
+ *  payment reversals or correcting a wrong mark-paid. */
+export interface UnmarkInvoicePaidRequest {
+  reason?: string;
+}
+export interface UnmarkInvoicePaidResponse { invoice: Invoice; }
 
 /** POST /v1/invoices/:id/void */
 export interface VoidInvoiceRequest {

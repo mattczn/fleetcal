@@ -879,11 +879,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   };
 
   // Promote a kind='rate_con' doc to primary — server mirrors
-  // loads.rate_con_pdf onto its storage_path, then we refetch so the
-  // sidebar's Primary badge + the viewer's default doc both reflect
-  // the new selection.
+  // loads.rate_con_pdf onto its storage_path. The optimistic
+  // override fires synchronously so the badge moves immediately;
+  // the refetch then replaces it with canonical server state.
   const handleSetRateConPrimary = async (docId: string): Promise<void> => {
     if (!loadId) return;
+    // Instant feedback: badge jumps to the clicked row before the
+    // PATCH round-trip. The override holds until fresh docs arrive
+    // with the new storage_path, at which point the canonical
+    // derivation takes over and the override clears.
+    setPrimaryOverrideId(docId);
     try {
       useCalendarStore.getState().markLoadSelfWrite(loadId);
       await railway.setRateConPrimary(docId);
@@ -900,8 +905,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         setSecondaryRateConUrl(null);
         setActiveRateConId(null);
       }
+      // Refetch landed; canonical derivation is now correct.
+      setPrimaryOverrideId(null);
     } catch (err) {
       console.error('[set-rate-con-primary] failed', err);
+      // Roll back the optimistic update so the badge snaps to where
+      // the server still thinks it is.
+      setPrimaryOverrideId(null);
       alert(`Make primary failed: ${(err as Error).message ?? 'Unknown error'}`);
     }
   };
@@ -956,21 +966,32 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     () => docs.filter(d => d.kind !== 'rate_con'),
     [docs],
   );
-  // Which rate-con is currently primary? Server-side rule:
-  // POST /v1/loads/:id/documents mirrors loads.rate_con_pdf to each
-  // new rate_con upload, so most-recent-uploadedAt wins. Mirror that
-  // here so the sidebar's Primary badge + the Manage Documents
-  // dialog's Primary badge agree on which file the packet uses.
-  // Falls back to the synthetic when no real kind='rate_con' rows
-  // exist (legacy loads that haven't seen an upload through the new
-  // preserve-then-mirror flow yet).
+  // Optimistic override for the primary rate-con. The Make Primary
+  // click sets this so the badge moves *instantly*, before the PATCH
+  // + refetch round-trip completes. Cleared once fresh docs arrive
+  // (those carry storage_paths the canonical derivation can use).
+  const [primaryOverrideId, setPrimaryOverrideId] = useState<string | null>(null);
+  // Which rate-con is currently primary? Source of truth: the doc
+  // whose storage_path matches loads.rate_con_pdf. Falls back to the
+  // most-recent-uploadedAt heuristic when storagePath isn't present
+  // (older API responses), then to the synthetic sentinel when no
+  // real kind='rate_con' rows exist.
   const primaryRateConId = useMemo<string | undefined>(() => {
+    if (primaryOverrideId) return primaryOverrideId;
     const real = rateConDocs.filter(x => x.id !== RATE_CON_PRIMARY_ID);
     if (real.length > 0) {
+      const targetPath = current?.rateConPdf;
+      if (targetPath) {
+        const matched = real.find(d => d.storagePath === targetPath);
+        if (matched) return matched.id;
+      }
+      // No storage-path match (legacy data, missing field, or the
+      // path is a data: URL the docs list can't reach) → fall back
+      // to the heuristic so the UI still picks *something*.
       return [...real].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0].id;
     }
     return rateConDocs.some(x => x.id === RATE_CON_PRIMARY_ID) ? RATE_CON_PRIMARY_ID : undefined;
-  }, [rateConDocs]);
+  }, [rateConDocs, current?.rateConPdf, primaryOverrideId]);
   // Visual split: invoices render in their own section above Documents
   // so the dispatcher can find the generated invoice PDF without
   // hunting through PODs / BOLs / scales. Both lists still index into
