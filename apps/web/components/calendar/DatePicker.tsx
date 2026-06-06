@@ -241,8 +241,25 @@ export default function DatePicker({ value, onChange, headerColor, min, required
             })}
           </div>
 
-          {/* Today shortcut */}
-          <div className="flex justify-center mt-2 pt-2" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
+          {/* Footer shortcuts — Today is always shown; Clear only when
+              the field is optional (callers that pass required omit
+              the Clear button since an empty value is invalid). */}
+          <div
+            className={`flex mt-2 pt-2 ${required ? 'justify-center' : 'justify-between'}`}
+            style={{ borderTop: '1px solid var(--gc-border-light)' }}
+          >
+            {!required && (
+              <button
+                type="button"
+                onClick={() => { onChange(''); setOpen(false); }}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                style={{ color: headerColor }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                Clear
+              </button>
+            )}
             <button
               type="button"
               onClick={() => { onChange(today); setOpen(false); }}

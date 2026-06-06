@@ -22,6 +22,7 @@
  * and driver lifecycles are semantically identical.
  */
 import { useEffect, useState } from 'react';
+import DatePicker from '@/components/calendar/DatePicker';
 
 interface Props {
   /** Initial active-from date as YYYY-MM-DD; if missing/blank, defaults to today. */
@@ -60,20 +61,6 @@ export default function LifecycleEditor({ activeFrom, activeTo, accent, onSave, 
   const invalid = !!toDate && toDate < fromDate;
   const canSave = canEdit && dirty && !invalid && !!fromDate;
 
-  const inputStyle: React.CSSProperties = {
-    width:        '100%',
-    padding:      '9px 12px',
-    fontSize:     14,
-    border:       '1px solid var(--gc-border)',
-    borderRadius: 6,
-    background:   'var(--gc-surface)',
-    color:        'var(--gc-text-1)',
-    outline:      'none',
-    transition:   'border-color 120ms',
-  };
-  const onFocus = (e: React.FocusEvent<HTMLInputElement>) => (e.currentTarget.style.borderColor = accent);
-  const onBlur  = (e: React.FocusEvent<HTMLInputElement>) => (e.currentTarget.style.borderColor = 'var(--gc-border)');
-
   function save() {
     if (!canSave) return;
     const changes: { activeFrom?: string; activeTo?: string | null } = {};
@@ -81,6 +68,22 @@ export default function LifecycleEditor({ activeFrom, activeTo, accent, onSave, 
     if (toDate !== initialTo)     changes.activeTo   = toDate === '' ? null : toDate;
     onSave(changes);
   }
+
+  // DatePicker's `required` prop hides its Clear button. Active from
+  // is required (an entity has to start sometime); retire date is
+  // optional (empty = currently active) so its picker exposes Clear.
+  // Disable-aware wrapper: when canEdit is false we render a flat
+  // non-interactive box so the field still communicates the saved
+  // values without inviting edits.
+  const disabledFieldStyle: React.CSSProperties = {
+    width:        '100%',
+    padding:      '10px 13px',
+    fontSize:     15,
+    border:       '1px solid var(--gc-border)',
+    borderRadius: 8,
+    background:   'var(--gc-bg)',
+    color:        'var(--gc-text-3)',
+  };
 
   return (
     <div className="mt-8 pt-6" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
@@ -92,29 +95,35 @@ export default function LifecycleEditor({ activeFrom, activeTo, accent, onSave, 
           <label className="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
             Active from
           </label>
-          <input
-            type="date"
-            value={fromDate}
-            disabled={!canEdit}
-            onChange={(e) => setFromDate(e.target.value)}
-            onFocus={onFocus}
-            onBlur={onBlur}
-            style={inputStyle}
-          />
+          {canEdit ? (
+            <DatePicker
+              value={fromDate}
+              onChange={setFromDate}
+              headerColor={accent}
+              required
+            />
+          ) : (
+            <div style={disabledFieldStyle}>{fromDate || '—'}</div>
+          )}
         </div>
         <div>
           <label className="block text-[11px] font-medium uppercase tracking-wider mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
             Retire date
           </label>
-          <input
-            type="date"
-            value={toDate}
-            disabled={!canEdit}
-            onChange={(e) => setToDate(e.target.value)}
-            onFocus={onFocus}
-            onBlur={onBlur}
-            style={inputStyle}
-          />
+          {canEdit ? (
+            <DatePicker
+              value={toDate}
+              onChange={setToDate}
+              headerColor={accent}
+              // Min keeps the picker from offering days before active
+              // from. The save-side check still catches manual edits
+              // that bypass the calendar, but this hides invalid days
+              // from the calendar UI in the first place.
+              min={fromDate || undefined}
+            />
+          ) : (
+            <div style={disabledFieldStyle}>{toDate || '—'}</div>
+          )}
           <div className="mt-1.5 text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
             {toDate ? `Retired on ${toDate}` : 'Leave blank if currently active'}
           </div>
