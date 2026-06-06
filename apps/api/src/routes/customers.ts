@@ -14,6 +14,8 @@ import {
   type UpdateCustomerRequest,
   type UpdateCustomerResponse,
   type RefreshCustomerInvoicingResponse,
+  type HarvestRateConFromPdfRequest,
+  type HarvestRateConFromPdfResponse,
   type ApiErrorResponse,
 } from "@fleetcal/types";
 
@@ -244,6 +246,95 @@ function extractJson(text: string): Record<string, unknown> {
   return JSON.parse(match ? match[0] : text);
 }
 
+interface HarvestBroker {
+  name?:                string;
+  contactName?:         string;
+  contactEmail?:        string;
+  contactPhone?:        string;
+  invoiceMethod?:       string;
+  invoiceEmail?:        string;
+  invoicePortal?:       string;
+  invoiceInstructions?: string;
+}
+
+/** Run the broker-harvest prompt against base64 PDF bytes. Centralized
+ *  so both the by-customer refresh endpoint and the by-PDF endpoint
+ *  used by the new-customer modal share a single Claude code path. */
+async function runBrokerHarvest(base64: string): Promise<HarvestBroker> {
+  const timezone = "Mountain Time (America/Denver)";
+  const docBlock: DocumentBlockParam = {
+    type:   "document",
+    source: { type: "base64", media_type: "application/pdf", data: base64 },
+  };
+  const textBlock: TextBlockParam = { type: "text", text: buildBrokerHarvestPrompt(timezone) };
+  const content: ContentBlockParam[] = [docBlock, textBlock];
+  const response = await ANTHROPIC_CLIENT.messages.create({
+    model:      HARVEST_MODEL,
+    max_tokens: 512,
+    messages:   [{ role: "user", content }],
+  });
+  const text = response.content[0]?.type === "text" ? response.content[0].text : "";
+  const parsed = extractJson(text) as { broker?: HarvestBroker };
+  return parsed.broker ?? {};
+}
+
+/** Empty string → undefined. Lets the UI distinguish "Claude saw nothing"
+ *  from "Claude said the empty string." */
+function clean(s: string | undefined): string | undefined {
+  const t = (s ?? "").trim();
+  return t ? t : undefined;
+}
+
+/** Normalize invoiceMethod to the two valid values. Claude occasionally
+ *  returns variants like "Portal" or unrelated strings when confused. */
+function normalizeInvoiceMethod(raw: string | undefined): "email" | "portal" | undefined {
+  const v = clean(raw)?.toLowerCase();
+  return v === "email" || v === "portal" ? v : undefined;
+}
+
+// ── POST /v1/customers/harvest-from-pdf ────────────────────────────────
+// Run broker-harvest on a PDF supplied in the body. Used by the
+// new-customer review modal in EventModal — the customer doesn't
+// exist yet so we can't go through the by-customer-id endpoint, but
+// the rate con is already in the modal's hands, so just send the bytes.
+customers.post("/harvest-from-pdf", requireCapability("customers.edit"), async (c) => {
+  let body: HarvestRateConFromPdfRequest;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_body" } satisfies ApiErrorResponse, 400);
+  }
+  const base64 = typeof body?.pdfBase64 === "string" ? body.pdfBase64.trim() : "";
+  if (!base64) {
+    return c.json({ error: "missing_pdf", detail: "pdfBase64 is required" } satisfies ApiErrorResponse, 400);
+  }
+
+  let broker: HarvestBroker;
+  try {
+    broker = await runBrokerHarvest(base64);
+  } catch (err) {
+    console.error("[POST /v1/customers/harvest-from-pdf] claude failed:", err);
+    return c.json({
+      error:  "parse_failed",
+      detail: err instanceof Error ? err.message : "unknown",
+    } satisfies ApiErrorResponse, 500);
+  }
+
+  const res: HarvestRateConFromPdfResponse = {
+    parsed: {
+      invoiceMethod:       normalizeInvoiceMethod(broker.invoiceMethod),
+      invoiceEmail:        clean(broker.invoiceEmail),
+      invoicePortal:       clean(broker.invoicePortal),
+      invoiceInstructions: clean(broker.invoiceInstructions),
+      contactName:         clean(broker.contactName),
+      contactEmail:        clean(broker.contactEmail),
+      contactPhone:        clean(broker.contactPhone),
+    },
+    parsedAt: new Date().toISOString(),
+  };
+  return c.json(res);
+});
+
 customers.post("/:id/refresh-invoicing-from-ratecon", requireCapability("customers.edit"), async (c) => {
   const orgId = c.get("orgId");
   const customerId = c.req.param("id");
@@ -311,36 +402,9 @@ customers.post("/:id/refresh-invoicing-from-ratecon", requireCapability("custome
   // base64 for the Anthropic document block.
   const base64 = Buffer.from(pdfBytes).toString("base64");
 
-  // Timezone choice is mostly cosmetic for this prompt — the four
-  // invoicing fields don't reference dates. Mountain Time is the
-  // common-case default for the existing FleetCal users and matches
-  // the web parse-ratecon route's default.
-  const timezone = "Mountain Time (America/Denver)";
-
-  type HarvestResult = {
-    broker?: {
-      invoiceMethod?:       string;
-      invoiceEmail?:        string;
-      invoicePortal?:       string;
-      invoiceInstructions?: string;
-    };
-  };
-
-  let parsed: HarvestResult;
+  let broker: HarvestBroker;
   try {
-    const docBlock: DocumentBlockParam = {
-      type:   "document",
-      source: { type: "base64", media_type: "application/pdf", data: base64 },
-    };
-    const textBlock: TextBlockParam = { type: "text", text: buildBrokerHarvestPrompt(timezone) };
-    const content: ContentBlockParam[] = [docBlock, textBlock];
-    const response = await ANTHROPIC_CLIENT.messages.create({
-      model:      HARVEST_MODEL,
-      max_tokens: 512,
-      messages:   [{ role: "user", content }],
-    });
-    const text = response.content[0]?.type === "text" ? response.content[0].text : "";
-    parsed = extractJson(text) as HarvestResult;
+    broker = await runBrokerHarvest(base64);
   } catch (err) {
     console.error("[POST /v1/customers/:id/refresh-invoicing-from-ratecon] claude failed:", err);
     return c.json({
@@ -349,23 +413,9 @@ customers.post("/:id/refresh-invoicing-from-ratecon", requireCapability("custome
     } satisfies ApiErrorResponse, 500);
   }
 
-  const broker = parsed.broker ?? {};
-  // Trim empty strings to undefined so the UI's "didn't find this" UX
-  // can distinguish "Claude saw nothing" from "Claude said exactly
-  // this empty string".
-  const clean = (s: string | undefined): string | undefined => {
-    const t = (s ?? "").trim();
-    return t ? t : undefined;
-  };
-  // Normalize invoiceMethod — Claude can return "email" / "portal" /
-  // "" / sometimes other strings if it's confused. Anything outside
-  // the two valid values gets dropped.
-  const rawMethod = clean(broker.invoiceMethod)?.toLowerCase();
-  const invoiceMethod = rawMethod === "email" || rawMethod === "portal" ? rawMethod : undefined;
-
   const res: RefreshCustomerInvoicingResponse = {
     parsed: {
-      invoiceMethod,
+      invoiceMethod:       normalizeInvoiceMethod(broker.invoiceMethod),
       invoiceEmail:        clean(broker.invoiceEmail),
       invoicePortal:       clean(broker.invoicePortal),
       invoiceInstructions: clean(broker.invoiceInstructions),

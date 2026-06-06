@@ -38,6 +38,8 @@ import type {
   ListCustomersResponse, CreateCustomerRequest, CreateCustomerResponse,
   UpdateCustomerRequest, UpdateCustomerResponse,
   RefreshCustomerInvoicingResponse,
+  HarvestRateConFromPdfRequest,
+  HarvestRateConFromPdfResponse,
   ListTrailersResponse, CreateTrailerRequest, CreateTrailerResponse,
   UpdateTrailerRequest, UpdateTrailerResponse,
   ListDispatchersResponse, CreateDispatcherRequest, CreateDispatcherResponse,
@@ -700,6 +702,14 @@ class RailwayClient {
    *  Save (PATCH /v1/customers/:id) commit them. */
   refreshCustomerInvoicingFromRateCon(id: string) {
     return this.req<RefreshCustomerInvoicingResponse>('POST', `/v1/customers/${id}/refresh-invoicing-from-ratecon`, {});
+  }
+  /** Run the broker-harvest prompt against a PDF the caller already
+   *  has in hand. Used by the new-customer review modal during the
+   *  rate-con upload flow — the customer doesn't exist yet, so we
+   *  send the bytes directly instead of going through the
+   *  by-customer-id refresh path. */
+  harvestRateConFromPdf(body: HarvestRateConFromPdfRequest) {
+    return this.req<HarvestRateConFromPdfResponse>('POST', '/v1/customers/harvest-from-pdf', body);
   }
 
   listTrailers()                             { return this.req<ListTrailersResponse>('GET', '/v1/trailers'); }

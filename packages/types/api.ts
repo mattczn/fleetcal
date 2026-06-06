@@ -664,6 +664,31 @@ export interface UpdateCustomerResponse { customer: Customer; }
 // Claude returns empty strings for unknown values; the UI surfaces
 // "(no value)" rather than blanking what's already saved.
 
+// ── POST /v1/customers/harvest-from-pdf ────────────────────────────────
+//
+// Run the broker-harvest prompt against a PDF supplied in the body,
+// without needing a saved customer or load. Used by the new-customer
+// review modal to pre-fill contact + invoicing fields directly from
+// the rate con the user just uploaded.
+
+export interface HarvestRateConFromPdfRequest {
+  /** Base64-encoded PDF bytes (no data: prefix). */
+  pdfBase64: string;
+}
+
+export interface HarvestRateConFromPdfResponse {
+  parsed: {
+    invoiceMethod?:       string;
+    invoiceEmail?:        string;
+    invoicePortal?:       string;
+    invoiceInstructions?: string;
+    contactName?:         string;
+    contactEmail?:        string;
+    contactPhone?:        string;
+  };
+  parsedAt: string;
+}
+
 export interface RefreshCustomerInvoicingResponse {
   parsed: {
     invoiceMethod?:       string;

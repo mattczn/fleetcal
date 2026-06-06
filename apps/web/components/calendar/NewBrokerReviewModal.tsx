@@ -1,76 +1,136 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, X, Mail } from 'lucide-react';
-import type { Customer } from '@/lib/types';
+import { Plus, X, Mail, User, Phone, Sparkles, Loader2, AlertCircle } from 'lucide-react';
+import type { Customer, CustomerContact } from '@/lib/types';
+import { railway } from '@/lib/railway';
 
 /**
  * Review-and-create dialog shown after the rate-con parser identifies a
- * broker that isn't in the customer list yet. User fills in the fields
- * manually — the AI broker-harvest pre-fill was dropped when the parse
- * pipeline collapsed to a single pass. To AI-fill invoicing fields from
- * a saved rate con on an existing customer, use the "Refresh from rate
- * con" button inside the customer profile.
+ * broker that isn't in the customer list yet. The user fills in the
+ * fields manually, OR if a rate con was provided to the modal, clicks
+ * "Extract from rate con" to run the AI harvest on those bytes and
+ * pre-fill contact + invoicing fields.
  *
- * The form intentionally stays compact — short name, notes, parse hints,
- * etc. live in the broker profile and can be edited there after creation.
+ * Mirrors the BrokerProfileModal contact-card pattern so users see one
+ * consistent shape for managing rep contacts whether they're creating
+ * a customer here or editing one in the profile modal later.
  */
 export interface NewBrokerReviewModalProps {
   initialName: string;
+  /** Base64-encoded rate-con PDF (no data: prefix). When set, the
+   *  "Extract from rate con" button appears and calls the AI harvest
+   *  to pre-fill contact + invoicing fields. */
+  rateConPdf?: string;
   accentColor?: string;
   onCancel:    () => void;
   onConfirm:   (payload: Omit<Customer, 'id'>) => Promise<void> | void;
 }
 
 export function NewBrokerReviewModal({
-  initialName, accentColor = '#0369a1', onCancel, onConfirm,
+  initialName, rateConPdf, accentColor = '#0369a1', onCancel, onConfirm,
 }: NewBrokerReviewModalProps) {
+  const ACCENT = accentColor;
+
   const [name,                setName]                = useState(initialName);
   const [shortName,           setShortName]           = useState('');
-  const [contactName,         setContactName]         = useState('');
-  const [contactEmail,        setContactEmail]        = useState('');
-  const [contactPhone,        setContactPhone]        = useState('');
+  const [contacts,            setContacts]            = useState<CustomerContact[]>([]);
   const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>('');
   const [invoiceEmail,        setInvoiceEmail]        = useState('');
   const [invoicePortal,       setInvoicePortal]       = useState('');
   const [invoiceInstructions, setInvoiceInstructions] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Rate-con AI harvest state.
+  const [extracting,    setExtracting]    = useState(false);
+  const [extractError,  setExtractError]  = useState<string | null>(null);
+  const [extracted,     setExtracted]     = useState(false);
+
+  // Per-contact two-step delete confirmation, matching the
+  // BrokerProfileModal behavior — single click arms, second click
+  // commits. Reset to null on every state mutation that isn't the
+  // confirm itself.
+  const [confirmDeleteContactId, setConfirmDeleteContactId] = useState<string | null>(null);
+
   const trimmedName = name.trim();
   const canCreate   = trimmedName.length > 0 && !busy;
+
+  /** Extract invoicing + contact fields from the rate-con PDF and
+   *  drop them into form state. Doesn't blow away anything the user
+   *  has already typed — only fills empty fields. */
+  const handleExtract = async () => {
+    if (!rateConPdf || extracting) return;
+    setExtracting(true);
+    setExtractError(null);
+    try {
+      const res = await railway.harvestRateConFromPdf({ pdfBase64: rateConPdf });
+      const p = res.parsed;
+
+      // Invoicing fields — only set if currently empty so re-running
+      // the extract doesn't overwrite manual edits.
+      if (!invoiceMethod && (p.invoiceMethod === 'email' || p.invoiceMethod === 'portal')) {
+        setInvoiceMethod(p.invoiceMethod);
+      }
+      if (!invoiceEmail.trim()        && p.invoiceEmail)        setInvoiceEmail(p.invoiceEmail);
+      if (!invoicePortal.trim()       && p.invoicePortal)       setInvoicePortal(p.invoicePortal);
+      if (!invoiceInstructions.trim() && p.invoiceInstructions) setInvoiceInstructions(p.invoiceInstructions);
+
+      // Contact — append a new card if the user has no contacts yet
+      // AND the harvest found any contact info. Don't merge into
+      // existing entries; the user's already-typed contacts are
+      // intentional.
+      const hasContactSignal = p.contactName || p.contactEmail || p.contactPhone;
+      if (contacts.length === 0 && hasContactSignal) {
+        setContacts([{
+          id:    crypto.randomUUID(),
+          name:  p.contactName  ?? undefined,
+          email: p.contactEmail ?? undefined,
+          phone: p.contactPhone ?? undefined,
+        }]);
+      }
+
+      setExtracted(true);
+    } catch (err) {
+      setExtractError(`Extract failed: ${(err as Error)?.message ?? 'unknown'}`);
+    } finally {
+      setExtracting(false);
+    }
+  };
 
   async function handleConfirm() {
     if (!canCreate) return;
     setBusy(true);
     try {
-      // Seed contacts[0] from the extracted name/email/phone so the new
-      // multi-contact UI sees the rep we just parsed off the rate con.
-      // Skip if none of the three were filled in.
-      const name_  = contactName.trim();
-      const email_ = contactEmail.trim();
-      const phone_ = contactPhone.trim();
-      const initialContacts = (name_ || email_ || phone_)
-        ? [{
-            id:    crypto.randomUUID(),
-            name:  name_  || undefined,
-            email: email_ || undefined,
-            phone: phone_ || undefined,
-          }]
-        : [];
+      // Strip empty contacts (all three fields blank) and trim each
+      // remaining field so persisted data isn't littered with
+      // half-finished entries. Mirrors BrokerProfileModal's save.
+      const cleanContacts = contacts
+        .map(c => ({
+          id:    c.id,
+          name:  c.name?.trim()  || undefined,
+          email: c.email?.trim() || undefined,
+          phone: c.phone?.trim() || undefined,
+        }))
+        .filter(c => c.name || c.email || c.phone);
+
+      // Legacy single-contact mirror — some older code paths still
+      // read customer.contactName/email/phone. Seed from the first
+      // contact so they stay in sync. Drops to undefined if the user
+      // didn't add any contacts.
+      const primary = cleanContacts[0];
+
       await onConfirm({
         name:                trimmedName,
         aliases:             [],
-        contacts:            initialContacts,
-        shortName:           shortName.trim()            || undefined,
-        // Legacy fields kept in sync for backwards-compat with anywhere
-        // still reading customer.contactName/email/phone.
-        contactName:         name_  || undefined,
-        contactEmail:        email_ || undefined,
-        contactPhone:        phone_ || undefined,
-        invoiceMethod:       invoiceMethod || undefined,
+        contacts:            cleanContacts,
+        shortName:           shortName.trim()             || undefined,
+        contactName:         primary?.name                || undefined,
+        contactEmail:        primary?.email               || undefined,
+        contactPhone:        primary?.phone               || undefined,
+        invoiceMethod:       invoiceMethod                || undefined,
         invoiceEmail:        invoiceMethod === 'email'  ? (invoiceEmail.trim()  || undefined) : undefined,
         invoicePortal:       invoiceMethod === 'portal' ? (invoicePortal.trim() || undefined) : undefined,
-        invoiceInstructions: invoiceInstructions.trim() || undefined,
+        invoiceInstructions: invoiceInstructions.trim()  || undefined,
       });
     } finally {
       setBusy(false);
@@ -81,17 +141,23 @@ export function NewBrokerReviewModal({
     <div className="fixed inset-0 z-[210] flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.45)' }}
       onMouseDown={e => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
-      <div className="rounded-2xl flex flex-col"
+      <div className="flex flex-col overflow-hidden"
         style={{
           background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)',
-          width: 600, maxHeight: '90vh', border: '1px solid var(--gc-border-light)',
+          width: 600, maxHeight: '90vh',
+          border: '1px solid var(--gc-border-light)',
+          // Single border-radius on the wrapper. With `overflow-hidden`
+          // the footer's borderTop and the form body's bottom edge
+          // both clip to the rounded corners — without this the
+          // footer rendered square-cornered against the wrapper.
+          borderRadius: 16,
         }}>
         {/* Header */}
         <div className="flex items-start justify-between px-6 pt-5 pb-4"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-start gap-3">
             <div style={{ background: '#f0f9ff', borderRadius: 10, padding: 8, flexShrink: 0 }}>
-              <Plus size={18} style={{ color: '#0369a1' }} />
+              <Plus size={18} style={{ color: ACCENT }} />
             </div>
             <div>
               <div className="text-base font-semibold mb-0.5" style={{ color: 'var(--gc-text-1)' }}>
@@ -114,31 +180,148 @@ export function NewBrokerReviewModal({
         {/* Form */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           <Field label="Name">
-            <Input value={name} onChange={setName} placeholder="Customer name" autoFocus accent={accentColor} />
+            <Input value={name} onChange={setName} placeholder="Customer name" autoFocus accent={ACCENT} />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Short name">
-              <Input value={shortName} onChange={setShortName} placeholder="Echo" accent={accentColor} />
-            </Field>
-            <Field label="Contact name">
-              <Input value={contactName} onChange={setContactName} placeholder="—" accent={accentColor} />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Contact email">
-              <Input value={contactEmail} onChange={setContactEmail} placeholder="—" accent={accentColor} type="email" />
-            </Field>
-            <Field label="Contact phone">
-              <Input value={contactPhone} onChange={setContactPhone} placeholder="—" accent={accentColor} type="tel" />
-            </Field>
+
+          <Field label="Display abbreviation" hint="Shown on calendar chips and compact tables when the full name doesn't fit. Optional.">
+            <Input value={shortName} onChange={setShortName} placeholder="e.g. UBR" accent={ACCENT} />
+          </Field>
+
+          {/* Contacts — same pattern as BrokerProfileModal so the UX
+              matches what users see when editing later. */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-extrabold uppercase tracking-wider"
+                style={{ color: 'var(--gc-text-1)' }}>
+                Contacts
+              </span>
+              <button type="button"
+                onClick={() => {
+                  setConfirmDeleteContactId(null);
+                  setContacts(cs => [...cs, { id: crypto.randomUUID() }]);
+                }}
+                className="text-[11px] font-bold flex items-center gap-1 px-2 py-1 rounded-md transition-colors"
+                style={{ color: ACCENT, background: 'transparent', border: `1px solid ${ACCENT}40`, cursor: 'pointer' }}
+                onMouseEnter={e => (e.currentTarget.style.background = `${ACCENT}10`)}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                <Plus size={11} /> Add contact
+              </button>
+            </div>
+            {contacts.length === 0 ? (
+              <div className="text-[12px] px-3 py-3 rounded-md" style={{
+                color: 'var(--gc-text-3)',
+                background: 'var(--gc-bg)',
+                border: '1px dashed var(--gc-border)',
+              }}>
+                No contacts yet. Click <strong>Add contact</strong> to log a rep.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {contacts.map((c, idx) => (
+                  <div key={c.id} className="rounded-md p-2.5"
+                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}>
+                    <div className="grid grid-cols-3 gap-2">
+                      <Field label="Name" icon={<User size={11} />}>
+                        <Input value={c.name ?? ''} placeholder="Full name…"
+                          onChange={v => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, name: v } : x))}
+                          accent={ACCENT} />
+                      </Field>
+                      <Field label="Email" icon={<Mail size={11} />}>
+                        <Input value={c.email ?? ''} placeholder="email@customer.com" type="email"
+                          onChange={v => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, email: v } : x))}
+                          accent={ACCENT} />
+                      </Field>
+                      <Field label="Phone" icon={<Phone size={11} />}>
+                        <div className="flex items-center gap-1">
+                          <Input value={c.phone ?? ''} placeholder="(555) 555-5555" type="tel"
+                            onChange={v => setContacts(cs => cs.map((x, i) => i === idx ? { ...x, phone: v } : x))}
+                            accent={ACCENT} />
+                          {(() => {
+                            const confirming = confirmDeleteContactId === c.id;
+                            return (
+                              <button type="button"
+                                title={confirming ? 'Click again to confirm' : 'Remove contact'}
+                                onClick={() => {
+                                  if (confirming) {
+                                    setContacts(cs => cs.filter((_, i) => i !== idx));
+                                    setConfirmDeleteContactId(null);
+                                  } else {
+                                    setConfirmDeleteContactId(c.id);
+                                  }
+                                }}
+                                className="flex items-center justify-center rounded-md transition-colors px-2"
+                                style={{
+                                  minWidth: 28, height: 28,
+                                  color: confirming ? '#fff' : 'var(--gc-text-3)',
+                                  background: confirming ? '#b91c1c' : 'transparent',
+                                  border: `1px solid ${confirming ? '#b91c1c' : 'var(--gc-border)'}`,
+                                  cursor: 'pointer', flexShrink: 0,
+                                  fontSize: 11, fontWeight: 800,
+                                  whiteSpace: 'nowrap',
+                                }}
+                                onMouseEnter={e => {
+                                  if (confirming) return;
+                                  e.currentTarget.style.background = '#fee2e2';
+                                  e.currentTarget.style.color = '#b91c1c';
+                                  e.currentTarget.style.borderColor = '#fecaca';
+                                }}
+                                onMouseLeave={e => {
+                                  if (confirming) return;
+                                  e.currentTarget.style.background = 'transparent';
+                                  e.currentTarget.style.color = 'var(--gc-text-3)';
+                                  e.currentTarget.style.borderColor = 'var(--gc-border)';
+                                }}>
+                                {confirming ? 'Confirm' : <X size={12} />}
+                              </button>
+                            );
+                          })()}
+                        </div>
+                      </Field>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Invoice routing */}
+          {/* Invoice settings */}
           <div className="pt-2" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-            <div className="text-[10px] font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1 mt-3"
-              style={{ color: 'var(--gc-text-1)' }}>
-              Invoice routing
+            <div className="flex items-center justify-between mt-3 mb-1.5">
+              <div className="text-[11px] font-extrabold uppercase tracking-wider"
+                style={{ color: 'var(--gc-text-1)' }}>
+                Invoice settings
+              </div>
+              {/* AI harvest button — only when the modal was opened from a
+                  rate-con parse path that handed us the PDF bytes. Pulls
+                  invoiceMethod / email / portal / instructions + the
+                  first rep contact off the document into empty form
+                  fields (won't overwrite user edits). */}
+              {rateConPdf && (
+                <button type="button"
+                  onClick={() => void handleExtract()}
+                  disabled={extracting}
+                  className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md transition-colors disabled:opacity-60"
+                  style={{
+                    color:      ACCENT,
+                    background: `${ACCENT}0d`,
+                    border:     `1px solid ${ACCENT}40`,
+                    cursor:     extracting ? 'wait' : 'pointer',
+                  }}
+                  title="Extract invoicing instructions + rep contact from this rate con">
+                  {extracting
+                    ? <Loader2 size={10} className="animate-spin" />
+                    : <Sparkles size={10} />}
+                  {extracting ? 'Extracting…' : extracted ? 'Re-extract' : 'Extract from rate con'}
+                </button>
+              )}
             </div>
+            {extractError && (
+              <div className="flex items-start gap-1.5 mb-2 px-2 py-1.5 rounded-md text-[11px]"
+                style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
+                <AlertCircle size={11} style={{ marginTop: 1, flexShrink: 0 }} />
+                {extractError}
+              </div>
+            )}
             <div className="flex gap-1.5 mb-2">
               {(['email', 'portal'] as const).map(m => {
                 const active = invoiceMethod === m;
@@ -147,9 +330,9 @@ export function NewBrokerReviewModal({
                     onClick={() => setInvoiceMethod(active ? '' : m)}
                     className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
                     style={{
-                      border: `1px solid ${active ? accentColor : 'var(--gc-border)'}`,
-                      background: active ? `${accentColor}10` : 'transparent',
-                      color: active ? accentColor : 'var(--gc-text-2)',
+                      border: `1px solid ${active ? ACCENT : 'var(--gc-border)'}`,
+                      background: active ? `${ACCENT}10` : 'transparent',
+                      color: active ? ACCENT : 'var(--gc-text-2)',
                       cursor: 'pointer',
                     }}>
                     {m === 'email' ? 'Email' : 'Online portal'}
@@ -159,11 +342,11 @@ export function NewBrokerReviewModal({
             </div>
             {invoiceMethod === 'email' ? (
               <Field label="Billing email" icon={<Mail size={11} />}>
-                <Input value={invoiceEmail} onChange={setInvoiceEmail} placeholder="ap@customer.com" accent={accentColor} type="email" />
+                <Input value={invoiceEmail} onChange={setInvoiceEmail} placeholder="ap@customer.com" accent={ACCENT} type="email" />
               </Field>
             ) : invoiceMethod === 'portal' ? (
               <Field label="Portal">
-                <Input value={invoicePortal} onChange={setInvoicePortal} placeholder="TriumphPay (https://...)" accent={accentColor} />
+                <Input value={invoicePortal} onChange={setInvoicePortal} placeholder="TriumphPay (https://...)" accent={ACCENT} />
               </Field>
             ) : null}
             <div className="mt-3">
@@ -176,7 +359,7 @@ export function NewBrokerReviewModal({
                     color: 'var(--gc-text-1)', background: 'var(--gc-surface)',
                     resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit',
                   }}
-                  onFocus={e => (e.currentTarget.style.borderColor = accentColor)}
+                  onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
                   onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')} />
               </Field>
             </div>
@@ -197,7 +380,7 @@ export function NewBrokerReviewModal({
           <button onClick={handleConfirm}
             disabled={!canCreate}
             className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
-            style={{ background: canCreate ? accentColor : 'var(--gc-border)', cursor: canCreate ? 'pointer' : 'default' }}>
+            style={{ background: canCreate ? ACCENT : 'var(--gc-border)', cursor: canCreate ? 'pointer' : 'default' }}>
             {busy ? 'Creating…' : 'Create customer'}
           </button>
         </div>
@@ -206,7 +389,12 @@ export function NewBrokerReviewModal({
   );
 }
 
-function Field({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
+function Field({ label, icon, hint, children }: {
+  label:    string;
+  icon?:    React.ReactNode;
+  hint?:    string;
+  children: React.ReactNode;
+}) {
   return (
     <div>
       <label className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider mb-1.5"
@@ -214,17 +402,22 @@ function Field({ label, icon, children }: { label: string; icon?: React.ReactNod
         {icon}{label}
       </label>
       {children}
+      {hint && (
+        <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }
 
 function Input({ value, onChange, placeholder, type, autoFocus, accent }: {
-  value: string;
-  onChange: (v: string) => void;
+  value:        string;
+  onChange:     (v: string) => void;
   placeholder?: string;
-  type?: string;
-  autoFocus?: boolean;
-  accent: string;
+  type?:        string;
+  autoFocus?:   boolean;
+  accent:       string;
 }) {
   return (
     <input type={type ?? 'text'} value={value} onChange={e => onChange(e.target.value)}
