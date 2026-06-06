@@ -51,6 +51,10 @@ export function FlagModal({ loadLabel, onCancel, onConfirm }: FlagModalProps) {
         style={{
           background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)',
           width: 520, maxHeight: '85vh', border: '1px solid var(--gc-border-light)',
+          // Clip the footer's gc-bg fill to the rounded modal shape —
+          // without this the footer extends into the bottom corners
+          // and squares them off.
+          overflow: 'hidden',
         }}>
         {/* Header */}
         <div className="flex items-start justify-between px-6 pt-5 pb-4"
