@@ -4283,7 +4283,7 @@ export default function EventModal() {
               style={{ color: 'var(--gc-text-3)', background: 'transparent' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              Cancel — keep editing
+              Keep editing
             </button>
           </div>
         </div>

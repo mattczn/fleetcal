@@ -247,10 +247,47 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
     return c.json({ error: "load_insert_failed", detail: loadErr?.message } satisfies ApiErrorResponse, 500);
   }
 
+  // Driver-pay auto-fill: when the org has configured a driverPayPct
+  // and the dispatcher creating the load didn't supply driver_pay
+  // (typically because they don't have payroll visibility), compute
+  // it server-side as load.price × pct so reports stay accurate
+  // regardless of who created the load.
+  //
+  // Single-leg loads: the calculated total lands on the one event.
+  // Relay loads: skipped here — splitting by leg miles requires the
+  // stops to be geocoded, which they may not be at insert time.
+  // Dispatchers with payroll access set relay leg pay manually.
+  let autoDriverPay: number | null = null;
+  if (body.events.length === 1) {
+    const linehaul = typeof body.load.loadPrice === "number" ? body.load.loadPrice : null;
+    const noPaySent = body.events[0].driverPay == null || body.events[0].driverPay === 0;
+    if (linehaul && linehaul > 0 && noPaySent) {
+      const { data: settingsRow } = await supabase
+        .from("org_settings")
+        .select("rate_con_settings")
+        .eq("org_id", orgId)
+        .maybeSingle();
+      const rcs = (settingsRow as { rate_con_settings: { driverPayPct?: number } | null } | null)?.rate_con_settings;
+      const pct = typeof rcs?.driverPayPct === "number" ? rcs.driverPayPct : null;
+      if (pct != null && pct > 0) {
+        autoDriverPay = Math.round(linehaul * (pct / 100) * 100) / 100;
+        console.log(`[POST /v1/loads] auto-filled driver_pay=${autoDriverPay} (linehaul=${linehaul} × ${pct}%) for load ${loadRow.id}`);
+      }
+    }
+  }
+
   // 2. Insert events
   const eventInserts = body.events.map((ev) =>
     appLoadToEventInsert(
-      { ...ev, loadId: loadRow.id, eventKind: "revenue", status: ev.status ?? "scheduled", stops: [] },
+      {
+        ...ev,
+        loadId:    loadRow.id,
+        eventKind: "revenue",
+        status:    ev.status ?? "scheduled",
+        // Apply the auto-fill only to single-leg loads — see above.
+        driverPay: autoDriverPay != null ? autoDriverPay : ev.driverPay,
+        stops:     [],
+      },
       orgId,
     ),
   );
