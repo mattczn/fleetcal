@@ -7,6 +7,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { localDateStr, nowInTz, dayAtNoon } from '@/lib/time-utils';
 import { searchEvents } from '@/lib/db';
 import LearningCenter from '@/components/onboarding/LearningCenter';
+import { useModules } from '@/lib/useModules';
 import Tooltip from '@/components/ui/Tooltip';
 import DatePicker from '@/components/calendar/DatePicker';
 import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
@@ -76,7 +77,12 @@ export default function CalendarToolbar() {
   const [truckFleetOpen,     setTruckFleetOpen]     = useState(false);
   // Hide the button when no trailers — keeps the toolbar clean for
   // orgs that don't use trailers yet. Retired trailers don't count.
+  // The fleet map itself is Motive-only (live GPS pins via ELD), so
+  // it's also gated on motive_integration — MVP orgs without ELD
+  // never see this button even when they have trailers.
+  const { enabled: moduleEnabled } = useModules();
   const hasActiveTrailers = trailers.some(t => !t.activeTo);
+  const showTrailerFleet  = hasActiveTrailers && moduleEnabled('motive_integration');
   const [trashAllOpen,       setTrashAllOpen]       = useState(false);
   const [trashQuery,         setTrashQuery]         = useState('');
   const [confirmClearTrash,  setConfirmClearTrash]  = useState(false);
@@ -820,7 +826,7 @@ export default function CalendarToolbar() {
             map. Sits just right of the layers eye so trailer status
             lives next to the other "what am I looking at" controls.
             Hidden when the org hasn't set up any trailers yet. */}
-        {hasActiveTrailers && (
+        {showTrailerFleet && (
           <Tooltip content="Trailer fleet map" placement="bottom">
             <button
               onClick={() => setTrailerFleetOpen(true)}

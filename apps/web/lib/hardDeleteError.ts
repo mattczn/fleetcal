@@ -6,21 +6,24 @@
 import { RailwayError } from '@/lib/railway';
 
 const LABELS: Record<string, string> = {
-  loads:                 'load',
-  fuel_reports:          'fuel report',
-  maintenance_reports:   'maintenance report',
-  push_tokens:           'push token',
-  notification_prefs:    'notification preference',
-  load_notifications:    'load notification',
-  documents:             'document',
-  evening_sweeps:        'evening sweep',
+  loads:                       'load',
+  events:                      'load',
+  fuel_reports:                'fuel report',
+  maintenance_reports:         'maintenance report',
+  maintenance_action_items:    'maintenance action item',
+  inspection_reports:          'inspection report',
+  push_tokens:                 'push token',
+  notification_prefs:          'notification preference',
+  load_notifications:          'load notification',
+  documents:                   'document',
+  evening_sweeps:              'evening sweep',
 };
 
 function pluralize(n: number, singular: string): string {
   return `${n} ${singular}${n === 1 ? '' : 's'}`;
 }
 
-export function formatHardDeleteError(entity: 'asset' | 'driver', err: unknown): string {
+export function formatHardDeleteError(entity: 'asset' | 'driver' | 'trailer', err: unknown): string {
   if (err instanceof RailwayError && err.status === 409) {
     const detail = err.detail as { blockers?: Record<string, number>; detail?: string } | null;
     const blockers = detail?.blockers ?? {};

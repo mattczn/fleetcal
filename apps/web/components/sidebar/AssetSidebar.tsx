@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Plus, Layers, Truck, Users, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
+import { Plus, Layers, Truck, Users, Container, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useOrganization } from '@clerk/nextjs';
@@ -10,6 +10,7 @@ import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import DriversModal from './DriversModal';
 import AssetsModal from './AssetsModal';
+import TrailersModal from './TrailersModal';
 import MiniCalendar from './MiniCalendar';
 import type { Capability, OrgModule } from '@fleetcal/types';
 
@@ -22,9 +23,12 @@ export default function AssetSidebar() {
   // at the bottom remain the doorway into the directory modals.
   const { openCreateModal, sidebarOpen, toggleSidebar, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, cardFontScale } = useCalendarStore();
   const { organization } = useOrganization();
-  const [showDrivers, setShowDrivers] = useState(false);
-  const [showAssets,  setShowAssets]  = useState(false);
+  const [showDrivers,  setShowDrivers]  = useState(false);
+  const [showAssets,   setShowAssets]   = useState(false);
+  const [showTrailers, setShowTrailers] = useState(false);
   const [batchHovered, setBatchHovered] = useState(false);
+  const { enabled: moduleEnabled } = useModules();
+  const trailersOn = moduleEnabled('trailers');
   const batchFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleBatchFiles = async (files: FileList | null) => {
@@ -250,6 +254,21 @@ export default function AssetSidebar() {
             <Users size={16} />
             Manage drivers
           </button>
+          {/* Trailers — gated on the trailers module so orgs without
+              the feature (e.g. small flatbed operations that don't
+              swap trailers) don't see the affordance. */}
+          {trailersOn && (
+            <button
+              onClick={() => setShowTrailers(true)}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
+              style={{ color: 'var(--gc-blue)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <Container size={16} />
+              Manage trailers
+            </button>
+          )}
           <Link
             href="/settings"
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
@@ -263,8 +282,9 @@ export default function AssetSidebar() {
         </div>
       </aside>
 
-      {showAssets  && <AssetsModal    onClose={() => setShowAssets(false)} />}
-      {showDrivers && <DriversModal   onClose={() => setShowDrivers(false)} />}
+      {showAssets   && <AssetsModal   onClose={() => setShowAssets(false)} />}
+      {showDrivers  && <DriversModal  onClose={() => setShowDrivers(false)} />}
+      {showTrailers && <TrailersModal onClose={() => setShowTrailers(false)} />}
     </>
   );
 }

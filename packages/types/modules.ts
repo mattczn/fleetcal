@@ -152,7 +152,11 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   maintenance:        false,
   // MVP-launch additions — OFF by default, flip ON via tier upgrade
   motive_integration: false,
-  trailers:           false,
+  // Trailers: ON for MVP. Carriers want to assign trailers to loads
+  // on day one (their drivers ask "which trailer am I pulling?"); the
+  // Motive ELD trailer-tracking add-ons (fleet map, live GPS pins)
+  // remain off via motive_integration.
+  trailers:           true,
   performance:        false,
   driver_app:         false,
   dispatch_board:     false,

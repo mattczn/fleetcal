@@ -4604,7 +4604,6 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'role-permissions', label: 'Role Permissions', icon: <Shield size={15} /> },
       { id: 'modules',          label: 'Modules',          icon: <Layers size={15} /> },
       { id: 'assets',           label: 'Trucks',           icon: <Truck size={15} /> },
-      { id: 'trailers',         label: 'Trailers',         icon: <Truck size={15} /> },
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
       { id: 'customers',        label: 'Customers',        icon: <Truck size={15} /> },
       { id: 'saved-locations',  label: 'Saved Locations',  icon: <MapPin size={15} /> },
@@ -4648,7 +4647,6 @@ const NAV_CAPABILITY: Partial<Record<NavItem, Capability>> = {
 // because absent keys are treated as enabled. MVP-launch orgs see only
 // the panels whose flags are ON in MVP_LAUNCH_DEFAULTS.
 const NAV_MODULE: Partial<Record<NavItem, OrgModule>> = {
-  'trailers':         'trailers',
   'dispatchers':      'team_roles',
   'integrations':     'motive_integration',
   'driver-app':       'driver_app',
@@ -4836,7 +4834,6 @@ export default function SettingsPage() {
           {active === 'saved-locations' && <SavedLocationsPanel />}
           {active === 'dispatchers'     && <DispatchersPanel />}
           {active === 'customers'       && <CustomersPanel />}
-          {active === 'trailers'        && <TrailersPanel />}
           {active === 'driver-app'        && <DriverAppPanel setActive={setActive} />}
           {active === 'members'           && <MembersPanel />}
           {active === 'role-permissions'  && <RolePermissionsPanel />}

@@ -445,7 +445,7 @@ interface CalendarStore extends ModalState {
 
   trailers: Trailer[];
   fetchTrailers: () => Promise<void>;
-  addTrailer: (t: Omit<Trailer, 'id'>) => Promise<void>;
+  addTrailer: (t: Omit<Trailer, 'id'>) => Promise<number>;
   updateTrailer: (id: number, updates: Partial<Omit<Trailer, 'id'>>) => Promise<void>;
   removeTrailer: (id: number) => Promise<void>;
   hardDeleteTrailer: (id: number) => Promise<void>;
@@ -994,6 +994,7 @@ export const useCalendarStore = create<CalendarStore>()(
     const created = await createTrailer(orgId, t, sortOrder);
     if (!created) throw new Error('Failed to save trailer — check console for details');
     set((s) => ({ trailers: [...s.trailers, created] }));
+    return created.id;
   },
   updateTrailer: async (id, updates) => {
     await updateTrailer(id, updates);
