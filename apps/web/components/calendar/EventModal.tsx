@@ -472,9 +472,14 @@ const PDF_ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // Renders a PDF data URL to canvas elements via PDF.js with zoom controls.
 function UploadedDocsPanel({
-  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange, onSignedUrlError, onPendingChange,
+  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange, onSignedUrlError, onPendingChange, legacyDocIds,
 }: {
   docs: import('@/lib/db').LoadDocument[];
+  /** Set of doc ids that should render with a "Legacy" tag next to
+   *  the kind chip. EventModal passes the ids of all `kind='rate_con'`
+   *  rows other than the current primary, so the user sees prior
+   *  rate-cons in the Documents panel with a clear label. */
+  legacyDocIds?: Set<string>;
   /** Generated invoices for this load. Rendered as virtual rows at the
    *  top of the docs list — clicking opens /accounting/invoices/[id]
    *  in a new tab so the load modal stays open underneath. */
@@ -898,6 +903,21 @@ function UploadedDocsPanel({
                       <span className="text-[10px] font-extrabold uppercase tracking-wider" style={{ color: tint.fg, background: tint.bg, padding: '2px 7px', borderRadius: 999 }}>
                         {KIND_LABEL[d.kind] ?? d.kind}
                       </span>
+                      {/* "Legacy" tag — the kind chip stays "Rate Con"
+                          so search / sort still treats this as a
+                          rate-con; the orange Legacy pill makes the
+                          state visible at a glance. */}
+                      {legacyDocIds?.has(d.id) && (
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider"
+                          style={{
+                            color: '#9a3412', background: '#ffedd5',
+                            border: '1px solid #fdba74',
+                            padding: '2px 7px', borderRadius: 999,
+                          }}
+                          title="Older rate-con kept on the load for reference. The current primary rate-con shows in the Rate Con tab.">
+                          Legacy
+                        </span>
+                      )}
                     </div>
                     <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</div>
                     <div className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>{fmt(d.uploadedAt)}</div>
@@ -4577,7 +4597,19 @@ export default function EventModal() {
                   style={docsTab === 'uploaded'
                     ? { background: LOAD_ACCENT_BG, color: LOAD_ACCENT, border: `1px solid ${LOAD_ACCENT_BORDER}` }
                     : { color: 'var(--gc-text-3)', border: '1px solid transparent' }}>
-                  Uploaded ({loadDocuments.filter(d => d.kind !== 'rate_con').length + loadInvoices.length})
+                  {(() => {
+                    // Count = non-rate-cons + legacy rate-cons + invoices.
+                    // The current primary rate-con (most recent kind=rate_con
+                    // upload) lives in the Rate Con tab and isn't double-counted.
+                    const rcs = loadDocuments.filter(d => d.kind === 'rate_con');
+                    const primaryId = rcs.length === 0
+                      ? undefined
+                      : [...rcs].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0].id;
+                    const visible = loadDocuments.filter(d =>
+                      d.kind !== 'rate_con' || d.id !== primaryId,
+                    );
+                    return `Uploaded (${visible.length + loadInvoices.length})`;
+                  })()}
                 </button>
               </div>
               <div className="flex items-center gap-1 flex-nowrap shrink-0">
@@ -4708,14 +4740,29 @@ export default function EventModal() {
                     </button>
                   </div>
                 )
-            ) : (
+            ) : (() => {
+              // Compute which rate-cons are "legacy" — every kind='rate_con'
+              // row except the primary (most recent uploadedAt). Replace
+              // Rate Con uploads now preserve the prior file as a load
+              // document, so historical rate-cons live in the Documents
+              // panel with a "Legacy" tag while the current primary stays
+              // alone on the Rate Con tab.
+              const rateCons = loadDocuments.filter(d => d.kind === 'rate_con');
+              const primaryRateConId = rateCons.length === 0
+                ? undefined
+                : [...rateCons].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0].id;
+              const legacyRateConIds = new Set(
+                rateCons.filter(d => d.id !== primaryRateConId).map(d => d.id),
+              );
+              return (
               <UploadedDocsPanel
-                // Rate cons live in their own bucket and have a
-                // dedicated tab (the canonical one renders inline +
-                // historical versions are reachable from there).
-                // Hide them from the Uploaded list so the two tabs
-                // are disjoint — one bucket per tab.
-                docs={loadDocuments.filter(d => d.kind !== 'rate_con')}
+                // Rate cons: the *current primary* (the file shown in
+                // the Rate Con tab + sent with the invoice) is hidden
+                // from this list to keep the two tabs disjoint. Older
+                // rate-cons surface here with a "Legacy" tag so the
+                // dispatcher can find historical versions.
+                docs={loadDocuments.filter(d => d.kind !== 'rate_con' || legacyRateConIds.has(d.id))}
+                legacyDocIds={legacyRateConIds}
                 invoices={loadInvoices}
                 selectedId={selectedDocId}
                 onSelect={setSelectedDocId}
@@ -4736,7 +4783,8 @@ export default function EventModal() {
                 }}
                 onPendingChange={setHasPendingDoc}
               />
-            )}
+              );
+            })()}
           </div>
         )}
 
