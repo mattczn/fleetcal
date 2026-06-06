@@ -402,18 +402,29 @@ function LoadCard({
                 const active = ev.status === key;
                 const meta = CHIP_META[key];
                 const isException = i >= PROGRESS_CHIPS.length;
+                // Cancel is locked once the load has moved past closeout
+                // (released for billing). The PATCH route enforces this
+                // server-side with a 409; the chip is disabled here so
+                // dispatchers don't roll their cursor into an error.
+                const cancelLocked = key === 'cancelled' && !!ev.billingStatus && ev.billingStatus !== 'pending';
                 return (
-                  <button key={key} type="button" onClick={() => handleChip(key)}
+                  <button key={key} type="button"
+                    disabled={cancelLocked}
+                    onClick={cancelLocked ? undefined : () => handleChip(key)}
+                    title={cancelLocked
+                      ? 'This load has been released for billing. Void the invoice first to cancel.'
+                      : undefined}
                     style={{
                       width: '100%', textAlign: 'left', padding: '8px 13px',
-                      fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'block',
+                      fontSize: 13, fontWeight: 600, cursor: cancelLocked ? 'not-allowed' : 'pointer', display: 'block',
                       background: active ? meta.activeBg : 'transparent',
-                      color: active ? meta.activeColor : 'var(--gc-text-1)',
+                      color: cancelLocked ? 'var(--gc-text-3)' : (active ? meta.activeColor : 'var(--gc-text-1)'),
                       borderTop: i === PROGRESS_CHIPS.length ? '1px solid var(--gc-border-light)' : 'none',
                       border: 'none',
+                      opacity: cancelLocked ? 0.5 : 1,
                       transition: 'background 100ms',
                     }}
-                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                    onMouseEnter={e => { if (!active && !cancelLocked) e.currentTarget.style.background = 'var(--gc-hover)'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = active ? meta.activeBg : 'transparent'; }}
                   >
                     {meta.label}

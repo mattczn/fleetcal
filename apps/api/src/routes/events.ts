@@ -325,6 +325,29 @@ events.patch("/:id", async (c) => {
     }
   }
 
+  // Cancel gate — a load can only be cancelled while its billing
+  // workflow hasn't moved past closeout. Once it's verified, invoiced,
+  // or paid, the broker side of the relationship is in motion and
+  // cancelling at that point creates accounting drift (open invoices
+  // referencing a "cancelled" load). Operators who genuinely need to
+  // walk one back have to void the invoice first.
+  if (body.status === "cancelled" && isRevenue && kr.load_id) {
+    const { data: bsRow } = await supabase
+      .from("loads")
+      .select("billing_status")
+      .eq("id", kr.load_id)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const bs = (bsRow as { billing_status: string | null } | null)?.billing_status ?? "pending";
+    if (bs !== "pending") {
+      return c.json({
+        error: "conflict",
+        reason: "billing_status_locked",
+        detail: `Cannot cancel — load is already ${bs} for billing. Void the invoice first.`,
+      } satisfies ApiErrorResponse, 409);
+    }
+  }
+
   const update: Record<string, unknown> = {};
   if ("title"          in body) update.title             = body.title;
   if ("start"          in body) update.start             = body.start;

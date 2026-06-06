@@ -902,6 +902,68 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   // Rate Con panel + the AI rate-con parser flow keep working with
   // a single canonical pointer.
   if (kind === "rate_con") {
+    // PRESERVE-BEFORE-MIRROR: Legacy loads (Alvys imports, anything
+    // pre-mirror-logic) carry their original rate-con as a bare
+    // storage_path in loads.rate_con_pdf with no matching
+    // load_documents row. If we mirror straight to the new upload,
+    // that old path is orphaned — the file stays in storage but
+    // nothing in the new system references it, so the sidebar can't
+    // surface it and the dispatcher loses the original.
+    // Fix: before overwriting loads.rate_con_pdf, check if the
+    // existing path has a backing load_documents row. If not, mint
+    // one so the legacy rate-con joins the kind=rate_con list and
+    // stays visible alongside the new upload.
+    const { data: loadRow } = await supabase
+      .from("loads")
+      .select("rate_con_pdf, load_num")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    const existingPath = (loadRow as { rate_con_pdf: string | null } | null)?.rate_con_pdf ?? null;
+    const existingLoadNum = (loadRow as { load_num: string | null } | null)?.load_num ?? null;
+    if (existingPath && !existingPath.startsWith("data:") && existingPath !== storagePath) {
+      // Does any load_document already point at this storage path?
+      // (Covers the case where the mirror has already been wired and
+      // the legacy row has a matching entry — no preservation needed.)
+      const { data: existingRow } = await supabase
+        .from("load_documents")
+        .select("id")
+        .eq("load_id", loadId)
+        .eq("org_id", orgId)
+        .eq("storage_path", existingPath)
+        .limit(1)
+        .maybeSingle();
+      if (!existingRow) {
+        // No backing row → mint one so the dispatcher can still see
+        // and use the legacy rate-con after the new upload lands.
+        // The filename guesses the same convention the regular
+        // upload path uses; mime stays unknown (we don't fetch the
+        // file just to sniff its bytes).
+        const ext = existingPath.split(".").pop()?.toLowerCase() || "pdf";
+        const safeNum = (existingLoadNum ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+        const legacyName = safeNum ? `${safeNum}_RATE_CON_LEGACY.${ext}` : `rate_con_legacy.${ext}`;
+        const { error: preserveErr } = await supabase
+          .from("load_documents")
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .insert({
+            event_id:     eventId,
+            load_id:      loadId,
+            org_id:       orgId,
+            storage_path: existingPath,
+            file_name:    legacyName,
+            mime_type:    null,
+            size_bytes:   null,
+            kind:         "rate_con",
+          } as any);
+        if (preserveErr) {
+          console.warn(
+            "[POST /v1/loads/:id/documents] legacy rate-con preserve failed:",
+            preserveErr,
+          );
+          // Best-effort — keep going so the new upload still lands.
+        }
+      }
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: mirrorErr } = await supabase
       .from("loads")

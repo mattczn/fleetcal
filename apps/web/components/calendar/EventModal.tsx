@@ -2031,6 +2031,15 @@ export default function EventModal() {
   // server rejects them anyway, and showing the button lets the user
   // trigger an optimistic local removal before the 403 comes back.
   const canDeleteLoad = canDo('loads.delete');
+  // Once a load has moved past the closeout step (released for
+  // billing), cancelling it would create accounting drift — there's
+  // potentially an open invoice referencing it. The server enforces
+  // this gate (events.ts PATCH returns 409 billing_status_locked);
+  // we hide the affordance here so users don't try the action and
+  // get an error back. To genuinely walk one back: void the
+  // invoice first, billing_status drops back to 'pending', then
+  // cancel is offered again.
+  const cancelLocked = !!ev?.billingStatus && ev.billingStatus !== 'pending';
   // ── Read-only gate for this modal ────────────────────────────────
   // Maintenance opens a revenue load → has loads.view but not
   // loads.edit, so the form should be a static view. We disable all
@@ -6449,12 +6458,20 @@ export default function EventModal() {
                         )}
                       </>
                     ) : eventKind === 'revenue' ? (
-                      canDeleteLoad ? (
+                      canDeleteLoad && !cancelLocked ? (
                         <button type="button" onClick={() => setCancelDialogOpen(true)}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                           style={{ color: '#d93025', background: 'transparent' }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
                           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <Trash2 size={15} />
+                          Cancel load
+                        </button>
+                      ) : canDeleteLoad && cancelLocked ? (
+                        <button type="button" disabled
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium cursor-not-allowed"
+                          style={{ color: 'var(--gc-text-3)', background: 'transparent', opacity: 0.6 }}
+                          title="This load has been released for billing. Void the invoice first to cancel.">
                           <Trash2 size={15} />
                           Cancel load
                         </button>
