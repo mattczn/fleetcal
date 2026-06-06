@@ -16,7 +16,7 @@
  */
 
 import { useRef, useState } from 'react';
-import { X, Truck, Container, Users, Building2, MapPin, ExternalLink } from 'lucide-react';
+import { X, Truck, Container, Users, Building2, MapPin } from 'lucide-react';
 import AssetsModal from './AssetsModal';
 import TrailersModal from './TrailersModal';
 import DriversModal from './DriversModal';
@@ -52,25 +52,23 @@ export default function DirectoryModal({ initial, onClose }: Props) {
   const [saving, setSaving]           = useState(false);
   const pendingActionRef = useRef<(() => void) | null>(null);
 
-  // Which not-yet-embedded directory the user asked to open as a
-  // standalone modal on top. Null when none is open.
-  const [standalone, setStandalone] = useState<DirectoryTab | null>(null);
-
   // Module gate — only show Trailers tab if the org has the module.
   const { enabled: moduleEnabled } = useModules();
   const trailersOn = moduleEnabled('trailers');
 
-  // Embedded refs — Trucks tracks dirty state; Drivers + Trailers
-  // auto-save so their handles are no-ops but we still hold a ref
-  // for symmetry. Customers + Locations remain transitional.
-  const trucksRef   = useRef<DirectoryDetailHandle>(null);
-  const driversRef  = useRef<DirectoryDetailHandle>(null);
-  const trailersRef = useRef<DirectoryDetailHandle>(null);
+  // Embedded refs — Trucks + Customers track dirty state via their
+  // imperative handles; Drivers + Trailers auto-save so their
+  // handles are no-ops. Locations is still transitional.
+  const trucksRef    = useRef<DirectoryDetailHandle>(null);
+  const driversRef   = useRef<DirectoryDetailHandle>(null);
+  const trailersRef  = useRef<DirectoryDetailHandle>(null);
+  const customersRef = useRef<DirectoryDetailHandle>(null);
 
   const currentRef = (): DirectoryDetailHandle | null => {
-    if (tab === 'trucks')   return trucksRef.current;
-    if (tab === 'drivers')  return driversRef.current;
-    if (tab === 'trailers') return trailersRef.current;
+    if (tab === 'trucks')    return trucksRef.current;
+    if (tab === 'drivers')   return driversRef.current;
+    if (tab === 'trailers')  return trailersRef.current;
+    if (tab === 'customers') return customersRef.current;
     return null;
   };
 
@@ -201,61 +199,15 @@ export default function DirectoryModal({ initial, onClose }: Props) {
 
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === 'trucks'    && <AssetsModal   ref={trucksRef}   embedded onClose={onClose} />}
-          {tab === 'drivers'   && <DriversModal  ref={driversRef}  embedded onClose={onClose} />}
+          {tab === 'trucks'    && <AssetsModal        ref={trucksRef}    embedded onClose={onClose} />}
+          {tab === 'drivers'   && <DriversModal       ref={driversRef}   embedded onClose={onClose} />}
           {tab === 'trailers'  && trailersOn && <TrailersModal ref={trailersRef} embedded onClose={onClose} />}
+          {tab === 'customers' && <BrokerProfileModal ref={customersRef} embedded onClose={onClose} />}
           {tab === 'locations' && <SavedLocationsDirectoryBody />}
-          {tab === 'customers' && (
-            <StandalonePlaceholder
-              tab={tab}
-              onOpen={() => setStandalone(tab)}
-            />
-          )}
         </div>
       </div>
     </div>
-
-    {/* Standalone modal overlays — open ON TOP of the directory shell
-        for any not-yet-embedded directory (Customers today). Closes
-        itself when the user is done; the directory shell stays open. */}
-    {standalone === 'customers' && <BrokerProfileModal onClose={() => setStandalone(null)} />}
     </>
   );
 }
 
-/** Transitional empty-state for the not-yet-embedded directory tabs.
- *  Shows a card explaining the migration + a button that opens the
- *  current standalone modal as an overlay. Will be replaced as each
- *  directory's content gets embedded inline. */
-function StandalonePlaceholder({ tab, onOpen }: {
-  tab: 'customers';
-  onOpen: () => void;
-}) {
-  const meta = TAB_META[tab];
-  const Icon = meta.icon;
-  return (
-    <div className="flex-1 flex items-center justify-center p-12">
-      <div className="text-center max-w-md">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-full mb-4"
-          style={{ background: 'var(--gc-blue-light)', color: 'var(--gc-blue)' }}>
-          <Icon size={20} />
-        </div>
-        <div className="text-base font-semibold mb-2" style={{ color: 'var(--gc-text-1)' }}>
-          {meta.label} directory
-        </div>
-        <p className="text-sm mb-5" style={{ color: 'var(--gc-text-2)' }}>
-          The unified inline view for {meta.label.toLowerCase()} is migrating.
-          Open the directory in its own window for now — same data, same
-          actions.
-        </p>
-        <button onClick={onOpen}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors text-white"
-          style={{ background: 'var(--gc-blue)' }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-          Open {meta.label.toLowerCase()} directory <ExternalLink size={14} />
-        </button>
-      </div>
-    </div>
-  );
-}

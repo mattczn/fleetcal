@@ -4630,7 +4630,6 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'assets',           label: 'Trucks',           icon: <Truck size={15} /> },
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
       { id: 'customers',        label: 'Customers',        icon: <Truck size={15} /> },
-      { id: 'saved-locations',  label: 'Saved Locations',  icon: <MapPin size={15} /> },
       { id: 'load-fields',      label: 'Load Fields',      icon: <LayoutList size={15} /> },
       { id: 'card-layout',      label: 'Card Layout',      icon: <Layers size={15} /> },
       { id: 'ratecon-ai',       label: 'Rate Con AI',      icon: <Bot size={15} /> },

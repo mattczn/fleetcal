@@ -13,6 +13,7 @@ import { useCalendarStore } from '@/store/useCalendarStore';
 import { fetchBrokerLoads } from '@/lib/db';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import type { Customer, CalendarEvent, CustomerContact } from '@/lib/types';
+import type { DirectoryDetailHandle } from '@/components/sidebar/DirectoryModal';
 
 const ACCENT = '#1a73e8';
 
@@ -97,13 +98,24 @@ function fmtDateTime(dt: string): string {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function BrokerProfileModal({
-  initialBrokerId,
-  onClose,
-}: {
+interface BrokerProfileModalProps {
   initialBrokerId?: string;
   onClose: () => void;
-}) {
+  /** Embedded mode for DirectoryModal — skip the outer chrome
+   *  (backdrop, container, header) and render only the body + the
+   *  internal save-bar footer. The internal unsaved-changes dialog
+   *  also stays — it handles in-modal navigation (switching between
+   *  customers in the left list), while the DirectoryModal shell
+   *  handles cross-tab navigation via the forwarded handle. */
+  embedded?: boolean;
+}
+
+const BrokerProfileModal = forwardRef<DirectoryDetailHandle, BrokerProfileModalProps>(
+function BrokerProfileModal({
+  initialBrokerId,
+  onClose,
+  embedded,
+}, modalRef) {
   const { customers, orgId, openEditModal, assets, modalOpen } = useCalendarStore();
   const tz = useCalendarStore(s => s.calendarTimezone);
   const sorted = [...customers].sort((a, b) => a.name.localeCompare(b.name));
@@ -169,6 +181,16 @@ export default function BrokerProfileModal({
     }
   };
 
+  // Forward the inner detail handle to the DirectoryModal shell so
+  // it can gate cross-tab navigation. detailRef's BrokerDetailHandle
+  // shape is close enough to DirectoryDetailHandle — wrap save() to
+  // return a Promise to match the async signature the shell expects.
+  useImperativeHandle(modalRef, () => ({
+    isDirty: () => detailRef.current?.isDirty() ?? false,
+    save:    async () => { detailRef.current?.save(); },
+    discard: () => { detailRef.current?.discard(); },
+  }), []);
+
   /** Wraps the imperative save handle with await + UI feedback.
    *  Previously the footer just fired-and-forgot the promise from
    *  detailRef.current?.save(), so the user got zero indication
@@ -194,27 +216,9 @@ export default function BrokerProfileModal({
     tryClose(() => { setSelectedId(id); setSelectedLoadId(null); });
   };
 
-  return (
-    <div
-      // z-[230] so it stacks above the EventModal (z-[200]) when
-      // opened from the broker link inside a load — EventModal stays
-      // mounted in the background, broker profile takes the focus.
-      // Below the inline confirm dialogs (z-240+) so any prompts the
-      // broker UI fires can still appear on top.
-      className="fixed inset-0 z-[230] flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.32)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) tryClose(onClose); }}
-    >
-      <div
-        className="flex flex-col"
-        style={{
-          background: 'var(--gc-surface)',
-          width: '100%', maxWidth: selectedLoad ? 1520 : 1100, height: '88vh',
-          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
-          transition: 'max-width 250ms ease',
-        }}
-      >
-        {/* Unsaved changes dialog */}
+  const content = (
+    <>
+      {/* Unsaved changes dialog */}
         {showUnsaved && (
           <div className="absolute inset-0 z-10 flex items-center justify-center"
             style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 14 }}>
@@ -268,7 +272,8 @@ export default function BrokerProfileModal({
           </div>
         )}
 
-        {/* Header */}
+      {/* Header — hidden in embedded mode (DirectoryModal supplies tabs). */}
+      {!embedded && (
         <div className="shrink-0 flex items-center justify-between px-7 py-5"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-center gap-2.5">
@@ -284,8 +289,9 @@ export default function BrokerProfileModal({
             <X size={16} />
           </button>
         </div>
+      )}
 
-        {/* Body */}
+      {/* Body */}
         <div className="flex-1 overflow-hidden flex min-h-0">
 
           {/* Sidebar */}
@@ -373,10 +379,36 @@ export default function BrokerProfileModal({
             </button>
           </div>
         )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div
+      // z-[230] so it stacks above the EventModal (z-[200]) when
+      // opened from the broker link inside a load — EventModal stays
+      // mounted in the background, broker profile takes the focus.
+      // Below the inline confirm dialogs (z-240+) so any prompts the
+      // broker UI fires can still appear on top.
+      className="fixed inset-0 z-[230] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.32)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) tryClose(onClose); }}>
+      <div
+        className="flex flex-col"
+        style={{
+          background: 'var(--gc-surface)',
+          width: '100%', maxWidth: selectedLoad ? 1520 : 1100, height: '88vh',
+          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
+          transition: 'max-width 250ms ease',
+        }}>
+        {content}
       </div>
     </div>
   );
-}
+});
+
+export default BrokerProfileModal;
 
 // ─── Broker Nav Row ───────────────────────────────────────────────────────────
 
