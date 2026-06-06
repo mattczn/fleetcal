@@ -24,7 +24,13 @@ interface IncomingCustomer {
   parseHints?: string;
 }
 
-const MODEL = 'claude-haiku-4-5-20251001';
+// Pass 1 (broker harvest) is just name + alias extraction — cheap,
+// Haiku handles it fine. Pass 2 (full schema + cross-check rules +
+// multi-stop date reading) needs Sonnet. Haiku was misreading
+// appointment dates against the cross-check rule and producing
+// different answers across runs because temperature defaulted to 1.0.
+const MODEL_PASS_1 = 'claude-haiku-4-5-20251001';
+const MODEL_PASS_2 = 'claude-sonnet-4-5-20250929';
 
 function extractJson(text: string): Record<string, unknown> {
   const match = text.match(/\{[\s\S]*\}/);
@@ -120,8 +126,9 @@ export async function POST(req: NextRequest) {
       const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
       const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
       const pass1Response = await client.messages.create({
-        model: MODEL,
+        model: MODEL_PASS_1,
         max_tokens: 512,
+        temperature: 0,
         messages: [{ role: 'user', content: pass1Content }],
       });
       const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
@@ -159,8 +166,9 @@ export async function POST(req: NextRequest) {
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
     const content: ContentBlockParam[] = [docBlock, textBlock];
     const response = await client.messages.create({
-      model: MODEL,
+      model: MODEL_PASS_2,
       max_tokens: PASS_2_MAX_TOKENS,
+      temperature: 0,
       messages: [{ role: 'user', content }],
     });
     const text = response.content[0].type === 'text' ? response.content[0].text : '';
