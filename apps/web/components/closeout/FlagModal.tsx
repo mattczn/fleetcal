@@ -13,7 +13,7 @@ export type FlagReason =
 
 const REASONS: { value: FlagReason; label: string; hint: string }[] = [
   { value: 'missing_pod',       label: 'Missing POD',          hint: 'Driver hasn\'t uploaded the signed POD yet.' },
-  { value: 'awaiting_rate_con', label: 'Awaiting rate con',    hint: 'Broker hasn\'t sent the updated rate con (lumper/detention add).' },
+  { value: 'awaiting_rate_con', label: 'Awaiting rate con',    hint: 'Customer hasn\'t sent the updated rate con (lumper/detention add).' },
   { value: 'detention_pending', label: 'Detention pending',    hint: 'Detention slip not yet collected or invoice not approved.' },
   { value: 'lumper_pending',    label: 'Lumper pending',       hint: 'Lumper receipt not yet collected.' },
   { value: 'rate_mismatch',     label: 'Rate mismatch',        hint: 'Rate con and load price don\'t agree — needs review.' },
@@ -112,7 +112,7 @@ export function FlagModal({ loadLabel, onCancel, onConfirm }: FlagModalProps) {
               Note
             </div>
             <textarea value={note} onChange={e => setNote(e.target.value)}
-              placeholder="What we're waiting on, who to call, broker dispute details, etc."
+              placeholder="What we're waiting on, who to call, customer dispute details, etc."
               rows={3}
               className="w-full rounded-lg outline-none text-sm"
               style={{

@@ -119,7 +119,7 @@ export default function LoadHistorySection({ loads, assets, onSelect, heading = 
             style={{ color: 'var(--gc-text-3)' }} />
           <input
             type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search load #, broker…"
+            placeholder="Search load #, customer…"
             style={{
               width: '100%', paddingLeft: 28, paddingRight: 8,
               height: 30, borderRadius: 8, fontSize: 12,

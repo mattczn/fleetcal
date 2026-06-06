@@ -1122,7 +1122,7 @@ function DetailsTab({
 
   // Editable text/number columns. Asset/Driver/Dates require pickers — deferred.
   const editLoadNum    = () => onEditField({ title: "Load #",    column: "load_num", initial: load.loadNum  ?? "", kind: "text",      transform: (v) => v.trim() || null });
-  const editBroker     = () => onEditField({ title: "Broker",    column: "broker",   initial: load.broker   ?? "", kind: "text",      transform: (v) => v.trim() || null });
+  const editBroker     = () => onEditField({ title: "Customer",  column: "broker",   initial: load.broker   ?? "", kind: "text",      transform: (v) => v.trim() || null });
   const editTrailerTyp = () => onEditField({ title: "Trailer Type", column: "trailer_type", initial: load.trailerType ?? "", kind: "text", transform: (v) => v.trim() || null });
   const editLoadPrice  = () => onEditField({ title: "Load Price",   column: "load_price", initial: load.loadPrice != null ? String(load.loadPrice) : "", kind: "number", transform: (v) => v ? parseFloat(v) : null });
   const editDriverPay  = () => onEditField({ title: "Driver Pay",   column: "driver_pay", initial: load.driverPay != null ? String(load.driverPay) : "", kind: "number", transform: (v) => v ? parseFloat(v) : null });
@@ -1254,7 +1254,7 @@ function DetailsTab({
           />
         )}
         <EditableRow
-          Icon={Building2} label="Broker"
+          Icon={Building2} label="Customer"
           value={editMode ? load.broker : displayBrokerName(load.broker, customers)}
           editing={editMode} modified={dirty.has("broker")}
           onEdit={onEditBroker}

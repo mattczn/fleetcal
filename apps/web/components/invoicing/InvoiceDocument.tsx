@@ -122,7 +122,7 @@ export function InvoiceDocument({
           <div className="flex-1">
             <div className="text-[11px] font-extrabold uppercase tracking-wider mb-1.5" style={{ color: '#5f6368' }}>Bill to</div>
             <div className="font-extrabold text-[13px]">
-              {snapshot.brokerName || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>Broker name</span> : null)}
+              {snapshot.brokerName || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>Customer name</span> : null)}
             </div>
             {(snapshot.brokerAddrLine1 || snapshot.brokerAddrLine2) && (
               <div className="leading-snug" style={{ color: '#3c4043' }}>

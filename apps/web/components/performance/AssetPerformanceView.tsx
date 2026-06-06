@@ -103,7 +103,7 @@ const COLUMNS: ColumnDef[] = [
   { key: 'deadheadPctOfDay', label: 'DH %',        help: '(Inbound DH + yard return) / total miles',
     align: 'right', fmt: (a) => fmtPct(a.deadheadPctOfDay),
     num: (a) => a.deadheadPctOfDay, higherBetter: false },
-  { key: 'avgRevPerLoad',  label: 'Avg $/load',    help: 'Average revenue per load (broker mix quality)',
+  { key: 'avgRevPerLoad',  label: 'Avg $/load',    help: 'Average revenue per load (customer mix quality)',
     align: 'right', fmt: (a) => a.avgRevPerLoad != null ? fmtMoney(a.avgRevPerLoad) : '—',
     num: (a) => a.avgRevPerLoad, higherBetter: true },
   { key: 'avgLoadedMilesPerLoad', label: 'Avg mi/load', help: 'Average loaded miles per load — long-haul vs local mix',

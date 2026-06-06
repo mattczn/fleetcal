@@ -83,7 +83,7 @@ export default async function HomePage() {
           <FeatureBlock
             icon={FileText}
             title="AI rate-con parser"
-            body="Drop a rate confirmation PDF onto the calendar. Broker, rate, stops, and appointment times extracted automatically. Edit what's wrong, save what's right."
+            body="Drop a rate confirmation PDF onto the calendar. Customer, rate, stops, and appointment times extracted automatically. Edit what's wrong, save what's right."
           />
           <FeatureBlock
             icon={Calendar}
@@ -93,7 +93,7 @@ export default async function HomePage() {
           <FeatureBlock
             icon={Receipt}
             title="Closeout to invoice in 3 clicks"
-            body="POD verification queue. Release to billing. Generate the invoice. Send to the broker. Mark paid. Every step where it should be, no leaving the app."
+            body="POD verification queue. Release to billing. Generate the invoice. Send to the customer. Mark paid. Every step where it should be, no leaving the app."
           />
           <FeatureBlock
             icon={Users}

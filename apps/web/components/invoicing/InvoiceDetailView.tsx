@@ -349,7 +349,7 @@ export function InvoiceDetailView({
             className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
             style={{ background: '#1a73e8', color: '#fff' }}
             disabled={!invoice || pdfBusy !== null}
-            title="Download the full broker packet (invoice + rate-con + POD)">
+            title="Download the full customer packet (invoice + rate-con + POD)">
             {pdfBusy === 'download-packet'
               ? <Loader2 size={12} className="animate-spin inline mr-1.5" />
               : <Download size={12} className="inline mr-1.5" />}
@@ -439,7 +439,7 @@ export function InvoiceDetailView({
                       <div className="flex items-start gap-1.5 text-[12px]">
                         <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
                         <span>
-                          No broker linked to this invoice. Pick one to enable sending.
+                          No customer linked to this invoice. Pick one to enable sending.
                         </span>
                       </div>
                       {brokerPickerOpen ? (
@@ -451,7 +451,7 @@ export function InvoiceDetailView({
                             style={{ border: '1px solid #fecaca', background: '#fff', color: 'var(--gc-text-1)' }}
                             autoFocus
                           >
-                            <option value="">— Pick a broker —</option>
+                            <option value="">— Pick a customer —</option>
                             {[...customers].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
                               <option key={c.id} value={c.id}>
                                 {c.name}{c.invoiceEmail ? '' : ' (no AP email)'}
@@ -479,7 +479,7 @@ export function InvoiceDetailView({
                           onClick={() => setBrokerPickerOpen(true)}
                           className="w-full text-[12px] font-semibold px-3 py-1.5 rounded transition-colors"
                           style={{ background: '#fff', color: '#991b1b', border: '1px solid #fecaca' }}>
-                          Set broker
+                          Set customer
                         </button>
                       )}
                     </div>
@@ -514,10 +514,10 @@ export function InvoiceDetailView({
                         title={
                           broker?.invoiceEmail
                             ? `Send to ${broker.invoiceEmail} (rebuilds the packet fresh — same process as Generate)`
-                            : 'Set this broker\'s invoice email before sending'
+                            : 'Set this customer\'s invoice email before sending'
                         }>
                         <Mail size={12} className="inline mr-1.5" />
-                        {generatedUrl ? 'Send to broker' : 'Generate & email to broker'}
+                        {generatedUrl ? 'Send to customer' : 'Generate & email to customer'}
                       </button>
                       <button onClick={() => void handleMarkSentManual()} disabled={busy !== null}
                         className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"
@@ -588,7 +588,7 @@ function BrokerRecipientBlock({
   invoice: Invoice;
   onBrokerClick: ((brokerId: string) => void) | undefined;
 }) {
-  const brokerName = broker?.name ?? invoice.snapshot.brokerName ?? '(no broker set)';
+  const brokerName = broker?.name ?? invoice.snapshot.brokerName ?? '(no customer set)';
   const recipient  = broker?.invoiceEmail?.trim();
 
   // method defaults to 'email' on new customers per Phase 4 — if it's
@@ -606,7 +606,7 @@ function BrokerRecipientBlock({
           onClick={() => onBrokerClick(broker.id)}
           className="text-[13px] font-semibold flex items-center gap-1 hover:underline"
           style={{ color: '#1a73e8' }}
-          title="Open broker profile">
+          title="Open customer profile">
           {brokerName}
           <ExternalLinkIcon size={11} />
         </button>
@@ -620,7 +620,7 @@ function BrokerRecipientBlock({
         <div className="text-[12px] flex items-start gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
           <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 2, color: '#9a3412' }} />
           <span>
-            Broker uses a portal (not email).
+            Customer uses a portal (not email).
             {broker?.invoicePortal && <> {broker.invoicePortal}</>}
             <br/>Use <strong>Mark sent manually</strong> after uploading to their portal.
           </span>
@@ -634,14 +634,14 @@ function BrokerRecipientBlock({
           style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}>
           <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
           <span>
-            No invoice email saved for this broker.{' '}
+            No invoice email saved for this customer.{' '}
             {broker && onBrokerClick && (
               <button onClick={() => onBrokerClick(broker.id)}
                 className="underline font-semibold">
-                Open broker profile
+                Open customer profile
               </button>
             )}
-            {(!broker || !onBrokerClick) && 'Set one in the broker profile to enable Email to broker.'}
+            {(!broker || !onBrokerClick) && 'Set one in the customer profile to enable Email to customer.'}
           </span>
         </div>
       )}
@@ -714,7 +714,7 @@ function EmailInvoiceDialog({ invoice, broker, busy, onClose, onSend }: EmailDia
         <div className="px-5 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <Mail size={16} style={{ color: '#1a73e8' }} />
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
-            Email invoice #{invoice.invoiceNumber} to broker
+            Email invoice #{invoice.invoiceNumber} to customer
           </div>
           <button onClick={onClose} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)]" disabled={busy}>
             <X size={14} />
@@ -726,13 +726,13 @@ function EmailInvoiceDialog({ invoice, broker, busy, onClose, onSend }: EmailDia
             <input type="email"
               value={to}
               onChange={e => setTo(e.target.value)}
-              placeholder={broker?.invoiceEmail ?? 'ap@broker.com'}
+              placeholder={broker?.invoiceEmail ?? 'ap@customer.com'}
               disabled={busy}
               className="w-full px-3 py-2 rounded-lg text-sm outline-none"
               style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }} />
             {!broker?.invoiceEmail && broker?.name && (
               <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
-                No saved AP email for {broker.name}. Add one in the broker profile to skip this step next time.
+                No saved AP email for {broker.name}. Add one in the customer profile to skip this step next time.
               </div>
             )}
           </Row>

@@ -1549,7 +1549,7 @@ export default function LoadDetailScreen() {
             marginBottom: 18,
           }}
         >
-          {load.broker      ? <MetaRow Icon={Building2} label="Broker"  value={load.broker}      /> : null}
+          {load.broker      ? <MetaRow Icon={Building2} label="Customer" value={load.broker}      /> : null}
           {load.assetName   ? <MetaRow Icon={Truck}     label="Truck"   value={load.assetName}   /> : null}
           {load.trailerType ? <MetaRow Icon={Container} label="Trailer Type" value={load.trailerType} /> : null}
           <TouchableOpacity onPress={() => setTrailerPickerVisible(true)} activeOpacity={0.6}>

@@ -804,7 +804,7 @@ function Step1({
         <FormRow Icon={User} label="Driver"
           value={selectedDriverName}
           onEdit={onPickDriver} />
-        <FormRow Icon={Building2} label="Broker"
+        <FormRow Icon={Building2} label="Customer"
           value={draft.broker || null}
           onEdit={onEditBroker} />
         <FormRow Icon={Box} label="Trailer Type"

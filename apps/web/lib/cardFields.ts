@@ -20,7 +20,7 @@ export const CARD_FIELD_DEFS: CardFieldDef[] = [
   { key: 'time',      label: 'Time',       render: (e) => { const s = e.start.split('T')[1]?.slice(0,5); const en = e.end.split('T')[1]?.slice(0,5); return s && en ? `${fmt(s)}–${fmt(en)}` : null; } },
   { key: 'driver',    label: 'Driver',     render: (e, ctx) => ctx?.driverLabel ?? e.driverName ?? null },
   { key: 'loadNum',   label: 'Load #',     render: (e) => e.loadNum ? `#${e.loadNum}` : null },
-  { key: 'broker',    label: 'Broker',     render: (e, ctx) => displayBrokerName(e.broker, ctx?.customers ?? []) || null },
+  { key: 'broker',    label: 'Customer',   render: (e, ctx) => displayBrokerName(e.broker, ctx?.customers ?? []) || null },
   { key: 'loadPrice', label: 'Linehaul',   render: (e) => e.loadPrice != null ? `$${e.loadPrice.toLocaleString()}` : null },
   // Total billable (linehaul + billable accessorials). Renders ONLY when
   // it differs from loadPrice — i.e., when there's at least one billable

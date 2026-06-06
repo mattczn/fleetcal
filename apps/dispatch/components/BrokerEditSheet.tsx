@@ -88,7 +88,7 @@ export function BrokerEditSheet({ visible, orgId, initial, saving, onClose, onSa
               borderBottomWidth: 1, borderBottomColor: "#f1f3f4",
             }}>
               <Text style={[txt(800), { fontSize: 16, color: "#202124", flex: 1 }]}>
-                Edit Broker
+                Edit Customer
               </Text>
               <TouchableOpacity onPress={onClose} hitSlop={10}>
                 <X size={20} color="#5f6368" strokeWidth={2.2} />
@@ -106,7 +106,7 @@ export function BrokerEditSheet({ visible, orgId, initial, saving, onClose, onSa
                   ref={inputRef}
                   value={value}
                   onChangeText={setValue}
-                  placeholder="Broker / Customer name"
+                  placeholder="Customer name"
                   placeholderTextColor="#9aa0a6"
                   autoCapitalize="words"
                   autoCorrect={false}

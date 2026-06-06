@@ -226,7 +226,7 @@ export default function BrokerProfileModal({
                 Unsaved changes
               </div>
               <div className="text-sm mb-5" style={{ color: 'var(--gc-text-2)' }}>
-                You have unsaved changes to this broker's details. What would you like to do?
+                You have unsaved changes to this customer's details. What would you like to do?
               </div>
               <div className="flex flex-col gap-2">
                 <button
@@ -326,7 +326,7 @@ export default function BrokerProfileModal({
               />
             ) : (
               <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--gc-text-3)' }}>
-                Select a broker
+                Select a customer
               </div>
             )}
           </div>

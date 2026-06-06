@@ -921,7 +921,7 @@ export default function CloseoutView() {
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 style={{ color: searchQuery ? 'var(--gc-blue)' : 'var(--gc-text-3)' }} />
               <input type="text"
-                placeholder={`Search ${tab} loads — broker, load #, ID, title, driver, notes…`}
+                placeholder={`Search ${tab} loads — customer, load #, ID, title, driver, notes…`}
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"

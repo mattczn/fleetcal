@@ -842,7 +842,7 @@ function AccountingPageInner() {
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--gc-text-3)' }} />
               <input type="text"
-                placeholder="Search broker, invoice #, load #, title…"
+                placeholder="Search customer, invoice #, load #, title…"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 className="text-[13px] pl-8 pr-7 py-1.5 rounded-lg outline-none"
@@ -1203,7 +1203,7 @@ function InvoiceSummaryModal({
                       per-node flex items, which mangles emphasis tags
                       (the inline elements become vertically-centered
                       boxes that don't sit on the text baseline). */}
-                  <span>Some brokers have no saved AP email — their invoices will be created but skipped at the send step.</span>
+                  <span>Some customers have no saved AP email — their invoices will be created but skipped at the send step.</span>
                 </div>
               )}
               {hasPortal && (
@@ -1211,7 +1211,7 @@ function InvoiceSummaryModal({
                   style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
                   <AlertCircle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
                   <span>
-                    Portal brokers won't get an email — their invoices flip to <strong>Sent</strong> so you can upload the packet to the portal yourself. Turn on <em>Bcc me a copy</em> to get the packet emailed to yourself.
+                    Portal customers won't get an email — their invoices flip to <strong>Sent</strong> so you can upload the packet to the portal yourself. Turn on <em>Bcc me a copy</em> to get the packet emailed to yourself.
                   </span>
                 </div>
               )}
@@ -1440,7 +1440,7 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
               g.status === 'sent'                ? { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: `Sent · ${g.invoiceIds.length}` } :
               g.status === 'sent_portal'         ? { bg: '#dbeafe', fg: '#1e40af', border: '#bfdbfe', label: 'Portal — marked sent' } :
               g.status === 'skipped_no_email'    ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no AP email' } :
-              g.status === 'skipped_no_customer' ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no broker' } :
+              g.status === 'skipped_no_customer' ? { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa', label: 'Skipped — no customer' } :
                                                    { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Failed' };
             return (
               <div key={i} className="px-3 py-2 rounded-lg flex items-center justify-between gap-3"
@@ -1800,7 +1800,7 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
                 style={{ background: '#fff7ed', color: '#9a3412', borderTop: '1px solid #fed7aa' }}>
                 {!hasRateCon
                   ? 'No rate confirmation on file.'
-                  : 'No supporting docs selected — brokers usually expect at least a POD.'}
+                  : 'No supporting docs selected — customers usually expect at least a POD.'}
               </div>
             )}
           </div>
@@ -1924,7 +1924,7 @@ function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplet
           <div className="font-semibold text-sm" style={{ color: 'var(--gc-text-1)' }}>
             {result
               ? (mode === 'resend' ? 'Batch resend results' : 'Batch send results')
-              : `${mode === 'resend' ? 'Resend' : 'Send'} ${invoices.length} invoice${invoices.length === 1 ? '' : 's'} — ${groups.length} broker${groups.length === 1 ? '' : 's'}`}
+              : `${mode === 'resend' ? 'Resend' : 'Send'} ${invoices.length} invoice${invoices.length === 1 ? '' : 's'} — ${groups.length} customer${groups.length === 1 ? '' : 's'}`}
           </div>
           <button onClick={onClose} disabled={busy} className="ml-auto p-1.5 rounded-lg hover:bg-[var(--gc-hover)] disabled:opacity-50">
             <X size={14} />
@@ -1972,7 +1972,7 @@ function BatchSendDialog({ rows, mode = 'send', onOpenBroker, onClose, onComplet
                             <div className="font-semibold text-[13px] truncate" style={{ color: 'var(--gc-text-1)' }}>{g.broker.name}</div>
                           )
                         ) : (
-                          <div className="font-semibold text-[13px] truncate" style={{ color: '#dc2626' }}>(no broker set)</div>
+                          <div className="font-semibold text-[13px] truncate" style={{ color: '#dc2626' }}>(no customer set)</div>
                         )}
                         <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>
                           {(() => {

@@ -1131,7 +1131,7 @@ const DOC_KIND_LABEL: Record<DocumentKind, string> = {
   other:         'Other',
 };
 const DOC_KIND_HINT: Partial<Record<DocumentKind, string>> = {
-  rate_con: 'Off by default — broker proprietary.',
+  rate_con: 'Off by default — customer proprietary.',
   invoice:  'Off by default — customer-facing financial doc.',
 };
 
@@ -1264,7 +1264,7 @@ function DocumentsPanel() {
                   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
                     {locked && (
                       <span
-                        title="Confidential by policy — contains broker rates or financial data. Cannot be shared with drivers."
+                        title="Confidential by policy — contains customer rates or financial data. Cannot be shared with drivers."
                         style={{ display: 'inline-flex', color: SETTINGS_COLORS.textMuted }}
                       >
                         <Lock size={13} />
@@ -2360,7 +2360,7 @@ function InvoicingPanel() {
           <h2 className="text-lg font-semibold" style={{ color: 'var(--gc-text-1)' }}>Invoicing</h2>
           <p className="text-sm mt-1.5 leading-relaxed" style={{ color: 'var(--gc-text-2)' }}>
             Letterhead, contact info, and payment instructions that appear on every invoice you generate.
-            Per-broker invoice routing (email vs portal) lives on each customer&rsquo;s profile.
+            Per-customer invoice routing (email vs portal) lives on each customer&rsquo;s profile.
           </p>
           {clerkOrg && (
             <div className="text-xs mt-2 flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
@@ -2391,7 +2391,7 @@ function InvoicingPanel() {
         <FieldRow label="DOT #">
           <Input value={form.dotNumber} onChange={v => updateField('dotNumber', v)} placeholder="1234567" />
         </FieldRow>
-        <FieldRow label="EIN" subtitle="Tax ID. Some brokers require it on the invoice.">
+        <FieldRow label="EIN" subtitle="Tax ID. Some customers require it on the invoice.">
           <Input value={form.ein} onChange={v => updateField('ein', v)} placeholder="12-3456789" />
         </FieldRow>
       </Card>
@@ -2416,11 +2416,11 @@ function InvoicingPanel() {
       </Card>
 
       {/* Contact */}
-      <Card title="Contact" subtitle="Shown on invoices so brokers know who to ask about payment.">
-        <FieldRow label="AR / accounting email" subtitle="Set as Reply-To on outbound invoice emails — broker replies route here.">
+      <Card title="Contact" subtitle="Shown on invoices so customers know who to ask about payment.">
+        <FieldRow label="AR / accounting email" subtitle="Set as Reply-To on outbound invoice emails — customer replies route here.">
           <Input value={form.email} onChange={v => updateField('email', v)} placeholder="ar@acmetrucking.com" type="email" />
         </FieldRow>
-        <FieldRow label="Auto-CC email" subtitle="Always CC'd on outbound invoice sends. Use a group inbox (e.g. billing@) so every broker Reply-All lands in one place. Comma-separate for multiple.">
+        <FieldRow label="Auto-CC email" subtitle="Always CC'd on outbound invoice sends. Use a group inbox (e.g. billing@) so every customer Reply-All lands in one place. Comma-separate for multiple.">
           <Input value={form.ccEmail} onChange={v => updateField('ccEmail', v)} placeholder="billing@acmetrucking.com" type="email" />
         </FieldRow>
         <FieldRow label="Phone">
@@ -2429,8 +2429,8 @@ function InvoicingPanel() {
       </Card>
 
       {/* Payment terms + remit-to */}
-      <Card title="Payment" subtitle="How and when brokers should pay.">
-        <FieldRow label="Default payment terms (days)" subtitle="Net 30 = 30. Brokers can override on their profile.">
+      <Card title="Payment" subtitle="How and when customers should pay.">
+        <FieldRow label="Default payment terms (days)" subtitle="Net 30 = 30. Customers can override on their profile.">
           <Input value={form.defaultPaymentTermsDays}
             onChange={v => updateField('defaultPaymentTermsDays', v.replace(/[^\d]/g, ''))}
             placeholder="30" />
@@ -2441,7 +2441,7 @@ function InvoicingPanel() {
               placeholder={'Make checks payable to:\nAcme Trucking LLC\nP.O. Box 1234, Salt Lake City, UT 84101\n\nACH inquiries: ar@acmetrucking.com'}
               rows={6} />
             <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-              <strong style={{ color: '#92400e' }}>Heads-up:</strong> invoices travel through brokers, AP staff, and factor archives.
+              <strong style={{ color: '#92400e' }}>Heads-up:</strong> invoices travel through customers, AP staff, and factor archives.
               Putting full ACH routing + account numbers in plain text on the invoice exposes them widely.
               Safer pattern: bank name + last-4 digits, with &ldquo;Contact AR for full ACH details.&rdquo;
             </div>
@@ -2474,7 +2474,7 @@ function InvoicingPanel() {
               placeholder={'Please find the attached invoice(s):\n\n{{invoiceList}}\n\nBill to: {{brokerName}}\nTotal: {{total}}\n\n{{remitTo}}\n\n{{companyName}}\n{{email}}\n{{phone}}'}
               rows={10} />
             <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-              Batch sends to the same broker share one email — placeholders like
+              Batch sends to the same customer share one email — placeholders like
               <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceNumber}}`}</code>
               expand to a comma-joined list (capped at 4 with &ldquo;+ N more&rdquo;).
               <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceList}}`}</code>

@@ -207,7 +207,7 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
                 tone={{ bg: '#dcfce7', fg: '#166534', border: '#86efac' }}
                 title={`${ACCESSORIAL_LABELS[a.category] ?? 'Accessorial'} ${moneyFmt(a.amount)}`}
                 detail={a.description ?? undefined}
-                meta={`Status: ${a.status ?? 'requested'} — waiting on broker decision`}
+                meta={`Status: ${a.status ?? 'requested'} — waiting on customer decision`}
               />
             ))}
             {isTonu && (
@@ -230,7 +230,7 @@ export default function FollowUpModal({ load, docCounts, actorName, onClose, onS
             <textarea
               value={note}
               onChange={e => setNote(e.target.value)}
-              placeholder="What did you do? (called broker AP, emailed driver, etc.)"
+              placeholder="What did you do? (called customer AP, emailed driver, etc.)"
               rows={3}
               disabled={busy}
               className="w-full px-3 py-2 rounded-lg text-sm outline-none"

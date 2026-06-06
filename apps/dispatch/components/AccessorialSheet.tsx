@@ -223,8 +223,8 @@ export function AccessorialSheet({ visible, initial, payOpts, onClose, onSave, o
 
               {/* Billable */}
               <ToggleRow
-                label="Billable to broker"
-                description="Counts toward the broker invoice total."
+                label="Billable to customer"
+                description="Counts toward the customer invoice total."
                 value={billable}
                 color={ACC_COLOR}
                 onChange={setBillable}
