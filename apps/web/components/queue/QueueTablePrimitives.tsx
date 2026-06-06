@@ -257,7 +257,7 @@ export function AccessorialsCell({ items }: { items?: AccessorialItem[] }) {
         onMouseEnter={openPopover}
         onMouseLeave={() => setPopPos(null)}
       >
-        <div className="font-semibold tabular-nums">{moneyFmt.format(sum)}</div>
+        <div className="tabular-nums">{moneyFmt.format(sum)}</div>
         <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
           {count} item{count !== 1 ? 's' : ''}
         </div>
@@ -738,10 +738,15 @@ export function NotesButton({
         <span
           className="absolute text-[9px] font-bold rounded-full tabular-nums flex items-center justify-center"
           style={{
-            top:        -5,
-            right:      -5,
-            minWidth:   14,
-            height:     14,
+            // Anchor close to the icon's top-right corner instead of
+            // popping the badge 5px outside the button — at -5 the
+            // badge clears the row's vertical bounds when the row
+            // sits at the top of the OpsTable viewport and gets
+            // clipped by the body's overflow.
+            top:        -3,
+            right:      -3,
+            minWidth:   13,
+            height:     13,
             padding:    '0 3px',
             background: '#1a73e8',
             color:      '#fff',

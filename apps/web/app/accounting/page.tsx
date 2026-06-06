@@ -509,7 +509,7 @@ function AccountingPageInner() {
       align: 'right', sortable: true,
       sortValue: r => r.load.loadPrice ?? 0,
       render: r => (
-        <span className="font-semibold tabular-nums">
+        <span className="tabular-nums">
           {r.load.loadPrice != null ? moneyFmt.format(r.load.loadPrice) : '—'}
         </span>
       ),

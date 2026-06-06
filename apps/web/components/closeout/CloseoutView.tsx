@@ -631,7 +631,7 @@ export default function CloseoutView() {
       align: 'right', sortable: true,
       sortValue: r => r.loadPrice ?? 0,
       render: r => (
-        <span className="font-semibold tabular-nums">
+        <span className="tabular-nums">
           {r.loadPrice != null ? moneyFmt.format(r.loadPrice) : '—'}
         </span>
       ),
@@ -1251,10 +1251,15 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
         <span
           className="absolute text-[9px] font-bold rounded-full tabular-nums flex items-center justify-center"
           style={{
-            top:        -5,
-            right:      -5,
-            minWidth:   14,
-            height:     14,
+            // Anchor close to the icon's top-right corner instead of
+            // popping the badge 5px outside the button — at -5 the
+            // badge clears the row's vertical bounds when the row
+            // sits at the top of the OpsTable viewport and gets
+            // clipped by the body's overflow.
+            top:        -3,
+            right:      -3,
+            minWidth:   13,
+            height:     13,
             padding:    '0 3px',
             background: '#1a73e8',
             color:      '#fff',
