@@ -56,22 +56,27 @@ orgSettings.get("/", async (c) => {
     notification_rules:        NotificationRules      | null;
     motive_settings:           import("@fleetcal/types").MotiveSettings | null;
   } | null;
-  // orgModules fallback: return MVP launch defaults when either (a) no
-  // row exists at all, or (b) a row exists but `modules` is null /
-  // empty `{}`. The empty-object case fires when a settings PATCH ran
-  // against a brand-new org BEFORE this file's PATCH handler started
-  // seeding with MVP_LAUNCH_DEFAULTS — that path used to write
-  // `modules: {}`, and an empty-object isn't caught by `??`, so without
-  // this check the org silently saw absent-key-as-enabled for every
-  // module (all features re-enabled) for the lifetime of the row.
+  // orgModules: layer MVP_LAUNCH_DEFAULTS as the base, then merge the
+  // stored map on top. Three regimes fall out:
+  //   (a) no row, or row with null/empty modules → returns the pure
+  //       MVP_LAUNCH_DEFAULTS
+  //   (b) row with stored modules but missing keys (e.g. a flag added
+  //       to the constant AFTER the org was stamped) → the new key
+  //       inherits the latest default automatically, no per-org
+  //       migration needed
+  //   (c) row with stored modules that explicitly set a key → the
+  //       stored value wins, preserving deliberate admin choices
   //
-  // Curzon's row has the OLD 5-flag default ({closeout:true, ...,
-  // maintenance:true}) — that's >0 keys, so this branch returns it
-  // unchanged and Curzon keeps absent-key-as-enabled for the 7 new
-  // flags = everything ON. No migration needed.
+  // This replaces the previous "stored-as-is OR pure defaults" branch,
+  // which had a gotcha: once an org's PATCH stamped the full default
+  // map, any later default-flag flips were silently ignored for that
+  // org. With layering, default flips propagate to all orgs that
+  // haven't explicitly opined on the flag.
   const storedModules    = row?.modules ?? null;
   const hasStoredModules = storedModules !== null && Object.keys(storedModules).length > 0;
-  const orgModulesOut    = hasStoredModules ? storedModules! : MVP_LAUNCH_DEFAULTS;
+  const orgModulesOut    = hasStoredModules
+    ? { ...MVP_LAUNCH_DEFAULTS, ...storedModules }
+    : MVP_LAUNCH_DEFAULTS;
 
   const res: GetOrgSettingsResponse = {
     settings: {
@@ -176,18 +181,26 @@ orgSettings.patch("/", requireCapability("org.settings.edit"), async (c) => {
   // and the API preserves the rest of the map. Reset to defaults by
   // sending an empty object.
   //
-  // Seed the merge base with MVP_LAUNCH_DEFAULTS when there's no
-  // existing row OR when an existing row has an empty `{}` modules
-  // map. The empty-object case fires for orgs whose row was created
-  // by a PATCH that ran BEFORE this seeding logic was deployed —
-  // without this check, those orgs would have absent keys for every
-  // flag (silently re-enabled per isModuleEnabled semantics) for the
-  // lifetime of the row. Curzon's stored 5-flag map has keys, so
-  // hits the `existingRow?.modules` branch and merges in unchanged.
+  // Three-layer merge so the result honors both deliberate per-org
+  // overrides AND the latest MVP defaults:
+  //
+  //   MVP_LAUNCH_DEFAULTS  <-  stored map  <-  request body
+  //
+  // - Brand-new orgs (no row): base = defaults, everything inherits.
+  // - Existing orgs with a stored map: any keys absent from storage
+  //   pick up the latest default (e.g. when we flip a flag's default
+  //   in code). Keys with stored values keep them.
+  // - The request body wins last for any keys it sets.
+  //
+  // This replaces the prior "stored-as-is" merge base. With that, once
+  // a PATCH stamped the full default map, later default flips were
+  // permanently invisible to that org — admins had to hand-toggle
+  // every new MVP default in the Modules panel. With layering, the
+  // newest defaults always show through for unset keys.
   const existingStored   = existingRow?.modules ?? null;
   const hasExistingFlags = existingStored !== null && Object.keys(existingStored).length > 0;
   const moduleMergeBase: OrgModuleFlags = hasExistingFlags
-    ? existingStored!
+    ? { ...MVP_LAUNCH_DEFAULTS, ...existingStored }
     : MVP_LAUNCH_DEFAULTS;
   const mergedModules: OrgModuleFlags = body.orgModules === undefined
     ? moduleMergeBase
