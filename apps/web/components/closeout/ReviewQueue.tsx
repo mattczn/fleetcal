@@ -1568,17 +1568,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const tint = KIND_TINT[active.kind] ?? KIND_TINT.other;
                   // Enumerate same-kind docs as POD 1 / POD 2 for context,
                   // matching the right sidebar list's row labels.
-                  const sameKindCount = nonRateConDocs.filter(x => x.kind === active.kind).length;
-                  const seq           = nonRateConDocs.slice(0, activeDocIdx + 1).filter(x => x.kind === active.kind).length;
-                  const labelText     = KIND_LABEL[active.kind] ?? active.kind;
-                  const kindLabel     = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                  // Bare kind in the toolbar too — same call as the
+                  // side-panel rows. "POD 1 / POD 2" numbering implied
+                  // an ordering the user didn't intend.
+                  const kindLabel     = KIND_LABEL[active.kind] ?? active.kind;
                   return (
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                        style={{ background: tint.bg, color: tint.fg }}>
+                      {/* Pill chip + 13px bold filename — same recipe
+                          as the sidebar doc rows. */}
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                        style={{ background: tint.bg, color: tint.fg, borderRadius: 999 }}>
                         {kindLabel}
                       </span>
-                      <span className="text-[12px] font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}
+                      <span className="text-[13px] font-bold truncate" style={{ color: 'var(--gc-text-1)' }}
                         title={active.fileName}>
                         {active.fileName}
                       </span>
@@ -1687,8 +1689,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   drops the last chip to a second row. */}
               <div className="flex items-center gap-2 flex-wrap justify-end">
                 {isTonu && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
-                    style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' }}>
+                  <span className="text-[10px] px-2 py-0.5 font-extrabold uppercase tracking-wider"
+                    style={{ background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: 999 }}>
                     TONU
                   </span>
                 )}
@@ -2946,19 +2948,20 @@ function DocSelectionDialog({
                           value={d.kind}
                           disabled={isPending || busy || isRenaming}
                           onChange={e => void handleKindChange(d.id, e.target.value as import('@fleetcal/types').DocumentKind)}
-                          className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-1 rounded shrink-0 cursor-pointer"
+                          className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-1 shrink-0 cursor-pointer"
                           style={{
                             background: tint.bg,
                             color:      tint.fg,
                             border:     'none',
+                            borderRadius: 999,
                             // Prevent inherited padding / appearance from
                             // bloating the chip in non-Chromium browsers.
                             appearance: 'none',
                             WebkitAppearance: 'none',
-                            paddingRight: 18,
+                            paddingRight: 20,
                             backgroundImage: `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='${encodeURIComponent(tint.fg)}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>")`,
                             backgroundRepeat:   'no-repeat',
-                            backgroundPosition: 'right 4px center',
+                            backgroundPosition: 'right 6px center',
                           }}
                           title="Change document type">
                           {kindOptions.map(opt => (
@@ -2966,8 +2969,8 @@ function DocSelectionDialog({
                           ))}
                         </select>
                       ) : (
-                        <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                          style={{ background: tint.bg, color: tint.fg }}>
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                          style={{ background: tint.bg, color: tint.fg, borderRadius: 999 }}>
                           {kindLabel[d.kind] ?? d.kind}
                         </span>
                       )}
