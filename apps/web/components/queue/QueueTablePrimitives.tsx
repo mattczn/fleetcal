@@ -142,9 +142,10 @@ const DOC_BADGE_TINT: Record<string, string> = {
 
 export function DocBadge({ label, count }: { label: string; count?: number }) {
   const bg = DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
+  const countSuffix = count && count > 1 ? ` (×${count})` : '';
   return (
     <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${count ?? ''} ${label}`.trim()}
+      title={`${label} — Present${countSuffix}`}
       style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
       {label}{count && count > 1 ? ` ×${count}` : ''}
     </span>
@@ -163,7 +164,7 @@ export function DocBadge({ label, count }: { label: string; count?: number }) {
  * Paperwork + Billing loads tables.
  */
 export function RequiredDocBadge({
-  label, present, count, presentTint, missingTitle,
+  label, present, count, presentTint, missingTitle: _ignoredMissingTitle,
 }: {
   label:        string;
   present:      boolean;
@@ -171,13 +172,17 @@ export function RequiredDocBadge({
   /** Background colour when the doc is present. Defaults to the tint
    *  registered in DOC_BADGE_TINT for `label`, falling back to Other. */
   presentTint?: string;
-  missingTitle: string;
+  /** @deprecated Hover text is now uniformly "{label} — Present/Missing".
+   *  Prop kept on the signature so existing call sites don't break, but
+   *  the value is no longer surfaced anywhere. */
+  missingTitle?: string;
 }) {
   if (present) {
     const bg = presentTint ?? DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
+    const countSuffix = count && count > 1 ? ` (×${count})` : '';
     return (
       <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-        title={`${count ?? ''} ${label}`.trim()}
+        title={`${label} — Present${countSuffix}`}
         style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
         {label}{count && count > 1 ? ` ×${count}` : ''}
       </span>
@@ -185,7 +190,7 @@ export function RequiredDocBadge({
   }
   return (
     <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={missingTitle}
+      title={`${label} — Missing`}
       style={{
         background: 'transparent',
         color:      '#991b1b',

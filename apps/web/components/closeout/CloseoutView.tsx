@@ -758,7 +758,7 @@ export default function CloseoutView() {
             return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
           }
           return (
-            <span className="font-bold tabular-nums">{moneyFmt.format(tot)}</span>
+            <span className="font-extrabold tabular-nums">{moneyFmt.format(tot)}</span>
           );
         },
       });
@@ -1206,9 +1206,10 @@ const DOC_BADGE_TINT: Record<string, string> = {
 };
 function DocBadge({ label, count }: { label: string; count?: number }) {
   const bg = DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
+  const countSuffix = count && count > 1 ? ` (×${count})` : '';
   return (
     <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${count ?? ''} ${label}`.trim()}
+      title={`${label} — Present${countSuffix}`}
       style={{
         background: bg,
         color:      '#fff',
@@ -1231,18 +1232,21 @@ function DocBadge({ label, count }: { label: string; count?: number }) {
  * Paperwork loads table.
  */
 function RequiredDocBadge({
-  label, present, count, presentTint, missingTitle,
+  label, present, count, presentTint,
 }: {
   label: string;
   present: boolean;
   count?: number;
   presentTint: string;
-  missingTitle: string;
+  /** Retained on the call site for backwards-compatibility but no longer
+   *  rendered — the hover state is uniformly "{label} — Present/Missing". */
+  missingTitle?: string;
 }) {
   if (present) {
+    const countSuffix = count && count > 1 ? ` (×${count})` : '';
     return (
       <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-        title={`${count ?? ''} ${label}`.trim()}
+        title={`${label} — Present${countSuffix}`}
         style={{
           background: presentTint,
           color:      '#fff',
@@ -1254,7 +1258,7 @@ function RequiredDocBadge({
   }
   return (
     <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={missingTitle}
+      title={`${label} — Missing`}
       style={{
         background: 'transparent',
         color:      '#991b1b',

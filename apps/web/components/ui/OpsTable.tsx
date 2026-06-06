@@ -69,6 +69,56 @@ import {
 import { ChevronDown, Search as SearchIcon, ArrowUp, ArrowDown, X, Columns as ColumnsIcon, Calendar as CalendarIcon, GripVertical } from 'lucide-react';
 import DatePicker from '../calendar/DatePicker';
 
+/**
+ * Merge a persisted column order with the current declared columns.
+ *
+ * Output:
+ *   - Every declared key appears exactly once, in declared order
+ *     where the persisted order doesn't specify.
+ *   - The user's persisted reordering is preserved for keys present
+ *     in both lists.
+ *   - Newly-declared keys are inserted ADJACENT to their declared-
+ *     order neighbour that's already placed in the result — so a
+ *     page that adds a new column mid-table doesn't end up tacking
+ *     it past pinned-right columns or burying it past everything
+ *     the user has customised.
+ *   - Persisted keys that no longer exist (column removed) are
+ *     dropped.
+ *
+ * Used both at initial mount (seed from localStorage) and on every
+ * `columns` change (re-sync when a page adds or removes a column).
+ */
+function mergeOrder(declaredKeys: string[], persisted: string[] | null): string[] {
+  if (!persisted) return declaredKeys.slice();
+  const declaredSet  = new Set(declaredKeys);
+  const persistedSet = new Set(persisted);
+  const result = persisted.filter(k => declaredSet.has(k));
+  for (let i = 0; i < declaredKeys.length; i++) {
+    const k = declaredKeys[i];
+    if (persistedSet.has(k)) continue;
+
+    // Walk LEFT in declared order looking for an anchor already in
+    // the result — insert right after it.
+    let anchored = false;
+    for (let j = i - 1; j >= 0; j--) {
+      const idx = result.indexOf(declaredKeys[j]);
+      if (idx !== -1) { result.splice(idx + 1, 0, k); anchored = true; break; }
+    }
+    if (anchored) continue;
+
+    // No left anchor — walk RIGHT and insert before the nearest
+    // right neighbour. Falls back to end-of-array when nothing
+    // matches (e.g. only this one new key, persisted is empty).
+    let inserted = false;
+    for (let j = i + 1; j < declaredKeys.length; j++) {
+      const idx = result.indexOf(declaredKeys[j]);
+      if (idx !== -1) { result.splice(idx, 0, k); inserted = true; break; }
+    }
+    if (!inserted) result.push(k);
+  }
+  return result;
+}
+
 // ── Public types ──────────────────────────────────────────────────────
 
 export type OpsColumn<T> = {
@@ -318,21 +368,25 @@ export function OpsTable<T>({
 
   // Column order — user-controlled via the picker dropdown's
   // up/down buttons when `columnReorder` is enabled. Stored as an
-  // ordered array of column keys; columns not present in the array
-  // keep their declared position (new columns appended after a
-  // future code change won't disappear from view).
+  // ordered array of column keys. `columnOrder` is the source of
+  // truth for visible order; the synced effect below guarantees it
+  // ALWAYS contains exactly the same set of keys as the declared
+  // columns array. That invariant matters for moveColumnTo() — when
+  // a column is missing from columnOrder, the picker's drag-drop
+  // can't locate it and silently bails.
   const orderStorageKey = persistKey ? `${persistKey}:order` : null;
   const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+    let persisted: string[] | null = null;
     if (typeof window !== 'undefined' && orderStorageKey) {
       try {
         const raw = window.localStorage.getItem(orderStorageKey);
         if (raw) {
           const parsed = JSON.parse(raw) as string[];
-          if (Array.isArray(parsed)) return parsed;
+          if (Array.isArray(parsed)) persisted = parsed;
         }
       } catch { /* fall through */ }
     }
-    return columns.map(c => c.key);
+    return mergeOrder(columns.map(c => c.key), persisted);
   });
   useEffect(() => {
     if (typeof window === 'undefined' || !orderStorageKey) return;
@@ -340,55 +394,40 @@ export function OpsTable<T>({
     catch { /* non-critical */ }
   }, [columnOrder, orderStorageKey]);
 
-  // Apply the user-chosen order to the declared columns. Any column
-  // not in `columnOrder` falls in at its declared position (so newly-
-  // added columns don't vanish for users with a stale persisted
-  // order, and — critically — don't get tacked on past pinned-right
-  // columns like `actions`). Pinned columns keep their pin direction
-  // regardless of where the user moves them in the order — sticky
-  // positioning would break otherwise.
+  // Sync columnOrder with the declared columns set whenever the
+  // page's declared columns change. Adds newly-declared keys in
+  // their declared-neighbour position; drops keys that no longer
+  // exist. Without this, new columns added by a page would appear
+  // via display merging but be missing from columnOrder, so the
+  // picker's drag handle would no-op for them (indexOf → -1).
+  useEffect(() => {
+    setColumnOrder(prev => {
+      const merged = mergeOrder(columns.map(c => c.key), prev);
+      if (merged.length === prev.length && merged.every((k, i) => k === prev[i])) return prev;
+      return merged;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns]);
+
+  // Apply the user-chosen order to the declared columns. After the
+  // sync effect above columnOrder is always a complete superset of
+  // the declared columns, so this is just a key→column lookup —
+  // no merge work needed at render time.
   const orderedColumns = useMemo(() => {
-    const byKey         = new Map(columns.map(c => [c.key, c]));
-    const declaredKeys  = columns.map(c => c.key);
-    const persistedSet  = new Set(columnOrder);
-
-    // Start with the persisted order (the user's customisations),
-    // filtering out any keys that no longer exist in the declared
-    // columns array (e.g. a column was removed in a later release).
-    const resultKeys: string[] = columnOrder.filter(k => byKey.has(k));
-
-    // For each declared column NOT in the persisted order, insert it
-    // adjacent to its nearest declared-order neighbour that IS
-    // already in the result. This keeps new columns at the position
-    // the caller intended, instead of appending them at the very end
-    // (which would push them PAST pinned-right columns once persisted
-    // state exists).
-    for (let i = 0; i < declaredKeys.length; i++) {
-      const k = declaredKeys[i];
-      if (persistedSet.has(k)) continue;
-
-      // Walk left in declared order looking for an anchor that's
-      // already placed in the result — insert right after it.
-      let anchored = false;
-      for (let j = i - 1; j >= 0; j--) {
-        const idx = resultKeys.indexOf(declaredKeys[j]);
-        if (idx !== -1) { resultKeys.splice(idx + 1, 0, k); anchored = true; break; }
-      }
-      if (anchored) continue;
-
-      // No left anchor — walk right and insert BEFORE the nearest
-      // right neighbour. Falls back to start-of-array when neither
-      // direction has a placed neighbour (e.g. the very first render
-      // with no persisted state).
-      let inserted = false;
-      for (let j = i + 1; j < declaredKeys.length; j++) {
-        const idx = resultKeys.indexOf(declaredKeys[j]);
-        if (idx !== -1) { resultKeys.splice(idx, 0, k); inserted = true; break; }
-      }
-      if (!inserted) resultKeys.push(k);
+    const byKey = new Map(columns.map(c => [c.key, c]));
+    const out: OpsColumn<T>[] = [];
+    for (const k of columnOrder) {
+      const c = byKey.get(k);
+      if (c) out.push(c);
     }
-
-    return resultKeys.map(k => byKey.get(k)!).filter(Boolean);
+    // Belt-and-braces: if the sync effect hasn't run yet on this
+    // tick, fall through to declared order for any column that
+    // hasn't made it into columnOrder.
+    if (out.length < columns.length) {
+      const seen = new Set(out.map(c => c.key));
+      for (const c of columns) if (!seen.has(c.key)) out.push(c);
+    }
+    return out;
   }, [columns, columnOrder]);
 
   // Visible columns = ordered columns minus user-hidden. We do NOT

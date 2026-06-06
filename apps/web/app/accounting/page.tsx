@@ -535,7 +535,7 @@ function AccountingPageInner() {
           ? r.invoice.total
           : r.load.totalBillable ?? r.load.loadPrice ?? null;
         return (
-          <span className="font-bold tabular-nums">
+          <span className="font-extrabold tabular-nums">
             {tot != null ? moneyFmt.format(tot) : '—'}
           </span>
         );
