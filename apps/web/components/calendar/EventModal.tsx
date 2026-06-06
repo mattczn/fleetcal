@@ -23,6 +23,7 @@ import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER, 
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
+import TimePicker from './TimePicker';
 import StopsSection from './StopsSection';
 import RouteMapPanel from './RouteMapPanel';
 import DriverSummaryPanel from './DriverSummaryPanel';
@@ -66,34 +67,24 @@ const STATUSES: { value: EventStatus; label: string; color: string; bg: string }
   { value: 'problem',    label: 'Problem',    color: '#c2410c', bg: '#ffedd5' },
 ];
 
-function SmartTimeInput({ value, onChange, placeholder = '8am, 1:30pm', headerColor }: {
+/** Thin wrapper around the shared TimePicker so the load modal's
+ *  start/end time fields pick up the hour/minute popover affordance
+ *  alongside the typing UX. Width + padding scale tokens match the
+ *  former inline input so the pill keeps its visual proportions
+ *  at every --ui-scale preset. */
+function SmartTimeInput({ value, onChange, headerColor }: {
   value: string; onChange: (v: string) => void; placeholder?: string; headerColor: string;
 }) {
-  const [raw, setRaw] = useState(value);
-  useEffect(() => { setRaw(value); }, [value]);
-  const commit = () => {
-    const parsed = parseTimeInput(raw);
-    if (parsed) { setRaw(parsed); onChange(parsed); }
-    else setRaw(value);
-  };
   return (
-    <input type="text" value={raw} onChange={e => setRaw(e.target.value)}
-      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
-      placeholder={placeholder}
-      style={{
-        // Width also tracks --ui-scale so the time pill stays
-        // visually proportional to the date picker next to it.
-        width: 'calc(120px * var(--ui-scale, 1))',
-        minWidth: 'calc(120px * var(--ui-scale, 1))',
-        border: '1px solid var(--gc-border)',
-        borderRadius: 8,
+    <TimePicker
+      value={value}
+      onChange={onChange}
+      headerColor={headerColor}
+      inputWidth={'calc(100px * var(--ui-scale, 1))'}
+      inputStyle={{
         padding: 'calc(8.5px * var(--ui-scale, 1)) calc(11px * var(--ui-scale, 1))',
         fontSize: 'calc(13.5px * var(--ui-scale, 1))',
-        color: 'var(--gc-text-1)', outline: 'none', cursor: 'text',
-        transition: 'border-color 150ms', background: 'var(--gc-surface)',
       }}
-      onFocus={e => { const el = e.currentTarget; requestAnimationFrame(() => el.select()); el.style.borderColor = headerColor; }}
-      onBlur={e => { commit(); e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
     />
   );
 }
