@@ -646,27 +646,65 @@ export function OpsTable<T>({
   }, [visibleColumns, selectable]);
 
   // First pinned-right column index (or -1 if none). Used to insert
-  // a 1fr spacer slot at that position so the row stretches to fill
-  // the container — without it, when the sum of column widths is
-  // less than the scroll container's width, sticky-right cells float
-  // at the right edge with an unsightly empty gap between them and
-  // the last non-pinned data cell.
+  // a spacer slot at that position so the row stretches to fill the
+  // container — without it, when the sum of column widths is less
+  // than the scroll container's width, sticky-right cells float at
+  // the right edge with an unsightly empty gap between them and the
+  // last non-pinned data cell. (Or, when the column sum exceeds the
+  // viewport and the user scrolls right, a gap appears between the
+  // last data cell and the sticky actions cell.)
   const firstPinnedRightIdx = useMemo(
     () => visibleColumns.findIndex(c => c.pinned === 'right'),
     [visibleColumns],
   );
 
+  // Track the scroll-container's CLIENT width via ResizeObserver so
+  // we can size the spacer track explicitly. A pure `minmax(0, 1fr)`
+  // collapses to 0 whenever the row's intrinsic content width
+  // exceeds the parent — there's no "remaining space" for the 1fr
+  // to absorb — which is exactly the case when there are many
+  // columns and the user horizontally scrolls. Forcing the spacer's
+  // MIN to (viewport - fixedSum) keeps the row at least viewport-
+  // wide so its `background: rowBg` (priority tint, hover) covers
+  // the visible gap between the last data cell and the sticky
+  // actions cell.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [cardInnerWidth, setCardInnerWidth] = useState(0);
+  useEffect(() => {
+    if (!cardRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      const e = entries[0];
+      if (e) setCardInnerWidth(e.contentRect.width);
+    });
+    ro.observe(cardRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // Sum of the fixed-pixel track widths. Non-px widths (e.g. "1fr"
+  // for a column without a declared width) contribute 0 — they're
+  // handled by the browser's own track sizing.
+  const fixedTracksSum = useMemo(() => {
+    let sum = selectable ? SELECT_COL_WIDTH : 0;
+    for (const c of visibleColumns) {
+      const w = widthOfCol(c);
+      const m = w.match(/^(\d+(?:\.\d+)?)px$/);
+      if (m) sum += parseFloat(m[1]);
+    }
+    return sum;
+  }, [visibleColumns, selectable, widthOfCol]);
+
   const gridTemplate = useMemo(() => {
     const widths = visibleColumns.map(widthOfCol);
     if (firstPinnedRightIdx > 0) {
+      const minSpacer = Math.max(0, cardInnerWidth - fixedTracksSum);
       // Insert the spacer track right before the first pinned-right
       // column. The header / row cell rendering walks this same index
       // and emits an empty <div> at the matching slot.
-      widths.splice(firstPinnedRightIdx, 0, 'minmax(0, 1fr)');
+      widths.splice(firstPinnedRightIdx, 0, `minmax(${minSpacer}px, 1fr)`);
     }
     const cols = widths.join(' ');
     return selectable ? `${SELECT_COL_WIDTH}px ${cols}` : cols;
-  }, [visibleColumns, selectable, widthOfCol, firstPinnedRightIdx]);
+  }, [visibleColumns, selectable, widthOfCol, firstPinnedRightIdx, cardInnerWidth, fixedTracksSum]);
 
   const rowHeightPx = density === 'compact' ? 36 : 52;
 
@@ -838,6 +876,7 @@ export function OpsTable<T>({
           The non-fillHeight default keeps existing consumers' layout
           untouched: horizontal scroll only, natural row height. */}
       <div
+        ref={cardRef}
         className={fillHeight ? 'rounded-lg flex-1 min-h-0' : 'rounded-lg'}
         style={{
           background: 'var(--gc-surface)',
