@@ -767,10 +767,16 @@ export default function CalendarToolbar() {
                 style={{ color: 'var(--gc-text-1)' }}>
                 Show on calendar
               </div>
+              {/* Driver-confirmed badge only makes sense when the
+                  org actually has the driver mobile app — without
+                  it, no driver ever confirms a load, so the toggle
+                  would just be a dead row in the menu. */}
               {([
-                { key: 'status',    label: 'Load status pill',   value: showStatusOverlay,    set: setShowStatusOverlay    },
-                { key: 'confirmed', label: 'Driver confirmed',   value: showConfirmedOverlay, set: setShowConfirmedOverlay },
-                { key: 'pod',       label: 'POD uploaded',       value: showPodOverlay,       set: setShowPodOverlay       },
+                { key: 'status',    label: 'Load status pill', value: showStatusOverlay,    set: setShowStatusOverlay    },
+                ...(moduleEnabled('driver_app')
+                  ? [{ key: 'confirmed', label: 'Driver confirmed', value: showConfirmedOverlay, set: setShowConfirmedOverlay } as const]
+                  : []),
+                { key: 'pod',       label: 'POD uploaded',     value: showPodOverlay,       set: setShowPodOverlay       },
               ] as const).map(row => (
                 <label key={row.key}
                   className="flex items-center justify-between gap-3 px-2.5 py-2 rounded cursor-pointer transition-colors"

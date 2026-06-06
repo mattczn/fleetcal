@@ -17,11 +17,12 @@ import type { Capability, OrgModule } from '@fleetcal/types';
 export default function AssetSidebar() {
   // The truck/asset list itself has moved to the right-hand TruckFleetPanel
   // (opened from the toolbar Truck icon). This sidebar still owns the
-  // dispatcher's daily tools — New Load / Batch, MiniCalendar, category
-  // filter chips — plus the cross-page nav rail that used to live in
-  // AppSidebar. The Manage Assets / Manage Drivers / Settings buttons
-  // at the bottom remain the doorway into the directory modals.
-  const { openCreateModal, sidebarOpen, toggleSidebar, assetCategories, activeCategoryFilter, setActiveCategoryFilter, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, cardFontScale } = useCalendarStore();
+  // dispatcher's daily tools — New Load / Batch, MiniCalendar — plus the
+  // cross-page nav rail that used to live in AppSidebar. The Manage
+  // Assets / Manage Drivers / Settings buttons at the bottom remain
+  // the doorway into the directory modals. (Category filter chips
+  // moved into the truck tray alongside the truck list itself.)
+  const { openCreateModal, sidebarOpen, toggleSidebar, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, cardFontScale } = useCalendarStore();
   const { organization } = useOrganization();
   const [showDrivers,  setShowDrivers]  = useState(false);
   const [showAssets,   setShowAssets]   = useState(false);
@@ -188,39 +189,12 @@ export default function AssetSidebar() {
           <MiniCalendar />
         </div>
 
-        {/* Category filter chips */}
-        {assetCategories.length > 0 && (
-          <div
-            className="shrink-0 flex gap-1.5 px-3 py-2 overflow-x-auto"
-            style={{ borderBottom: '1px solid var(--gc-border-light)', scrollbarWidth: 'none' }}
-          >
-            <button
-              onClick={() => setActiveCategoryFilter(null)}
-              className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
-              style={{
-                background: activeCategoryFilter === null ? 'var(--gc-blue-light)' : 'transparent',
-                color:      activeCategoryFilter === null ? 'var(--gc-blue)'       : 'var(--gc-text-3)',
-                border: `1px solid ${activeCategoryFilter === null ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-              }}
-            >
-              All
-            </button>
-            {assetCategories.map(cat => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategoryFilter(activeCategoryFilter === cat ? null : cat)}
-                className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
-                style={{
-                  background: activeCategoryFilter === cat ? 'var(--gc-blue-light)' : 'transparent',
-                  color:      activeCategoryFilter === cat ? 'var(--gc-blue)'       : 'var(--gc-text-3)',
-                  border: `1px solid ${activeCategoryFilter === cat ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
-                }}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* Category filter chips moved to TruckFleetPanel (toolbar
+            Truck icon → right-side tray) so they sit next to the
+            truck list they describe instead of competing with the
+            cross-page nav rail for left-rail real estate. The
+            calendar grid still reacts to the same store value
+            (activeCategoryFilter) — only the control location moved. */}
 
         {/* Cross-page navigation — the dispatcher's jump list to every
             other surface in the app (Dashboard, Closeout, Equipment,

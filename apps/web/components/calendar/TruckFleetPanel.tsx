@@ -40,7 +40,19 @@ interface Props {
 const PANEL_WIDTH = 420;
 
 export default function TruckFleetPanel({ onClose }: Props) {
-  const { assets, toggleAssetVisibility, reorderAssets, unassignedAssetId } = useCalendarStore();
+  const {
+    assets,
+    toggleAssetVisibility,
+    reorderAssets,
+    unassignedAssetId,
+    // Category filter chips moved here from the left rail
+    // (AssetSidebar). The store value is the canonical filter that
+    // also drives which trucks render as columns on the calendar
+    // grid — same source-of-truth, just a different control surface.
+    assetCategories,
+    activeCategoryFilter,
+    setActiveCategoryFilter,
+  } = useCalendarStore();
   const { can } = usePermissions();
   const canEdit = can('assets.edit');
 
@@ -93,6 +105,8 @@ export default function TruckFleetPanel({ onClose }: Props) {
       const hay = `${a.name} ${a.unit ?? ''} ${a.type ?? ''}`.toLowerCase();
       return hay.includes(q);
     };
+    const matchesCategory = (a: Asset) =>
+      activeCategoryFilter === null || a.type === activeCategoryFilter;
     const real = assets.filter(a =>
       a.id !== unassignedAssetId &&
       a.name !== 'Unassigned' &&
@@ -103,12 +117,13 @@ export default function TruckFleetPanel({ onClose }: Props) {
     const hidden: Asset[] = [];
     for (const a of real) {
       if (!matches(a)) continue;
+      if (!matchesCategory(a)) continue;
       if (a.hidden) hidden.push(a);
       else active.push(a);
     }
     // Intentionally no alpha sort — store order is the truth.
     return { activeTrucks: active, hiddenTrucks: hidden };
-  }, [assets, query, unassignedAssetId, today]);
+  }, [assets, query, activeCategoryFilter, unassignedAssetId, today]);
 
   // When the embedded AssetsModal closes, we don't auto-close the
   // tray — the user may want to edit a few in a row. Just clear the
@@ -193,6 +208,40 @@ export default function TruckFleetPanel({ onClose }: Props) {
             )}
           </div>
         </div>
+
+        {/* Category filter chips — All + one chip per category. Same
+            store value (activeCategoryFilter) that drives the
+            calendar grid's column filtering, so toggling here also
+            filters the columns on the calendar behind this tray. */}
+        {assetCategories.length > 0 && (
+          <div
+            className="flex gap-1.5 px-4 py-2 overflow-x-auto"
+            style={{ borderBottom: '1px solid var(--gc-border-light)', scrollbarWidth: 'none' }}>
+            <button
+              onClick={() => setActiveCategoryFilter(null)}
+              className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+              style={{
+                background: activeCategoryFilter === null ? 'var(--gc-blue-light)' : 'transparent',
+                color:      activeCategoryFilter === null ? 'var(--gc-blue)'       : 'var(--gc-text-3)',
+                border: `1px solid ${activeCategoryFilter === null ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+              }}>
+              All
+            </button>
+            {assetCategories.map(cat => (
+              <button
+                key={cat}
+                onClick={() => setActiveCategoryFilter(activeCategoryFilter === cat ? null : cat)}
+                className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+                style={{
+                  background: activeCategoryFilter === cat ? 'var(--gc-blue-light)' : 'transparent',
+                  color:      activeCategoryFilter === cat ? 'var(--gc-blue)'       : 'var(--gc-text-3)',
+                  border: `1px solid ${activeCategoryFilter === cat ? 'var(--gc-blue)' : 'var(--gc-border-light)'}`,
+                }}>
+                {cat}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* List */}
         <div className="flex-1 min-h-0 overflow-y-auto py-2">
