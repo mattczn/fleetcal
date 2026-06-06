@@ -956,6 +956,22 @@ export default function CloseoutView() {
     const truckOpts = Array.from(new Set(
       dedup.map(r => r.assetName ?? '').filter(Boolean),
     )).sort().map(v => ({ value: v, label: v }));
+    // Accessorial filter — operator-centric presets rather than the
+    // raw category list, since the common workflow is "show me all
+    // loads that have anything to chase down". Per-category options
+    // give a quick way to scope to e.g. just detentions or just
+    // lumpers when a specific bucket is the focus.
+    const accessorialOpts = [
+      { value: '__any',        label: 'Has any accessorial' },
+      { value: '__pending',    label: 'Has pending accessorial' },
+      { value: '__none',       label: 'No accessorials' },
+      { value: 'detention',    label: 'Detention' },
+      { value: 'lumper',       label: 'Lumper' },
+      { value: 'layover',      label: 'Layover' },
+      { value: 'scale_ticket', label: 'Scale' },
+      { value: 'extra_stop',   label: 'Extra stop' },
+      { value: 'other',        label: 'Other' },
+    ];
     return [
       { kind: 'select', key: 'customer', label: 'Customer',
         options: customerOpts,
@@ -966,6 +982,15 @@ export default function CloseoutView() {
       { kind: 'select', key: 'truck',    label: 'Truck',
         options: truckOpts,
         predicate: (r, v) => (r.assetName ?? '') === v },
+      { kind: 'select', key: 'accessorial', label: 'Accessorial',
+        options: accessorialOpts,
+        predicate: (r, v) => {
+          const accs = r.accessorials ?? [];
+          if (v === '__any')     return accs.length > 0;
+          if (v === '__pending') return accs.some(a => a.status !== 'approved' && a.status !== 'denied');
+          if (v === '__none')    return accs.length === 0;
+          return accs.some(a => a.category === v);
+        } },
       { kind: 'date-range', key: 'pickedUp', label: 'Picked up',
         getDate: r => r.start ?? '' },
       { kind: 'date-range', key: 'delivered', label: 'Delivered',
