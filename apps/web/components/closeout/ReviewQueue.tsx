@@ -1202,42 +1202,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // onto loads.rate_con_pdf so the rate-con viewer always shows the
   // latest; older versions remain accessible in the docs strip
   // (kind=rate_con).
-  const rateConInputRef = useRef<HTMLInputElement>(null);
-  const [rateConUploading, setRateConUploading] = useState(false);
-  const uploadRateCon = async (file: File) => {
-    if (!loadId || rateConUploading) return;
-    setRateConUploading(true);
-    try {
-      useCalendarStore.getState().markLoadSelfWrite(loadId);
-      const { document } = await railway.uploadLoadDocument(loadId, file, 'rate_con');
-      // Invalidate the cache for this load and re-fetch so:
-      //   - the Rate Con viewer pulls the new signed URL
-      //   - the new rate_con doc shows up in the docs strip
-      docsCacheRef.current.delete(loadId);
-      await prefetchLoadAssets(loadId, true);
-      const fresh = docsCacheRef.current.get(loadId);
-      if (fresh) {
-        setDocs(fresh.docs);
-        setRateConUrl(fresh.rateConUrl);
-      }
-      // Optimistic: also surface the new doc in the local list in case
-      // the prefetch was already in flight and missed our row.
-      setDocs(prev => prev.some(d => d.id === document.id) ? prev : [...prev, {
-        id:         document.id,
-        loadId:     document.loadId ?? loadId,
-        fileName:   document.fileName,
-        mimeType:   document.mimeType,
-        sizeBytes:  document.sizeBytes,
-        kind:       document.kind,
-        uploadedAt: document.uploadedAt,
-      } as LoadDocument]);
-    } catch (err) {
-      console.error('[review queue] rate-con upload failed:', err);
-      alert(`Upload failed: ${(err as Error).message ?? 'Unknown error'}`);
-    } finally {
-      setRateConUploading(false);
-    }
-  };
+  // Standalone rate-con upload was removed alongside the viewer's
+  // Replace button. Rate cons now upload via the Manage Documents
+  // dialog with kind='rate_con'; the server's existing
+  // POST /v1/loads/:id/documents handler mirrors loads.rate_con_pdf
+  // onto the new storage path so the most recent upload becomes the
+  // primary the invoice packet renders.
 
   function pickFile() {
     setUploadError(null);
@@ -1648,22 +1618,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   {leftPanelView === 'rateCon' && !current.rateConPdf && (
                     <span className="text-xs font-bold" style={{ color: '#dc2626' }}>Not attached</span>
                   )}
-                  {leftPanelView === 'rateCon' && loadId && (
-                    <button type="button"
-                      onClick={() => rateConInputRef.current?.click()}
-                      disabled={rateConUploading}
-                      className="flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-                      style={{
-                        background: KIND_TINT.rate_con.bg,
-                        color:      KIND_TINT.rate_con.fg,
-                      }}
-                      title={current.rateConPdf ? 'Upload a new rate confirmation' : 'Upload rate confirmation'}>
-                      {rateConUploading
-                        ? <Loader2 size={11} className="animate-spin" />
-                        : <Plus size={11} />}
-                      {current.rateConPdf ? 'Replace' : 'Upload'}
-                    </button>
-                  )}
+                  {/* Upload moved into the Manage Documents dialog.
+                      Pick "Rate Con" as the kind there and the server
+                      mirrors loads.rate_con_pdf to the new upload — so
+                      the most recent rate-con becomes the one in the
+                      invoice packet, and the previous one stays around
+                      as a load_documents row for reference. */}
                 </div>
               </div>
               {leftPanelView === 'rateCon'
@@ -1684,14 +1644,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     );
                   })()
                 : <StopsView stops={allStopsForView} />}
-              {/* Hidden file input — fired by the Replace/Upload button. */}
-              <input ref={rateConInputRef} type="file" accept=".pdf,application/pdf,image/*"
-                style={{ display: 'none' }}
-                onChange={e => {
-                  const f = e.target.files?.[0];
-                  if (f) void uploadRateCon(f);
-                  e.target.value = '';
-                }} />
             </div>
 
             {/* Middle column — viewer with a thin header.
@@ -1986,10 +1938,25 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     style={{ color: 'var(--gc-text-3)' }}>
                     Rate Confirmations · {rateConDocs.length}
                   </div>
+                  {(() => {
+                  // Compute which rate-con is "primary" — i.e. the
+                  // one the invoice packet uses. Server-side rule:
+                  // POST /v1/loads/:id/documents mirrors
+                  // loads.rate_con_pdf onto each new rate_con
+                  // upload, so the most recent rate-con wins. Mirror
+                  // that here by picking the latest uploadedAt
+                  // (falls back to the synthetic when no real rows
+                  // exist). Drives the "Primary" badge below.
+                  const realConDocs = rateConDocs.filter(x => x.id !== RATE_CON_PRIMARY_ID);
+                  const primaryId   = realConDocs.length > 0
+                    ? [...realConDocs].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1))[0].id
+                    : RATE_CON_PRIMARY_ID;
+                  return (
                   <div className="space-y-1">
                     {rateConDocs.map((d) => {
                       const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
                       const isVirtual = d.id === RATE_CON_PRIMARY_ID;
+                      const isPrimary = d.id === primaryId;
                       // The canonical highlights when nothing else is
                       // explicitly selected (activeRateConId === null),
                       // matching the default left-viewer state.
@@ -2029,6 +1996,18 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                                 style={{ background: tint.bg, color: tint.fg, borderRadius: 999 }}>
                                 {rowKindLabel}
                               </span>
+                              {/* "Primary" pill = this rate-con is the
+                                  one the invoice packet uses. Drives
+                                  off the most-recent-upload heuristic
+                                  computed above (mirrors the server's
+                                  loads.rate_con_pdf auto-mirror). */}
+                              {isPrimary && (
+                                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                                  style={{ background: '#dcfce7', color: '#166534', border: '1px solid #86efac', borderRadius: 999 }}
+                                  title="The invoice packet includes this rate-con">
+                                  Primary
+                                </span>
+                              )}
                             </div>
                             {renamingDocId === d.id ? (
                               <input
@@ -2061,6 +2040,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       );
                     })}
                   </div>
+                  );
+                  })()}
                 </div>
               )}
 
@@ -3254,8 +3235,14 @@ function DocSelectionDialog({
                               as the sidebar list so the two surfaces
                               stay in sync at a glance. Hidden when the
                               parent doesn't pass includedIds (e.g.
-                              standalone Convert dialog). */}
-                          {includedIds && onToggleIncluded && (() => {
+                              standalone Convert dialog). Also hidden
+                              for rate_con docs: the invoice packet
+                              always uses the most recent rate-con
+                              (server picks loads.rate_con_pdf which
+                              is auto-mirrored on every upload), so
+                              giving the user a toggle here would imply
+                              control they don't actually have. */}
+                          {includedIds && onToggleIncluded && d.kind !== 'rate_con' && (() => {
                             const isOn = includedIds.has(d.id);
                             return (
                               <button type="button"
