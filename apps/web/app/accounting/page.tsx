@@ -788,7 +788,7 @@ function AccountingPageInner() {
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <AppShell title="Accounting" icon={Receipt}>
+    <AppShell title="Billing" icon={Receipt}>
       <DataLoader />
 
       {/* The content area is a fixed-height flex column so the table
@@ -799,7 +799,7 @@ function AccountingPageInner() {
 
           {/* Purpose hint */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
-            Billing pipeline. Loads land in <strong>Released</strong> once Closeout marks them verified.
+            Billing pipeline. Loads land in <strong>Released</strong> once Paperwork marks them verified.
             Generate invoices, track delivery, mark paid.
           </div>
 

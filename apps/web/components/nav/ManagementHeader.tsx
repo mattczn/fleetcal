@@ -22,8 +22,8 @@ const NAV_LINKS: Array<{
 }> = [
   { href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view' },
   { href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
-  { href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',    module: 'closeout' },
-  { href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
+  { href: '/closeout',    label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',    module: 'closeout' },
+  { href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access',  module: 'accounting' },
   // Equipment subsumes the old Fuel + Maintenance nav links — one
   // page with three sub-tabs (Inspections / Maintenance / Fuel). The
   // /fuel and /maintenance routes still exist as redirects to

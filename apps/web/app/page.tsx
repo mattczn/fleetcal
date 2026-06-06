@@ -92,7 +92,7 @@ export default async function HomePage() {
           />
           <FeatureBlock
             icon={Receipt}
-            title="Closeout to invoice in 3 clicks"
+            title="Paperwork to invoice in 3 clicks"
             body="POD verification queue. Release to billing. Generate the invoice. Send to the customer. Mark paid. Every step where it should be, no leaving the app."
           />
           <FeatureBlock

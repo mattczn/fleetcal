@@ -288,8 +288,12 @@ interface PageNavLink {
 const PAGE_NAV: PageNavLink[] = [
   { href: '/dashboard',  label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
   { href: '/board',      label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view',        module: 'dispatch_board' },
-  { href: '/closeout',   label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
-  { href: '/accounting', label: 'Accounting',     icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
+  // Display labels were "Closeout" / "Accounting" — renamed to
+  // plain-language "Paperwork" / "Billing". URLs + capability
+  // strings + module IDs stay unchanged so bookmarks, role configs,
+  // and DB enum values keep working.
+  { href: '/closeout',   label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
+  { href: '/accounting', label: 'Billing',        icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
   { href: '/equipment?tab=maintenance', label: 'Equipment', icon: Package, cap: 'maintenance.access', module: 'maintenance', matchPrefix: true },
   { href: '/payroll',    label: 'Payroll',        icon: Users,           cap: 'payroll.access',    module: 'payroll' },
   { href: '/drivers',    label: 'Drivers',        icon: Gauge,           cap: 'drivers.view',      module: 'performance' },

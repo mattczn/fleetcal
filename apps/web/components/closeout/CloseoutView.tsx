@@ -848,18 +848,18 @@ export default function CloseoutView() {
   const rowKey = useCallback((r: QueueRow) => r.id, []);
 
   return (
-    <AppShell title="Closeout" icon={FileCheck2}>
+    <AppShell title="Paperwork" icon={FileCheck2}>
       {/* Fixed-height content area — table claims the remaining space
           and scrolls inside its own viewport. Outer padding lives here. */}
       <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
         <div className="w-full min-h-0 flex-1 flex flex-col gap-4">
 
-          {/* Purpose hint — keeps the split between Closeout and
-              Accounting visible while users are still building muscle
+          {/* Purpose hint — keeps the split between Paperwork and
+              Billing visible while users are still building muscle
               memory. */}
           <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
             POD verification. Check paperwork and release loads for billing.
-            Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Accounting</Link>.
+            Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Billing</Link>.
           </div>
 
           {/* Bucket tiles — same visual rhythm as /accounting. Each

@@ -295,8 +295,8 @@ export interface CapabilityInfo {
 export const CAPABILITY_CATALOG: CapabilityInfo[] = [
   // Module access — top-nav visibility.
   { cap: "dashboard.access",  label: "Dashboard",     group: "Module access", hint: "Top-line KPIs, revenue + driver pay totals." },
-  { cap: "closeout.access",   label: "Closeout",      group: "Module access", hint: "POD verification + flag queue." },
-  { cap: "accounting.access", label: "Accounting",    group: "Module access", hint: "Invoice list, send/void, payment status." },
+  { cap: "closeout.access",   label: "Paperwork",     group: "Module access", hint: "POD verification + flag queue." },
+  { cap: "accounting.access", label: "Billing",       group: "Module access", hint: "Invoice list, send/void, payment status." },
   { cap: "payroll.access",    label: "Payroll",       group: "Module access", hint: "Per-driver weekly pay + adjustments." },
   { cap: "fuel.access",       label: "Fuel",          group: "Module access" },
   { cap: "maintenance.access", label: "Maintenance",  group: "Module access" },

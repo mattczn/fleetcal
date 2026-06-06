@@ -69,8 +69,8 @@ export const ORG_MODULES: readonly OrgModule[] = [
 /** Display labels (singular). Used in Settings → Modules toggles
  *  and the "module disabled" empty-state messaging. */
 export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
-  closeout:           "Closeout",
-  accounting:         "Accounting",
+  closeout:           "Paperwork",
+  accounting:         "Billing",
   fuel:               "Fuel",
   payroll:            "Payroll",
   maintenance:        "Maintenance",

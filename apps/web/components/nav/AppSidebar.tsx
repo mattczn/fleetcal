@@ -69,8 +69,8 @@ const PRIMARY_NAV: NavItem[] = [
   { kind: 'leaf', href: '/calendar',    label: 'Calendar',       icon: Calendar,        cap: 'loads.view' },
   { kind: 'leaf', href: '/dashboard',   label: 'Dashboard',      icon: BarChart2,       cap: 'dashboard.access' },
   { kind: 'leaf', href: '/board',       label: 'Command Center', icon: LayoutDashboard, cap: 'loads.view',        module: 'dispatch_board' },
-  { kind: 'leaf', href: '/closeout',    label: 'Closeout',       icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
-  { kind: 'leaf', href: '/accounting',  label: 'Accounting',     icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
+  { kind: 'leaf', href: '/closeout',    label: 'Paperwork',      icon: FileCheck2,      cap: 'closeout.access',   module: 'closeout' },
+  { kind: 'leaf', href: '/accounting',  label: 'Billing',        icon: Receipt,         cap: 'accounting.access', module: 'accounting' },
   {
     kind: 'group',
     href: '/equipment?tab=maintenance',
