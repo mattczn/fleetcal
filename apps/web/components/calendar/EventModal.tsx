@@ -1053,7 +1053,13 @@ function UploadedDocsPanel({
 
   // Viewer — when a doc is selected
   return (
-    <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)' }}>
+    // minHeight: 0 lets the inner flex-1 scroll container respect the
+    // panel's bounded height instead of growing to fit its tall child
+    // (the image). Without it, overflow-auto on the scroll container
+    // does nothing — the flex chain grows freely and a tall JPEG gets
+    // cut off at the bottom with no way to scroll. Same flex-overflow
+    // gotcha that bites every modal viewer.
+    <div className="flex-1 flex flex-col" style={{ background: 'var(--gc-bg)', minHeight: 0 }}>
       {uploadHeader}
       <div className="shrink-0 flex items-center gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
         <button type="button" onClick={() => onSelect(null)}
@@ -1108,7 +1114,7 @@ function UploadedDocsPanel({
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-auto" style={{ background: '#1a1a1a', textAlign: 'center' }}>
+      <div className="flex-1 overflow-auto" style={{ background: '#1a1a1a', textAlign: 'center', minHeight: 0 }}>
         {!signedUrl ? (
           <div className="flex items-center justify-center" style={{ height: '100%' }}>
             <Loader2 size={20} className="animate-spin" style={{ color: '#ffffff' }} />
