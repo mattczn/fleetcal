@@ -623,6 +623,12 @@ class RailwayClient {
   renameDocument(documentId: string, fileName: string) {
     return this.req<{ ok: true; fileName: string }>('PATCH', `/v1/documents/${documentId}`, { fileName });
   }
+  /** Flip a doc's per-row invoice-include flag. null resets to the
+   *  heuristic; true/false override it. Backs the dispatcher's
+   *  Invoice toggle in the review queue. */
+  updateDocumentInvoiceInclude(documentId: string, includedInInvoice: boolean | null) {
+    return this.req<{ ok: true }>('PATCH', `/v1/documents/${documentId}`, { includedInInvoice });
+  }
   /** Change a document's kind. When fileName is omitted, the server
    *  auto-renames the display fileName to match the new kind using
    *  the same {LOAD_NUM}_{KIND}{_N}.{ext} convention as upload. */

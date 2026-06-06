@@ -514,6 +514,13 @@ export interface DocumentSummary {
   kind:        DocumentKind;
   uploadedAt:  string;
   signedUrl?:  string;
+  /** Per-doc invoice-include flag.
+   *  null = not explicitly set yet (client falls back to the
+   *    PODs-near-delivery auto-include heuristic).
+   *  true / false = explicit user choice (overrides the heuristic).
+   *  Replaces the legacy loads.invoice_doc_ids array column — see
+   *  the 20260607_load_documents_included_in_invoice migration. */
+  includedInInvoice?: boolean | null;
 }
 
 // GET /v1/loads/:loadId/documents

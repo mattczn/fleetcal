@@ -617,7 +617,7 @@ loads.get("/:id/documents", async (c) => {
 
   const { data: rows, error } = await supabase
     .from("load_documents")
-    .select("id,load_id,invoice_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at")
+    .select("id,load_id,invoice_id,storage_path,file_name,mime_type,size_bytes,kind,uploaded_at,included_in_invoice")
     .eq("load_id", loadId)
     .eq("org_id", orgId)
     .order("uploaded_at", { ascending: false });
@@ -631,8 +631,13 @@ loads.get("/:id/documents", async (c) => {
     storage_path: string;
     file_name: string; mime_type: string | null; size_bytes: number | null;
     kind: string; uploaded_at: string;
+    included_in_invoice: boolean | null;
   };
-  const docs = (rows ?? []) as DocRow[];
+  // Cast via unknown — the generated Supabase types don't know about
+  // included_in_invoice until the user reruns the type pull after
+  // the 20260607 migration is applied. The runtime always returns
+  // the column once the migration has run.
+  const docs = (rows ?? []) as unknown as DocRow[];
 
   // Batch-mint signed URLs, grouped by bucket. Rate cons live in
   // their own bucket so we can't mint them in the same call as the
@@ -689,15 +694,16 @@ loads.get("/:id/documents", async (c) => {
   }
 
   const documents: DocumentSummary[] = docs.map((d) => ({
-    id:         d.id,
-    loadId:     d.load_id,
-    invoiceId:  d.invoice_id  ?? undefined,
-    fileName:   d.file_name,
-    mimeType:   d.mime_type   ?? undefined,
-    sizeBytes:  d.size_bytes  ?? undefined,
-    kind:       (d.kind as DocumentKind) ?? "other",
-    uploadedAt: d.uploaded_at,
-    signedUrl:  urlByPath.get(d.storage_path),
+    id:                 d.id,
+    loadId:             d.load_id,
+    invoiceId:          d.invoice_id  ?? undefined,
+    fileName:           d.file_name,
+    mimeType:           d.mime_type   ?? undefined,
+    sizeBytes:          d.size_bytes  ?? undefined,
+    kind:               (d.kind as DocumentKind) ?? "other",
+    uploadedAt:         d.uploaded_at,
+    signedUrl:          urlByPath.get(d.storage_path),
+    includedInInvoice:  d.included_in_invoice,
   }));
 
   const res: ListDocumentsResponse = { documents };

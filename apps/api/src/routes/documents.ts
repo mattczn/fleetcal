@@ -70,13 +70,25 @@ documents.get("/:id/url", async (c) => {
 documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   const orgId = c.get("orgId");
   const docId = c.req.param("id");
-  const body = await c.req.json<{ fileName?: string; kind?: string }>();
+  const body = await c.req.json<{ fileName?: string; kind?: string; includedInInvoice?: boolean | null }>();
 
-  const hasName = body.fileName !== undefined && body.fileName !== null;
-  const hasKind = body.kind !== undefined && body.kind !== null;
-  if (!hasName && !hasKind) {
+  const hasName     = body.fileName !== undefined && body.fileName !== null;
+  const hasKind     = body.kind !== undefined && body.kind !== null;
+  // includedInInvoice may legitimately be sent as `null` to reset
+  // back to the heuristic, so the presence check uses `in` semantics.
+  const hasInclude  = Object.prototype.hasOwnProperty.call(body, 'includedInInvoice');
+  if (!hasName && !hasKind && !hasInclude) {
     return c.json(
-      { error: "validation_failed", errors: ["fileName or kind required"] } satisfies ApiErrorResponse,
+      { error: "validation_failed", errors: ["fileName, kind, or includedInInvoice required"] } satisfies ApiErrorResponse,
+      400,
+    );
+  }
+  if (hasInclude
+      && body.includedInInvoice !== null
+      && body.includedInInvoice !== true
+      && body.includedInInvoice !== false) {
+    return c.json(
+      { error: "validation_failed", errors: ["includedInInvoice must be true, false, or null"] } satisfies ApiErrorResponse,
       400,
     );
   }
@@ -120,6 +132,9 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
     // storage_path itself.
     cleanName = body.fileName!.trim().replace(/[/\\]/g, "_").slice(0, 200);
     updates.file_name = cleanName;
+  }
+  if (hasInclude) {
+    updates.included_in_invoice = body.includedInInvoice;
   }
   if (hasKind) {
     updates.kind = body.kind;

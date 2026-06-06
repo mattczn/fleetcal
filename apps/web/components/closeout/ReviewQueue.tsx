@@ -27,7 +27,7 @@
  *   Esc        — close
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUser } from '@clerk/nextjs';
 import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Download } from 'lucide-react';
 import type { Load, CalendarEvent, Stop } from '@/lib/types';
@@ -185,6 +185,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const safeIdx = Math.min(Math.max(idx, 0), Math.max(loads.length - 1, 0));
   const current = loads[safeIdx];
 
+  // Internal navigators — the keyboard / button paths use the
+  // attemptNavigate wrappers below so dirty-state prompts can
+  // intercept the move.
+  const goTo = (n: number) => setIdx(n);
   const next = () => setIdx(i => Math.min(i + 1, loads.length - 1));
   const prev = () => setIdx(i => Math.max(i - 1, 0));
 
@@ -193,13 +197,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [activeDocIdx, setActiveDocIdx] = useState(0);
   const [activeDocUrl, setActiveDocUrl] = useState<string | null>(null);
   const [docsLoading, setDocsLoading] = useState(false);
-  // Invoice doc selection: defaults to PODs uploaded on/after delivery
-  const [includedDocIds, setIncludedDocIds] = useState<Set<string>>(new Set());
-  // Tracks what's "already saved" so the auto-persist effect can tell
-  // a genuine user change apart from the navigation-reset that fires
-  // whenever the user advances to a new load. Stores both the loadId
-  // it was set for and a stable serialization of the ids.
-  const lastPersistedIncludeRef = useRef<{ loadId: string; ids: string } | null>(null);
+  // Invoice doc selection — per-doc, persisted on load_documents.included_in_invoice.
+  // The source of truth is the column on each doc row (`d.includedInInvoice`).
+  // The dispatcher's pending changes live in a local map until they
+  // hit Save, so a stray close / nav-away no longer drops their work.
+  //   value true / false → explicit override they're about to save
+  //   key absent         → leave at the doc's current persisted state
+  const [pendingIncludeChanges, setPendingIncludeChanges] = useState<Record<string, boolean>>({});
+  const [isSavingIncludes, setIsSavingIncludes] = useState(false);
   // Active draft invoice for the current load, if any. Drives whether
   // the action button says "Generate invoice" or "Regenerate invoice".
   // Loaded on load-change via listInvoices; refreshed locally after
@@ -278,10 +283,8 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setRateConUrl(null);
       setSecondaryRateConUrl(null);
       setActiveRateConId(null);
-      setIncludedDocIds(new Set());
-      // No load → nothing to compare future changes against. Clear
-      // the ref so the next load's applyAssets can stamp fresh.
-      lastPersistedIncludeRef.current = null;
+      // Drop any pending include changes when the queue goes empty.
+      setPendingIncludeChanges({});
       return;
     }
 
@@ -295,28 +298,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       // sidebar's Rate Confirmations list.
       setSecondaryRateConUrl(null);
       setActiveRateConId(null);
-      // Default invoice selection — same heuristic as before: prior
-      // saved selection wins, else PODs near delivery time.
-      // current.end is naive ISO in the org's dispatch zone; interpret
-      // accordingly so the "POD uploaded near delivery" auto-select
-      // window stays accurate regardless of dispatcher's browser tz.
-      const deliveredAt = current?.end ? parseNaiveIsoInTz(current.end, tz) : 0;
-      const presetFromDb = (current as Load).invoiceDocIds ?? [];
-      const ids = new Set<string>(presetFromDb.length > 0
-        ? presetFromDb
-        : assets.docs
-            .filter(x => x.kind === 'pod' && new Date(x.uploadedAt).getTime() >= deliveredAt - 86_400_000)
-            .map(x => x.id),
-      );
-      setIncludedDocIds(ids);
-      // Stamp the persist-ref to match what we just loaded, so the
-      // auto-persist effect's first fire on this load is a no-op
-      // (it would otherwise see the navigation-reset as a "change"
-      // and re-write the same set we just read).
-      lastPersistedIncludeRef.current = {
-        loadId,
-        ids: JSON.stringify([...ids].sort()),
-      };
+      // Drop any in-flight pending changes when we navigate to a new
+      // load — they belong to the previous load. Save happens before
+      // navigation through the close confirm, so this branch only
+      // discards changes the user already chose to abandon.
+      setPendingIncludeChanges({});
     };
 
     const cached = docsCacheRef.current.get(loadId);
@@ -436,53 +422,84 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   ];
   const requiredPass = checklist.filter(c => !c.skip).every(c => c.pass);
 
-  // Auto-persist invoice-include changes. Previously the set lived
-  // only in client state until the user clicked Release / Regenerate,
-  // so closing the review panel mid-edit dropped every toggle and
-  // every merge-driven swap-in-place — reopening sent the user back
-  // to the heuristic default ("all PODs near delivery"). Now any
-  // change to includedDocIds queues a debounced PATCH so the next
-  // time the dispatcher opens the load, the same set is waiting.
+  // ── Invoice-include effective state ──────────────────────────────
+  // The dispatcher's "include in invoice" decisions are now stored
+  // per doc on load_documents.included_in_invoice (TRUE / FALSE /
+  // NULL=heuristic). `pendingIncludeChanges` overrides that per-doc
+  // value until the user saves.
   //
-  // lastPersistedIncludeRef holds the (loadId, ids) tuple we last
-  // synced. The applyAssets stamp on load means the first fire on a
-  // new load is a no-op (state == ref). Only user-driven changes
-  // make it past the equality check.
-  useEffect(() => {
-    if (!loadId) return;
-    const serialized = JSON.stringify([...includedDocIds].sort());
-    const ref = lastPersistedIncludeRef.current;
-    if (ref && ref.loadId === loadId && ref.ids === serialized) return;
-    const t = setTimeout(() => {
-      void persistInvoiceDocs()
-        .then(() => {
-          lastPersistedIncludeRef.current = { loadId, ids: serialized };
-        })
-        .catch(err => console.error('[invoice-include auto-persist] failed', err));
-    }, 500);
-    return () => clearTimeout(t);
-    // persistInvoiceDocs reads `current` + `includedDocIds` via closure;
-    // re-pinning it on every render would prevent the debounce from
-    // batching rapid clicks. The listed deps cover the only inputs
-    // that change the desired write payload.
+  // effectiveInclude resolves a single doc to its current visible
+  // boolean. includedDocIds is the same data as a Set so existing
+  // call sites that read `.has(d.id)` keep working unchanged.
+  const deliveredAt = current?.end ? parseNaiveIsoInTz(current.end, tz) : 0;
+  const effectiveInclude = (d: LoadDocument): boolean => {
+    if (Object.prototype.hasOwnProperty.call(pendingIncludeChanges, d.id)) {
+      return pendingIncludeChanges[d.id];
+    }
+    if (d.includedInInvoice === true)  return true;
+    if (d.includedInInvoice === false) return false;
+    // null → heuristic: POD uploaded near delivery time.
+    return d.kind === 'pod'
+      && new Date(d.uploadedAt).getTime() >= deliveredAt - 86_400_000;
+  };
+  const includedDocIds = useMemo<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const d of docs) if (effectiveInclude(d)) s.add(d.id);
+    return s;
+    // effectiveInclude reads deliveredAt + pending from closure; both
+    // are inputs to the derivation, so list them explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includedDocIds, loadId]);
+  }, [docs, pendingIncludeChanges, deliveredAt]);
+  const dirtyIncludeCount = Object.keys(pendingIncludeChanges).length;
 
   // ── Actions ───────────────────────────────────────────────────────
-  async function persistInvoiceDocs() {
-    if (!current) return;
-    const targetId = (current as Load).loadId ?? current.id;
-    // markLoadSelfWrite suppresses the realtime echo from popping the
-    // "updated by another dispatcher" banner on the dispatcher who
-    // just made the change. Stamping the same loadId we're about to
-    // write to is sufficient — markLoadSelfWrite finds every cached
-    // event sharing that loadId (both relay legs included).
-    useCalendarStore.getState().markLoadSelfWrite(targetId);
-    await railway.updateLoadCloseout(targetId, {
-      action: 'set_invoice_docs',
-      invoiceDocIds: Array.from(includedDocIds),
+  /** Stage a pending change. Doesn't hit the API until saveIncludes. */
+  const setInvoiceInclude = (docId: string, next: boolean) => {
+    setPendingIncludeChanges(prev => {
+      // Find the doc's persisted value so a toggle that returns to
+      // the saved state DROPS the pending entry rather than keeping a
+      // no-op around (which would still show "1 unsaved change").
+      const doc = docs.find(d => d.id === docId);
+      const persisted = doc
+        ? (doc.includedInInvoice === true  ? true
+         : doc.includedInInvoice === false ? false
+         : (doc.kind === 'pod' && new Date(doc.uploadedAt).getTime() >= deliveredAt - 86_400_000))
+        : null;
+      const copy = { ...prev };
+      if (persisted === next) delete copy[docId];
+      else                    copy[docId] = next;
+      return copy;
     });
-  }
+  };
+  /** Flush every pending change to load_documents via PATCH /v1/documents/:id.
+   *  Refetches the docs list on success so includedInInvoice reflects the
+   *  server truth + drains the pending map. Returns true on success. */
+  const saveIncludes = async (): Promise<boolean> => {
+    if (!loadId || dirtyIncludeCount === 0) return true;
+    setIsSavingIncludes(true);
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(loadId);
+      const entries = Object.entries(pendingIncludeChanges);
+      await Promise.all(entries.map(([id, val]) =>
+        railway.updateDocumentInvoiceInclude(id, val)
+      ));
+      // Re-fetch so docs[].includedInInvoice picks up the server's
+      // new truth and pendingIncludeChanges can be safely cleared.
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, !!current?.rateConPdf);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) setDocs(fresh.docs);
+      setPendingIncludeChanges({});
+      return true;
+    } catch (err) {
+      console.error('[invoice-include save] failed', err);
+      alert(`Save failed: ${(err as Error).message ?? 'Unknown error'}`);
+      return false;
+    } finally {
+      setIsSavingIncludes(false);
+    }
+  };
+  const discardIncludes = () => setPendingIncludeChanges({});
 
   /**
    * Generate or regenerate the invoice for the current load. Persists
@@ -504,7 +521,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     try {
       // Save the doc selection before snapshot — the server only sees
       // what's currently persisted on the load.
-      await persistInvoiceDocs();
+      // Flush any pending dispatcher-edited include flags first so
+      // the snapshot picks up exactly what's checked in the UI.
+      if (dirtyIncludeCount > 0) await saveIncludes();
 
       let result: import('@fleetcal/types').CreateInvoiceResponse;
       if (activeInvoice && activeInvoice.status === 'draft') {
@@ -554,8 +573,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     try {
       const targetId = (current as Load).loadId ?? current.id;
       const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
-      await persistInvoiceDocs();
-      // Re-stamp because persistInvoiceDocs above already consumed
+      // Flush any pending dispatcher-edited include flags first so
+      // the snapshot picks up exactly what's checked in the UI.
+      if (dirtyIncludeCount > 0) await saveIncludes();
+      // Re-stamp because saveIncludes above already consumed
       // the 5-second window; the verify call also fires a realtime
       // echo and needs its own suppression.
       useCalendarStore.getState().markLoadSelfWrite(targetId);
@@ -705,11 +726,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       if (removedIdx !== -1 && removedIdx <= activeDocIdx) {
         setActiveDocIdx(Math.max(0, Math.min(activeDocIdx - 1, nextDocs.length - 1)));
       }
-      // Drop from invoice-included set if it was checked.
-      setIncludedDocIds(prev => {
-        if (!prev.has(docId)) return prev;
-        const next = new Set(prev);
-        next.delete(docId);
+      // The doc is gone from `docs[]` now, so the derived
+      // includedDocIds excludes it automatically. Just clear any
+      // pending change keyed on the deleted id so the Save bar count
+      // doesn't include a stale entry.
+      setPendingIncludeChanges(prev => {
+        if (!Object.prototype.hasOwnProperty.call(prev, docId)) return prev;
+        const next = { ...prev };
+        delete next[docId];
         return next;
       });
     } catch (err) {
@@ -1045,6 +1069,18 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const result = await mergeDocsToPdf(selected);
       // Originals are NOT deleted — the merged doc is appended.
       // Refresh: invalidate cache + re-prefetch.
+      if (result) {
+        // Replace-in-place in the invoice packet directly on the
+        // server: drop the originals, add the merged doc. Merge is
+        // already an intentional click; we don't want to make the
+        // dispatcher confirm the consequent include-state changes
+        // separately in the Save bar. The refetch below picks up
+        // the new included_in_invoice values from the column.
+        await Promise.all([
+          ...result.sourceIds.map(id => railway.updateDocumentInvoiceInclude(id, false)),
+          railway.updateDocumentInvoiceInclude(result.id, true),
+        ]).catch(err => console.warn('[merge include-flip] failed', err));
+      }
       docsCacheRef.current.delete(loadId);
       await prefetchLoadAssets(loadId, !!current?.rateConPdf);
       const fresh = docsCacheRef.current.get(loadId);
@@ -1053,19 +1089,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         if (result) {
           const newIdx = fresh.docs.findIndex(d => d.id === result.id);
           if (newIdx !== -1) setActiveDocIdx(newIdx);
-          // Replace-in-place in the invoice packet: drop the originals
-          // we merged, add the new merged doc. The merged PDF
-          // supersedes its inputs, so shipping both in the invoice
-          // would just produce duplicate pages.
-          const merged = new Set(result.sourceIds);
-          setIncludedDocIds(prev => {
-            const next = new Set<string>();
-            for (const id of prev) {
-              if (!merged.has(id)) next.add(id);
-            }
-            next.add(result.id);
-            return next;
-          });
         }
       }
     } catch (err) {
@@ -1127,27 +1150,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           for (const sid of res.sourceIds) mergedOriginalIds.add(sid);
         }
       }
+      // Replace-in-place directly on the server so the include
+      // state survives navigation without needing the user to click
+      // Save (merge is itself an intentional action). Untouched kinds
+      // (singletons) keep their existing included_in_invoice column
+      // value untouched.
+      await Promise.all([
+        ...[...mergedOriginalIds].map(id => railway.updateDocumentInvoiceInclude(id, false)),
+        ...newIds.map(id => railway.updateDocumentInvoiceInclude(id, true)),
+      ]).catch(err => console.warn('[merge-by-type include-flip] failed', err));
       // One refresh after all groups land — cheaper than refetching
       // between each bucket.
       docsCacheRef.current.delete(loadId);
       await prefetchLoadAssets(loadId, !!current?.rateConPdf);
       const fresh = docsCacheRef.current.get(loadId);
-      if (fresh) {
-        setDocs(fresh.docs);
-        // Replace-in-place: drop every original that was merged, then
-        // add the new merged docs. Untouched kinds (singletons) keep
-        // their existing included state. This lines up with what the
-        // dispatcher actually wants in the invoice packet — one
-        // merged doc per kind, not the merged doc PLUS the originals.
-        setIncludedDocIds(prev => {
-          const next = new Set<string>();
-          for (const id of prev) {
-            if (!mergedOriginalIds.has(id)) next.add(id);
-          }
-          for (const id of newIds) next.add(id);
-          return next;
-        });
-      }
+      if (fresh) setDocs(fresh.docs);
       return { ok: true };
     } catch (err) {
       console.error('[review queue] merge-by-type failed:', err);
@@ -1260,10 +1277,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       if (entry) {
         docsCacheRef.current.set(loadId, { ...entry, docs: [...entry.docs, newDoc] });
       }
-      // PODs auto-include in the invoice packet (matches the default
-      // behavior elsewhere in this view).
+      // PODs auto-include in the invoice packet. With the new
+      // per-doc column, the cleanest path is a direct PATCH — that
+      // way the include flag is committed without a Save bar entry
+      // (the upload itself is the dispatcher's commit).
       if (kind === 'pod') {
-        setIncludedDocIds(prev => new Set(prev).add(document.id));
+        railway.updateDocumentInvoiceInclude(document.id, true)
+          .catch(err => console.warn('[upload auto-include] failed', err));
       }
       // Switch the viewer to the freshly uploaded doc so the user can
       // sanity-check the right page is up.
@@ -1278,6 +1298,27 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
   }
 
+  // Pending "action to run after the confirm prompt resolves". When
+  // null, no prompt is open. When set, it identifies what the user
+  // was trying to do — close the queue, or jump to a different load
+  // — so the confirm dialog can resume that action after Save or
+  // Discard finishes.
+  const [pendingExitAction, setPendingExitAction] = useState<null | { kind: 'close' } | { kind: 'nav'; targetIdx: number }>(null);
+  // Wraps onClose so a close attempt with unsaved invoice-include
+  // changes routes through a confirm prompt. ESC / backdrop / X all
+  // route through this so the user can't bypass the prompt.
+  const attemptClose = useCallback(() => {
+    if (dirtyIncludeCount > 0) { setPendingExitAction({ kind: 'close' }); return; }
+    onClose();
+  }, [dirtyIncludeCount, onClose]);
+  // Cross-load navigation gets the same treatment. Picking Save in
+  // the dialog flushes pending changes, then advances; Discard
+  // clears them and advances; Cancel stays put.
+  const attemptNavigate = useCallback((targetIdx: number) => {
+    if (dirtyIncludeCount > 0) { setPendingExitAction({ kind: 'nav', targetIdx }); return; }
+    setIdx(targetIdx);
+  }, [dirtyIncludeCount]);
+
   // ── Keyboard shortcuts ────────────────────────────────────────────
   const releaseRef = useRef(handleRelease);
   releaseRef.current = handleRelease;
@@ -1290,15 +1331,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       if (showFlag) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (e.key === 'Escape')      { onClose(); }
-      else if (e.key === 'ArrowRight' || e.key === 'j') { e.preventDefault(); next(); }
-      else if (e.key === 'ArrowLeft'  || e.key === 'k') { e.preventDefault(); prev(); }
+      if (e.key === 'Escape')      { attemptClose(); }
+      else if (e.key === 'ArrowRight' || e.key === 'j') { e.preventDefault(); attemptNavigate(safeIdx + 1); }
+      else if (e.key === 'ArrowLeft'  || e.key === 'k') { e.preventDefault(); attemptNavigate(safeIdx - 1); }
       else if (e.key === 'r' || e.key === 'R' || e.key === 'Enter') { e.preventDefault(); void releaseRef.current(); }
       else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); setShowFlag(true); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showFlag, onClose, eventModalOpen, notesOpen]);
+  }, [showFlag, attemptClose, attemptNavigate, safeIdx, eventModalOpen, notesOpen]);
 
   // ── Render ────────────────────────────────────────────────────────
   if (!current) {
@@ -1371,7 +1412,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
   return (
     <>
-      <Shell onClose={onClose} blocked={eventModalOpen} zIndex={zIndex}>
+      <Shell onClose={attemptClose} blocked={eventModalOpen} zIndex={zIndex}>
         {/* Top bar — matches the load modal's header treatment:
               • px-6 py-4 padding (was px-5 py-3) for matching breathing room
               • 36×36 rounded-xl blue icon tile as the brand anchor on the left
@@ -1457,21 +1498,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               </span>
             )}
           </div>
-          <button onClick={prev} disabled={safeIdx === 0}
+          <button onClick={() => attemptNavigate(safeIdx - 1)} disabled={safeIdx === 0}
             className="p-2 rounded-full transition-colors disabled:opacity-30"
             title="Previous (←)"
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <ChevronLeft size={18} />
           </button>
-          <button onClick={next} disabled={safeIdx >= loads.length - 1}
+          <button onClick={() => attemptNavigate(safeIdx + 1)} disabled={safeIdx >= loads.length - 1}
             className="p-2 rounded-full transition-colors disabled:opacity-30"
             title="Next (→)"
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
             <ChevronRight size={18} />
           </button>
-          <button onClick={onClose}
+          <button onClick={attemptClose}
             className="p-2 rounded-full transition-colors"
             title="Close (Esc)"
             onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
@@ -2114,15 +2155,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         )}
                       </div>
                       {/* Per-row include-in-invoice toggle — pill-shape
-                          + softer green to fit the new row recipe. */}
+                          + softer green to fit the new row recipe.
+                          Stages a pending change; the Save bar at the
+                          bottom of the sidebar is the commit point. */}
                       <button type="button"
                         onClick={e => {
                           e.stopPropagation();
-                          setIncludedDocIds(prev => {
-                            const next = new Set(prev);
-                            if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
-                            return next;
-                          });
+                          setInvoiceInclude(d.id, !included);
                         }}
                         className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
                         style={{
@@ -2198,6 +2237,40 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 would re-stamp the verified_at timestamp and add noise to
                 the audit trail. */}
             <div className="shrink-0 px-4 py-4 space-y-2" style={{ background: 'var(--gc-bg)' }}>
+              {/* Save / Discard bar — only visible when the dispatcher
+                  has pending include-in-invoice flips. Persists the
+                  staged changes to load_documents.included_in_invoice;
+                  the auto-persist debounce that used to do this lived
+                  on a knife-edge with the close path, so flips were
+                  silently dropped. Now nothing leaves client state
+                  without an explicit click. */}
+              {dirtyIncludeCount > 0 && (
+                <div className="rounded-lg space-y-1.5"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid #fde68a', padding: '8px 10px' }}>
+                  <div className="text-[11px] font-bold" style={{ color: '#92400e' }}>
+                    {dirtyIncludeCount} unsaved {dirtyIncludeCount === 1 ? 'change' : 'changes'} to invoice docs
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button type="button"
+                      onClick={() => void saveIncludes()}
+                      disabled={isSavingIncludes}
+                      className="flex-1 flex items-center justify-center gap-1.5 text-[12px] font-semibold px-2 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                      style={{ background: 'var(--gc-blue)', color: '#fff' }}>
+                      {isSavingIncludes
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <CheckCircle2 size={11} />}
+                      Save
+                    </button>
+                    <button type="button"
+                      onClick={discardIncludes}
+                      disabled={isSavingIncludes}
+                      className="text-[12px] font-semibold px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                      style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
               {/* Convert to PDF used to live here as a standalone CTA;
                   it moved into the Manage Documents dialog (passed in
                   via the dialog's `extraAction` slot) so the sidebar
@@ -2371,6 +2444,61 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         />
       )}
 
+      {/* Unsaved invoice-include changes — prompt before close /
+          nav. Three-way: Save & continue, Discard, Cancel.
+          ConfirmDialog only supports two buttons so we render this
+          one inline. */}
+      {pendingExitAction && (() => {
+        const resume = () => {
+          const action = pendingExitAction;
+          setPendingExitAction(null);
+          if (action.kind === 'close') onClose();
+          else                          goTo(action.targetIdx);
+        };
+        return (
+          <div className="fixed inset-0 flex items-center justify-center px-4"
+            style={{ background: 'rgba(0,0,0,0.5)', zIndex: zIndex + 60 }}
+            onMouseDown={e => { if (e.target === e.currentTarget) setPendingExitAction(null); }}>
+            <div className="rounded-2xl flex flex-col w-full overflow-hidden"
+              style={{ maxWidth: 460, background: 'var(--gc-surface)', boxShadow: '0 16px 48px rgba(0,0,0,0.25)', border: '1px solid var(--gc-border)' }}>
+              <div className="px-5 pt-5 pb-3">
+                <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
+                  Save invoice changes?
+                </div>
+                <div className="text-[13px] font-medium mt-1" style={{ color: 'var(--gc-text-2)' }}>
+                  You have {dirtyIncludeCount} unsaved {dirtyIncludeCount === 1 ? 'change' : 'changes'} to which docs are included in the invoice.
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 px-5 py-4"
+                style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+                <button type="button"
+                  onClick={() => setPendingExitAction(null)}
+                  disabled={isSavingIncludes}
+                  className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors"
+                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}>
+                  Cancel
+                </button>
+                <button type="button"
+                  onClick={() => { discardIncludes(); resume(); }}
+                  disabled={isSavingIncludes}
+                  className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors text-white"
+                  style={{ background: '#d93025' }}>
+                  Discard
+                </button>
+                <button type="button"
+                  onClick={async () => { const ok = await saveIncludes(); if (ok) resume(); }}
+                  disabled={isSavingIncludes}
+                  className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-colors text-white disabled:opacity-50"
+                  style={{ background: 'var(--gc-blue)' }}>
+                  {isSavingIncludes ? <Loader2 size={13} className="animate-spin" /> : null}
+                  Save &amp; continue
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {pendingCloseConfirm && (
         <ConfirmDialog
           title="Discard pending uploads?"
@@ -2455,11 +2583,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           // too — same state the sidebar drives, so flipping here
           // mirrors there instantly.
           includedIds={includedDocIds}
-          onToggleIncluded={(id) => setIncludedDocIds(prev => {
-            const next = new Set(prev);
-            if (next.has(id)) next.delete(id); else next.add(id);
-            return next;
-          })}
+          onToggleIncluded={(id) => setInvoiceInclude(id, !includedDocIds.has(id))}
           kindOptions={KIND_OPTIONS}
           // Pending kind picker — when the user clicks "+ Add document"
           // and picks files, the OS file picker fires (via pickFile).
