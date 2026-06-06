@@ -1482,11 +1482,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     return (
                       <button key={t.key} type="button"
                         onClick={() => setLeftPanelView(t.key)}
-                        className="px-3 py-1 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors"
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
                         style={{
                           background: active ? 'var(--gc-blue)' : 'transparent',
                           color:      active ? '#fff' : 'var(--gc-text-2)',
-                          textShadow: active ? '0 1px 1px rgba(0,0,0,0.25)' : undefined,
                         }}>
                         {t.label}
                       </button>
@@ -1501,17 +1500,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     <button type="button"
                       onClick={() => rateConInputRef.current?.click()}
                       disabled={rateConUploading}
-                      className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
                       style={{
                         background: KIND_TINT.rate_con.bg,
                         color:      KIND_TINT.rate_con.fg,
-                        textShadow: '0 1px 1px rgba(0,0,0,0.25)',
-                        boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
                       }}
                       title={current.rateConPdf ? 'Upload a new rate confirmation' : 'Upload rate confirmation'}>
                       {rateConUploading
-                        ? <Loader2 size={10} className="animate-spin" />
-                        : <Plus size={10} />}
+                        ? <Loader2 size={11} className="animate-spin" />
+                        : <Plus size={11} />}
                       {current.rateConPdf ? 'Replace' : 'Upload'}
                     </button>
                   )}
@@ -1590,14 +1587,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 })()}
                 {loadId && (
                   <button type="button" onClick={pickFile} disabled={uploading}
-                    className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-opacity disabled:opacity-50 shrink-0"
+                    className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50 shrink-0"
                     style={{
                       background:  'var(--gc-blue)',
                       color:       '#fff',
-                      textShadow:  '0 1px 1px rgba(0,0,0,0.25)',
-                      boxShadow:   '0 1px 3px rgba(0,0,0,0.12)',
                     }}>
-                    {uploading ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
+                    {uploading ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
                     Add Documents
                   </button>
                 )}
@@ -1804,16 +1799,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 <button type="button"
                   onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
                   disabled={merging}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-50"
                   style={{
                     background: 'var(--gc-blue)',
                     color:      'white',
-                    border:     '1px solid var(--gc-blue)',
                   }}
                   onMouseEnter={e => { if (!merging) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
                   onMouseLeave={e => { if (!merging) e.currentTarget.style.background = 'var(--gc-blue)'; }}>
-                  {merging ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
-                  Manage documents
+                  {merging ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+                  Manage Documents
                 </button>
               </div>
             )}
