@@ -125,6 +125,12 @@ const KIND_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind
   { kind: 'other',        label: 'Other',        tint: KIND_TINT.other },
 ];
 
+/** Module-level so DocSelectionDialog can disable its "Convert to
+ *  PDF" button when nothing in the user's selection is convertable. */
+function isPdfDocFn(d: LoadDocument): boolean {
+  return (d.mimeType ?? '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(d.fileName);
+}
+
 function ageDays(iso: string): number {
   const t = new Date(iso).getTime();
   if (isNaN(t)) return 0;
@@ -693,8 +699,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
   const [convertSelection,  setConvertSelection]  = useState<Set<string>>(new Set());
   const [converting,        setConverting]        = useState(false);
-  const isPdfDoc = (d: LoadDocument): boolean =>
-    (d.mimeType ?? '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(d.fileName);
+  // Re-export at component scope so the rest of this file's closures
+  // keep the same name. The module-level helper (top of file) is
+  // shared with DocSelectionDialog so the "Convert to PDF" button can
+  // disable itself when the user's selection is all-PDF.
+  const isPdfDoc = isPdfDocFn;
   // Convert candidates = load_documents that aren't already PDF. The
   // virtual rate-con primary is excluded since we don't reliably know
   // its mime type without an extra fetch.
@@ -1830,10 +1839,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       // matching the default left-viewer state.
                       const active   = activeRateConId === d.id
                                      || (activeRateConId === null && isVirtual);
-                      const sameKindCount = rateConDocs.length;
-                      const seq           = i + 1;
-                      const labelText     = KIND_LABEL[d.kind] ?? d.kind;
-                      const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                      // Row label = bare kind ("RATE CON"). We used to
+                      // append " N" when multiple rate-cons existed,
+                      // but the numbering made the chips look like
+                      // step indicators instead of kind tags.
+                      const rowKindLabel  = KIND_LABEL[d.kind] ?? d.kind;
                       return (
                         <div key={d.id}
                           className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
@@ -1898,10 +1908,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
                   const active   = i === activeDocIdx;
                   const included = includedDocIds.has(d.id);
-                  const sameKindCount = nonRateConDocs.filter(x => x.kind === d.kind).length;
-                  const seq           = nonRateConDocs.slice(0, i + 1).filter(x => x.kind === d.kind).length;
-                  const labelText     = KIND_LABEL[d.kind] ?? d.kind;
-                  const rowKindLabel  = sameKindCount > 1 ? `${labelText} ${seq}` : labelText;
+                  // Row label = bare kind ("POD"). We used to suffix
+                  // "N" when 2+ docs shared a kind ("POD 1", "POD 2"),
+                  // but the numbering implied an order/step the user
+                  // didn't intend — flatten to the bare kind.
+                  const rowKindLabel  = KIND_LABEL[d.kind] ?? d.kind;
                   return (
                     <div key={d.id}
                       className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
@@ -3067,23 +3078,32 @@ function DocSelectionDialog({
         {manageMode ? (
           <div className="flex items-center justify-end gap-2 px-5 py-4"
             style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-            {/* Convert selected — enabled when at least 1 doc is
-                picked. The parent's handler silently skips PDFs in the
-                selection, so the button doesn't need to gate on kind. */}
-            {onConvertSelected && (
-              <button type="button"
-                onClick={() => { void onConvertSelected(); }}
-                disabled={busy || count < 1}
-                className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-colors disabled:opacity-40"
-                style={{
-                  background: 'var(--gc-surface)',
-                  color:      'var(--gc-blue)',
-                  border:     '1px solid var(--gc-blue)',
-                }}
-                title="Convert each selected non-PDF doc to its own PDF (originals stay)">
-                <FileText size={13} /> Convert selected
-              </button>
-            )}
+            {/* Convert to PDF — enabled only when the selection has
+                at least one NON-PDF doc. Disabling on all-PDF avoids
+                a click that silently no-ops (the parent handler
+                drops PDFs from the input set). */}
+            {onConvertSelected && (() => {
+              const selectedNonPdfCount = docs
+                .filter(d => selected.has(d.id) && !isPdfDocFn(d))
+                .length;
+              const convertDisabled = busy || selectedNonPdfCount < 1;
+              return (
+                <button type="button"
+                  onClick={() => { void onConvertSelected(); }}
+                  disabled={convertDisabled}
+                  className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-colors disabled:opacity-40"
+                  style={{
+                    background: 'var(--gc-surface)',
+                    color:      'var(--gc-blue)',
+                    border:     '1px solid var(--gc-blue)',
+                  }}
+                  title={selectedNonPdfCount > 0
+                    ? `Convert ${selectedNonPdfCount} non-PDF doc${selectedNonPdfCount === 1 ? '' : 's'} to PDF`
+                    : 'Select at least one non-PDF doc'}>
+                  <FileText size={13} /> Convert to PDF
+                </button>
+              );
+            })()}
             {/* Merge selected — calls the standard onConfirm path
                 (parent wires it to handleMergeSelected). Enabled at
                 2+ since merging a single doc is meaningless. */}
