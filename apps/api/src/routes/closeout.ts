@@ -320,6 +320,35 @@ closeout.get("/queue", async (c) => {
   // returned docCounts payload further down doesn't re-fetch.
   const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged" || tab === "all" || tab === "recent");
 
+  // Relay partner driver/asset info, keyed by load_id. The dedup step
+  // below collapses a relay's two legs into a single surviving row
+  // (pickup leg wins), which means the OTHER leg's driver + truck
+  // disappear from the response. The closeout table wants both
+  // drivers on the row, so we walk the un-deduped data here and
+  // stash the partner's info before dedup runs.
+  const partnerByLoadId = new Map<string, { driverName?: string; assetId?: number }>();
+  const collectPartners = (rows: Array<{ id: string; load?: { id?: string | null } | null; driver_name?: string | null; asset_id?: number | null; relay_role?: string | null }>) => {
+    const byLoadId = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const lid = r.load?.id;
+      if (!lid) continue;
+      if (!byLoadId.has(lid)) byLoadId.set(lid, []);
+      byLoadId.get(lid)!.push(r);
+    }
+    for (const [lid, legs] of byLoadId.entries()) {
+      if (legs.length < 2) continue;
+      // Dedup prefers the pickup leg, so the partner of the survivor
+      // is the non-pickup leg (or the second leg when both share role).
+      const survivor = legs.find(l => l.relay_role === "pickup") ?? legs[0];
+      const partner = legs.find(l => l.id !== survivor.id);
+      if (!partner) continue;
+      partnerByLoadId.set(lid, {
+        driverName: partner.driver_name ?? undefined,
+        assetId:    partner.asset_id   ?? undefined,
+      });
+    }
+  };
+
   if (!searching && !wideCandidatePath) {
     // released_all (and the legacy verified/invoiced/paid filters)
     // were DB-paginated at the event level — fine when each load is
@@ -342,6 +371,7 @@ closeout.get("/queue", async (c) => {
     if (all.length >= NARROW_CAP) {
       console.warn(`[GET /v1/closeout/queue] narrow-cap hit (${NARROW_CAP}) for org=${orgId} tab=${tab} — totals may undercount`);
     }
+    collectPartners(all);
     const deduped = dedupEventsByLoad(all);
     totalCount = deduped.length;
     rawRows    = deduped.slice(offset, offset + limit);
@@ -426,6 +456,7 @@ closeout.get("/queue", async (c) => {
       return tab === "flagged" ? flagged : !flagged;
     });
 
+    collectPartners(filtered);
     // Server-side dedup by load — one row per load (pickup leg wins).
     // Previously the client did this; doing it here means the page
     // slice contains 50 unique loads, not 50 events (which deduped
@@ -547,6 +578,7 @@ closeout.get("/queue", async (c) => {
         return tab === "flagged" ? flagged : !flagged;
       });
     }
+    collectPartners(finalRows);
     // Server-side dedup so the page contains one row per load
     // (pickup leg wins). Without this, a relay-heavy search result
     // shows 25 rows on a 50-row page.
@@ -573,19 +605,24 @@ closeout.get("/queue", async (c) => {
   // event rows above carry asset_id but joinEventLoadToApp doesn't
   // resolve it to a display string. driver.ts/events.ts do this
   // join inline; mirror the pattern here so the Paperwork table's
-  // Truck column renders something other than "—". One query per
-  // page, not per row.
-  const assetIds = Array.from(new Set(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rawRows.map((r: any) => r.asset_id as number | null | undefined).filter((id): id is number => typeof id === "number"),
-  ));
-  if (assetIds.length > 0) {
+  // Truck column renders something other than "—". The same lookup
+  // covers BOTH the surviving leg's asset and any relay partner's
+  // asset (recorded in partnerByLoadId above) so the response can
+  // include the partner driver+truck names for relay loads.
+  const assetIdSet = new Set<number>();
+  for (const r of rawRows as Array<{ asset_id?: number | null }>) {
+    if (typeof r.asset_id === "number") assetIdSet.add(r.asset_id);
+  }
+  for (const p of partnerByLoadId.values()) {
+    if (typeof p.assetId === "number") assetIdSet.add(p.assetId);
+  }
+  const nameById = new Map<number, string>();
+  if (assetIdSet.size > 0) {
     const { data: assetRows } = await supabase
       .from("assets")
       .select("id,name,unit")
       .eq("org_id", orgId)
-      .in("id", assetIds);
-    const nameById = new Map<number, string>();
+      .in("id", Array.from(assetIdSet));
     for (const a of (assetRows ?? []) as Array<{ id: number; name: string | null; unit: string | null }>) {
       const label = `${a.name ?? ""}${a.unit ? ` #${a.unit}` : ""}`.trim();
       if (label) nameById.set(a.id, label);
@@ -597,6 +634,23 @@ closeout.get("/queue", async (c) => {
         const label = nameById.get(assetId);
         if (label) loads[i].assetName = label;
       }
+    }
+  }
+
+  // Build the relayPartners sidecar map for the response. Keyed by
+  // loadId so the client driver column can show "Pickup driver / +
+  // Delivery driver" for relay loads without a second fetch.
+  const relayPartners: Record<string, { driverName?: string; assetName?: string }> = {};
+  for (const l of loads) {
+    if (!l.loadId) continue;
+    const p = partnerByLoadId.get(l.loadId);
+    if (!p) continue;
+    const assetName = typeof p.assetId === "number" ? nameById.get(p.assetId) : undefined;
+    if (p.driverName || assetName) {
+      relayPartners[l.loadId] = {
+        driverName: p.driverName,
+        assetName,
+      };
     }
   }
 
@@ -621,6 +675,7 @@ closeout.get("/queue", async (c) => {
   return c.json({
     loads,
     docCounts,
+    relayPartners,
     total: totalCount,
     totalLoadValue,
     limit,

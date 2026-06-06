@@ -70,6 +70,7 @@ const BUCKET_LIMIT  = 5000;
 interface CacheEntry {
   loads: CalendarEvent[];
   docCounts: Record<string, Record<string, number>>;
+  relayPartners?: Record<string, { driverName?: string; assetName?: string }>;
   total: number;
   fetchedAt: number;
 }
@@ -176,6 +177,10 @@ export default function CloseoutView() {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [docCounts, setDocCounts] = useState<Record<string, Record<string, number>>>({});
+  // Relay-partner sidecar from the API: { [loadId]: { driverName, assetName } }.
+  // For relay loads where dedup dropped one leg, this tells the
+  // driver/truck columns about the OTHER leg without a second fetch.
+  const [relayPartners, setRelayPartners] = useState<Record<string, { driverName?: string; assetName?: string }>>({});
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
@@ -218,6 +223,7 @@ export default function CloseoutView() {
     if (!cached) return false;
     setRows(cached.loads as QueueRow[]);
     setDocCounts(cached.docCounts);
+    setRelayPartners(cached.relayPartners ?? {});
     setTotal(cached.total);
     return true;
   };
@@ -231,15 +237,16 @@ export default function CloseoutView() {
       // 50 currently visible. BUCKET_LIMIT matches the API's
       // in-memory candidate caps so a single request covers the
       // bucket without a second page fetch.
-      const { loads, docCounts, total } = await railway.listCloseoutQueue(API_TAB[tab], {
+      const { loads, docCounts, relayPartners, total } = await railway.listCloseoutQueue(API_TAB[tab], {
         limit: BUCKET_LIMIT,
         q:     searchQuery || undefined,
         now:   naiveNowInTz(calendarTimezone),
       });
-      const entry: CacheEntry = { loads, docCounts, total, fetchedAt: Date.now() };
+      const entry: CacheEntry = { loads, docCounts, total, fetchedAt: Date.now(), relayPartners };
       cacheRef.current.set(`${tab}:${searchQuery}`, entry);
       setRows(loads as QueueRow[]);
       setDocCounts(docCounts ?? {});
+      setRelayPartners(relayPartners ?? {});
       setTotal(total ?? loads.length);
       mergeEvents(loads as QueueRow[]);
     } catch (err) {
@@ -630,12 +637,19 @@ export default function CloseoutView() {
       sortable: true,
       sortValue: r => r.driverName ?? '',
       render: r => {
-        const partner = r.relayGroupId
+        // Try the local rows lookup first (works when both legs are in
+        // the visible page), then fall back to the server-provided
+        // relayPartners sidecar for the common case where server-side
+        // dedup dropped the partner leg before it reached the client.
+        const localPartner = r.relayGroupId
           ? rows.find(x => x.id !== r.id && x.relayGroupId === r.relayGroupId)
           : null;
+        const partnerDriverName =
+          localPartner?.driverName
+          ?? (r.loadId ? relayPartners[r.loadId]?.driverName : undefined);
         const drivers: string[] = [];
         if (r.driverName) drivers.push(r.driverName);
-        if (partner?.driverName && partner.driverName !== r.driverName) drivers.push(partner.driverName);
+        if (partnerDriverName && partnerDriverName !== r.driverName) drivers.push(partnerDriverName);
         if (drivers.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>;
         if (drivers.length === 1) return <span>{drivers[0]}</span>;
         return (
@@ -927,7 +941,7 @@ export default function CloseoutView() {
     // captured. The actual values that influence DISPLAY are listed
     // explicitly below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, rows, docCounts, tab]);
+  }, [customers, rows, docCounts, tab, relayPartners]);
 
   // ── OpsTable filters — Customer + Driver multi-select chips + a
   // Delivered date-range chip. Options come from the current page's

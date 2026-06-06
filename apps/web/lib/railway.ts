@@ -518,6 +518,12 @@ class RailwayClient {
       loads: import('@fleetcal/types').Load[];
       /** Per-loadId map of doc-kind counts: { [loadId]: { pod: 2, bol: 1, lumper: 1 } } */
       docCounts: Record<string, Record<string, number>>;
+      /** Per-loadId relay partner info — the OTHER leg's driver + truck.
+       *  Populated only for relay loads; lookup misses are normal for
+       *  single-leg loads. The closeout table uses this to render
+       *  "Driver A / + Driver B" without having to fetch the partner
+       *  leg separately. */
+      relayPartners?: Record<string, { driverName?: string; assetName?: string }>;
       /** Total matching rows across all pages (for pagination footer). */
       total: number;
       /** Sum of load prices across the full filtered set, deduped by
