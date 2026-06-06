@@ -1718,17 +1718,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     </div>
                   );
                 })()}
-                {loadId && (
-                  <button type="button" onClick={pickFile} disabled={uploading}
-                    className="flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1 rounded-lg transition-opacity disabled:opacity-50 shrink-0"
-                    style={{
-                      background:  'var(--gc-blue)',
-                      color:       '#fff',
-                    }}>
-                    {uploading ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
-                    Add Documents
-                  </button>
-                )}
+                {/* Add Documents button removed — uploads now happen
+                    exclusively inside the right-sidebar "Manage
+                    Documents" dialog. The viewer toolbar is read-only:
+                    it identifies the active doc; it doesn't mutate
+                    the load. */}
               </div>
 
               {nonRateConDocs.length > 0 ? (() => {
