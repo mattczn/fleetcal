@@ -1,9 +1,19 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink, Loader2 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { AssetDocument, AssetDocumentKind } from '@fleetcal/types';
+
+// Imperative handle the parent uses to query / drive the panel's
+// unsaved-changes state. Mirrors the BrokerProfileModal /
+// EventModal pattern: panel owns the form state, parent owns the
+// "are you sure?" dialog and the navigation/close intent.
+export type AssetDetailHandle = {
+  isDirty: () => boolean;
+  save:    () => Promise<void>;
+  discard: () => void;
+};
 import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
@@ -57,6 +67,16 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
   );
   const [adding, setAdding] = useState(false);
 
+  // Unsaved-changes guard. The detail panel owns its form state and
+  // exposes save/discard via a ref; this modal intercepts every
+  // "navigate away" intent (close, switch trucks) and shows a 3-button
+  // dialog so changes never silently vanish.
+  const detailRef          = useRef<AssetDetailHandle>(null);
+  const [panelDirty,  setPanelDirty]  = useState(false);
+  const [showUnsaved, setShowUnsaved] = useState(false);
+  const [saving,      setSaving]      = useState(false);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+
   // Track the id of the row we created via "+ Add Asset" as a
   // placeholder. If the user navigates away (selection change, close,
   // unmount) without entering a real name, that row gets removed so
@@ -76,12 +96,58 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
     }
   };
 
-  const setSelected = (next: number) => {
-    if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
-    setSelectedRaw(next);
+  /** Wraps a navigation intent in the unsaved-changes guard. If the
+   *  panel reports clean → run the action immediately. If dirty → show
+   *  the 3-button dialog; the action only runs after Save or Discard. */
+  const tryNavigate = (action: () => void) => {
+    if (detailRef.current?.isDirty()) {
+      pendingActionRef.current = action;
+      setShowUnsaved(true);
+    } else {
+      action();
+    }
   };
 
-  const handleClose = () => { cleanupDraft(); onClose(); };
+  const setSelected = (next: number) => {
+    tryNavigate(() => {
+      if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
+      setSelectedRaw(next);
+    });
+  };
+
+  const handleClose = () => {
+    tryNavigate(() => { cleanupDraft(); onClose(); });
+  };
+
+  const handleUnsavedSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await detailRef.current?.save();
+      const action = pendingActionRef.current;
+      pendingActionRef.current = null;
+      setShowUnsaved(false);
+      action?.();
+    } catch (err) {
+      console.error('[AssetsModal] save failed:', err);
+      alert(`Save failed: ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUnsavedDiscard = () => {
+    detailRef.current?.discard();
+    const action = pendingActionRef.current;
+    pendingActionRef.current = null;
+    setShowUnsaved(false);
+    action?.();
+  };
+
+  const handleUnsavedKeepEditing = () => {
+    pendingActionRef.current = null;
+    setShowUnsaved(false);
+  };
 
   useEffect(() => {
     return () => { cleanupDraft(); };
@@ -133,20 +199,66 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
       onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div
-        className="flex flex-col"
+        className="flex flex-col relative"
         style={{
           background: 'var(--gc-surface)',
           width: '100%', maxWidth: 1020, height: '82vh',
           borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
         }}
       >
+        {/* Unsaved-changes guard — mirrors the EventModal pattern. Sits
+            inside the modal container with absolute positioning so it
+            dims only the truck directory, not the entire screen. */}
+        {showUnsaved && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center"
+            style={{ background: 'rgba(0,0,0,0.4)', borderRadius: 14 }}>
+            <div
+              className="rounded-2xl p-6 space-y-4"
+              style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}>
+              <div>
+                <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Save changes?</div>
+                <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>You have unsaved changes to this truck.</div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => void handleUnsavedSave()}
+                  disabled={saving}
+                  className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-60"
+                  style={{ background: 'var(--gc-blue)' }}
+                  onMouseEnter={e => { if (!saving) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+                  {saving ? 'Saving…' : 'Yes, save changes'}
+                </button>
+                <button
+                  onClick={handleUnsavedDiscard}
+                  disabled={saving}
+                  className="w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+                  style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  No, discard changes
+                </button>
+                <button
+                  onClick={handleUnsavedKeepEditing}
+                  disabled={saving}
+                  className="w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+                  style={{ color: 'var(--gc-text-3)', background: 'transparent' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  Keep editing
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="shrink-0 flex items-center justify-between px-7 py-5"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-center gap-2.5">
             <Truck size={17} style={{ color: 'var(--gc-blue)' }} />
             <span className="text-base font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-              Asset Directory
+              Truck Directory
             </span>
           </div>
           <button onClick={handleClose} className="p-1.5 rounded-full transition-colors"
@@ -208,6 +320,8 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
             {selectedAsset ? (
               <AssetProfilePanel
                 key={selectedAsset.id}
+                ref={detailRef}
+                onDirtyChange={setPanelDirty}
                 asset={selectedAsset}
                 events={events}
                 drivers={drivers}
@@ -321,14 +435,18 @@ function NavAssetRow({ asset, selected, onSelect }: {
 
 // ─── Asset Profile Panel ──────────────────────────────────────────────────────
 
-function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, onHardDelete }: {
+interface AssetProfilePanelProps {
   asset: Asset;
   events: CalendarEvent[];
   drivers: Driver[];
   openEditModal: (id: string) => void;
   onRemove: () => void;
   onHardDelete: () => void;
-}) {
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+const AssetProfilePanel = forwardRef<AssetDetailHandle, AssetProfilePanelProps>(
+function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, onHardDelete, onDirtyChange }, ref) {
   const { updateAsset, assetCategories, deletedEvents } = useCalendarStore();
   const { can: canDo } = usePermissions();
   const canDelete = canDo('assets.delete');
@@ -365,12 +483,92 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
   const [notes,           setNotes]           = useState(asset.notes           ?? '');
   const [color,           setColor]           = useState(asset.color);
   const [motiveVehicleId,     setMotiveVehicleId]     = useState(asset.motiveVehicleId ?? '');
-  const [motiveEditing,       setMotiveEditing]       = useState(false);
-  const [motiveDraft,         setMotiveDraft]         = useState(asset.motiveVehicleId ?? '');
   const [confirmDelete,       setConfirmDelete]       = useState(false);
 
-  const save = (updates: Partial<Omit<Asset, 'id'>>) =>
-    updateAsset(asset.id, updates);
+  // Top-of-panel tab selector. 'details' covers everything except the
+  // loads list (profile fields, lifecycle, documents, retire,
+  // hard-delete); 'history' shows only the loads.
+  const [view, setView] = useState<'details' | 'history'>('details');
+
+  // Dirty / Save-Discard plumbing.
+  //
+  // Compare every editable field to its corresponding asset prop. The
+  // asset prop is the canonical "last saved" snapshot — after a Save
+  // it's updated by the store and `isDirty` flips back to false
+  // automatically without any explicit reset. License expiration is
+  // normalized to '' for the dirty check so that `null` vs `undefined`
+  // vs empty-string can't pretend to be a real change.
+  const isDirty =
+    name              !== asset.name                          ||
+    unit              !== (asset.unit              ?? '')     ||
+    make              !== (asset.make              ?? '')     ||
+    model             !== (asset.model             ?? '')     ||
+    vin               !== (asset.vin               ?? '')     ||
+    licensePlate      !== (asset.licensePlate      ?? '')     ||
+    licenseState      !== (asset.licenseState      ?? '')     ||
+    licenseExpiration !== (asset.licenseExpiration ?? '')     ||
+    notes             !== (asset.notes             ?? '')     ||
+    color             !== asset.color                          ||
+    type              !== asset.type                           ||
+    motiveVehicleId   !== (asset.motiveVehicleId   ?? '');
+
+  // Notify parent so it can intercept close/select while dirty.
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
+
+  /** Push every locally-edited field to the store in one updateAsset
+   *  call. Trimming + uppercase normalisation matches what the old
+   *  per-field onBlur handlers used to do. Name is special: a blank
+   *  trimmed name is rejected silently (server requires non-empty),
+   *  so we fall back to the previously-saved name. */
+  const saveAll = async () => {
+    const trimmedName = name.trim();
+    await updateAsset(asset.id, {
+      name:              trimmedName || asset.name,
+      unit:              unit.trim() || undefined,
+      make:              make.trim() || undefined,
+      model:             model.trim() || undefined,
+      vin:               vin.trim().toUpperCase().replace(/\s+/g, '') || undefined,
+      licensePlate:      licensePlate.trim().toUpperCase() || undefined,
+      licenseState:      licenseState.trim().toUpperCase() || undefined,
+      licenseExpiration: licenseExpiration || null,
+      notes:             notes.trim() || undefined,
+      color,
+      type,
+      motiveVehicleId:   motiveVehicleId.trim() || undefined,
+    });
+  };
+
+  /** Snap every local field back to the asset prop. Used by the
+   *  Discard button + the parent's unsaved-changes dialog. */
+  const discardAll = () => {
+    setName(asset.name);
+    setUnit(asset.unit ?? '');
+    setMake(asset.make ?? '');
+    setModel(asset.model ?? '');
+    setVin(asset.vin ?? '');
+    setLicensePlate(asset.licensePlate ?? '');
+    setLicenseState(asset.licenseState ?? '');
+    setLicenseExpiration(asset.licenseExpiration ?? '');
+    setNotes(asset.notes ?? '');
+    setColor(asset.color);
+    setType(asset.type);
+    setMotiveVehicleId(asset.motiveVehicleId ?? '');
+  };
+
+  useImperativeHandle(ref, () => ({
+    isDirty: () => isDirty,
+    save:    saveAll,
+    discard: discardAll,
+  }), [isDirty, saveAll, discardAll]);
+
+  // Legacy per-field saver kept for source compatibility with the
+  // documents / lifecycle sub-components that still call save(...) —
+  // they bypass the Save bar because their changes are inherently
+  // committed-on-action (upload completes → row exists; lifecycle
+  // editor has its own Save buttons). For form fields below, every
+  // onBlur used to call save({...}); those calls are now no-ops and
+  // the bottom Save bar drives the actual DB write.
+  const save = (_updates: Partial<Omit<Asset, 'id'>>) => {};
 
   const focusBorder = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     (e.currentTarget.style.borderColor = color);
@@ -408,6 +606,30 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
           </div>
         </div>
       </div>
+
+      {/* Details / History tab selector. Details = profile fields +
+          documents + lifecycle + retire/delete (everything you'd
+          configure about this truck). History = the loads list
+          surface separately so the long upcoming/previous list
+          doesn't push the editable fields off the screen. */}
+      <div className="flex items-center gap-1 mb-6 p-0.5 rounded-lg"
+        style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', width: 'fit-content' }}>
+        {(['details', 'history'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setView(tab)}
+            className="px-4 py-1.5 rounded-md text-sm font-semibold transition-colors capitalize"
+            style={{
+              background: view === tab ? 'var(--gc-surface)' : 'transparent',
+              color:      view === tab ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+              boxShadow:  view === tab ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+            }}>
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {view === 'details' && (<>
 
       {/* Read-only notice for roles (e.g. maintenance) that have
           assets.view but not assets.edit. The fieldset below disables
@@ -598,53 +820,20 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
             }} />
         </PField>
 
-        {/* Motive integration — only when the org has motive_integration ON */}
+        {/* Motive integration — only when the org has motive_integration ON.
+            Simplified to a plain input now that the panel uses the
+            Save bar pattern; the old Edit/Save inline toggle was
+            redundant with the bottom Save/Discard affordance. */}
         {showMotiveField && (
         <PField label="Motive Vehicle ID">
-          {motiveEditing ? (
-            <div className="flex gap-2">
-              <input
-                autoFocus
-                type="text"
-                value={motiveDraft}
-                onChange={e => setMotiveDraft(e.target.value)}
-                placeholder="e.g. 123456"
-                style={{ ...P_INPUT, flex: 1 }}
-                onFocus={focusBorder}
-                onBlur={blurBorder}
-                onKeyDown={e => {
-                  if (e.key === 'Escape') { setMotiveDraft(motiveVehicleId); setMotiveEditing(false); }
-                }}
-              />
-              <button
-                onClick={() => {
-                  const v = motiveDraft.trim();
-                  setMotiveVehicleId(v);
-                  save({ motiveVehicleId: v || undefined });
-                  setMotiveEditing(false);
-                }}
-                className="shrink-0 px-3 rounded-lg text-[13px] font-medium"
-                style={{ background: color, color: '#fff', border: 'none', cursor: 'pointer' }}
-              >
-                Save
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div
-                style={{ ...P_INPUT, flex: 1, color: motiveVehicleId ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}
-              >
-                {motiveVehicleId || 'Not set'}
-              </div>
-              <button
-                onClick={() => { setMotiveDraft(motiveVehicleId); setMotiveEditing(true); }}
-                className="shrink-0 px-3 rounded-lg text-[13px] font-medium"
-                style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-2)', cursor: 'pointer' }}
-              >
-                Edit
-              </button>
-            </div>
-          )}
+          <input type="text" value={motiveVehicleId} onChange={e => setMotiveVehicleId(e.target.value)}
+            placeholder="e.g. 123456" style={P_INPUT}
+            onFocus={focusBorder}
+            onBlur={e => {
+              const v = e.target.value.trim();
+              setMotiveVehicleId(v);
+              blurBorder(e);
+            }} />
         </PField>
         )}
       </div>
@@ -702,27 +891,21 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
 
       </fieldset>
 
-      {/* Recent loads — In Progress / Upcoming / Completed with search.
-          Same structure as BrokerProfileModal's load history surface. */}
-      <LoadHistorySection
-        loads={assetLoads}
-        assets={[asset]}
-        onSelect={openEditModal}
-        heading="Loads"
-        emptyLabel="No loads found for this asset"
-      />
-
       {/* Lifecycle editor — set/edit the active_from and retire date.
           Bookkeeping fixes happen here; the Retire button below is the
           one-tap "retire today" shortcut. Both write to the same
           fields. Gated on assets.edit (not delete) because backdating
-          active_from is a correction, not a destructive action. */}
+          active_from is a correction, not a destructive action.
+          Note: writes through updateAsset directly (bypassing the
+          staged Save bar) since lifecycle has its own internal Save
+          UI and committing lifecycle changes shouldn't depend on
+          unrelated profile-field edits being clean. */}
       <LifecycleEditor
         activeFrom={asset.activeFrom}
         activeTo={asset.activeTo}
         accent={color}
         canEdit={canEdit}
-        onSave={(changes) => save(changes)}
+        onSave={(changes) => updateAsset(asset.id, changes)}
       />
 
       {/* Retire — gated on assets.delete. Underlying API now stamps
@@ -781,9 +964,57 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
             : null}
         />
       )}
+
+      {/* Save / Discard bar — sticky at the bottom of the details
+          view when any profile field has been edited. Mirrors the
+          load modal's "you have unsaved changes" affordance so the
+          UX rhymes across the two main edit surfaces. */}
+      {isDirty && canEdit && (
+        <div
+          className="sticky bottom-0 -mx-8 px-8 py-4 mt-8 flex items-center gap-3 justify-end"
+          style={{
+            background: 'var(--gc-surface)',
+            borderTop: '1px solid var(--gc-border-light)',
+            boxShadow: '0 -8px 16px -8px rgba(0,0,0,0.08)',
+          }}>
+          <span className="text-xs mr-auto" style={{ color: 'var(--gc-text-3)' }}>
+            Unsaved changes
+          </span>
+          <button
+            type="button"
+            onClick={discardAll}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', background: 'transparent' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={() => void saveAll()}
+            className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
+            style={{ background: 'var(--gc-blue)' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+            Save changes
+          </button>
+        </div>
+      )}
+
+      </>)}
+
+      {view === 'history' && (
+        <LoadHistorySection
+          loads={assetLoads}
+          assets={[asset]}
+          onSelect={openEditModal}
+          heading="Loads"
+          emptyLabel="No loads found for this asset"
+        />
+      )}
     </div>
   );
-}
+});
 
 /** Two-step destructive confirm — click to arm, type the name, click
  *  again to fire. When `localBlockerHint` is set, the button is
