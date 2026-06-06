@@ -20,7 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, Star, X, MessageSquare, Search } from 'lucide-react';
+import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, Star, X, MessageSquare, Search, Info } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
@@ -36,16 +36,18 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 import { AccessorialsCell, FastTooltip } from '@/components/queue/QueueTablePrimitives';
 
-type Tab = 'pending' | 'flagged' | 'all' | 'released';
+type Tab = 'all' | 'recent' | 'flagged' | 'released';
 
 // Maps the closeout UI's bucket name to the API tab. `released` (UI) →
 // `released_all` (API) — the API name is more specific to avoid
 // colliding with the accounting page's narrower `released` bucket
-// which means just billing_status='verified'.
-const API_TAB: Record<Tab, 'pending' | 'flagged' | 'all' | 'released_all'> = {
-  pending:  'pending',
-  flagged:  'flagged',
+// which means just billing_status='verified'. `recent` is a new
+// time-based filter ("delivered in the last 24h"); it shares the
+// same candidate set as `all` plus a window check.
+const API_TAB: Record<Tab, 'recent' | 'flagged' | 'all' | 'released_all'> = {
   all:      'all',
+  recent:   'recent',
+  flagged:  'flagged',
   released: 'released_all',
 };
 
@@ -101,10 +103,10 @@ const DEFAULT_COL_WIDTHS = {
 };
 
 const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
-  { value: 'pending',  label: 'Pending',  subtitle: 'Awaiting POD',           tint: '#1a73e8' },
-  { value: 'flagged',  label: 'Flagged',  subtitle: 'Needs follow-up',        tint: '#b45309' },
-  { value: 'all',      label: 'All',      subtitle: 'All pending and flagged', tint: '#5f6368' },
-  { value: 'released', label: 'Released', subtitle: 'Done & beyond',          tint: '#15803d' },
+  { value: 'all',      label: 'All',                subtitle: 'Delivered loads ready to release',     tint: '#5f6368' },
+  { value: 'recent',   label: 'Recently Delivered', subtitle: 'Delivered within the past 24 hours',   tint: '#1a73e8' },
+  { value: 'flagged',  label: 'Flagged',            subtitle: 'Missing POD · pending acc · priority · manual', tint: '#b45309' },
+  { value: 'released', label: 'Released',           subtitle: 'Released for billing',                 tint: '#15803d' },
 ];
 
 function ageDays(deliveredEnd: string): number {
@@ -141,18 +143,18 @@ export default function CloseoutView() {
   // because the provider is already wired from the previous page.
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
 
-  const [tab, setTab] = useState<Tab>('pending');
+  const [tab, setTab] = useState<Tab>('all');
   // Live counts shown on bucket tiles. Pre-fetched on mount and
   // refreshed alongside the main queue fetch — keeps the inactive
   // tile's number accurate without forcing a tab switch.
-  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0, released: 0 });
+  const [bucketTotals, setBucketTotals] = useState<Record<Tab, number>>({ all: 0, recent: 0, flagged: 0, released: 0 });
   // Sum of load values per bucket (mirrors /accounting's bucket tiles).
   // Server returns this in the queue response (deduped by loadId for
   // relays). Refreshed alongside the count totals.
   // NOTE: released bucket intentionally leaves load $ at 0 — the
   // released view is a history surface for dispatchers WITHOUT
   // accounting access, so we don't pre-aggregate billing $ on it.
-  const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ pending: 0, flagged: 0, all: 0, released: 0 });
+  const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ all: 0, recent: 0, flagged: 0, released: 0 });
 
   // Search across all loads in the current tab (not just the page on
   // screen). Live input lives in `searchInput`; the debounced value
@@ -260,22 +262,22 @@ export default function CloseoutView() {
   // tile's count doesn't get stale.
   async function refreshBucketTotals() {
     try {
-      const [p, f, a, r] = await Promise.all([
-        railway.listCloseoutQueue('pending',      { limit: 1 }).catch(() => null),
-        railway.listCloseoutQueue('flagged',      { limit: 1 }).catch(() => null),
+      const [a, rc, f, rl] = await Promise.all([
         railway.listCloseoutQueue('all',          { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('recent',       { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('flagged',      { limit: 1 }).catch(() => null),
         railway.listCloseoutQueue('released_all', { limit: 1 }).catch(() => null),
       ]);
       setBucketTotals({
-        pending:  p?.total ?? 0,
-        flagged:  f?.total ?? 0,
-        all:      a?.total ?? 0,
-        released: r?.total ?? 0,
+        all:      a?.total  ?? 0,
+        recent:   rc?.total ?? 0,
+        flagged:  f?.total  ?? 0,
+        released: rl?.total ?? 0,
       });
       setBucketLoadValue({
-        pending:  p?.totalLoadValue ?? 0,
-        flagged:  f?.totalLoadValue ?? 0,
-        all:      a?.totalLoadValue ?? 0,
+        all:      a?.totalLoadValue  ?? 0,
+        recent:   rc?.totalLoadValue ?? 0,
+        flagged:  f?.totalLoadValue  ?? 0,
         // Intentionally 0 — released bucket doesn't surface aggregate $.
         released: 0,
       });
@@ -962,10 +964,26 @@ export default function CloseoutView() {
 
           {/* Purpose hint — keeps the split between Paperwork and
               Billing visible while users are still building muscle
-              memory. */}
-          <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>
-            POD verification. Check paperwork and release loads for billing.
-            Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Billing</Link>.
+              memory, and surfaces the auto-flag rules so users don't
+              have to guess what put a load in the Flagged bucket. */}
+          <div className="text-[12.5px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: 'var(--gc-text-3)' }}>
+            <span>
+              POD verification. Check paperwork and release loads for billing.
+              Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Billing</Link>.
+            </span>
+            <FastTooltip text="Flagged = POD missing 24h+ · Pending accessorial · Priority load · Manually flagged">
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md cursor-default"
+                style={{
+                  background: '#fff7ed',
+                  color:      '#9a3412',
+                  border:     '1px solid #fed7aa',
+                  fontWeight: 600,
+                }}
+              >
+                <Info size={11} /> What gets flagged?
+              </span>
+            </FastTooltip>
           </div>
 
           {/* Bucket tiles — same visual rhythm as /accounting. Each
@@ -980,7 +998,7 @@ export default function CloseoutView() {
               const count = bucketTotals[b.value];
               const value = bucketLoadValue[b.value];
               const Icon =
-                b.value === 'pending'  ? Clock :
+                b.value === 'recent'   ? Clock :
                 b.value === 'flagged'  ? Flag  :
                 b.value === 'released' ? CheckCircle2 :
                                          FileCheck2;
@@ -1070,7 +1088,7 @@ export default function CloseoutView() {
           {searchQuery && (
             <div className="text-[11px] -mt-2 ml-1 flex items-center gap-1.5" style={{ color: 'var(--gc-text-2)' }}>
               <Search size={10} style={{ color: 'var(--gc-blue)' }} /> Showing {tab} loads matching <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>&ldquo;{searchQuery}&rdquo;</span>
-              {tab === 'pending' && <span style={{ color: 'var(--gc-text-3)' }}>(including upcoming)</span>}
+              {(tab === 'all' || tab === 'recent') && <span style={{ color: 'var(--gc-text-3)' }}>(including upcoming)</span>}
             </div>
           )}
 

@@ -109,12 +109,22 @@ function loadIsFlagged(
   podCountByLoad: Map<string, number>,
   deliveryEnd:    string | null | undefined,
   nowMs:          number,
+  /** Priority lives on the EVENT row, not the load — relays can have
+   *  a priority pickup leg without the delivery leg being flagged.
+   *  Caller passes the relevant event's value here. */
+  eventPriority?: boolean,
 ): boolean {
+  // Manual flag — operator hit the Flag button.
   if (load.billing_status === 'on_hold') return true;
+  // Operator marked the load with the priority star.
+  if (eventPriority) return true;
+  // Any accessorial still in requested/unknown status — money waiting
+  // on approval.
   if (hasPendingAccessorial(load))       return true;
   // POD check skipped entirely for TONU — no delivery happened, no
   // paperwork expected.
   if (load.is_tonu) return false;
+  // POD missing 24h+ past delivery.
   if (podDueByNow(deliveryEnd, nowMs) && isPodMissing(loadId, podCountByLoad)) return true;
   return false;
 }
@@ -185,7 +195,7 @@ function dedupEventsByLoad<T extends { load?: { id?: string | null } | null; rel
   return [...out, ...standalone];
 }
 
-type Tab = "pending" | "flagged" | "verified" | "invoiced" | "paid" | "all" | "released_all";
+type Tab = "pending" | "recent" | "flagged" | "verified" | "invoiced" | "paid" | "all" | "released_all";
 
 closeout.get("/queue", async (c) => {
   const orgId = c.get("orgId");
@@ -222,14 +232,21 @@ closeout.get("/queue", async (c) => {
       .eq("event_kind", "revenue")
       .is("deleted_at", null)
       .neq("status", "cancelled");
-    // Pending + Flagged are derived: we fetch every candidate that
-    // COULD be in either bucket, compute impediments below, then
-    // split. Candidates = loads with billing_status in
+    // All / Recently Delivered / Flagged are derived: we fetch every
+    // candidate that COULD belong to any of them, compute impediments
+    // below, then split. Candidates = loads with billing_status in
     // {pending, on_hold}. The non-search path also applies the
-    // delivered-by-now date filter so we don't surface upcoming
-    // loads in the working set.
-    if (tab === "pending" || tab === "flagged" || tab === "all") {
-      if (!searching && tab === "pending") q = q.lte("end", nowIso);
+    // `delivered-by-now` filter (end <= now) to every candidate
+    // bucket — Paperwork only deals with loads that have actually
+    // been delivered. `recent` adds a 24h lower bound applied in JS
+    // against the relay-aware deliveryEnd map.
+    //
+    // `pending` is preserved as a server-side alias for
+    // "delivered loads NOT in the Flagged bucket" — kept so any
+    // older client that still asks for it gets the historical
+    // behaviour. The Paperwork UI no longer surfaces it.
+    if (tab === "pending" || tab === "flagged" || tab === "all" || tab === "recent") {
+      if (!searching) q = q.lte("end", nowIso);
       q = q.in("load.billing_status", ["pending", "on_hold"]);
     } else if (tab === "verified") q = q.eq("load.billing_status", "verified");
     else if   (tab === "invoiced") q = q.eq("load.billing_status", "invoiced");
@@ -284,7 +301,7 @@ closeout.get("/queue", async (c) => {
   // Reuse-flag — when the wide-candidate path runs, we've already
   // built loadIds + we'll need POD counts; track them here so the
   // returned docCounts payload further down doesn't re-fetch.
-  const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged" || tab === "all");
+  const wideCandidatePath = !searching && (tab === "pending" || tab === "flagged" || tab === "all" || tab === "recent");
 
   if (!searching && !wideCandidatePath) {
     // released_all (and the legacy verified/invoiced/paid filters)
@@ -358,14 +375,28 @@ closeout.get("/queue", async (c) => {
     const deliveryEndByLoadId = buildDeliveryEndMap(candidates);
     const nowMs = Date.now();
 
-    // Apply the impediment filter. Pending = NOT flagged.
-    // `all` short-circuits the split — every candidate in the
-    // pending/on_hold candidate set is returned.
-    const filtered = tab === "all" ? candidates : candidates.filter(r => {
+    // Apply the impediment / time filter per tab:
+    //   • all      — every candidate in the pending/on_hold set
+    //   • pending  — NOT flagged (legacy alias — UI no longer surfaces)
+    //   • flagged  — IS flagged (manual flag, priority, pending acc,
+    //                missing POD 24h+)
+    //   • recent   — delivered within the last 24h, regardless of flag.
+    //                Time window applied against the RELAY-AWARE
+    //                deliveryEnd so a relay with pickup yesterday and
+    //                delivery 2h ago shows up here.
+    const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+    const filtered = candidates.filter(r => {
       const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
       const loadId = loadRow?.id;
       const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
-      const flagged = loadIsFlagged(loadRow, loadId, podCount, deliveryEnd, nowMs);
+      if (tab === "all") return true;
+      if (tab === "recent") {
+        if (!deliveryEnd) return false;
+        const t = new Date(deliveryEnd).getTime();
+        if (isNaN(t)) return false;
+        return t > nowMs - RECENT_WINDOW_MS && t <= nowMs;
+      }
+      const flagged = loadIsFlagged(loadRow, loadId, podCount, deliveryEnd, nowMs, !!r.priority);
       return tab === "flagged" ? flagged : !flagged;
     });
 
@@ -451,7 +482,7 @@ closeout.get("/queue", async (c) => {
     // logic as the non-search wide-candidate path — we just feed it
     // the already-merged result set instead of a fresh fetch.
     let finalRows = merged;
-    if (tab === "pending" || tab === "flagged" || tab === "all") {
+    if (tab === "pending" || tab === "flagged" || tab === "all" || tab === "recent") {
       const candidateLoadIds = Array.from(new Set(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         merged.map((r: any) => r.load?.id as string | undefined).filter((id): id is string => !!id),
@@ -470,11 +501,19 @@ closeout.get("/queue", async (c) => {
       }
       const deliveryEndByLoadId = buildDeliveryEndMap(merged);
       const nowMs = Date.now();
-      finalRows = tab === "all" ? merged : merged.filter(r => {
+      const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+      finalRows = merged.filter(r => {
         const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
         const loadId = loadRow?.id;
         const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
-        const flagged = loadIsFlagged(loadRow, loadId, podCount, deliveryEnd, nowMs);
+        if (tab === "all") return true;
+        if (tab === "recent") {
+          if (!deliveryEnd) return false;
+          const t = new Date(deliveryEnd).getTime();
+          if (isNaN(t)) return false;
+          return t > nowMs - RECENT_WINDOW_MS && t <= nowMs;
+        }
+        const flagged = loadIsFlagged(loadRow, loadId, podCount, deliveryEnd, nowMs, !!r.priority);
         return tab === "flagged" ? flagged : !flagged;
       });
     }
