@@ -807,9 +807,9 @@ function Step1({
         <FormRow Icon={Building2} label="Customer"
           value={draft.broker || null}
           onEdit={onEditBroker} />
-        <FormRow Icon={Box} label="Trailer Type"
+        <FormRow Icon={Box} label="Equipment Type"
           value={draft.trailerType || null}
-          onEdit={() => onEditField({ title: "Trailer Type", column: "trailerType", initial: draft.trailerType, kind: "text", transform: (v) => v.trim() })}
+          onEdit={() => onEditField({ title: "Equipment Type", column: "trailerType", initial: draft.trailerType, kind: "text", transform: (v) => v.trim() })}
           last />
       </Card>
 

@@ -1123,7 +1123,7 @@ function DetailsTab({
   // Editable text/number columns. Asset/Driver/Dates require pickers — deferred.
   const editLoadNum    = () => onEditField({ title: "Load #",    column: "load_num", initial: load.loadNum  ?? "", kind: "text",      transform: (v) => v.trim() || null });
   const editBroker     = () => onEditField({ title: "Customer",  column: "broker",   initial: load.broker   ?? "", kind: "text",      transform: (v) => v.trim() || null });
-  const editTrailerTyp = () => onEditField({ title: "Trailer Type", column: "trailer_type", initial: load.trailerType ?? "", kind: "text", transform: (v) => v.trim() || null });
+  const editTrailerTyp = () => onEditField({ title: "Equipment Type", column: "trailer_type", initial: load.trailerType ?? "", kind: "text", transform: (v) => v.trim() || null });
   const editLoadPrice  = () => onEditField({ title: "Load Price",   column: "load_price", initial: load.loadPrice != null ? String(load.loadPrice) : "", kind: "number", transform: (v) => v ? parseFloat(v) : null });
   const editDriverPay  = () => onEditField({ title: "Driver Pay",   column: "driver_pay", initial: load.driverPay != null ? String(load.driverPay) : "", kind: "number", transform: (v) => v ? parseFloat(v) : null });
   // Special Instructions writes to load.notes (the canonical column);
@@ -1260,7 +1260,7 @@ function DetailsTab({
           onEdit={onEditBroker}
         />
         <EditableRow
-          Icon={Box} label="Trailer Type" value={load.trailerType}
+          Icon={Box} label="Equipment Type" value={load.trailerType}
           editing={editMode} modified={dirty.has("trailer_type")}
           onEdit={editTrailerTyp}
         />

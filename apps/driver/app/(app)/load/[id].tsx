@@ -1551,7 +1551,7 @@ export default function LoadDetailScreen() {
         >
           {load.broker      ? <MetaRow Icon={Building2} label="Customer" value={load.broker}      /> : null}
           {load.assetName   ? <MetaRow Icon={Truck}     label="Truck"   value={load.assetName}   /> : null}
-          {load.trailerType ? <MetaRow Icon={Container} label="Trailer Type" value={load.trailerType} /> : null}
+          {load.trailerType ? <MetaRow Icon={Container} label="Equipment Type" value={load.trailerType} /> : null}
           <TouchableOpacity onPress={() => setTrailerPickerVisible(true)} activeOpacity={0.6}>
             <MetaRow
               Icon={Container}

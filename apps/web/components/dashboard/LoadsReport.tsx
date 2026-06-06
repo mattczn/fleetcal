@@ -127,7 +127,7 @@ const COLUMNS: ColumnDef[] = [
     const a = ctx.assets.find(x => x.id === l.pickupAssetId);
     return a ? (a.unit ? `${a.name} #${a.unit}` : a.name) : '';
   }},
-  { id: 'trailerType',  label: 'Trailer Type', get: (l) => l.trailerType ?? '' },
+  { id: 'trailerType',  label: 'Equipment Type', get: (l) => l.trailerType ?? '' },
   { id: 'isRelay',      label: 'Relay',       get: (l) => l.isRelay ? 'Yes' : '' },
   { id: 'status',       label: 'Status',      get: (l) => STATUS_LABEL[l.pickupStatus ?? 'scheduled'] ?? l.pickupStatus ?? '' },
   { id: 'deliveryStatus', label: 'Delivery Status', get: (l) => STATUS_LABEL[l.deliveryStatus ?? 'scheduled'] ?? l.deliveryStatus ?? '' },
