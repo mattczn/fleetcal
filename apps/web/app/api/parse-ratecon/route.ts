@@ -211,6 +211,19 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Trace buffer for debugging. Surfaced in the response so the user
+  // can open DevTools → Network and see exactly what each pass
+  // returned without redeploying.
+  const trace: {
+    pass1RawText?: string;
+    pass1Parsed?:  Record<string, unknown>;
+    discrepancies?: string[];
+    correctivePrompt?: string;
+    pass2RawText?: string;
+    pass2Parsed?:  Record<string, unknown>;
+    crossCheckAfterPass2?: string[];
+  } = {};
+
   // ── Pass 1 (Haiku) ───────────────────────────────────────────────
   let parsed: Record<string, unknown>;
   try {
@@ -223,8 +236,10 @@ export async function POST(req: NextRequest) {
       messages: [{ role: 'user', content }],
     });
     const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    trace.pass1RawText = text;
     try {
       parsed = extractJson(text);
+      trace.pass1Parsed = parsed;
     } catch (parseErr) {
       console.error('[parse-ratecon] pass-1 JSON parse failed:', {
         stopReason: response.stop_reason,
@@ -235,11 +250,28 @@ export async function POST(req: NextRequest) {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: msg, trace }, { status: 500 });
   }
+
+  // Verbose dump of pass-1 dates → Vercel logs. Mirror what the
+  // cross-check is about to read so failures in production are
+  // diagnosable without re-running locally.
+  console.log('[parse-ratecon] pass-1 dates:', JSON.stringify({
+    start: parsed.start,
+    end:   parsed.end,
+    stops: Array.isArray(parsed.stops)
+      ? (parsed.stops as Array<Record<string, unknown>>).map(s => ({
+          sequence:  s.sequence,
+          apptStart: s.apptStart,
+          apptEnd:   s.apptEnd,
+        }))
+      : [],
+    dateJustifications: parsed.dateJustifications,
+  }, null, 2));
 
   // ── Cross-check + conditional pass-2 escalation ──────────────────
   const discrepancies = findDateDiscrepancies(parsed);
+  trace.discrepancies = discrepancies;
   let escalatedToSonnet = false;
   if (discrepancies.length > 0) {
     escalatedToSonnet = true;
@@ -247,6 +279,7 @@ export async function POST(req: NextRequest) {
 
     try {
       const correctivePrompt = buildRateConCorrectivePrompt(parsed, discrepancies, promptVariables);
+      trace.correctivePrompt = correctivePrompt;
       const textBlock: TextBlockParam = { type: 'text', text: correctivePrompt };
       const content: ContentBlockParam[] = [docBlock, textBlock];
       const response = await client.messages.create({
@@ -256,7 +289,10 @@ export async function POST(req: NextRequest) {
         messages: [{ role: 'user', content }],
       });
       const text = response.content[0].type === 'text' ? response.content[0].text : '';
+      trace.pass2RawText = text;
       const correction = extractJson(text);
+      trace.pass2Parsed = correction;
+      console.log('[parse-ratecon] pass-2 corrected dates:', JSON.stringify(correction, null, 2));
       parsed = applyCorrection(parsed, correction);
 
       // Re-check. We accept whatever Sonnet returns even if still
@@ -264,6 +300,7 @@ export async function POST(req: NextRequest) {
       // and we'd rather surface what the better model thinks than
       // loop indefinitely. Log for visibility.
       const stillBad = findDateDiscrepancies(parsed);
+      trace.crossCheckAfterPass2 = stillBad;
       if (stillBad.length > 0) {
         console.warn('[parse-ratecon] pass-2 (Sonnet) also failed cross-check; accepting anyway:', stillBad);
       }
@@ -337,6 +374,11 @@ export async function POST(req: NextRequest) {
       escalatedToSonnet,
       pass1Model: PASS_1_MODEL,
       pass2Model: escalatedToSonnet ? PASS_2_MODEL : null,
+      // Full debug trace — raw text + parsed JSON from each pass +
+      // the discrepancies that triggered escalation + the corrective
+      // prompt sent to Sonnet. Inspect via DevTools → Network. None
+      // of this is read by the UI; it's pure diagnostics.
+      trace,
     },
   });
 }
