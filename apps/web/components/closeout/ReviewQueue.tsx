@@ -1275,12 +1275,24 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   return (
     <>
       <Shell onClose={onClose} blocked={eventModalOpen} zIndex={zIndex}>
-        {/* Top bar */}
-        <div className="shrink-0 flex items-center gap-3 px-5 py-3"
-          style={{ borderBottom: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
-          <span className="text-[11px] font-semibold uppercase tracking-wider"
-            style={{ color: 'var(--gc-text-3)' }}>
-            {safeIdx + 1} of {loads.length}
+        {/* Top bar — matches the load modal's header treatment:
+              • px-6 py-4 padding (was px-5 py-3) for matching breathing room
+              • 36×36 rounded-xl blue icon tile as the brand anchor on the left
+              • 11px extrabold uppercase tracking-wider blue kicker
+                ("CLOSEOUT REVIEW") sitting above the load title
+              • 3px blue bottom under-rule (was 1px hairline) so the
+                header reads as one continuous chrome strip with the
+                content area below */}
+        <div className="shrink-0 flex items-center gap-3 px-6 py-4"
+          style={{ borderBottom: '3px solid var(--gc-blue)', background: 'var(--gc-surface)' }}>
+          <div className="flex items-center justify-center shrink-0"
+            style={{ width: 36, height: 36, borderRadius: 12, background: 'var(--gc-blue)', color: 'white' }}
+            title="Closeout Review">
+            <CheckCircle2 size={18} />
+          </div>
+          <span className="text-[11px] font-extrabold uppercase tracking-wider shrink-0"
+            style={{ color: 'var(--gc-blue)' }}>
+            Closeout · {safeIdx + 1} of {loads.length}
           </span>
           <span style={{ background: ageColor.bg, color: ageColor.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
@@ -2366,21 +2378,29 @@ function Shell({ children, onClose, blocked, zIndex }: { children: React.ReactNo
   // user doesn't accidentally lose their queue position when the click
   // bubbles past EventModal's backdrop.
   return (
+    // Match the load modal's backdrop + shell treatment so the two
+    // primary modals in the app feel like one system:
+    //   • neutral rgba(0,0,0,0.36) tint, no blue, no blur
+    //   • 14px radius (was rounded-2xl ~16)
+    //   • var(--shadow-3) design token (was hard-coded big shadow)
+    //   • no shell border (the shadow does the visual lift)
+    //   • gc-surface as the base, so individual sections that use gc-bg
+    //     read as recessed wells against it
     <div className="fixed inset-0 flex items-center justify-center p-4"
-      style={{ background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(2px)', zIndex }}
+      style={{ background: 'rgba(0,0,0,0.36)', zIndex }}
       onMouseDown={e => { if (!blocked && e.target === e.currentTarget) onClose(); }}>
       <div
-        className="flex flex-col rounded-2xl overflow-hidden"
+        className="flex flex-col overflow-hidden"
         style={{
           // Sized so the 320px verification sidebar + two PDF columns
           // fit comfortably even on a 14" laptop. Capped to leave a
           // sliver of backdrop on ultrawides so it still reads as a
           // modal rather than a takeover.
-          width:      'min(99vw, 1900px)',
-          height:     'min(95vh, 1100px)',
-          background: 'var(--gc-bg)',
-          boxShadow:  '0 24px 64px rgba(0,0,0,0.45)',
-          border:     '1px solid var(--gc-border)',
+          width:        'min(99vw, 1900px)',
+          height:       'min(95vh, 1100px)',
+          borderRadius: 14,
+          background:   'var(--gc-surface)',
+          boxShadow:    'var(--shadow-3)',
         }}>
         {children}
       </div>
