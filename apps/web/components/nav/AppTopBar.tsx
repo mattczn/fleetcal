@@ -22,7 +22,6 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { OrganizationSwitcher, UserButton } from '@clerk/nextjs';
-import { NotificationsBell } from '@/components/toolbar/NotificationsBell';
 
 interface Props {
   /** Page title rendered on the left. Optional — some pages will
@@ -161,12 +160,8 @@ export default function AppTopBar({ title, icon: Icon, rightSlot }: Props) {
         )}
       </form>
 
-      {/* Right-side global controls — same group as the calendar
-          toolbar's right edge so visual continuity is preserved. */}
-      <div className="flex items-center" style={{ borderLeft: '1px solid var(--gc-border-light)', paddingLeft: 12, marginLeft: 4 }}>
-        <NotificationsBell />
-      </div>
-      <div className="flex items-center gap-2">
+      {/* Right-side global controls — org switcher + user button. */}
+      <div className="flex items-center gap-2" style={{ borderLeft: '1px solid var(--gc-border-light)', paddingLeft: 12, marginLeft: 4 }}>
         <OrganizationSwitcher
           afterSelectOrganizationUrl="/calendar"
           hidePersonal

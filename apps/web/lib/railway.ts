@@ -771,15 +771,6 @@ class RailwayClient {
 
   // ── Org settings ──────────────────────────────────────────────────────
   getOrgSettings()                           { return this.req<GetOrgSettingsResponse>('GET', '/v1/org-settings'); }
-  /** Org-scoped recent-notifications log for the dispatcher bell.
-   *  Window defaults to 48 hours on the server; pass `hours` to override. */
-  listOrgNotifications(opts?: { hours?: number; limit?: number }) {
-    const qs = new URLSearchParams();
-    if (opts?.hours != null) qs.set('hours', String(opts.hours));
-    if (opts?.limit != null) qs.set('limit', String(opts.limit));
-    const q = qs.toString();
-    return this.req<import('@fleetcal/types').ListOrgNotificationsResponse>('GET', `/v1/notifications${q ? `?${q}` : ''}`);
-  }
   updateOrgSettings(body: UpdateOrgSettingsRequest) {
     return this.req<UpdateOrgSettingsResponse>('PATCH', '/v1/org-settings', body);
   }
