@@ -1040,7 +1040,7 @@ export default function CloseoutView() {
               with /accounting so cards stay the same width across
               both pages (this view fills 3 of 5; right two slots are
               spacers). */}
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
+          <div className="grid gap-2 lg:gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
             {TABS.map(b => {
               const active = tab === b.value;
               const count = bucketTotals[b.value];
@@ -1059,7 +1059,7 @@ export default function CloseoutView() {
               return (
                 <button key={b.value}
                   onClick={() => setTab(b.value)}
-                  className="text-left px-4 py-3 rounded-xl transition-all"
+                  className="text-left px-3 lg:px-4 py-2 lg:py-3 rounded-xl transition-all"
                   style={{
                     background: 'var(--gc-surface)',
                     border: active ? `2px solid ${b.tint}` : '1px solid var(--gc-border-light)',
@@ -1070,10 +1070,10 @@ export default function CloseoutView() {
                     <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
                     <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
                   </div>
-                  <div className="mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                  <div className="hidden lg:block mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
                     {showValue ? moneyFmt.format(value) : ' '}
                   </div>
-                  <div className="mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                  <div className="hidden lg:block mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
                     {b.subtitle}
                   </div>
                 </button>
