@@ -1083,6 +1083,9 @@ export const useCalendarStore = create<CalendarStore>()(
         hidden:          asset.hidden           ?? false,
         motiveVehicleId: asset.motiveVehicleId  ?? null,
         sortOrder:       get().assets.length - 1,
+        // Forward activeFrom when the caller supplied one. Server
+        // falls back to today otherwise.
+        ...(asset.activeFrom != null ? { activeFrom: asset.activeFrom } : {}),
       });
       set((state) => ({
         assets: state.assets.map((a) => a.id === tempId ? { ...created } : a),

@@ -241,7 +241,11 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
       // so the call validates; the profile panel opens with the name
       // field focused so the dispatcher just types their real name
       // and the placeholder disappears.
-      const newId = await addDriver({ name: 'New driver' });
+      // Org-wide default lifecycle start. See AssetsModal for context —
+      // this fleet's records all started 2026-01-01, and overriding the
+      // server's "today" fallback keeps new drivers consistent with
+      // historical roster start dates.
+      const newId = await addDriver({ name: 'New driver', activeFrom: '2026-01-01' });
       draftIdRef.current = newId;
       setSelectedRaw(newId);
     } catch (err) {

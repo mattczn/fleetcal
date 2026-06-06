@@ -105,6 +105,13 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
         type:  assetCategories[0] ?? 'OTR',
         hidden: false,
         sortOrder: 0,
+        // Org-wide default lifecycle start. The server's todayUtcDateKey()
+        // fallback was correct for orgs being onboarded mid-year, but
+        // this fleet's records all started 2026-01-01 — overriding here
+        // means every new truck shows up in reports from that date
+        // forward instead of "today" (which would zero out historical
+        // metrics that span the create date).
+        activeFrom: '2026-01-01',
       });
       draftIdRef.current = newId;
       setSelectedRaw(newId);
