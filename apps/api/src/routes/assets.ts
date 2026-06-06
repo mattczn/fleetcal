@@ -39,6 +39,8 @@ interface DbAssetRow {
   model: string | null;
   vin: string | null;
   license_plate: string | null;
+  license_state: string | null;
+  license_expiration: string | null;
   notes: string | null;
   hidden: boolean;
   motive_vehicle_id: string | null;
@@ -49,26 +51,28 @@ interface DbAssetRow {
 
 // Columns shared across all endpoints — single source of truth so we
 // can't forget to add a new column to one of the SELECTs.
-const ASSET_COLS = "id,name,color,type,unit,truck,make,model,vin,license_plate,notes,hidden,motive_vehicle_id,sort_order,active_from,active_to";
+const ASSET_COLS = "id,name,color,type,unit,truck,make,model,vin,license_plate,license_state,license_expiration,notes,hidden,motive_vehicle_id,sort_order,active_from,active_to";
 
 function rowToAsset(r: DbAssetRow): Asset {
   return {
-    id:               r.id,
-    name:             r.name,
-    color:            r.color,
-    type:             r.type,
-    unit:             r.unit              ?? undefined,
-    truck:            r.truck             ?? undefined,
-    make:             r.make              ?? undefined,
-    model:            r.model             ?? undefined,
-    vin:              r.vin               ?? undefined,
-    licensePlate:     r.license_plate     ?? undefined,
-    hidden:           r.hidden,
-    notes:            r.notes             ?? undefined,
-    motiveVehicleId:  r.motive_vehicle_id ?? undefined,
-    sortOrder:        r.sort_order,
-    activeFrom:       r.active_from,
-    activeTo:         r.active_to,
+    id:                r.id,
+    name:              r.name,
+    color:             r.color,
+    type:              r.type,
+    unit:              r.unit               ?? undefined,
+    truck:             r.truck              ?? undefined,
+    make:              r.make               ?? undefined,
+    model:             r.model              ?? undefined,
+    vin:               r.vin                ?? undefined,
+    licensePlate:      r.license_plate      ?? undefined,
+    licenseState:      r.license_state      ?? undefined,
+    licenseExpiration: r.license_expiration ?? null,
+    hidden:            r.hidden,
+    notes:             r.notes              ?? undefined,
+    motiveVehicleId:   r.motive_vehicle_id  ?? undefined,
+    sortOrder:         r.sort_order,
+    activeFrom:        r.active_from,
+    activeTo:          r.active_to,
   };
 }
 
@@ -110,24 +114,26 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
   }
 
   const insert = {
-    org_id:            orgId,
-    name:              body.name,
-    color:             body.color,
-    type:              body.type,
-    unit:              body.unit             ?? null,
-    truck:             body.truck            ?? null,
-    make:              body.make             ?? null,
-    model:             body.model            ?? null,
-    vin:               body.vin              ?? null,
-    license_plate:     body.licensePlate     ?? null,
-    notes:             body.notes            ?? null,
-    hidden:            body.hidden           ?? false,
-    motive_vehicle_id: body.motiveVehicleId  ?? null,
-    sort_order:        sortOrder,
+    org_id:             orgId,
+    name:               body.name,
+    color:              body.color,
+    type:               body.type,
+    unit:               body.unit              ?? null,
+    truck:              body.truck             ?? null,
+    make:               body.make              ?? null,
+    model:              body.model             ?? null,
+    vin:                body.vin               ?? null,
+    license_plate:      body.licensePlate      ?? null,
+    license_state:      body.licenseState      ?? null,
+    license_expiration: body.licenseExpiration ?? null,
+    notes:              body.notes             ?? null,
+    hidden:             body.hidden            ?? false,
+    motive_vehicle_id:  body.motiveVehicleId   ?? null,
+    sort_order:         sortOrder,
     // active_from defaults to CURRENT_DATE in the DB if omitted;
     // active_to defaults to NULL (currently active).
-    active_from:       body.activeFrom       ?? todayUtcDateKey(),
-    active_to:         body.activeTo         ?? null,
+    active_from:        body.activeFrom        ?? todayUtcDateKey(),
+    active_to:          body.activeTo          ?? null,
   };
   const { data, error } = await supabase
     .from("assets")
@@ -158,9 +164,11 @@ assets.patch("/:id", requireCapability("assets.edit"), async (c) => {
   if ("truck"           in body) update.truck             = body.truck            ?? null;
   if ("make"            in body) update.make              = body.make             ?? null;
   if ("model"           in body) update.model             = body.model            ?? null;
-  if ("vin"             in body) update.vin               = body.vin              ?? null;
-  if ("licensePlate"    in body) update.license_plate     = body.licensePlate     ?? null;
-  if ("notes"           in body) update.notes             = body.notes            ?? null;
+  if ("vin"               in body) update.vin                = body.vin               ?? null;
+  if ("licensePlate"      in body) update.license_plate      = body.licensePlate      ?? null;
+  if ("licenseState"      in body) update.license_state      = body.licenseState      ?? null;
+  if ("licenseExpiration" in body) update.license_expiration = body.licenseExpiration ?? null;
+  if ("notes"             in body) update.notes              = body.notes             ?? null;
   if ("hidden"          in body) update.hidden            = body.hidden           ?? false;
   if ("motiveVehicleId" in body) update.motive_vehicle_id = body.motiveVehicleId  ?? null;
   if ("sortOrder"       in body) update.sort_order        = body.sortOrder;

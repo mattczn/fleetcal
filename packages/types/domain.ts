@@ -280,6 +280,10 @@ export interface Asset {
   /** State-issued license plate number. Indexed for toll / DMV
    *  correspondence lookup. */
   licensePlate?: string;
+  /** 2-letter US state code for the plate issuer (e.g. "CA", "IL"). */
+  licenseState?: string;
+  /** ISO YYYY-MM-DD expiration date for the plate / registration. */
+  licenseExpiration?: string | null;
   hidden?: boolean;
   notes?: string;
   motiveVehicleId?: string;

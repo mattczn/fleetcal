@@ -536,33 +536,37 @@ export interface CreateAssetRequest {
   unit?:            string | null;
   /** Legacy free-text Make/Model field; prefer `make` + `model`. */
   truck?:           string | null;
-  make?:            string | null;
-  model?:           string | null;
-  vin?:             string | null;
-  licensePlate?:    string | null;
-  notes?:           string | null;
-  hidden?:          boolean;
-  motiveVehicleId?: string | null;
+  make?:              string | null;
+  model?:             string | null;
+  vin?:               string | null;
+  licensePlate?:      string | null;
+  licenseState?:      string | null;
+  licenseExpiration?: string | null;
+  notes?:             string | null;
+  hidden?:            boolean;
+  motiveVehicleId?:   string | null;
   /** Optional explicit sort_order; otherwise the server appends to the end. */
-  sortOrder?:       number;
+  sortOrder?:         number;
   /** YYYY-MM-DD; defaults to today server-side. */
-  activeFrom?:      string;
+  activeFrom?:        string;
   /** YYYY-MM-DD or null. null = currently active (the default). */
-  activeTo?:        string | null;
+  activeTo?:          string | null;
 }
 export interface CreateAssetResponse { asset: Asset; }
 export interface UpdateAssetRequest  {
-  name?:            string;
-  color?:           string;
-  type?:            string;
-  unit?:            string | null;
+  name?:              string;
+  color?:             string;
+  type?:              string;
+  unit?:              string | null;
   /** Legacy free-text Make/Model field; prefer `make` + `model`. */
-  truck?:           string | null;
-  make?:            string | null;
-  model?:           string | null;
-  vin?:             string | null;
-  licensePlate?:    string | null;
-  notes?:           string | null;
+  truck?:             string | null;
+  make?:              string | null;
+  model?:             string | null;
+  vin?:               string | null;
+  licensePlate?:      string | null;
+  licenseState?:      string | null;
+  licenseExpiration?: string | null;
+  notes?:             string | null;
   hidden?:          boolean;
   motiveVehicleId?: string | null;
   sortOrder?:       number;

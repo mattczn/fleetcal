@@ -16,11 +16,13 @@ CREATE TABLE assets (
   type          text NOT NULL DEFAULT 'Local',   -- OTR | Local | Dedicated | Regional
   unit          text,                             -- fleet/unit number
   truck         text,                             -- LEGACY free-text "Make/Model" — see make/model below; kept for backward compat until next migration
-  make          text,                             -- e.g. "Freightliner"
-  model         text,                             -- e.g. "Cascadia"
-  vin           text,                             -- 17-char VIN
-  license_plate text,
-  notes         text,
+  make               text,                             -- e.g. "Freightliner"
+  model              text,                             -- e.g. "Cascadia"
+  vin                text,                             -- 17-char VIN
+  license_plate      text,
+  license_state      text,                             -- 2-letter state code
+  license_expiration date,
+  notes              text,
   hidden        boolean NOT NULL DEFAULT false,
   sort_order    integer NOT NULL DEFAULT 0,
   created_at    timestamptz NOT NULL DEFAULT now()

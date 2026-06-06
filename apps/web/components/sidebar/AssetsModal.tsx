@@ -355,10 +355,12 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
   // DB column for `truck` is still around for backward compat but no
   // longer rendered or edited from this UI. If a future read needs
   // the legacy value, asset.truck is still available off the store.
-  const [make,            setMake]            = useState(asset.make            ?? '');
-  const [model,           setModel]           = useState(asset.model           ?? '');
-  const [vin,             setVin]             = useState(asset.vin             ?? '');
-  const [licensePlate,    setLicensePlate]    = useState(asset.licensePlate    ?? '');
+  const [make,              setMake]              = useState(asset.make              ?? '');
+  const [model,             setModel]             = useState(asset.model             ?? '');
+  const [vin,               setVin]               = useState(asset.vin               ?? '');
+  const [licensePlate,      setLicensePlate]      = useState(asset.licensePlate      ?? '');
+  const [licenseState,      setLicenseState]      = useState(asset.licenseState      ?? '');
+  const [licenseExpiration, setLicenseExpiration] = useState(asset.licenseExpiration ?? '');
   const [type,            setType]            = useState(asset.type);
   const [notes,           setNotes]           = useState(asset.notes           ?? '');
   const [color,           setColor]           = useState(asset.color);
@@ -507,12 +509,41 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
           </PField>
           <PField label="License Plate">
             <input type="text" value={licensePlate} onChange={e => setLicensePlate(e.target.value)}
-              placeholder="e.g. CA 9XY-Z123" style={P_INPUT}
+              placeholder="e.g. 9XY-Z123" style={P_INPUT}
               onFocus={focusBorder}
               onBlur={e => {
                 const v = e.target.value.trim().toUpperCase();
                 setLicensePlate(v);
                 save({ licensePlate: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+        </div>
+
+        {/* License State + Expiration — IRP-apportioned plates and
+            state-specific renewal cycles vary by truck. Same shape
+            as the trailer fields for visual parity. */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <PField label="License State">
+            <input type="text" value={licenseState} onChange={e => setLicenseState(e.target.value)}
+              placeholder="e.g. CA" style={P_INPUT}
+              maxLength={2}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim().toUpperCase();
+                setLicenseState(v);
+                save({ licenseState: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+          <PField label="License Expiration">
+            <input type="date" value={licenseExpiration} onChange={e => setLicenseExpiration(e.target.value)}
+              style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value;
+                setLicenseExpiration(v);
+                save({ licenseExpiration: v || null });
                 blurBorder(e);
               }} />
           </PField>

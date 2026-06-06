@@ -20,6 +20,8 @@ export type Database = {
           created_at: string
           hidden: boolean
           id: number
+          license_state: string | null
+          license_expiration: string | null
           motive_vehicle_id: string | null
           name: string
           notes: string | null
