@@ -23,6 +23,7 @@ import LoadsReport from '@/components/dashboard/LoadsReport';
 import type { CalendarEvent } from '@/lib/types';
 import type { LoadSummary } from '@fleetcal/types';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -420,6 +421,14 @@ export default function DashboardView() {
   // Dispatcher and Maintenance never see what we paid drivers.
   const { can } = usePermissions();
   const canViewDriverPay = can('loads.view_driver_pay');
+  // Module gates for KPI tiles + overlays. MVP orgs end up with
+  // exactly four KPIs (revenue, avg/truck, payroll, avg/load); the
+  // volume + fuel tiles fall away with their respective modules.
+  const { enabled: moduleEnabled } = useModules();
+  const showPayrollKpi = moduleEnabled('payroll');
+  const showFuelKpi    = moduleEnabled('fuel');
+  const showVolumeKpis = moduleEnabled('performance');
+  const showEldMiles   = moduleEnabled('motive_integration');
   // Top-level view toggle: "Performance" (existing revenue/loads KPIs)
   // vs "Fuel" (new spend/gallons/MPG KPIs). Both share the period
   // picker + date range so flipping views feels like changing lenses
@@ -1253,55 +1262,67 @@ export default function DashboardView() {
               loading={loadSummaries === null}
             />
             <KpiCard
-              label="Avg Revenue / Asset"
+              label="Avg Revenue / Truck"
               value={kpis.activeAssets > 0 ? fmt(kpis.avgRevPerAsset) : '—'}
-              sub={`across ${kpis.activeAssets} active asset${kpis.activeAssets !== 1 ? 's' : ''}`}
+              sub={`across ${kpis.activeAssets} active truck${kpis.activeAssets !== 1 ? 's' : ''}`}
               icon={<CheckCircle2 size={17} />}
               accent="#f9ab00"
               loading={loadSummaries === null}
             />
-            <KpiCard
-              label="Total Payroll"
-              value={payrollTotal == null ? '—' : fmt(payrollTotal)}
-              sub={payrollSub}
-              badge={payrollBadge}
-              icon={<Wallet size={17} />}
-              accent="#5e35b1"
-              loading={payrollData === null}
-            />
-            <KpiCard
-              label="Total Fuel Spend"
-              value={fuelSpend == null ? '—' : fmt(fuelSpend)}
-              sub="across all fuel transactions"
-              icon={<Fuel size={17} />}
-              accent="#ea4335"
-              loading={fuelSpend === null}
-            />
-            {/* Row 2 ─ volume */}
-            <KpiCard
-              label="Total Loaded Miles"
-              value={fmtMiles(kpis.miles)}
-              sub="sum of leg loaded miles"
-              icon={<Route size={17} />}
-              accent="#00838f"
-              loading={loadSummaries === null}
-            />
-            <KpiCard
-              label="Total Miles"
-              value={eldMiles == null ? '—' : fmtMiles(eldMiles)}
-              sub="ELD-equipped trucks only"
-              icon={<Gauge size={17} />}
-              accent="#0288d1"
-              loading={eldMiles === null}
-            />
-            <KpiCard
-              label="Total Loads"
-              value={String(kpis.loads)}
-              sub="loads dispatched this period"
-              icon={<Truck size={17} />}
-              accent="#1e8e3e"
-              loading={loadSummaries === null}
-            />
+            {showPayrollKpi && (
+              <KpiCard
+                label="Total Payroll"
+                value={payrollTotal == null ? '—' : fmt(payrollTotal)}
+                sub={payrollSub}
+                badge={payrollBadge}
+                icon={<Wallet size={17} />}
+                accent="#5e35b1"
+                loading={payrollData === null}
+              />
+            )}
+            {showFuelKpi && (
+              <KpiCard
+                label="Total Fuel Spend"
+                value={fuelSpend == null ? '—' : fmt(fuelSpend)}
+                sub="across all fuel transactions"
+                icon={<Fuel size={17} />}
+                accent="#ea4335"
+                loading={fuelSpend === null}
+              />
+            )}
+            {/* Row 2 ─ volume — gated on the performance module. MVP
+                orgs without it see a single-row 4-KPI dashboard
+                focused on the money. */}
+            {showVolumeKpis && (
+              <KpiCard
+                label="Total Loaded Miles"
+                value={fmtMiles(kpis.miles)}
+                sub="sum of leg loaded miles"
+                icon={<Route size={17} />}
+                accent="#00838f"
+                loading={loadSummaries === null}
+              />
+            )}
+            {showEldMiles && (
+              <KpiCard
+                label="Total Miles"
+                value={eldMiles == null ? '—' : fmtMiles(eldMiles)}
+                sub="ELD-equipped trucks only"
+                icon={<Gauge size={17} />}
+                accent="#0288d1"
+                loading={eldMiles === null}
+              />
+            )}
+            {showVolumeKpis && (
+              <KpiCard
+                label="Total Loads"
+                value={String(kpis.loads)}
+                sub="loads dispatched this period"
+                icon={<Truck size={17} />}
+                accent="#1e8e3e"
+                loading={loadSummaries === null}
+              />
+            )}
             <KpiCard
               label="Avg Revenue / Load"
               value={kpis.loads > 0 ? fmt(kpis.avgRevPerLoad) : '—'}
@@ -1324,8 +1345,8 @@ export default function DashboardView() {
               <CostBar
                 revenue={kpis.revenue}
                 segments={[
-                  { label: 'Payroll', amount: payrollTotal ?? 0, color: '#5e35b1' },
-                  { label: 'Fuel',    amount: fuelSpend   ?? 0, color: '#ea4335' },
+                  ...(showPayrollKpi ? [{ label: 'Payroll', amount: payrollTotal ?? 0, color: '#5e35b1' }] : []),
+                  ...(showFuelKpi    ? [{ label: 'Fuel',    amount: fuelSpend   ?? 0, color: '#ea4335' }] : []),
                 ]}
               />
             ) : (
@@ -1342,24 +1363,28 @@ export default function DashboardView() {
                     secondary bars beneath the revenue bar so a
                     dispatcher can eyeball margin per truck. */}
                 <div className="flex items-center gap-3 text-[11px]" style={{ color: 'var(--gc-text-2)' }}>
-                  <label className="flex items-center gap-1 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showPayrollOverlay}
-                      onChange={(e) => setShowPayrollOverlay(e.target.checked)}
-                      style={{ accentColor: '#5e35b1' }}
-                    />
-                    <span style={{ color: '#5e35b1', fontWeight: 600 }}>Payroll</span>
-                  </label>
-                  <label className="flex items-center gap-1 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showFuelOverlay}
-                      onChange={(e) => setShowFuelOverlay(e.target.checked)}
-                      style={{ accentColor: '#ea4335' }}
-                    />
-                    <span style={{ color: '#ea4335', fontWeight: 600 }}>Fuel</span>
-                  </label>
+                  {showPayrollKpi && (
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={showPayrollOverlay}
+                        onChange={(e) => setShowPayrollOverlay(e.target.checked)}
+                        style={{ accentColor: '#5e35b1' }}
+                      />
+                      <span style={{ color: '#5e35b1', fontWeight: 600 }}>Payroll</span>
+                    </label>
+                  )}
+                  {showFuelKpi && (
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={showFuelOverlay}
+                        onChange={(e) => setShowFuelOverlay(e.target.checked)}
+                        style={{ accentColor: '#ea4335' }}
+                      />
+                      <span style={{ color: '#ea4335', fontWeight: 600 }}>Fuel</span>
+                    </label>
+                  )}
                 </div>
               </div>
               {revenueByAsset.length === 0 ? (
