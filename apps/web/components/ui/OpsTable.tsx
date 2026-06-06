@@ -1072,18 +1072,23 @@ export function OpsTable<T>({
                 {r.getVisibleCells().map((cell, idx) => {
                   const col = visibleColumns[idx];
                   const stickyStyle = stickyStyleFor(col, leftOffsets, rightOffsets);
-                  // Emit the 1fr filler before the first pinned-right
+                  // Emit the filler track before the first pinned-right
                   // cell so the row's grid slot count matches the
-                  // template. Falls under the row's rowBg so the
-                  // empty area paints with the same row colour as the
-                  // rest of the row instead of showing the scroll
-                  // container's background.
+                  // template. Paint the spacer with rowBg directly
+                  // rather than relying on `transparent` to inherit
+                  // the row's bg — grid layout edge cases (sticky
+                  // siblings, overflow containers, scrollbar gutters)
+                  // occasionally leave a visible gap where the row's
+                  // bg doesn't reach. Setting the spacer's bg
+                  // explicitly guarantees the priority tint covers
+                  // the visible viewport edge-to-edge regardless of
+                  // scroll position.
                   const spacer = idx === firstPinnedRightIdx && firstPinnedRightIdx > 0
                     ? (
                       <div
                         key="__row_spacer"
                         aria-hidden
-                        style={{ background: 'transparent' }}
+                        style={{ background: rowBg }}
                       />
                     )
                     : null;
