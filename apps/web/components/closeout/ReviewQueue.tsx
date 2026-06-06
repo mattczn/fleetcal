@@ -1838,12 +1838,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               {/* RATE CONFIRMATIONS */}
               {rateConDocs.length > 0 && (
                 <div>
-                  <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                  <div className="px-3 pt-2 pb-1.5 text-[11px] font-extrabold uppercase tracking-wider"
                     style={{ color: 'var(--gc-text-3)' }}>
                     Rate Confirmations · {rateConDocs.length}
                   </div>
                   <div className="space-y-1">
-                    {rateConDocs.map((d, i) => {
+                    {rateConDocs.map((d) => {
                       const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
                       const isVirtual = d.id === RATE_CON_PRIMARY_ID;
                       // The canonical highlights when nothing else is
@@ -1851,46 +1851,60 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       // matching the default left-viewer state.
                       const active   = activeRateConId === d.id
                                      || (activeRateConId === null && isVirtual);
-                      // Row label = bare kind ("RATE CON"). We used to
-                      // append " N" when multiple rate-cons existed,
-                      // but the numbering made the chips look like
-                      // step indicators instead of kind tags.
                       const rowKindLabel  = KIND_LABEL[d.kind] ?? d.kind;
                       return (
                         <div key={d.id}
-                          className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
+                          className="group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors cursor-pointer"
                           style={{
                             background: active ? tint.bg + '14' : 'transparent',
-                            border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
+                            // Inset box-shadow avoids the 1.5px reflow
+                            // a border-width swap caused (rows used to
+                            // shift on click).
+                            boxShadow:  active ? `inset 0 0 0 1.5px ${tint.bg}` : 'none',
                           }}
                           onClick={() => selectRateCon(d)}
                           onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
                           onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                            style={{ background: tint.bg, color: tint.fg }}>
-                            {rowKindLabel}
-                          </span>
-                          {renamingDocId === d.id ? (
-                            <input
-                              autoFocus
-                              value={renameDraft}
-                              disabled={renameSaving}
-                              onClick={e => e.stopPropagation()}
-                              onChange={e => setRenameDraft(e.target.value)}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
-                                if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                              }}
-                              onBlur={() => { if (!renameSaving) void commitRename(); }}
-                              className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
-                              style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
-                            />
-                          ) : (
-                            <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
-                              title={d.fileName}>
-                              {d.fileName}
-                            </span>
-                          )}
+                          {/* 32×32 tinted FileText tile — sidebar-density
+                              port of the load modal's 36×36 anchor. Gives
+                              every row a visual handle so the eye doesn't
+                              hunt for the kind chip on long lists. */}
+                          <div className="flex items-center justify-center shrink-0"
+                            style={{ width: 32, height: 32, borderRadius: 8, background: tint.bg, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                            <FileText size={14} style={{ color: tint.fg }} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            {/* Kind pill above the filename — pill radius
+                                + 11px extrabold to match the load modal's
+                                kind chips (was square 4px / 10px). */}
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                                style={{ background: tint.bg, color: tint.fg, borderRadius: 999 }}>
+                                {rowKindLabel}
+                              </span>
+                            </div>
+                            {renamingDocId === d.id ? (
+                              <input
+                                autoFocus
+                                value={renameDraft}
+                                disabled={renameSaving}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => setRenameDraft(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                                  if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                                }}
+                                onBlur={() => { if (!renameSaving) void commitRename(); }}
+                                className="w-full text-[13px] font-bold bg-transparent outline-none border-b"
+                                style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                              />
+                            ) : (
+                              <div className="truncate text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}
+                                title={d.fileName}>
+                                {d.fileName}
+                              </div>
+                            )}
+                          </div>
                           {/* Per-row Rename/Delete moved into the
                               "Manage documents" dialog — keeps the
                               side panel as a read-only navigator and
@@ -1927,48 +1941,53 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const rowKindLabel  = KIND_LABEL[d.kind] ?? d.kind;
                   return (
                     <div key={d.id}
-                      className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors cursor-pointer"
+                      className="group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors cursor-pointer"
                       style={{
                         background: active ? tint.bg + '14' : 'transparent',
-                        border:     active ? `1.5px solid ${tint.bg}` : '1.5px solid transparent',
+                        // Inset shadow instead of border swap — no reflow on click.
+                        boxShadow:  active ? `inset 0 0 0 1.5px ${tint.bg}` : 'none',
                       }}
                       onClick={() => setActiveDocIdx(i)}
                       onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gc-hover)'; }}
                       onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
-                        style={{ background: tint.bg, color: tint.fg }}>
-                        {rowKindLabel}
-                      </span>
-                      {renamingDocId === d.id ? (
-                        <input
-                          autoFocus
-                          value={renameDraft}
-                          disabled={renameSaving}
-                          onClick={e => e.stopPropagation()}
-                          onChange={e => setRenameDraft(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
-                            if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                          }}
-                          onBlur={() => { if (!renameSaving) void commitRename(); }}
-                          className="flex-1 text-[12px] font-semibold bg-transparent outline-none border-b"
-                          style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
-                        />
-                      ) : (
-                        <span className="flex-1 truncate text-[12px]" style={{ color: 'var(--gc-text-1)' }}
-                          title={d.fileName}>
-                          {d.fileName}
-                        </span>
-                      )}
-                      {/* Per-row Rename/Delete moved into the
-                          "Manage documents" dialog. Side panel is
-                          navigation-only now. */}
-                      {/* Per-row include-in-invoice toggle. Rendered for
-                          every doc kind including invoices — the
-                          dispatcher gets to decide whether a prior
-                          invoice file ships inside the new packet
-                          (usually no, but the toggle is harmless and
-                          consistent). */}
+                      {/* 32×32 tinted FileText tile — matches the rate-con
+                          row recipe so every list item in the sidebar has
+                          the same anchor. */}
+                      <div className="flex items-center justify-center shrink-0"
+                        style={{ width: 32, height: 32, borderRadius: 8, background: tint.bg, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                        <FileText size={14} style={{ color: tint.fg }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                            style={{ background: tint.bg, color: tint.fg, borderRadius: 999 }}>
+                            {rowKindLabel}
+                          </span>
+                        </div>
+                        {renamingDocId === d.id ? (
+                          <input
+                            autoFocus
+                            value={renameDraft}
+                            disabled={renameSaving}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => setRenameDraft(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter')  { e.preventDefault(); void commitRename(); }
+                              if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                            }}
+                            onBlur={() => { if (!renameSaving) void commitRename(); }}
+                            className="w-full text-[13px] font-bold bg-transparent outline-none border-b"
+                            style={{ color: 'var(--gc-text-1)', borderColor: tint.bg }}
+                          />
+                        ) : (
+                          <div className="truncate text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}
+                            title={d.fileName}>
+                            {d.fileName}
+                          </div>
+                        )}
+                      </div>
+                      {/* Per-row include-in-invoice toggle — pill-shape
+                          + softer green to fit the new row recipe. */}
                       <button type="button"
                         onClick={e => {
                           e.stopPropagation();
@@ -1978,11 +1997,12 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                             return next;
                           });
                         }}
-                        className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
                         style={{
-                          background: included ? '#dcfce7' : 'var(--gc-bg)',
+                          background: included ? '#dcfce7' : 'transparent',
                           color:      included ? '#166534' : 'var(--gc-text-3)',
                           border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
+                          borderRadius: 999,
                         }}
                         title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
                         {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
@@ -1999,7 +2019,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         dispatcher sees when reopening a load. */}
                     {invoiceDocs.length > 0 && (
                       <div>
-                        <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                        <div className="px-3 pt-2 pb-1.5 text-[11px] font-extrabold uppercase tracking-wider"
                           style={{ color: 'var(--gc-text-3)' }}>
                           Invoices · {invoiceDocs.length}
                         </div>
@@ -2013,7 +2033,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         isn't an invoice. Count reflects this section
                         only (invoices have their own count above). */}
                     <div>
-                      <div className="px-1.5 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider"
+                      <div className="px-3 pt-2 pb-1.5 text-[11px] font-extrabold uppercase tracking-wider"
                         style={{ color: 'var(--gc-text-3)' }}>
                         Documents · {otherDocs.length}
                       </div>

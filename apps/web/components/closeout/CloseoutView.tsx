@@ -1004,7 +1004,7 @@ export default function CloseoutView() {
   const rowKey = useCallback((r: QueueRow) => r.id, []);
 
   return (
-    <AppShell title="Paperwork" icon={FileCheck2}>
+    <AppShell title="Paperwork" icon={FileCheck2} noPageScroll>
       {/* Fixed-height content area — table claims the remaining space
           and scrolls inside its own viewport. Outer padding lives here. */}
       <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">

@@ -34,9 +34,16 @@ interface Props {
    *  fill the remaining viewport — pages that need scroll should
    *  handle it inside. */
   children: React.ReactNode;
+  /** Disable page-level vertical scroll. Use this on pages whose
+   *  content is sized to fit the viewport and where any scrolling
+   *  should happen INSIDE a child container (e.g. an OpsTable with
+   *  fillHeight). Without this, main has overflow-y: auto and the
+   *  whole page scrolls, defeating the child's internal scroll
+   *  affordance. */
+  noPageScroll?: boolean;
 }
 
-export default function AppShell({ title, icon, rightSlot, children }: Props) {
+export default function AppShell({ title, icon, rightSlot, children, noPageScroll }: Props) {
   // `w-full h-full flex-1` is intentionally redundant — `w-full` handles
   // the block-parent case, `flex-1 min-w-0` handles the flex-parent
   // case. Some of the management page.tsx wrappers wrap us in a
@@ -51,7 +58,9 @@ export default function AppShell({ title, icon, rightSlot, children }: Props) {
       <AppSidebar />
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <AppTopBar title={title} icon={icon} rightSlot={rightSlot} />
-        <main className="flex-1 min-h-0 overflow-y-auto" style={{ background: 'var(--gc-bg)' }}>
+        <main
+          className={`flex-1 min-h-0 ${noPageScroll ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}
+          style={{ background: 'var(--gc-bg)' }}>
           {children}
         </main>
       </div>
