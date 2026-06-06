@@ -349,7 +349,14 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
 
   const [name,            setName]            = useState(asset.name);
   const [unit,            setUnit]            = useState(asset.unit            ?? '');
-  const [truck,           setTruck]           = useState(asset.truck           ?? '');
+  // Make + Model replace the old single free-text `truck` field. The
+  // DB column for `truck` is still around for backward compat but no
+  // longer rendered or edited from this UI. If a future read needs
+  // the legacy value, asset.truck is still available off the store.
+  const [make,            setMake]            = useState(asset.make            ?? '');
+  const [model,           setModel]           = useState(asset.model           ?? '');
+  const [vin,             setVin]             = useState(asset.vin             ?? '');
+  const [licensePlate,    setLicensePlate]    = useState(asset.licensePlate    ?? '');
   const [type,            setType]            = useState(asset.type);
   const [notes,           setNotes]           = useState(asset.notes           ?? '');
   const [color,           setColor]           = useState(asset.color);
@@ -386,7 +393,14 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
             {asset.name}{asset.unit ? ` #${asset.unit}` : ''}
           </div>
           <div className="text-sm mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-            {asset.type}{asset.truck ? ` · ${asset.truck}` : ''}
+            {/* Header sub-line: category + make/model. Prefer the new
+                make + model fields; fall back to the legacy `truck`
+                free-text for rows not yet backfilled. */}
+            {asset.type}{(() => {
+              const mm = [asset.make, asset.model].filter(Boolean).join(' ');
+              const display = mm || asset.truck;
+              return display ? ` · ${display}` : '';
+            })()}
           </div>
         </div>
       </div>
@@ -442,19 +456,68 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
           </PField>
         </div>
 
-        {/* Truck + Category */}
+        {/* Make + Model — replaces the single free-text "Make/Model"
+            input. Splitting these out lets future surfaces filter or
+            group by manufacturer (e.g. maintenance "Cascadia issues"
+            view), and matches every fleet-management UI dispatchers
+            are used to seeing. */}
         <div className="grid grid-cols-2 gap-4 mb-4">
-          <PField label="Make/Model">
-            <input type="text" value={truck} onChange={e => setTruck(e.target.value)}
-              placeholder="e.g. 2024 Freightliner" style={P_INPUT}
+          <PField label="Make">
+            <input type="text" value={make} onChange={e => setMake(e.target.value)}
+              placeholder="e.g. Freightliner" style={P_INPUT}
               onFocus={focusBorder}
               onBlur={e => {
                 const v = e.target.value.trim();
-                setTruck(v);
-                save({ truck: v || undefined });
+                setMake(v);
+                save({ make: v || undefined });
                 blurBorder(e);
               }} />
           </PField>
+          <PField label="Model">
+            <input type="text" value={model} onChange={e => setModel(e.target.value)}
+              placeholder="e.g. Cascadia" style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                setModel(v);
+                save({ model: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+        </div>
+
+        {/* VIN + License Plate — both are critical for maintenance
+            shop intake (VIN) and toll / DMV correspondence (plate).
+            Both columns are indexed for fast lookup. */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <PField label="VIN">
+            <input type="text" value={vin} onChange={e => setVin(e.target.value)}
+              placeholder="17-character VIN" style={P_INPUT}
+              maxLength={17}
+              onFocus={focusBorder}
+              onBlur={e => {
+                // VINs are conventionally uppercase, no spaces.
+                const v = e.target.value.trim().toUpperCase().replace(/\s+/g, '');
+                setVin(v);
+                save({ vin: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+          <PField label="License Plate">
+            <input type="text" value={licensePlate} onChange={e => setLicensePlate(e.target.value)}
+              placeholder="e.g. CA 9XY-Z123" style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim().toUpperCase();
+                setLicensePlate(v);
+                save({ licensePlate: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+        </div>
+
+        {/* Category */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
           <PField label="Category">
             <select value={type} onChange={e => { setType(e.target.value); save({ type: e.target.value }); }}
               style={{ ...P_INPUT, cursor: 'pointer', height: 42, padding: '0 12px' }}

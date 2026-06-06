@@ -209,7 +209,23 @@ export interface Asset {
   color: string;
   type: string;
   unit?: string;
+  /** Legacy free-text "Make/Model" field. Superseded by `make` +
+   *  `model` below as of 2026-06-06; kept here so old UIs / clients
+   *  that haven't redeployed still see something sensible. The DB
+   *  column will be dropped in a follow-up migration once Curzon's
+   *  data is verified clean. New code should write to `make` /
+   *  `model` and ignore this. */
   truck?: string;
+  /** Truck manufacturer, e.g. "Freightliner", "Peterbilt", "Kenworth". */
+  make?: string;
+  /** Truck model, e.g. "Cascadia", "579", "T680". */
+  model?: string;
+  /** 17-character Vehicle Identification Number. Used by maintenance
+   *  shops + DMV lookups; indexed (org_id, vin) for fast lookup. */
+  vin?: string;
+  /** State-issued license plate number. Indexed for toll / DMV
+   *  correspondence lookup. */
+  licensePlate?: string;
   hidden?: boolean;
   notes?: string;
   motiveVehicleId?: string;

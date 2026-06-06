@@ -534,7 +534,12 @@ export interface CreateAssetRequest {
   color:            string;
   type:             string;
   unit?:            string | null;
+  /** Legacy free-text Make/Model field; prefer `make` + `model`. */
   truck?:           string | null;
+  make?:            string | null;
+  model?:           string | null;
+  vin?:             string | null;
+  licensePlate?:    string | null;
   notes?:           string | null;
   hidden?:          boolean;
   motiveVehicleId?: string | null;
@@ -551,7 +556,12 @@ export interface UpdateAssetRequest  {
   color?:           string;
   type?:            string;
   unit?:            string | null;
+  /** Legacy free-text Make/Model field; prefer `make` + `model`. */
   truck?:           string | null;
+  make?:            string | null;
+  model?:           string | null;
+  vin?:             string | null;
+  licensePlate?:    string | null;
   notes?:           string | null;
   hidden?:          boolean;
   motiveVehicleId?: string | null;
