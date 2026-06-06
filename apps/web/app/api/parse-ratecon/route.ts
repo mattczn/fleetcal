@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam, DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { NextRequest, NextResponse } from 'next/server';
-import { buildRateConPrompt, buildBrokerHarvestPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables, BrokerRule, BrokerProfile } from '@/lib/prompt';
+import { buildRateConPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
 import { geocodeAll } from '@/lib/geocode';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
@@ -24,29 +24,28 @@ interface IncomingCustomer {
   parseHints?: string;
 }
 
-// Pass 1 (broker harvest) is just name + alias extraction — cheap,
-// Haiku handles it fine. Pass 2 (full schema + cross-check rules +
-// multi-stop date reading) needs Sonnet. Haiku was misreading
-// appointment dates against the cross-check rule and producing
-// different answers across runs because temperature defaulted to 1.0.
-const MODEL_PASS_1 = 'claude-haiku-4-5-20251001';
-const MODEL_PASS_2 = 'claude-sonnet-4-5-20250929';
+// Single-pass extraction with Sonnet at temperature 0. The two-pass
+// design (Haiku broker harvest → Sonnet full extraction with
+// parseHints injection) was dropped because:
+//   • parseHints was barely used (a few customers had hints)
+//   • Pass 1 added a second source of prompt drift between orgs
+//   • Customer matching is a fine post-process — no model needed
+const MODEL = 'claude-sonnet-4-5-20250929';
 
 function extractJson(text: string): Record<string, unknown> {
   const match = text.match(/\{[\s\S]*\}/);
   return JSON.parse(match ? match[0] : text);
 }
 
-/** Generous output budget for pass 2. Long multi-stop rate cons can
- *  easily exceed 2k tokens of JSON; 8k covers every realistic case
- *  (15+ stops, full schema, broker rules, etc.) without affecting
- *  cost — Anthropic only charges for tokens actually generated. */
-const PASS_2_MAX_TOKENS = 8192;
+/** Generous output budget. Long multi-stop rate cons can easily
+ *  exceed 2k tokens of JSON; 8k covers every realistic case (15+
+ *  stops, full schema) without affecting cost — Anthropic only
+ *  charges for tokens actually generated. */
+const MAX_TOKENS = 8192;
 
-/** Match a broker name (post-cleanBrokerName) against the org's customer
- *  list. Exact name + alias match only — the more sophisticated fuzzy
- *  matcher lives client-side; we just need to pick which broker's hints
- *  go into pass 2, and the AI's pass-1 broker name is usually pristine. */
+/** Match the extracted broker name against the org's customer roster
+ *  for post-parse customer linking. Exact normalized-name + alias
+ *  match only — fuzzier matching lives client-side. */
 function matchBroker(brokerName: string, customers: IncomingCustomer[]): IncomingCustomer | undefined {
   if (!brokerName) return undefined;
   const lower = brokerName.toLowerCase().trim();
@@ -67,10 +66,7 @@ export async function POST(req: NextRequest) {
   let enabledFields: string[] = [];
   let customInstructions = '';
   let promptVariables: PromptVariables = DEFAULT_PROMPT_VARIABLES;
-  let brokerRules: BrokerRule[] = [];
   let customers: IncomingCustomer[] = [];
-  let knownBrokerName: string | undefined;
-  let skipBrokerHarvest = false;
 
   try {
     ({
@@ -78,18 +74,10 @@ export async function POST(req: NextRequest) {
       enabledFields = [],
       customInstructions = '',
       promptVariables = DEFAULT_PROMPT_VARIABLES,
-      // Two ways to pass broker context:
-      //   • brokerRules — legacy: caller pre-filtered to rules-bearing customers
-      //   • customers   — preferred: full roster, server picks the matched rule
-      // Sending `customers` enables the broker-harvest pass + new-customer
-      // prefill in the response.
-      brokerRules = [],
+      // Customer roster for post-parse name matching. NOT injected
+      // into the prompt anymore — that was the two-pass design that
+      // produced inconsistent results across orgs.
       customers = [],
-      // Reparse-from-doc-view path: caller already has the broker resolved
-      // on the load. Skip the harvest pass and look up the matched rule
-      // directly. ~half the latency, zero pass-1 token cost.
-      knownBrokerName,
-      skipBrokerHarvest = false,
     } = await req.json());
     if (!data) throw new Error('missing data');
   } catch {
@@ -98,93 +86,28 @@ export async function POST(req: NextRequest) {
 
   const client = new Anthropic({ apiKey: key });
 
-  // The PDF block is identical across both calls; cache_control marks it
-  // as a cacheable prefix so pass 2 reads the PDF from cache instead of
-  // re-uploading. Cuts pass-2 input cost by ~90%.
   const docBlock: DocumentBlockParam = {
     type: 'document',
     source: { type: 'base64', media_type: 'application/pdf', data },
-    cache_control: { type: 'ephemeral' },
   };
 
-  // ── Pass 1: harvest broker profile ───────────────────────────────────────
-  // Runs every time so the client always has fields to pre-fill the
-  // "Save as customer" review modal with, even when the broker isn't
-  // yet in the customer list. The customer-rule injection that piggy-
-  // backs on this is just an extra benefit when customers DO exist.
-  //
-  // Reparse path skips this — caller has already resolved the customer
-  // and just wants pass-2 to refresh the load fields.
-  let brokerProfile: BrokerProfile | undefined;
-  let matchedCustomer: IncomingCustomer | undefined;
+  // Build the single prompt. brokerRules is always empty now — the
+  // per-broker parseHints feature was dropped along with pass 1.
+  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, []);
 
-  if (skipBrokerHarvest && knownBrokerName && customers.length > 0) {
-    matchedCustomer = matchBroker(cleanBrokerName(knownBrokerName), customers)
-                   ?? matchBroker(knownBrokerName, customers);
-  } else if (!skipBrokerHarvest) {
-    try {
-      const pass1Text: TextBlockParam = { type: 'text', text: buildBrokerHarvestPrompt(promptVariables.timezone) };
-      const pass1Content: ContentBlockParam[] = [docBlock, pass1Text];
-      const pass1Response = await client.messages.create({
-        model: MODEL_PASS_1,
-        max_tokens: 512,
-        temperature: 0,
-        messages: [{ role: 'user', content: pass1Content }],
-      });
-      const pass1Text2 = pass1Response.content[0].type === 'text' ? pass1Response.content[0].text : '';
-      const pass1Json = extractJson(pass1Text2) as { broker?: BrokerProfile; docType?: string };
-      brokerProfile = pass1Json.broker
-        ? { ...pass1Json.broker, docType: pass1Json.docType }
-        : undefined;
-      if (brokerProfile?.name && customers.length > 0) {
-        const cleaned = cleanBrokerName(brokerProfile.name);
-        matchedCustomer = matchBroker(cleaned, customers) ?? matchBroker(brokerProfile.name, customers);
-      }
-    } catch (err) {
-      // Non-fatal — fall through to pass 2 with whatever rules the caller
-      // pre-filtered. Logged so we can see if it's failing systemically.
-      console.error('[parse-ratecon] pass-1 broker harvest failed:', err);
-    }
-  }
-
-  // Build the broker rules to inject into pass 2:
-  //   • If pass 1 matched a customer with parseHints → use just that rule
-  //   • Else fall back to whatever the caller sent (legacy behavior)
-  const effectiveRules: BrokerRule[] = matchedCustomer && matchedCustomer.parseHints?.trim()
-    ? [{
-        name:    matchedCustomer.name,
-        aliases: matchedCustomer.aliases ?? [],
-        hints:   matchedCustomer.parseHints.trim(),
-      }]
-    : brokerRules;
-
-  // ── Pass 2: full extraction with the matched broker's hints ──────────────
-  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, effectiveRules);
-
-  // Debug short-circuit: ?debug=1 returns the inputs without calling
-  // the model. Useful when two orgs produce different outputs for what
-  // appears to be the same PDF — paste both responses side-by-side and
-  // the divergence in promptVariables / customInstructions / enabled
-  // fields / matched customer pops out immediately.
+  // Debug short-circuit: ?debug=1 returns the exact inputs without
+  // calling the model. Useful for diffing prompt drift between orgs.
   const url = new URL(req.url);
   if (url.searchParams.get('debug') === '1') {
     return NextResponse.json({
       debug: true,
-      passOne: {
-        model: MODEL_PASS_1,
-        brokerProfileMatchedFromPdf: brokerProfile,
-        matchedCustomerFromRoster:   matchedCustomer ? { name: matchedCustomer.name, aliases: matchedCustomer.aliases, parseHintsLen: matchedCustomer.parseHints?.length ?? 0 } : null,
-      },
-      passTwo: {
-        model: MODEL_PASS_2,
-        enabledFields,
-        customInstructions,
-        promptVariables,
-        effectiveRulesCount: effectiveRules.length,
-        effectiveRules: effectiveRules.map(r => ({ name: r.name, aliases: r.aliases, hintsLen: r.hints.length, hints: r.hints })),
-        fullPrompt: prompt,
-        pdfBytesLength: data.length,                                  // base64 length — a same-PDF check
-      },
+      model: MODEL,
+      enabledFields,
+      customInstructions,
+      promptVariables,
+      fullPrompt: prompt,
+      pdfBytesLength: data.length,
+      customerCount: customers.length,
     });
   }
 
@@ -193,8 +116,8 @@ export async function POST(req: NextRequest) {
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
     const content: ContentBlockParam[] = [docBlock, textBlock];
     const response = await client.messages.create({
-      model: MODEL_PASS_2,
-      max_tokens: PASS_2_MAX_TOKENS,
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
       temperature: 0,
       messages: [{ role: 'user', content }],
     });
@@ -202,7 +125,7 @@ export async function POST(req: NextRequest) {
     try {
       parsed = extractJson(text);
     } catch (parseErr) {
-      console.error('[parse-ratecon] pass-2 JSON parse failed:', {
+      console.error('[parse-ratecon] JSON parse failed:', {
         stopReason: response.stop_reason,
         textLength: text.length,
         tail: text.slice(-200),
@@ -218,6 +141,17 @@ export async function POST(req: NextRequest) {
   // the title doesn't read "Direct Connect Logistics Inc: …".
   if (typeof parsed.broker === 'string') {
     parsed.broker = cleanBrokerName(parsed.broker);
+  }
+
+  // Post-parse customer matching. Replaces what pass 1 used to do —
+  // matches the extracted broker name against the org's roster and
+  // returns the canonical customer name if found. Pure post-process,
+  // no model involvement.
+  let matchedCustomerName: string | undefined;
+  if (typeof parsed.broker === 'string' && customers.length > 0) {
+    const matched = matchBroker(parsed.broker, customers)
+                 ?? matchBroker(cleanBrokerName(parsed.broker), customers);
+    if (matched) matchedCustomerName = matched.name;
   }
 
   // ── Enrich stops with geocoding ─────────────────────────────────────────────
@@ -239,9 +173,9 @@ export async function POST(req: NextRequest) {
         type:          (stop.type ?? 'stop') as StopType,
         facilityName:  stop.facilityName || undefined,
         address:       stop.address       || undefined,
-        // Prefer Google's structured address_components (locality /
-        // administrative_area_level_1) over whatever the AI guessed —
-        // those are the canonical city / state for the geocoded address.
+        // Prefer Google's structured address_components over the AI's
+        // guess — those are the canonical city / state for the
+        // geocoded address.
         city:          geo?.city          ?? stop.city ?? undefined,
         state:         geo?.state         ?? undefined,
         lat:           geo?.lat           ?? undefined,
@@ -256,17 +190,9 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Title is built client-side by generateLoadTitle() so it can use
-  // customer.shortName + the org's customer roster. We just return the
-  // AI's summary (formatted per `titleFormat`) as a fallback for the rare
-  // case where the client can't synthesize one.
-
   return NextResponse.json({
     ...parsed,
     stops: enrichedStops,
-    // Pass-1 broker profile harvest. Client uses this to pre-fill a new
-    // customer record when the broker isn't matched. `undefined` if pass 1
-    // didn't run (no customers sent) or failed.
-    brokerProfile,
+    matchedCustomerName,
   });
 }

@@ -143,11 +143,28 @@ Fill as many fields as possible. Use an empty string for any field not found —
 
 The "stops" array is REQUIRED. Extract every pickup, delivery, and intermediate stop in the order they appear in the document. Stop type rules: "pickup" = live load (driver waits), "delivery" = live unload, "drop" = drop loaded trailer (no hook of another), "drop_hook" = drop loaded AND hook empty/different, "stop" = intermediate non-loading stop. If a stop is both a pickup and delivery at the same location, create two entries.
 
-DATE EXTRACTION RULES — critical, read carefully:
-- Copy dates LITERALLY from the document. Do NOT compute, infer, or "add business days". If the rate con says "06/04/2026", write "2026-06-04" — never adjust.
-- The document's load-confirmation date / issue date / signature date is NOT the pickup date. Ignore it for stop times; use only the date printed next to each stop's PU/SO/Stop line.
-- Cross-check before returning: the FIRST stop's apptStart MUST match the load's "start" field exactly (same date AND time). The LAST stop's apptStart MUST match the load's "end" field exactly. Every other stop's date MUST fall between the start date and end date, inclusive.
-- If a stop date appears to fall outside the start→end window, you have misread it. Re-extract from the document; do not return a stop date that contradicts start/end.
+DATE EXTRACTION — read this section TWICE before extracting any date:
+
+The load's "start" is the FIRST stop's appointment time. The load's "end" is the LAST stop's appointment time. The first stop and the load start are the SAME EVENT — they MUST share the same date and time.
+
+1. Copy dates LITERALLY. Do NOT compute, infer, shift, or "add business days". If the rate con says "06/04/2026", write "2026-06-04".
+
+2. IGNORE these dates — they are NOT appointment times:
+   - Load-confirmation date / issue date / signature date / "tendered" date / "created" date
+   - "Available by" / "ready by" / "must deliver by" dates UNLESS that's the only date given for a stop
+   - Payment terms ("net 30", "due in 30 days")
+   - Insurance certificate effective / expiration dates
+   - Broker contract / agreement dates
+   - Any date printed in a header, footer, or signature block
+
+3. ONLY use dates that are explicitly tied to a stop — printed in the stop's appointment column, or directly next to the stop's address, or labeled "Appointment", "Pickup", "Delivery", "Stop", "PU", "DEL", "SO".
+
+4. HARD CONSTRAINTS — every value you return MUST satisfy ALL of these:
+   - stops[0].apptStart === start (exact same date AND time, to the minute)
+   - stops[last].apptStart === end (exact same date AND time, to the minute)
+   - For every middle stop: start <= stops[i].apptStart <= end (inclusive of both ends)
+
+5. Self-check before returning. Walk through your stops array and verify constraint #4. If any stop violates it, you misread the document — go back to the appointment column for that stop and re-extract. Do NOT return JSON that violates these constraints; that would be a bug.
 
 ${schema},
 ${stopsSchema}
