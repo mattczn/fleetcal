@@ -3590,6 +3590,13 @@ export default function EventModal() {
         if (parsed.refNums) setFieldValues(prev => ({ ...prev, refNums: parseAiRefNums(parsed.refNums) }));
         if (parsed.start) {
           const [sd, st = '08:00'] = parsed.start.split('T');
+          // Sync prevStartDateRef BEFORE setStartDate so the
+          // stop-shift effect (line ~2141) sees prev === new and
+          // skips the delta-shift. Without this, the freshly parsed
+          // stops get shifted by however many days the parsed start
+          // differs from the modal's pre-parse date, causing the
+          // observed "appt dates jumped +N days" bug.
+          prevStartDateRef.current = sd;
           setStartDate(sd); setStartTime(st.slice(0, 5));
           if (!parsed.end) setEndDate(sd);
         }
@@ -3780,6 +3787,10 @@ export default function EventModal() {
       }
       if (parsed.start) {
         const [sd, st = '08:00'] = parsed.start.split('T');
+        // Sync prevStartDateRef BEFORE setStartDate so the stop-shift
+        // effect doesn't apply a delta when the reparse moves
+        // startDate. Same fix as the initial-parse path above.
+        prevStartDateRef.current = sd;
         setStartDate(sd); setStartTime(st.slice(0, 5));
       }
       if (parsed.end) {
