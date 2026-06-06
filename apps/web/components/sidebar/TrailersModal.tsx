@@ -8,6 +8,7 @@ import { useModules } from '@/lib/useModules';
 import { formatHardDeleteError } from '@/lib/hardDeleteError';
 import { railway } from '@/lib/railway';
 import LifecycleEditor from './LifecycleEditor';
+import LoadHistorySection from './LoadHistorySection';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import { TRAILER_CATEGORIES, type TrailerCategory, type TrailerDocument, type TrailerDocumentKind } from '@fleetcal/types';
 import type { Trailer } from '@/lib/types';
@@ -332,7 +333,15 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
   onRemove: () => void;
   onHardDelete: () => void;
 }) {
-  const { updateTrailer } = useCalendarStore();
+  const { updateTrailer, events, assets, openEditModal } = useCalendarStore();
+
+  // Details / History split — matches Trucks / Drivers / Customers.
+  // Trailer history is the set of events (loads) where this trailer
+  // was assigned via events.trailer_id. The CalendarEvent.trailerId
+  // field is populated by the load modal's trailer dropdown; we
+  // filter the global events array down to the matches.
+  const [view, setView] = useState<'details' | 'history'>('details');
+  const trailerLoads = events.filter(ev => ev.trailerId === trailer.id);
   const { can: canDo } = usePermissions();
   const canDelete = canDo('trailers.delete');
   const canEdit   = canDo('trailers.edit');
@@ -390,6 +399,26 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
           )}
         </div>
       </div>
+
+      {/* Details / History tab selector — mirrors AssetsModal. */}
+      <div className="flex items-center gap-1 mb-6 p-0.5 rounded-lg"
+        style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', width: 'fit-content' }}>
+        {(['details', 'history'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setView(tab)}
+            className="px-4 py-1.5 rounded-md text-sm font-semibold transition-colors capitalize"
+            style={{
+              background: view === tab ? 'var(--gc-surface)' : 'transparent',
+              color:      view === tab ? TRAILER_ACCENT : 'var(--gc-text-3)',
+              boxShadow:  view === tab ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+            }}>
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {view === 'details' && (<>
 
       {!canEdit && (
         <div style={{
@@ -660,6 +689,18 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
         <PermanentDeleteBlock
           label={trailer.name}
           onConfirm={onHardDelete}
+        />
+      )}
+
+      </>)}
+
+      {view === 'history' && (
+        <LoadHistorySection
+          loads={trailerLoads}
+          assets={assets}
+          onSelect={openEditModal}
+          heading="Loads"
+          emptyLabel="No loads found for this trailer"
         />
       )}
     </div>

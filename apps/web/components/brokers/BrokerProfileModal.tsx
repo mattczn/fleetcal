@@ -488,6 +488,12 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const { updateCustomer } = useCalendarStore();
   const tz = useCalendarStore(s => s.calendarTimezone);
 
+  // Details / History split. Details = customer profile fields.
+  // History = the stats card + per-load table. Mirrors the same
+  // pattern used in Trucks and Drivers so all 5 directories read
+  // consistently.
+  const [view, setView] = useState<'details' | 'history'>('details');
+
   // Long name = the canonical company name shown in the modal header
   // and used by the customer-matching code throughout the app.
   // Editable here because brokers occasionally change branding (typo
@@ -724,6 +730,25 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         </div>
       </div>
 
+      {/* Details / History tab selector */}
+      <div className="flex items-center gap-1 mb-6 p-0.5 rounded-lg"
+        style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', width: 'fit-content' }}>
+        {(['details', 'history'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setView(tab)}
+            className="px-4 py-1.5 rounded-md text-sm font-semibold transition-colors capitalize"
+            style={{
+              background: view === tab ? 'var(--gc-surface)' : 'transparent',
+              color:      view === tab ? ACCENT : 'var(--gc-text-3)',
+              boxShadow:  view === tab ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+            }}>
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {view === 'details' && (<>
       {/* Details form */}
       <div className="mb-6">
         <SectionLabel>Details</SectionLabel>
@@ -958,6 +983,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         </div>
       </div>
 
+      </>)}
+
+      {view === 'history' && (<>
       {/* Stats — between billing notes and load history */}
       {!loading && (
         <div className="grid grid-cols-2 gap-3 mb-6">
@@ -1054,6 +1082,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           </div>
         )}
       </div>
+      </>)}
     </div>
   );
 });
