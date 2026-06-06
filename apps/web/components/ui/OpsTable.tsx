@@ -55,7 +55,7 @@
 'use client';
 
 import {
-  useMemo, useState, useRef, useEffect, useCallback, type ReactNode,
+  useMemo, useState, useRef, useEffect, useCallback, Fragment, type ReactNode,
 } from 'react';
 import {
   flexRender,
@@ -645,10 +645,28 @@ export function OpsTable<T>({
     return { leftOffsets: left, rightOffsets: right };
   }, [visibleColumns, selectable]);
 
+  // First pinned-right column index (or -1 if none). Used to insert
+  // a 1fr spacer slot at that position so the row stretches to fill
+  // the container — without it, when the sum of column widths is
+  // less than the scroll container's width, sticky-right cells float
+  // at the right edge with an unsightly empty gap between them and
+  // the last non-pinned data cell.
+  const firstPinnedRightIdx = useMemo(
+    () => visibleColumns.findIndex(c => c.pinned === 'right'),
+    [visibleColumns],
+  );
+
   const gridTemplate = useMemo(() => {
-    const cols = visibleColumns.map(widthOfCol).join(' ');
+    const widths = visibleColumns.map(widthOfCol);
+    if (firstPinnedRightIdx > 0) {
+      // Insert the spacer track right before the first pinned-right
+      // column. The header / row cell rendering walks this same index
+      // and emits an empty <div> at the matching slot.
+      widths.splice(firstPinnedRightIdx, 0, 'minmax(0, 1fr)');
+    }
+    const cols = widths.join(' ');
     return selectable ? `${SELECT_COL_WIDTH}px ${cols}` : cols;
-  }, [visibleColumns, selectable, widthOfCol]);
+  }, [visibleColumns, selectable, widthOfCol, firstPinnedRightIdx]);
 
   const rowHeightPx = density === 'compact' ? 36 : 52;
 
@@ -863,9 +881,28 @@ export function OpsTable<T>({
             const dir   = h?.column.getIsSorted();
             const canSort = h?.column.getCanSort() ?? false;
             const stickyStyle = stickyStyleFor(col, leftOffsets, rightOffsets);
+            // Inject the 1fr filler track right before the first
+            // pinned-right header so the grid slot count matches the
+            // gridTemplate computed above. Without this, the spacer
+            // track exists in the template but the row only emits
+            // N - 1 cells and CSS Grid renders them inside the wrong
+            // tracks.
+            const spacer = idx === firstPinnedRightIdx && firstPinnedRightIdx > 0
+              ? (
+                <div
+                  key="__hdr_spacer"
+                  aria-hidden
+                  style={{
+                    background: 'var(--gc-surface)',
+                    height: '100%',
+                  }}
+                />
+              )
+              : null;
             return (
+              <Fragment key={col.key}>
+                {spacer}
               <div
-                key={col.key}
                 style={{
                   ...stickyStyle,
                   background: 'var(--gc-surface)',
@@ -907,6 +944,7 @@ export function OpsTable<T>({
                   )}
                 </button>
               </div>
+              </Fragment>
             );
           })}
         </div>
@@ -983,9 +1021,25 @@ export function OpsTable<T>({
                 {r.getVisibleCells().map((cell, idx) => {
                   const col = visibleColumns[idx];
                   const stickyStyle = stickyStyleFor(col, leftOffsets, rightOffsets);
+                  // Emit the 1fr filler before the first pinned-right
+                  // cell so the row's grid slot count matches the
+                  // template. Falls under the row's rowBg so the
+                  // empty area paints with the same row colour as the
+                  // rest of the row instead of showing the scroll
+                  // container's background.
+                  const spacer = idx === firstPinnedRightIdx && firstPinnedRightIdx > 0
+                    ? (
+                      <div
+                        key="__row_spacer"
+                        aria-hidden
+                        style={{ background: 'transparent' }}
+                      />
+                    )
+                    : null;
                   return (
+                    <Fragment key={cell.id}>
+                      {spacer}
                     <div
-                      key={cell.id}
                       className="min-w-0 flex items-center"
                       style={{
                         ...stickyStyle,
@@ -1010,6 +1064,7 @@ export function OpsTable<T>({
                       }}>
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </div>
+                    </Fragment>
                   );
                 })}
               </div>

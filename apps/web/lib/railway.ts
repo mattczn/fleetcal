@@ -503,12 +503,17 @@ class RailwayClient {
   // ── Closeout / POD verification queue ─────────────────────────────────
   listCloseoutQueue(
     tab: 'pending' | 'recent' | 'flagged' | 'verified' | 'invoiced' | 'paid' | 'all' | 'released_all' = 'all',
-    opts?: { limit?: number; offset?: number; q?: string },
+    opts?: { limit?: number; offset?: number; q?: string; now?: string },
   ) {
     const params = new URLSearchParams({ tab });
     if (opts?.limit  != null) params.set('limit',  String(opts.limit));
     if (opts?.offset != null) params.set('offset', String(opts.offset));
     if (opts?.q && opts.q.trim().length >= 2) params.set('q', opts.q.trim());
+    // Naive ISO ("YYYY-MM-DDTHH:mm") in the org's dispatch zone. The
+    // events.end column is stored as a naive text string in the same
+    // format, so passing a UTC ISO produces wrong comparisons once
+    // local time and UTC straddle midnight.
+    if (opts?.now) params.set('now', opts.now);
     return this.req<{
       loads: import('@fleetcal/types').Load[];
       /** Per-loadId map of doc-kind counts: { [loadId]: { pod: 2, bol: 1, lumper: 1 } } */

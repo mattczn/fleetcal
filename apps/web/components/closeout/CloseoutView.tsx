@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, Star, X, MessageSquare, Search, Info } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { naiveNowInTz } from '@/lib/time-utils';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { railway } from '@/lib/railway';
 import Link from 'next/link';
@@ -135,6 +136,7 @@ interface QueueRow extends CalendarEvent { /* alias for clarity */ }
 export default function CloseoutView() {
   const customers = useCalendarStore(s => s.customers);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const { user } = useUser();
   // Clerk readiness gate — without this, a hard refresh on /closeout
   // fires the queue request before RailwayClientProvider has a chance
@@ -232,6 +234,7 @@ export default function CloseoutView() {
       const { loads, docCounts, total } = await railway.listCloseoutQueue(API_TAB[tab], {
         limit: BUCKET_LIMIT,
         q:     searchQuery || undefined,
+        now:   naiveNowInTz(calendarTimezone),
       });
       const entry: CacheEntry = { loads, docCounts, total, fetchedAt: Date.now() };
       cacheRef.current.set(`${tab}:${searchQuery}`, entry);
@@ -262,11 +265,12 @@ export default function CloseoutView() {
   // tile's count doesn't get stale.
   async function refreshBucketTotals() {
     try {
+      const nowTz = naiveNowInTz(calendarTimezone);
       const [a, rc, f, rl] = await Promise.all([
-        railway.listCloseoutQueue('all',          { limit: 1 }).catch(() => null),
-        railway.listCloseoutQueue('recent',       { limit: 1 }).catch(() => null),
-        railway.listCloseoutQueue('flagged',      { limit: 1 }).catch(() => null),
-        railway.listCloseoutQueue('released_all', { limit: 1 }).catch(() => null),
+        railway.listCloseoutQueue('all',          { limit: 1, now: nowTz }).catch(() => null),
+        railway.listCloseoutQueue('recent',       { limit: 1, now: nowTz }).catch(() => null),
+        railway.listCloseoutQueue('flagged',      { limit: 1, now: nowTz }).catch(() => null),
+        railway.listCloseoutQueue('released_all', { limit: 1, now: nowTz }).catch(() => null),
       ]);
       setBucketTotals({
         all:      a?.total  ?? 0,

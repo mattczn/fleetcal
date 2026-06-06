@@ -216,7 +216,24 @@ closeout.get("/queue", async (c) => {
   // Fetch revenue events whose load matches the requested billing-status
   // filter. We pull events (not loads) so each leg is a row — the client
   // can dedup by load_id when needed.
-  const nowIso = new Date().toISOString();
+  //
+  // Two clocks live in this handler:
+  //   • nowNaive — "YYYY-MM-DDTHH:mm" in the org's dispatch zone. Used
+  //     for ALL comparisons against events.start / events.end, which
+  //     are stored as naive text in the dispatch zone. Without this,
+  //     comparing a UTC ISO produces wrong results once local time
+  //     and UTC straddle midnight (future-local loads slip past the
+  //     `end <= now` filter every evening). The client passes this
+  //     via ?now=… ; we fall back to a server-side UTC slice if
+  //     the param is missing so older clients still mostly work.
+  //   • nowMs — Date.now(). Used only for the 24h grace-window math
+  //     where we compare two millisecond counts, never against an
+  //     events.start/end string.
+  const nowParam = c.req.query("now");
+  const nowNaive = nowParam && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(nowParam)
+    ? nowParam.slice(0, 16)
+    : new Date().toISOString().slice(0, 16); // best-effort fallback
+  const nowIso = nowNaive;
 
   // Helper: build a fresh events query with the org/kind/deleted/status
   // + tab-based billing_status filters applied. Returns the builder so
@@ -389,6 +406,15 @@ closeout.get("/queue", async (c) => {
       const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
       const loadId = loadRow?.id;
       const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
+
+      // RELAY GATE — the SQL filter `event.end <= now` only checks
+      // the row's own leg; for a relay where the pickup leg has
+      // already ended but the delivery leg is still in the future,
+      // the pickup-leg row leaks through. Drop those here so
+      // Paperwork strictly shows DELIVERED loads, mirroring the
+      // bucket-tile copy.
+      if (deliveryEnd && deliveryEnd > nowNaive) return false;
+
       if (tab === "all") return true;
       if (tab === "recent") {
         if (!deliveryEnd) return false;
@@ -506,6 +532,10 @@ closeout.get("/queue", async (c) => {
         const loadRow = r.load as { billing_status?: string; accessorials?: unknown; is_tonu?: boolean; id?: string };
         const loadId = loadRow?.id;
         const deliveryEnd = (loadId && deliveryEndByLoadId.get(loadId)) ?? r.end;
+        // Search path lifts the date filter so we can find upcoming
+        // loads by load #. The bucket filters still constrain to
+        // delivered loads — non-search behaviour.
+        if (!searching && deliveryEnd && deliveryEnd > nowNaive) return false;
         if (tab === "all") return true;
         if (tab === "recent") {
           if (!deliveryEnd) return false;

@@ -109,6 +109,30 @@ export function todayDateKeyInTz(tz: string): string {
  * Returns "—" for nullish/unparseable input so call sites can drop
  * their own null-guards.
  */
+/**
+ * Current time as a NAIVE ISO ("YYYY-MM-DDTHH:mm") in the given tz.
+ *
+ * Used when the server needs to compare against `events.start` or
+ * `events.end`, both of which are stored as naive text strings in
+ * the org's dispatch zone. Passing a UTC ISO would silently break
+ * string-comparison filters once local and UTC straddle midnight.
+ */
+export function naiveNowInTz(tz: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone:  tz,
+    year:      'numeric',
+    month:     '2-digit',
+    day:       '2-digit',
+    hour:      '2-digit',
+    minute:    '2-digit',
+    hour12:    false,
+  }).formatToParts(new Date());
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
+  // Intl emits "24" for midnight in some locales — collapse to "00".
+  const hour = get('hour') === '24' ? '00' : get('hour');
+  return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}`;
+}
+
 export function formatTimestampInTz(
   iso: string | null | undefined,
   tz: string,
