@@ -2642,10 +2642,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           includedIds={includedDocIds}
           onToggleIncluded={(id) => setInvoiceInclude(id, !includedDocIds.has(id))}
           // Surface the Primary rate-con badge + Make Primary button
-          // inside the dialog. Excludes the virtual sentinel id
-          // because the virtual row doesn't even render inside the
-          // dialog (it's not a real load_documents row).
-          primaryRateConId={primaryRateConId !== RATE_CON_PRIMARY_ID ? primaryRateConId : undefined}
+          // inside the dialog. Pass the actual primaryRateConId
+          // unconditionally — the virtual sentinel DOES render in the
+          // dialog (mergeCandidates includes it), and when the
+          // synthetic row IS primary the badge should show on it,
+          // not the Make Primary button. The row-render code's
+          // d.id !== primaryRateConId check handles both branches.
+          primaryRateConId={primaryRateConId}
           onSetRateConPrimary={handleSetRateConPrimary}
           kindOptions={KIND_OPTIONS}
           // Pending kind picker — when the user clicks "+ Add document"
