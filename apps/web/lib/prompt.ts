@@ -17,64 +17,6 @@ export const DEFAULT_PROMPT_VARIABLES: PromptVariables = {
   specialInstructionsFormat: 'Driver-essential broker requirements only. Do NOT repeat stop addresses, appointment times, gate-arrival windows, or anything that belongs on a specific stop — those are already captured in the structured stops array. Focus on load-level info that applies across the whole load: detention policy, weight or temperature requirements, equipment requirements (chains, straps, pallets), security or PPE requirements, TONU policy, after-hours / weekend access notes, lumper/dock fees, and any unusual broker requirements. Exclude insurance terms, payment terms, and broker/carrier legal language. Keep it short and bulleted. Return an empty string if nothing essential remains beyond what other fields already capture.',
 };
 
-export interface BrokerRule {
-  name:    string;     // canonical name
-  aliases: string[];   // additional names the broker may appear as
-  hints:   string;     // free-form guidance from the org's customer record
-}
-
-/** Pass-1 harvest result. Used to look up matching customer record and
- *  to pre-fill a new one if no match. All fields optional — Claude
- *  returns "" when something isn't on the document. */
-export interface BrokerProfile {
-  name?:                string;
-  contactName?:         string;
-  contactEmail?:        string;
-  contactPhone?:        string;
-  /** "email" | "portal" — how this broker accepts invoices. */
-  invoiceMethod?:       string;
-  /** AP / billing email when invoiceMethod is "email". */
-  invoiceEmail?:        string;
-  /** Portal name + URL when invoiceMethod is "portal". */
-  invoicePortal?:       string;
-  /** Catch-all for additional broker-wide billing notes (terms,
-   *  required docs, factor). Must NOT include load-specific
-   *  identifiers (load #, PRO #, this load's PO/reference, etc.) —
-   *  those would pollute future invoices for the same broker. The
-   *  prompt enforces this explicitly. */
-  invoiceInstructions?: string;
-  /** "rate_con" | "amendment" | "revised" | "other" — quick sanity check;
-   *  if "other" the caller may bail out before pass 2. */
-  docType?:             string;
-}
-
-/**
- * Pass-1 prompt: identify the broker and harvest a few fields that
- * belong on the customer record. Output is small (~150 tokens) so the
- * subsequent full-schema pass can run cheaply against the cached PDF.
- */
-export function buildBrokerHarvestPrompt(timezone: string): string {
-  return `You are the first of a two-pass rate-confirmation parser. This pass extracts ONLY the broker/customer profile so the second pass can apply broker-specific rules.
-
-Return a single JSON object with this exact shape — no markdown, no explanation. Use empty strings for fields not on the document; do not omit keys.
-
-{
-  "broker": {
-    "name":                "<canonical broker / customer / shipper company name as it appears>",
-    "contactName":         "<dispatcher or rep name on the rate con>",
-    "contactEmail":        "<dispatcher / billing contact email>",
-    "contactPhone":        "<dispatcher phone, digits + format as on the doc>",
-    "invoiceMethod":       "<'email' | 'portal' | '' — how this broker wants invoices submitted. 'portal' if any online billing system is named (TriumphPay, RMIS, McLeod, MyCarrierPortal, broker's own portal, etc.). 'email' if invoices go to a specific AP/billing email. Empty string if unclear.>",
-    "invoiceEmail":        "<AP / billing email when invoiceMethod is 'email', otherwise empty string>",
-    "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal', e.g. 'TriumphPay (https://app.triumphpay.com)'. Otherwise empty string.>",
-    "invoiceInstructions": "<BROKER-WIDE billing policies only — things that apply to EVERY load from this broker, not just this one. Allowed: payment terms (net 30, quickpay rates), required documents that are always needed (BOL/POD/scale tickets/lumper receipts), factor preferences, remit-to address overrides, billing portal requirements, required line items the broker wants on every invoice. 1-3 short bulleted lines. STRICTLY EXCLUDE anything load-specific: this load's load number, PRO number, BOL number, PO number, shipment/order/confirmation number, references to 'this load' or 'this shipment', or any value that would change on the next load from the same broker. Empty string if there's nothing broker-wide to add.>"
-  },
-  "docType": "<rate_con | amendment | revised | other>"
-}
-
-The current timezone is ${timezone}.`;
-}
-
 /**
  * Pass-2 corrective prompt. Fires only when pass-1's output fails the
  * date cross-check (stops[0].apptStart !== start, stops[last].apptStart
@@ -140,7 +82,6 @@ export function buildRateConPrompt(
   enabledFieldIds: string[],
   customInstructions: string,
   variables: PromptVariables = DEFAULT_PROMPT_VARIABLES,
-  brokerRules: BrokerRule[] = [],
 ): string {
   const alwaysSchema: Record<string, string> = {
     summary: variables.titleFormat,
@@ -170,18 +111,6 @@ export function buildRateConPrompt(
 
   const customBlock = customInstructions.trim()
     ? `\nAdditional instructions:\n${customInstructions.trim()}\n`
-    : '';
-
-  // Per-broker rules — pulled from the org's customer records. Each rule
-  // applies only when the rate-con's broker name (or an alias) matches.
-  // Skipped entirely when no customers have parse hints set.
-  const brokerRulesBlock = brokerRules.length > 0
-    ? `\nPer-broker rules — apply the matching rule when the rate-con's broker name (or any alias) matches a name below:\n${brokerRules
-        .map(r => {
-          const aliasPart = r.aliases.length > 0 ? ` (aliases: ${r.aliases.join(', ')})` : '';
-          return `- ${r.name}${aliasPart}: ${r.hints.trim()}`;
-        })
-        .join('\n')}\n`
     : '';
 
   const stopsSchema = `  "stops": [
@@ -236,6 +165,6 @@ The load's "start" is the FIRST stop's appointment time. The load's "end" is the
 
 ${schema},
 ${stopsSchema}
-${customBlock}${brokerRulesBlock}
+${customBlock}
 Convert all times to ${variables.timezone}.`;
 }

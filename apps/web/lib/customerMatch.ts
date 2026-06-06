@@ -1,20 +1,4 @@
 import type { Customer, CustomerMatchResult } from './types';
-import type { BrokerRule } from './prompt';
-
-/**
- * Build the per-broker rules block for the rate-con AI prompt from the
- * org's customer records. Only customers with non-empty parse hints are
- * included; everything else is skipped to keep the prompt small.
- */
-export function buildBrokerRules(customers: Customer[]): BrokerRule[] {
-  return customers
-    .filter(c => c.parseHints && c.parseHints.trim().length > 0)
-    .map(c => ({
-      name:    c.name,
-      aliases: c.aliases ?? [],
-      hints:   c.parseHints!.trim(),
-    }));
-}
 
 /**
  * Resolve a load's broker string to the org's preferred display name.

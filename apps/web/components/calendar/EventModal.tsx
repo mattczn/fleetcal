@@ -16,7 +16,7 @@ import { isActiveOn } from '@/lib/lifecycle';
 import { AssetSelect } from './AssetSelect';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
 import { NON_REVENUE_TYPES } from '@/lib/types';
-import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
+import { matchCustomer } from '@/lib/customerMatch';
 import { cleanBrokerName } from '@/lib/brokerName';
 import { NewBrokerReviewModal } from './NewBrokerReviewModal';
 import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER, LOAD_ACCENT_HOVER } from '@/lib/loadAccent';
@@ -2180,10 +2180,6 @@ export default function EventModal() {
   const [parseError, setParseError] = useState('');
   const [brokerMatch, setBrokerMatch] = useState<CustomerMatchResult>({ status: 'none' });
   const [brokerSaveBlocked, setBrokerSaveBlocked] = useState(false);
-  // Pass-1 broker profile from the rate-con parser. Used to pre-fill MC#,
-  // contact info, and invoice instructions when the broker isn't yet a
-  // customer and the user clicks "Save as customer."
-  const [parsedBrokerProfile, setParsedBrokerProfile] = useState<import('@/lib/prompt').BrokerProfile | undefined>(undefined);
   // The pending new-broker creation flow. Set when the user clicks one of
   // the "Save as customer" CTAs; the review modal renders when truthy.
   const [pendingNewBroker, setPendingNewBroker] = useState<string | null>(null);
@@ -2539,7 +2535,7 @@ export default function EventModal() {
   };
 
   useEffect(() => {
-    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setParsedBrokerProfile(undefined); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); setSuggestAssetSwap(null); setSuggestDriverSwap(null); setSuggestRelayDelivAssetSwap(null); setSuggestRelayDelivDriverSwap(null); return; }
+    if (!modalOpen) { setConfirmDel(false); setConfirmRelayRemove(false); setConfirmRemoveRateCon(false); setConfirmSkip(false); setConfirmBatchCancel(false); setParseState('idle'); setParseError(''); setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(false); setIsDirty(false); setShowSavePrompt(false); setAccessorials([]); setStops([]); setBrokerMatch({ status: 'none' }); setBrokerSaveBlocked(false); setShowBrokerProfile(false); setDupLoadNum(null); setPendingSave(null); setGeocodeBlock(null); setLoadedMiles(null); setPartnerLoadedMiles(null); setShowDriverSummary(false); setLinkedTrailerId(undefined); setPriority(false); setEventKind('revenue'); setNonRevenueType('Maintenance'); setDocsTab('rateCon'); setLoadDocuments([]); setLoadInvoices([]); setSelectedDocUrl(null); setSelectedDocId(null); setAuditLog([]); setInternalNotes([]); setOriginalInternalNotes([]); setNoteComposer(''); setNoteComposerOpen(false); setPendingNewBroker(null); setPickupDriverPay(''); setDeliveryDriverPay(''); setSuggestAssetSwap(null); setSuggestDriverSwap(null); setSuggestRelayDelivAssetSwap(null); setSuggestRelayDelivDriverSwap(null); return; }
     setParseState('idle'); setParseError('');
     setRateConPdf(undefined); setRateConOriginal(undefined); setShowPdfViewer(false); setShowMapPanel(modalShowMap);
     setIsDirty(false); setShowSavePrompt(false);
@@ -2643,11 +2639,6 @@ export default function EventModal() {
       const batchItem = batchItems[batchIndex];
       if (batchItem) {
         const p = batchItem.parsed;
-        // Stash the pass-1 broker harvest so the new-customer review modal
-        // pre-fills MC#/contacts/invoice routing — same as the single-parse
-        // path. Without this, batch-parsed loads always opened a blank
-        // review form even when the AI extracted broker info.
-        if (p.brokerProfile) setParsedBrokerProfile(p.brokerProfile as import('@/lib/prompt').BrokerProfile);
         const today = localDateStr(currentDate);
         // Title generated after broker+stops are resolved below
         const initialAssetId = assets[0]?.id ?? 1;
@@ -2692,15 +2683,6 @@ export default function EventModal() {
             vals['customerId'] = match.customer.id;
             if (String(p.broker).trim() !== match.customer.name) {
               void addCustomerAlias(match.customer.id, String(p.broker).trim());
-            }
-            // Same auto-append-contact behavior as the single-parse path.
-            const bp = (p as Record<string, unknown>).brokerProfile as { contactName?: string; contactEmail?: string; contactPhone?: string } | undefined;
-            if (bp && (bp.contactName || bp.contactEmail || bp.contactPhone)) {
-              void addCustomerContact(match.customer.id, {
-                name:  bp.contactName,
-                email: bp.contactEmail,
-                phone: bp.contactPhone,
-              });
             }
           }
           setBrokerMatch(match);
@@ -3571,19 +3553,10 @@ export default function EventModal() {
             enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
             customInstructions: promptInstructions,
             promptVariables,
-            // Send the full roster so pass 1 can pick the matching rule.
-            // Server filters down to the one match before pass 2.
-            customers: customers.map(c => ({
-              name: c.name, aliases: c.aliases ?? [], parseHints: c.parseHints,
-            })),
           }),
         });
         const parsed = await res.json();
         if (parsed.error) throw new Error(parsed.error);
-
-        // Stash the broker profile from pass 1 so the new-customer CTAs
-        // can pre-fill MC#, contact info, and invoice instructions.
-        if (parsed.brokerProfile) setParsedBrokerProfile(parsed.brokerProfile);
 
         let resolvedBroker: string | undefined;
         if (parsed.loadNum) setField('loadNum', parsed.loadNum);
@@ -3633,18 +3606,6 @@ export default function EventModal() {
             setField('customerId', match.customer.id);
             if (String(parsed.broker).trim() !== match.customer.name) {
               void addCustomerAlias(match.customer.id, String(parsed.broker).trim());
-            }
-            // AI-extracted rep info from the rate con — append to the
-            // matched customer's contacts[] if we don't already have a
-            // contact with the same email/phone. Helps build out the
-            // contact list passively over time.
-            const bp = parsed.brokerProfile as { contactName?: string; contactEmail?: string; contactPhone?: string } | undefined;
-            if (bp && (bp.contactName || bp.contactEmail || bp.contactPhone)) {
-              void addCustomerContact(match.customer.id, {
-                name:  bp.contactName,
-                email: bp.contactEmail,
-                phone: bp.contactPhone,
-              });
             }
           } else {
             resolvedBroker = String(parsed.broker);
@@ -3726,10 +3687,10 @@ export default function EventModal() {
    * Used when a broker sends an updated rate-con (rate change, added stop,
    * etc.) and you want the form re-synced without re-uploading the PDF.
    *
-   * Skips pass 1 (broker harvest) since the customer is already resolved
-   * on the load — server still injects that customer's parseHints into
-   * pass 2 via the knownBrokerName lookup. ~half the latency of a fresh
-   * parse and zero pass-1 token cost.
+   * The server runs a single Sonnet pass with conditional Haiku
+   * retry on date-cross-check failure (see /api/parse-ratecon).
+   * Customer matching is done client-side after the response lands,
+   * not on the server — no roster injection needed.
    */
   const handleFullReparse = async () => {
     if (!rateConPdf || reparsing) return;
@@ -3743,7 +3704,6 @@ export default function EventModal() {
         const buf  = await resp.arrayBuffer();
         base64 = bufferToBase64(buf);
       }
-      const knownBrokerName = typeof fieldValues['broker'] === 'string' ? (fieldValues['broker'] as string) : undefined;
       const res = await fetch('/api/parse-ratecon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3752,11 +3712,6 @@ export default function EventModal() {
           enabledFields: Object.keys(fieldSettings).filter(k => fieldSettings[k]),
           customInstructions: promptInstructions,
           promptVariables,
-          customers: customers.map(c => ({
-            name: c.name, aliases: c.aliases ?? [], parseHints: c.parseHints,
-          })),
-          knownBrokerName,
-          skipBrokerHarvest: true,
         }),
       });
       const parsed = await res.json();
@@ -4282,7 +4237,6 @@ export default function EventModal() {
     {pendingNewBroker !== null && (
       <NewBrokerReviewModal
         initialName={pendingNewBroker}
-        profile={parsedBrokerProfile}
         onCancel={() => setPendingNewBroker(null)}
         onConfirm={confirmCreateBroker}
       />

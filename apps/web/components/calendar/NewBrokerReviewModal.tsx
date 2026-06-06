@@ -3,49 +3,37 @@
 import { useState } from 'react';
 import { Plus, X, Mail } from 'lucide-react';
 import type { Customer } from '@/lib/types';
-import type { BrokerProfile } from '@/lib/prompt';
-import { cleanBrokerName } from '@/lib/brokerName';
 
 /**
  * Review-and-create dialog shown after the rate-con parser identifies a
- * broker that isn't in the customer list yet. Fields are pre-filled from
- * the pass-1 harvest so the user just confirms / edits — no manual entry.
+ * broker that isn't in the customer list yet. User fills in the fields
+ * manually — the AI broker-harvest pre-fill was dropped when the parse
+ * pipeline collapsed to a single pass. To AI-fill invoicing fields from
+ * a saved rate con on an existing customer, use the "Refresh from rate
+ * con" button inside the customer profile.
  *
  * The form intentionally stays compact — short name, notes, parse hints,
  * etc. live in the broker profile and can be edited there after creation.
  */
 export interface NewBrokerReviewModalProps {
   initialName: string;
-  profile?:    BrokerProfile;
   accentColor?: string;
   onCancel:    () => void;
   onConfirm:   (payload: Omit<Customer, 'id'>) => Promise<void> | void;
 }
 
 export function NewBrokerReviewModal({
-  initialName, profile, accentColor = '#0369a1', onCancel, onConfirm,
+  initialName, accentColor = '#0369a1', onCancel, onConfirm,
 }: NewBrokerReviewModalProps) {
-  // Only auto-fill from the profile when its broker name matches what we
-  // were given (cleaned-suffix variations match too). Otherwise the user
-  // typed a name unrelated to the parse and we don't want to mix data.
-  const cleanedParsed = profile?.name ? cleanBrokerName(profile.name) : '';
-  const sameBroker = !!profile?.name && (
-    profile.name.toLowerCase() === initialName.toLowerCase() ||
-    cleanedParsed.toLowerCase() === initialName.toLowerCase()
-  );
-  const seed = sameBroker ? profile : undefined;
-
   const [name,                setName]                = useState(initialName);
   const [shortName,           setShortName]           = useState('');
-  const [contactName,         setContactName]         = useState(seed?.contactName         ?? '');
-  const [contactEmail,        setContactEmail]        = useState(seed?.contactEmail        ?? '');
-  const [contactPhone,        setContactPhone]        = useState(seed?.contactPhone        ?? '');
-  const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>(
-    seed?.invoiceMethod === 'email' ? 'email' : seed?.invoiceMethod === 'portal' ? 'portal' : '',
-  );
-  const [invoiceEmail,        setInvoiceEmail]        = useState(seed?.invoiceEmail        ?? '');
-  const [invoicePortal,       setInvoicePortal]       = useState(seed?.invoicePortal       ?? '');
-  const [invoiceInstructions, setInvoiceInstructions] = useState(seed?.invoiceInstructions ?? '');
+  const [contactName,         setContactName]         = useState('');
+  const [contactEmail,        setContactEmail]        = useState('');
+  const [contactPhone,        setContactPhone]        = useState('');
+  const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>('');
+  const [invoiceEmail,        setInvoiceEmail]        = useState('');
+  const [invoicePortal,       setInvoicePortal]       = useState('');
+  const [invoiceInstructions, setInvoiceInstructions] = useState('');
   const [busy, setBusy] = useState(false);
 
   const trimmedName = name.trim();
@@ -110,9 +98,7 @@ export function NewBrokerReviewModal({
                 Review new customer
               </div>
               <div className="text-xs" style={{ color: 'var(--gc-text-2)' }}>
-                {sameBroker
-                  ? 'Auto-filled from this rate-con. Edit anything below, then create.'
-                  : 'Add this customer to your directory.'}
+                Add this customer to your directory.
               </div>
             </div>
           </div>

@@ -23,12 +23,6 @@ interface RawStop {
   instructions?: string;
 }
 
-interface IncomingCustomer {
-  name:        string;
-  aliases?:    string[];
-  parseHints?: string;
-}
-
 // Two-model design with conditional escalation:
 //   • Pass 1 (Haiku): cheap full extraction. Schema includes a
 //     dateJustifications block citing where on the PDF each date came
@@ -51,18 +45,37 @@ function extractJson(text: string): Record<string, unknown> {
   return JSON.parse(match ? match[0] : text);
 }
 
-const MAX_TOKENS = 8192;
+const PASS_1_MAX_TOKENS = 8192;
+// Bumped from 2048 so multi-stop loads with 5+ corrections can fit
+// without truncation. Cost is only on output tokens actually produced,
+// so the ceiling is free.
+const PASS_2_MAX_TOKENS = 4096;
 
-/** Match the extracted broker name against the org's customer roster
- *  for post-parse customer linking. Exact normalized-name + alias
- *  match only — fuzzier matching lives client-side. */
-function matchBroker(brokerName: string, customers: IncomingCustomer[]): IncomingCustomer | undefined {
-  if (!brokerName) return undefined;
-  const lower = brokerName.toLowerCase().trim();
-  return customers.find(c =>
-    c.name.toLowerCase() === lower ||
-    (c.aliases ?? []).some(a => a.toLowerCase() === lower),
-  );
+/** Wrap an Anthropic messages.create call with exponential-backoff
+ *  retry on transient errors (429, 503, 529 overloaded). Up to 3
+ *  attempts with jittered backoff. Re-throws on non-retryable errors
+ *  or after exhausting retries — matches the pattern used in the
+ *  timeline auto-link route. */
+async function callWithRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  const MAX_ATTEMPTS = 3;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      // Anthropic SDK errors expose .status; bare fetch errors don't.
+      const status = (err as { status?: number })?.status;
+      const retryable = status === 429 || status === 503 || status === 529;
+      if (!retryable || attempt === MAX_ATTEMPTS) throw err;
+      const base = 500 * Math.pow(2, attempt - 1);   // 500, 1000, 2000
+      const jitter = Math.random() * 500;
+      const delay = base + jitter;
+      console.warn(`[parse-ratecon] ${label} attempt ${attempt} failed (${status}); retrying in ${Math.round(delay)}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
 /** Parse a naive ISO datetime into epoch millis. Returns NaN if
@@ -164,7 +177,6 @@ export async function POST(req: NextRequest) {
   let enabledFields: string[] = [];
   let customInstructions = '';
   let promptVariables: PromptVariables = DEFAULT_PROMPT_VARIABLES;
-  let customers: IncomingCustomer[] = [];
 
   try {
     ({
@@ -172,9 +184,6 @@ export async function POST(req: NextRequest) {
       enabledFields = [],
       customInstructions = '',
       promptVariables = DEFAULT_PROMPT_VARIABLES,
-      // Customer roster for post-parse name matching only — NOT
-      // injected into the prompt anymore.
-      customers = [],
     } = await req.json());
     if (!data) throw new Error('missing data');
   } catch {
@@ -192,7 +201,7 @@ export async function POST(req: NextRequest) {
     cache_control: { type: 'ephemeral' },
   };
 
-  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, []);
+  const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables);
 
   // Debug short-circuit: ?debug=1 returns the exact inputs without
   // calling the model. Useful for diffing prompt drift between orgs.
@@ -207,7 +216,6 @@ export async function POST(req: NextRequest) {
       promptVariables,
       fullPrompt: prompt,
       pdfBytesLength: data.length,
-      customerCount: customers.length,
     });
   }
 
@@ -229,12 +237,12 @@ export async function POST(req: NextRequest) {
   try {
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
     const content: ContentBlockParam[] = [docBlock, textBlock];
-    const response = await client.messages.create({
+    const response = await callWithRetry(() => client.messages.create({
       model: PASS_1_MODEL,
-      max_tokens: MAX_TOKENS,
+      max_tokens: PASS_1_MAX_TOKENS,
       temperature: 0,
       messages: [{ role: 'user', content }],
-    });
+    }), 'pass-1');
     const text = response.content[0].type === 'text' ? response.content[0].text : '';
     trace.pass1RawText = text;
     try {
@@ -282,12 +290,12 @@ export async function POST(req: NextRequest) {
       trace.correctivePrompt = correctivePrompt;
       const textBlock: TextBlockParam = { type: 'text', text: correctivePrompt };
       const content: ContentBlockParam[] = [docBlock, textBlock];
-      const response = await client.messages.create({
+      const response = await callWithRetry(() => client.messages.create({
         model: PASS_2_MODEL,
-        max_tokens: 2048,
+        max_tokens: PASS_2_MAX_TOKENS,
         temperature: 0,
         messages: [{ role: 'user', content }],
-      });
+      }), 'pass-2');
       const text = response.content[0].type === 'text' ? response.content[0].text : '';
       trace.pass2RawText = text;
       const correction = extractJson(text);
@@ -321,14 +329,9 @@ export async function POST(req: NextRequest) {
     parsed.broker = cleanBrokerName(parsed.broker);
   }
 
-  // Post-parse customer matching. Replaces what the old pass-1 broker
-  // harvest used to do — pure post-process, no model involvement.
-  let matchedCustomerName: string | undefined;
-  if (typeof parsed.broker === 'string' && customers.length > 0) {
-    const matched = matchBroker(parsed.broker, customers)
-                 ?? matchBroker(cleanBrokerName(parsed.broker), customers);
-    if (matched) matchedCustomerName = matched.name;
-  }
+  // Customer matching lives client-side in generateLoadTitle() and
+  // matchCustomer() — they already have the org's full roster in
+  // state, so passing it through the server was pure waste.
 
   // ── Enrich stops with geocoding ─────────────────────────────────────────────
   const rawStops: RawStop[] = Array.isArray(parsed.stops) ? (parsed.stops as RawStop[]) : [];
@@ -366,7 +369,6 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ...parsed,
     stops: enrichedStops,
-    matchedCustomerName,
     // Surface whether Sonnet was needed. Useful for the UI to show a
     // "AI rechecked these dates" badge and for you to see how often
     // pass 1 fails in practice.
