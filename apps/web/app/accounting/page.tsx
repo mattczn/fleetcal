@@ -50,11 +50,11 @@ import type {
 type Bucket = 'released' | 'queued' | 'invoiced' | 'paid' | 'all';
 
 const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>; tint: string; subtitle: string }> = [
-  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', subtitle: 'Ready to invoice' },
-  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea', subtitle: 'Drafts, unsent'   },
-  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8', subtitle: 'Awaiting payment' },
-  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a', subtitle: 'Closed out'       },
-  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'Everything'       },
+  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', subtitle: 'Paperwork verified · ready to invoice' },
+  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea', subtitle: 'Invoice generated · waiting to be sent' },
+  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8', subtitle: 'Invoice sent · awaiting payment'       },
+  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a', subtitle: 'Payment received'                       },
+  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'All released loads'                     },
 ];
 
 // ─── Columns ────────────────────────────────────────────────────────────
