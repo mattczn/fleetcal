@@ -56,12 +56,20 @@ interface TrailersModalProps {
 
 const TrailersModal = forwardRef<DirectoryDetailHandle, TrailersModalProps>(
 function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
-  // Auto-save on blur — no staged dirty state.
+  // Forward the inner detail handle so the DirectoryModal shell can
+  // gate cross-tab navigation against staged form changes.
+  const detailRef          = useRef<TrailerDetailHandle>(null);
+  const [, setPanelDirty]  = useState(false);
+  const [showUnsaved, setShowUnsaved] = useState(false);
+  const [saving,      setSaving]      = useState(false);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+
   useImperativeHandle(modalRef, () => ({
-    isDirty: () => false,
-    save:    () => Promise.resolve(),
-    discard: () => {},
+    isDirty: () => detailRef.current?.isDirty() ?? false,
+    save:    () => detailRef.current?.save() ?? Promise.resolve(),
+    discard: () => { detailRef.current?.discard(); },
   }), []);
+
   const { trailers: allTrailers, addTrailer, removeTrailer, hardDeleteTrailer } = useCalendarStore();
   // The trailer_categories module gates the per-trailer Category
   // field. MVP orgs with uniform fleets (all dry vans) get a
@@ -100,12 +108,53 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
     }
   };
 
-  const setSelected = (next: number) => {
-    if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
-    setSelectedRaw(next);
+  const tryNavigate = (action: () => void) => {
+    if (detailRef.current?.isDirty()) {
+      pendingActionRef.current = action;
+      setShowUnsaved(true);
+    } else {
+      action();
+    }
   };
 
-  const handleClose = () => { cleanupDraft(); onClose(); };
+  const handleUnsavedSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await detailRef.current?.save();
+      const action = pendingActionRef.current;
+      pendingActionRef.current = null;
+      setShowUnsaved(false);
+      action?.();
+    } catch (err) {
+      console.error('[TrailersModal] save failed:', err);
+      alert(`Save failed: ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const handleUnsavedDiscard = () => {
+    detailRef.current?.discard();
+    const action = pendingActionRef.current;
+    pendingActionRef.current = null;
+    setShowUnsaved(false);
+    action?.();
+  };
+  const handleUnsavedKeep = () => {
+    pendingActionRef.current = null;
+    setShowUnsaved(false);
+  };
+
+  const setSelected = (next: number) => {
+    tryNavigate(() => {
+      if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
+      setSelectedRaw(next);
+    });
+  };
+
+  const handleClose = () => {
+    tryNavigate(() => { cleanupDraft(); onClose(); });
+  };
 
   useEffect(() => {
     return () => { cleanupDraft(); };
@@ -138,6 +187,36 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
   };
 
   const selectedTrailer = trailers.find(t => t.id === selected) ?? null;
+
+  const unsavedDialog = showUnsaved && (
+    <div className="absolute inset-0 z-20 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.4)', borderRadius: 14 }}>
+      <div className="rounded-2xl p-6 space-y-4"
+        style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}>
+        <div>
+          <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Save changes?</div>
+          <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>You have unsaved changes to this trailer.</div>
+        </div>
+        <div className="flex flex-col gap-2">
+          <button onClick={() => void handleUnsavedSave()} disabled={saving}
+            className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-60"
+            style={{ background: TRAILER_ACCENT }}>
+            {saving ? 'Saving…' : 'Yes, save changes'}
+          </button>
+          <button onClick={handleUnsavedDiscard} disabled={saving}
+            className="w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+            style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'transparent' }}>
+            No, discard changes
+          </button>
+          <button onClick={handleUnsavedKeep} disabled={saving}
+            className="w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+            style={{ color: 'var(--gc-text-3)', background: 'transparent' }}>
+            Keep editing
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   const content = (
     <>
@@ -208,6 +287,8 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
             {selectedTrailer ? (
               <TrailerProfilePanel
                 key={selectedTrailer.id}
+                ref={detailRef}
+                onDirtyChange={setPanelDirty}
                 trailer={selectedTrailer}
                 onRemove={() => {
                   if (draftIdRef.current === selectedTrailer.id) draftIdRef.current = null;
@@ -251,7 +332,7 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
     </>
   );
 
-  if (embedded) return content;
+  if (embedded) return (<>{unsavedDialog}{content}</>);
 
   return (
     <div
@@ -259,12 +340,13 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
       style={{ background: 'rgba(0,0,0,0.32)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}>
       <div
-        className="flex flex-col"
+        className="flex flex-col relative"
         style={{
           background: 'var(--gc-surface)',
           width: '100%', maxWidth: 1020, height: '82vh',
           borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
         }}>
+        {unsavedDialog}
         {content}
       </div>
     </div>
@@ -328,11 +410,24 @@ function NavTrailerRow({ trailer, selected, onSelect, showCategory }: {
 
 // ─── Trailer Profile Panel ────────────────────────────────────────────────────
 
-function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
+interface TrailerProfilePanelProps {
   trailer: Trailer;
   onRemove: () => void;
   onHardDelete: () => void;
-}) {
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+/** Imperative handle returned via forwardRef — Save/Discard contract
+ *  the parent modal and the DirectoryModal shell can use to gate
+ *  cross-tab navigation while staged form changes exist. */
+export type TrailerDetailHandle = {
+  isDirty: () => boolean;
+  save:    () => Promise<void>;
+  discard: () => void;
+};
+
+const TrailerProfilePanel = forwardRef<TrailerDetailHandle, TrailerProfilePanelProps>(
+function TrailerProfilePanel({ trailer, onRemove, onHardDelete, onDirtyChange }, ref) {
   const { updateTrailer, events, assets, openEditModal } = useCalendarStore();
 
   // Details / History split — matches Trucks / Drivers / Customers.
@@ -370,7 +465,62 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
   const [motiveDraft,       setMotiveDraft]       = useState(trailer.motiveVehicleId ?? '');
   const [confirmDelete,     setConfirmDelete]     = useState(false);
 
-  const save = (updates: Partial<Omit<Trailer, 'id'>>) => updateTrailer(trailer.id, updates);
+  // Stage updates locally; commit on Save click. The legacy inline
+  // `save({...})` calls below all hit this no-op now — local state
+  // is the single source of truth. Same pattern as AssetsModal.
+  const save = (_updates: Partial<Omit<Trailer, 'id'>>) => {};
+  const realUpdateTrailer = updateTrailer;
+
+  const isDirty =
+    name              !== trailer.name                          ||
+    trailerNumber     !== (trailer.trailerNumber     ?? '')     ||
+    category          !== trailer.category                      ||
+    notes             !== (trailer.notes             ?? '')     ||
+    make              !== (trailer.make              ?? '')     ||
+    model             !== (trailer.model             ?? '')     ||
+    vin               !== (trailer.vin               ?? '')     ||
+    licensePlate      !== (trailer.licensePlate      ?? '')     ||
+    licenseState      !== (trailer.licenseState      ?? '')     ||
+    licenseExpiration !== (trailer.licenseExpiration ?? '')     ||
+    motiveVehicleId   !== (trailer.motiveVehicleId   ?? '');
+
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
+
+  const saveAll = async () => {
+    await realUpdateTrailer(trailer.id, {
+      name:              name.trim() || trailer.name,
+      trailerNumber:     trailerNumber.trim() || undefined,
+      category,
+      notes:             notes.trim() || undefined,
+      make:              make.trim() || undefined,
+      model:             model.trim() || undefined,
+      vin:               vin.trim().toUpperCase().replace(/\s+/g, '') || undefined,
+      licensePlate:      licensePlate.trim().toUpperCase() || undefined,
+      licenseState:      licenseState.trim().toUpperCase() || undefined,
+      licenseExpiration: licenseExpiration || null,
+      motiveVehicleId:   motiveVehicleId.trim() || undefined,
+    });
+  };
+
+  const discardAll = () => {
+    setName(trailer.name);
+    setTrailerNumber(trailer.trailerNumber ?? '');
+    setCategory(trailer.category);
+    setNotes(trailer.notes ?? '');
+    setMake(trailer.make ?? '');
+    setModel(trailer.model ?? '');
+    setVin(trailer.vin ?? '');
+    setLicensePlate(trailer.licensePlate ?? '');
+    setLicenseState(trailer.licenseState ?? '');
+    setLicenseExpiration(trailer.licenseExpiration ?? '');
+    setMotiveVehicleId(trailer.motiveVehicleId ?? '');
+  };
+
+  useImperativeHandle(ref, () => ({
+    isDirty: () => isDirty,
+    save:    saveAll,
+    discard: discardAll,
+  }), [isDirty, saveAll, discardAll]);
 
   const focusBorder = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     (e.currentTarget.style.borderColor = TRAILER_ACCENT);
@@ -644,7 +794,7 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
         activeTo={trailer.activeTo}
         accent={TRAILER_ACCENT}
         canEdit={canEdit}
-        onSave={(changes) => save(changes)}
+        onSave={(changes) => realUpdateTrailer(trailer.id, changes)}
       />
 
       {/* Retire — soft, stamps active_to = today */}
@@ -692,6 +842,40 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
         />
       )}
 
+      {/* Save / Discard bar — sticky at the bottom of Details when
+          any profile field is staged. Mirrors AssetsModal. */}
+      {isDirty && canEdit && (
+        <div
+          className="sticky bottom-0 -mx-8 px-8 py-4 mt-8 flex items-center gap-3 justify-end"
+          style={{
+            background: 'var(--gc-surface)',
+            borderTop: '1px solid var(--gc-border-light)',
+            boxShadow: '0 -8px 16px -8px rgba(0,0,0,0.08)',
+          }}>
+          <span className="text-xs mr-auto" style={{ color: 'var(--gc-text-3)' }}>
+            Unsaved changes
+          </span>
+          <button
+            type="button"
+            onClick={discardAll}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', background: 'transparent' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={() => void saveAll()}
+            className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
+            style={{ background: TRAILER_ACCENT }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '0.85')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+            Save changes
+          </button>
+        </div>
+      )}
+
       </>)}
 
       {view === 'history' && (
@@ -705,7 +889,7 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
       )}
     </div>
   );
-}
+});
 
 /** Two-step destructive confirm — same pattern as AssetsModal. */
 function PermanentDeleteBlock({ label, onConfirm }: {

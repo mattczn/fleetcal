@@ -181,13 +181,21 @@ interface DriversModalProps {
 
 const DriversModal = forwardRef<DirectoryDetailHandle, DriversModalProps>(
 function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
-  // Auto-save pattern — no staged dirty state to track. Expose a
-  // no-op handle so the shell's tryNavigate just runs the action.
+  // Forward the inner detail handle so the DirectoryModal shell can
+  // gate cross-tab navigation against staged form changes. Same
+  // pattern as AssetsModal.
+  const detailRef          = useRef<DriverDetailHandle>(null);
+  const [panelDirty,  setPanelDirty]  = useState(false);
+  const [showUnsaved, setShowUnsaved] = useState(false);
+  const [saving,      setSaving]      = useState(false);
+  const pendingActionRef = useRef<(() => void) | null>(null);
+
   useImperativeHandle(modalRef, () => ({
-    isDirty: () => false,
-    save:    () => Promise.resolve(),
-    discard: () => {},
+    isDirty: () => detailRef.current?.isDirty() ?? false,
+    save:    () => detailRef.current?.save() ?? Promise.resolve(),
+    discard: () => { detailRef.current?.discard(); },
   }), []);
+
   const {
     assets, drivers: allDrivers, driverPrefs, driverPrefsSecondary,
     addDriver, removeDriver, hardDeleteDriver, updateDriver, setDriverPref, setDriverPrefSecondary,
@@ -229,14 +237,58 @@ function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
     }
   };
 
+  /** Wraps a navigation intent in the unsaved-changes guard. Same
+   *  pattern as AssetsModal: if the panel reports clean, just run
+   *  the action; otherwise queue the action and show the dialog. */
+  const tryNavigate = (action: () => void) => {
+    if (detailRef.current?.isDirty()) {
+      pendingActionRef.current = action;
+      setShowUnsaved(true);
+    } else {
+      action();
+    }
+  };
+
   // Wrapper: clean up any pending draft when selection moves elsewhere.
   const setSelected = (next: number | 'asset-prefs') => {
-    if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
-    setSelectedRaw(next);
+    tryNavigate(() => {
+      if (draftIdRef.current != null && next !== draftIdRef.current) cleanupDraft();
+      setSelectedRaw(next);
+    });
   };
 
   // Modal close: drop the draft before unmounting.
-  const handleClose = () => { cleanupDraft(); onClose(); };
+  const handleClose = () => {
+    tryNavigate(() => { cleanupDraft(); onClose(); });
+  };
+
+  const handleUnsavedSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await detailRef.current?.save();
+      const action = pendingActionRef.current;
+      pendingActionRef.current = null;
+      setShowUnsaved(false);
+      action?.();
+    } catch (err) {
+      console.error('[DriversModal] save failed:', err);
+      alert(`Save failed: ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const handleUnsavedDiscard = () => {
+    detailRef.current?.discard();
+    const action = pendingActionRef.current;
+    pendingActionRef.current = null;
+    setShowUnsaved(false);
+    action?.();
+  };
+  const handleUnsavedKeep = () => {
+    pendingActionRef.current = null;
+    setShowUnsaved(false);
+  };
 
   // Safety net for unexpected unmounts.
   useEffect(() => {
@@ -286,6 +338,36 @@ function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
   const selectedDriver = typeof selected === 'number'
     ? drivers.find(d => d.id === selected) ?? null
     : null;
+
+  const unsavedDialog = showUnsaved && (
+    <div className="absolute inset-0 z-20 flex items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.4)', borderRadius: 14 }}>
+      <div className="rounded-2xl p-6 space-y-4"
+        style={{ background: 'var(--gc-surface)', boxShadow: 'var(--shadow-3)', width: 380, border: '1px solid var(--gc-border-light)' }}>
+        <div>
+          <div className="text-base font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Save changes?</div>
+          <div className="text-sm" style={{ color: 'var(--gc-text-2)' }}>You have unsaved changes to this driver.</div>
+        </div>
+        <div className="flex flex-col gap-2">
+          <button onClick={() => void handleUnsavedSave()} disabled={saving}
+            className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-60"
+            style={{ background: ACCENT }}>
+            {saving ? 'Saving…' : 'Yes, save changes'}
+          </button>
+          <button onClick={handleUnsavedDiscard} disabled={saving}
+            className="w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+            style={{ border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)', background: 'transparent' }}>
+            No, discard changes
+          </button>
+          <button onClick={handleUnsavedKeep} disabled={saving}
+            className="w-full px-4 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-60"
+            style={{ color: 'var(--gc-text-3)', background: 'transparent' }}>
+            Keep editing
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   const content = (
     <>
@@ -384,6 +466,8 @@ function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
             ) : selectedDriver ? (
               <DriverProfilePanel
                 key={selectedDriver.id}
+                ref={detailRef}
+                onDirtyChange={setPanelDirty}
                 driver={selectedDriver}
                 events={events}
                 deletedEvents={deletedEvents}
@@ -423,7 +507,7 @@ function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
     </>
   );
 
-  if (embedded) return content;
+  if (embedded) return (<>{unsavedDialog}{content}</>);
 
   return (
     <div
@@ -431,12 +515,13 @@ function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
       style={{ background: 'rgba(0,0,0,0.32)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}>
       <div
-        className="flex flex-col"
+        className="flex flex-col relative"
         style={{
           background: 'var(--gc-surface)',
           width: '100%', maxWidth: 1020, height: '82vh',
           borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
         }}>
+        {unsavedDialog}
         {content}
       </div>
     </div>
@@ -510,7 +595,7 @@ function NavDriverRow({ driver, selected, onSelect }: {
 
 // ─── Driver Profile Panel ─────────────────────────────────────────────────────
 
-function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDriver, onRemove, onHardDelete }: {
+interface DriverProfilePanelProps {
   driver: Driver;
   events: CalendarEvent[];
   deletedEvents: CalendarEvent[];
@@ -518,7 +603,29 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
   updateDriver: (id: number, updates: Partial<Omit<Driver, 'id'>>) => void;
   onRemove: () => void;
   onHardDelete: () => void;
-}) {
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+/** Imperative handle returned via forwardRef — same shape as the
+ *  AssetDetailHandle, lets DriversModal and the DirectoryModal shell
+ *  check / commit / discard staged form changes. */
+export type DriverDetailHandle = {
+  isDirty: () => boolean;
+  save:    () => Promise<void>;
+  discard: () => void;
+};
+
+const DriverProfilePanel = forwardRef<DriverDetailHandle, DriverProfilePanelProps>(
+function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDriver: realUpdateDriver, onRemove, onHardDelete, onDirtyChange }, ref) {
+  // Shadow the prop with a no-op. Every existing onBlur handler below
+  // still calls `updateDriver(driver.id, {...})` but it stages
+  // nothing — local state is the only source of truth. saveAll
+  // (below) calls realUpdateDriver once with the full payload.
+  //
+  // LifecycleEditor + the owner-op exclusion checkbox keep using
+  // realUpdateDriver directly because they shouldn't be gated by the
+  // unrelated profile-field staging — same rule as AssetsModal.
+  const updateDriver = (_id: number, _updates: Partial<Omit<Driver, 'id'>>) => {};
   const { openEditModal, orgId } = useCalendarStore();
   const { organization } = useOrganization();
   const { can: canDo } = usePermissions();
@@ -569,6 +676,76 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [payHistory,    setPayHistory]    = useState<PayrollRecord[]>([]);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  // Stage editable form fields against the driver prop. After a save,
+  // the store updates the prop and isDirty flips back to false on the
+  // next render automatically.
+  const isDirty =
+    firstName     !== (driver.firstName      ?? '') ||
+    lastName      !== (driver.lastName       ?? '') ||
+    phone         !== (driver.phone          ?? '') ||
+    email         !== (driver.email          ?? '') ||
+    notes         !== (driver.notes          ?? '') ||
+    addrStreet    !== parseAddress(driver.address).street ||
+    addrCity      !== parseAddress(driver.address).city  ||
+    addrState     !== parseAddress(driver.address).state ||
+    addrZip       !== parseAddress(driver.address).zip   ||
+    licenseNumber !== (driver.licenseNumber  ?? '') ||
+    licenseState  !== (driver.licenseState   ?? '') ||
+    licenseExp    !== (driver.licenseExp     ?? '') ||
+    medCardExp    !== (driver.medicalCardExp ?? '') ||
+    dob           !== (driver.dob            ?? '');
+
+  // Notify parent so the DriversModal main can intercept close /
+  // driver switch with an unsaved-changes dialog.
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
+
+  /** Commit every staged field in one updateDriver call. */
+  const saveAll = async () => {
+    const newAddr = joinAddress({
+      street: addrStreet, city: addrCity, state: addrState, zip: addrZip,
+    });
+    const computedName = `${firstName.trim()} ${lastName.trim()}`.trim() || driver.name;
+    await realUpdateDriver(driver.id, {
+      firstName:      firstName.trim()     || undefined,
+      lastName:       lastName.trim()      || undefined,
+      name:           computedName,
+      phone:          phone.trim()         || undefined,
+      email:          email.trim()         || undefined,
+      notes:          notes.trim()         || undefined,
+      address:        newAddr              ?? undefined,
+      licenseNumber:  licenseNumber.trim() || undefined,
+      licenseState:   licenseState.trim()  || undefined,
+      licenseExp:     licenseExp.trim()    || undefined,
+      medicalCardExp: medCardExp.trim()    || undefined,
+      dob:            dob.trim()           || undefined,
+    });
+  };
+
+  /** Snap every local field back to the driver prop. */
+  const discardAll = () => {
+    setFirstName(driver.firstName ?? '');
+    setLastName(driver.lastName ?? '');
+    setPhone(driver.phone ?? '');
+    setEmail(driver.email ?? '');
+    setNotes(driver.notes ?? '');
+    const addr = parseAddress(driver.address);
+    setAddrStreet(addr.street);
+    setAddrCity(addr.city);
+    setAddrState(addr.state);
+    setAddrZip(addr.zip);
+    setLicenseNumber(driver.licenseNumber ?? '');
+    setLicenseState(driver.licenseState ?? '');
+    setLicenseExp(driver.licenseExp ?? '');
+    setMedCardExp(driver.medicalCardExp ?? '');
+    setDob(driver.dob ?? '');
+  };
+
+  useImperativeHandle(ref, () => ({
+    isDirty: () => isDirty,
+    save:    saveAll,
+    discard: discardAll,
+  }), [isDirty, saveAll, discardAll]);
 
   useEffect(() => {
     // Skip when the role can't read /v1/payroll/records — the endpoint
@@ -1062,7 +1239,7 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
         activeTo={driver.activeTo}
         accent="#1a73e8"
         canEdit={canEdit}
-        onSave={(changes) => updateDriver(driver.id, changes)}
+        onSave={(changes) => realUpdateDriver(driver.id, changes)}
       />
 
       {/* Owner-operator flag. When true, loads driven by this driver
@@ -1079,7 +1256,7 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
           type="checkbox"
           checked={!!driver.excludeFromReports}
           disabled={!canEdit}
-          onChange={(e) => updateDriver(driver.id, { excludeFromReports: e.target.checked })}
+          onChange={(e) => realUpdateDriver(driver.id, { excludeFromReports: e.target.checked })}
           style={{ marginTop: 2, accentColor: '#1a73e8', cursor: canEdit ? 'pointer' : 'not-allowed' }}
         />
         <label htmlFor={`exclude-${driver.id}`} className="text-sm" style={{ color: 'var(--gc-text-1)', cursor: canEdit ? 'pointer' : 'not-allowed' }}>
@@ -1147,6 +1324,41 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
             ? `${loadsAttached} load${loadsAttached === 1 ? '' : 's'} attached`
             : null}
         />
+      )}
+
+      {/* Save / Discard bar — sticky at the bottom of the Details
+          view when any profile field has been edited. Same shape
+          as AssetsModal. */}
+      {isDirty && canEdit && (
+        <div
+          className="sticky bottom-0 -mx-8 px-8 py-4 mt-8 flex items-center gap-3 justify-end"
+          style={{
+            background: 'var(--gc-surface)',
+            borderTop: '1px solid var(--gc-border-light)',
+            boxShadow: '0 -8px 16px -8px rgba(0,0,0,0.08)',
+          }}>
+          <span className="text-xs mr-auto" style={{ color: 'var(--gc-text-3)' }}>
+            Unsaved changes
+          </span>
+          <button
+            type="button"
+            onClick={discardAll}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)', background: 'transparent' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={() => void saveAll()}
+            className="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
+            style={{ background: ACCENT }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = ACCENT)}>
+            Save changes
+          </button>
+        </div>
       )}
 
       </>)}
@@ -1225,7 +1437,7 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
       )}
     </div>
   );
-}
+});
 
 /** Two-step destructive confirm — same component as the one in
  *  AssetsModal. Type the entity's name, then click to fire. */
