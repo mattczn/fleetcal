@@ -147,6 +147,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [showFlag, setShowFlag] = useState(false);
   const [busy, setBusy] = useState(false);
   const [resolved, setResolved] = useState<Set<string>>(new Set());
+  // True when the user clicked Release on a load that's missing required
+  // docs. The confirm dialog gates the actual release so users get a
+  // styled "are you sure?" instead of a native browser confirm popup.
+  const [releaseConfirmOpen, setReleaseConfirmOpen] = useState(false);
 
   // Bound idx whenever the queue changes underneath us.
   const safeIdx = Math.min(Math.max(idx, 0), Math.max(loads.length - 1, 0));
@@ -458,10 +462,17 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
     // Required-doc gate runs inside the click handler — putting it in
     // the button's `disabled` prop fires the confirm() on every render.
+    // The dialog handles the actual proceed when the user accepts;
+    // bail here so we don't release before they answer.
     if (!requiredPass) {
-      const ok = window.confirm('Required docs are missing for this load. Release anyway?');
-      if (!ok) return;
+      setReleaseConfirmOpen(true);
+      return;
     }
+    await performRelease();
+  }
+
+  async function performRelease() {
+    if (!current) return;
     setBusy(true);
     try {
       const targetId = (current as Load).loadId ?? current.id;
@@ -2176,6 +2187,24 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             const id = deleteTarget.id;
             setDeleteTarget(null);
             void handleDeleteDoc(id);
+          }}
+        />
+      )}
+
+      {releaseConfirmOpen && (
+        <ConfirmDialog
+          title="Required docs missing"
+          message="One or more required documents are missing for this load. Releasing now means the broker will be invoiced without them attached."
+          confirmLabel="Release without Required Docs"
+          cancelLabel="Cancel"
+          destructive
+          // Topmost — sits above the queue panel itself so users can't
+          // accidentally interact with anything beneath the warning.
+          zIndex={zIndex + 60}
+          onCancel={() => setReleaseConfirmOpen(false)}
+          onConfirm={() => {
+            setReleaseConfirmOpen(false);
+            void performRelease();
           }}
         />
       )}
