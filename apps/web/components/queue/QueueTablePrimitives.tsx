@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState, forwardRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Check, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
   User as UserIcon, Truck as TruckIcon,
@@ -219,8 +220,11 @@ export function RequiredDocBadge({
  * 80) and disappears immediately on leave.
  *
  * Positioning is `position: fixed` with coords derived from the
- * trigger's bounding rect, so the tooltip escapes any table/cell
- * overflow without needing a portal.
+ * trigger's bounding rect. The tooltip body is rendered through a
+ * portal into document.body so it joins the topmost stacking context
+ * — without the portal, sticky table headers (zIndex: 2-3 inside
+ * their own stacking context) would clip the tooltip even though
+ * z-[1000] would normally beat them.
  */
 export function FastTooltip({
   text, children, delay = 80,
@@ -232,7 +236,13 @@ export function FastTooltip({
 }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
   const timerRef = useRef<number | null>(null);
+
+  // Wait for client-side mount before reaching for document.body —
+  // SSR would crash on `createPortal(_, document.body)` during the
+  // first render pass.
+  useEffect(() => { setMounted(true); }, []);
 
   const show = () => {
     if (timerRef.current != null) window.clearTimeout(timerRef.current);
@@ -250,28 +260,35 @@ export function FastTooltip({
     setPos(null);
   };
 
+  const tooltipNode = pos && (
+    <div
+      className="fixed px-2 py-1 rounded-md pointer-events-none whitespace-nowrap"
+      style={{
+        top:        pos.top,
+        left:       pos.left,
+        transform:  'translate(-50%, -100%)',
+        background: 'rgba(32, 33, 36, 0.94)',
+        color:      '#fff',
+        fontSize:   11,
+        fontWeight: 600,
+        boxShadow:  '0 4px 12px rgba(0,0,0,0.18)',
+        // Inline zIndex so the portal target body's stacking context
+        // doesn't pin us behind any z-[1000] modal that happens to be
+        // open. 10000 sits above ConfirmDialog (z-260) and well above
+        // the OpsTable sticky chrome.
+        zIndex:     10_000,
+      }}
+    >
+      {text}
+    </div>
+  );
+
   return (
     <>
       <span ref={triggerRef} onMouseEnter={show} onMouseLeave={hide} className="inline-flex">
         {children}
       </span>
-      {pos && (
-        <div
-          className="fixed z-[200] px-2 py-1 rounded-md pointer-events-none whitespace-nowrap"
-          style={{
-            top:        pos.top,
-            left:       pos.left,
-            transform:  'translate(-50%, -100%)',
-            background: 'rgba(32, 33, 36, 0.94)',
-            color:      '#fff',
-            fontSize:   11,
-            fontWeight: 600,
-            boxShadow:  '0 4px 12px rgba(0,0,0,0.18)',
-          }}
-        >
-          {text}
-        </div>
-      )}
+      {mounted && tooltipNode && createPortal(tooltipNode, document.body)}
     </>
   );
 }
