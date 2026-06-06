@@ -46,6 +46,7 @@ export type OrgModule =
   | "dispatch_board"     // gates the real-time Command Center board + the follow-up modal
   | "custom_documents"   // gates document-type customization in settings
   | "team_roles"         // gates multi-role / multi-dispatcher team management (Settings → Dispatchers + Role Permissions). OFF for MVP — every team member is an owner/admin to keep onboarding simple.
+  | "trailer_categories" // gates the per-trailer Category field (Swing/Roll Up/Reefer/Flat Bed/Other). Off for MVP — most 1-14 truck carriers have a uniform fleet (all dry vans), so the category dropdown is noise. Curzon flips on for their mixed fleet.
   | "relay_advanced";    // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
 
 export const ORG_MODULES: readonly OrgModule[] = [
@@ -61,6 +62,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "dispatch_board",
   "custom_documents",
   "team_roles",
+  "trailer_categories",
   "relay_advanced",
 ] as const;
 
@@ -79,6 +81,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   dispatch_board:     "Command Center",
   custom_documents:   "Custom document types",
   team_roles:         "Multi-role team management",
+  trailer_categories: "Trailer categories",
   relay_advanced:     "Relay handoff documentation",
 };
 
@@ -96,6 +99,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   dispatch_board:     "Real-time Command Center board for active dispatch with quick-action shortcuts and follow-up tasks.",
   custom_documents:   "Define your own document types (custom POD variants, broker-specific paperwork) for upload + tagging.",
   team_roles:         "Manage multi-role teams with distinct dispatcher accounts + customize per-role permissions. Without this, every team member is an admin.",
+  trailer_categories: "Per-trailer category labels (Swing, Roll Up, Reefer, Flat Bed, Other). Useful for mixed fleets; most uniform-fleet carriers can leave this off.",
   relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
 };
 
@@ -136,7 +140,8 @@ export function isModuleEnabled(
 export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   | "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
   | "motive_integration" | "trailers" | "performance" | "driver_app"
-  | "dispatch_board" | "custom_documents" | "team_roles" | "relay_advanced"
+  | "dispatch_board" | "custom_documents" | "team_roles"
+  | "trailer_categories" | "relay_advanced"
 >> = {
   // Pre-launch core modules
   // - closeout / accounting / payroll: core to the rate-con-to-paid
@@ -162,5 +167,9 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   dispatch_board:     false,
   custom_documents:   false,
   team_roles:         false,
+  // Trailer categories: OFF for MVP. Most small carriers run a uniform
+  // fleet (all dry vans), so the category dropdown is dead UI. Mixed
+  // fleets like Curzon flip this on per-org from Settings → Modules.
+  trailer_categories: false,
   relay_advanced:     false,
 };

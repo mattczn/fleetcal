@@ -49,6 +49,13 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
   initialTrailerId?: number;
 }) {
   const { trailers: allTrailers, addTrailer, removeTrailer, hardDeleteTrailer } = useCalendarStore();
+  // The trailer_categories module gates the per-trailer Category
+  // field. MVP orgs with uniform fleets (all dry vans) get a
+  // simpler form without the dropdown; Curzon-style mixed fleets
+  // flip it on. When off, new trailers silently default to 'Other'
+  // so the DB CHECK constraint stays satisfied.
+  const { enabled: moduleEnabled } = useModules();
+  const showCategory = moduleEnabled('trailer_categories');
 
   // Sort retired trailers to the bottom so the directory leads with
   // everything currently in service.
@@ -98,7 +105,12 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
     try {
       const newId = await addTrailer({
         name:     'New trailer',
-        category: TRAILER_CATEGORIES[0],
+        // Default category: when the categories module is on, lead
+        // with 'Swing' (the most common starting point for the
+        // current Curzon use). When off, pick 'Other' — the form
+        // hides the field entirely and 'Other' reads as
+        // "uncategorized" if categories ever get turned back on.
+        category: showCategory ? TRAILER_CATEGORIES[0] : 'Other',
         // Match AssetsModal default — historical reports stay clean.
         activeFrom: '2026-01-01',
       });
@@ -181,6 +193,7 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
                   trailer={t}
                   selected={selected === t.id}
                   onSelect={() => setSelected(t.id)}
+                  showCategory={showCategory}
                 />
               ))}
             </div>
@@ -236,10 +249,11 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
 
 // ─── Nav Trailer Row ──────────────────────────────────────────────────────────
 
-function NavTrailerRow({ trailer, selected, onSelect }: {
+function NavTrailerRow({ trailer, selected, onSelect, showCategory }: {
   trailer: Trailer;
   selected: boolean;
   onSelect: () => void;
+  showCategory: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   return (
@@ -278,7 +292,7 @@ function NavTrailerRow({ trailer, selected, onSelect }: {
         </div>
         {trailer.trailerNumber && (
           <div className="text-[11px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-            #{trailer.trailerNumber} · {trailer.category}
+            #{trailer.trailerNumber}{showCategory ? ` · ${trailer.category}` : ''}
           </div>
         )}
       </div>
@@ -302,6 +316,10 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
   // any ELD plumbing.
   const { enabled: moduleEnabled } = useModules();
   const showMotiveField = moduleEnabled('motive_integration');
+  // Trailer categories — same gating rationale as the modal entry
+  // point. When off, the Category dropdown disappears from the
+  // profile form AND from the small header sub-line under the name.
+  const showCategory    = moduleEnabled('trailer_categories');
 
   const [name,            setName]            = useState(trailer.name);
   const [trailerNumber,   setTrailerNumber]   = useState(trailer.trailerNumber ?? '');
@@ -334,9 +352,11 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
           <div className="text-xl font-semibold" style={{ color: 'var(--gc-text-1)' }}>
             {trailer.name}{trailer.trailerNumber ? ` #${trailer.trailerNumber}` : ''}
           </div>
-          <div className="text-sm mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-            {trailer.category}
-          </div>
+          {showCategory && (
+            <div className="text-sm mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+              {trailer.category}
+            </div>
+          )}
         </div>
       </div>
 
@@ -382,22 +402,26 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
           </PField>
         </div>
 
-        {/* Category */}
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <PField label="Category">
-            <select
-              value={category}
-              onChange={e => {
-                const v = e.target.value as TrailerCategory;
-                setCategory(v);
-                save({ category: v });
-              }}
-              style={{ ...P_INPUT, cursor: 'pointer', height: 42, padding: '0 12px' }}
-              onFocus={focusBorder} onBlur={blurBorder}>
-              {TRAILER_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </PField>
-        </div>
+        {/* Category — gated on trailer_categories module. Hidden for
+            MVP orgs with uniform fleets; visible for mixed fleets
+            (Curzon) that need the per-trailer label. */}
+        {showCategory && (
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <PField label="Category">
+              <select
+                value={category}
+                onChange={e => {
+                  const v = e.target.value as TrailerCategory;
+                  setCategory(v);
+                  save({ category: v });
+                }}
+                style={{ ...P_INPUT, cursor: 'pointer', height: 42, padding: '0 12px' }}
+                onFocus={focusBorder} onBlur={blurBorder}>
+                {TRAILER_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </PField>
+          </div>
+        )}
 
         {/* Notes */}
         <PField label="Notes">
