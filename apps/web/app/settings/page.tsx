@@ -3982,7 +3982,17 @@ function TrailersPanel() {
     if (!orgId) { setSaveError('Not connected — reload the page and try again.'); return; }
     setSaving(true); setSaveError('');
     try {
-      await addTrailer({ name, trailerNumber: newNumber.trim() || undefined, category: newCategory, notes: newNotes.trim() || undefined, motiveVehicleId: newMotive.trim() || undefined });
+      await addTrailer({
+        name,
+        trailerNumber:   newNumber.trim() || undefined,
+        category:        newCategory,
+        notes:           newNotes.trim() || undefined,
+        motiveVehicleId: newMotive.trim() || undefined,
+        // Match the AssetsModal/DriversModal/TrailersModal convention:
+        // pin new trailers to the org's records-start date so historical
+        // reports stay clean across all fleet entities.
+        activeFrom:      '2026-01-01',
+      });
       setNewName(''); setNewNumber(''); setNewCategory('Swing'); setNewNotes(''); setNewMotive('');
       setAdding(false);
     } catch (err) {
