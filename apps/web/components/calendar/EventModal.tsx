@@ -117,8 +117,19 @@ function CopyLabelBtn({ value }: { value: string }) {
   return (
     <button type="button"
       onClick={() => { navigator.clipboard.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
-      style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, cursor: 'pointer', border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: copied ? '#15803d' : 'var(--gc-text-3)', transition: 'color 120ms' }}>
-      {copied ? '✓ Copied' : 'Copy'}
+      title={copied ? 'Copied!' : 'Copy'}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 20, height: 20, borderRadius: 4, marginLeft: 4,
+        cursor: 'pointer',
+        border: '1px solid var(--gc-border)',
+        background: 'var(--gc-bg)',
+        color: copied ? '#15803d' : 'var(--gc-text-3)',
+        transition: 'color 120ms, background 120ms',
+      }}
+      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-bg)'; }}>
+      {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
     </button>
   );
 }
