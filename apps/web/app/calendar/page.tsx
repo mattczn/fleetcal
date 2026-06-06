@@ -9,7 +9,6 @@ import EventModal from '@/components/calendar/EventModal';
 import BatchNotification from '@/components/calendar/BatchNotification';
 import DataLoader from '@/components/DataLoader';
 import OnboardingController from '@/components/onboarding/OnboardingController';
-import AssistantChat from '@/components/AssistantChat';
 import EldSync from '@/components/EldSync';
 import RealtimeSync from '@/components/RealtimeSync';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -45,7 +44,6 @@ export default function CalendarPage() {
       <EventModal />
       <BatchNotification />
       <OnboardingController />
-      <AssistantChat />
     </div>
   );
 }
