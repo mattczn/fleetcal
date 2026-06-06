@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MapPin, Loader2, RefreshCw, Truck, Activity } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
+import { useModules } from '@/lib/useModules';
 import { GUTTER_W } from '@/lib/time-utils';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import AssetDetailModal from './AssetDetailModal';
@@ -98,6 +99,15 @@ export default function CalendarHeader() {
 
   const hasMotiveAssets = visibleAssets.some(a => !!a.motiveVehicleId);
   const { locations, loading, lastFetched, refresh } = useMotiveLocations();
+
+  // AssetDetailModal is built around Motive data — live location +
+  // movement history. Without the motive_integration module the
+  // modal would open empty, so on MVP we suppress both the header
+  // click affordance and the under-name location pill. The button
+  // becomes a static div so there's no hover/cursor signal that
+  // implies it's actionable.
+  const { enabled: moduleEnabled } = useModules();
+  const motiveOn = moduleEnabled('motive_integration');
 
   const [detailPanel, setDetailPanel] = useState<{ asset: Asset; location: MotiveLocation | null } | null>(null);
 
@@ -212,18 +222,8 @@ export default function CalendarHeader() {
               const showUnit    = rw >= 90;
               const iconSize    = isVertical ? 18 : 28;
               const unitLabel   = asset.unit ? `#${asset.unit}` : asset.type;
-              return (
-                <button
-                  className={
-                    isVertical
-                      ? "flex flex-col items-center gap-0.5 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
-                      : "flex items-center gap-2 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
-                  }
-                  onClick={() => setDetailPanel({ asset, location: loc ?? null })}
-                  title={`${asset.name}${asset.unit ? ` · #${asset.unit}` : ""} — View location + movement history`}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                >
+              const innerBlock = (
+                <>
                   <Truck size={iconSize} style={{ color: asset.color, flexShrink: 0 }} />
                   <div
                     className={
@@ -248,6 +248,30 @@ export default function CalendarHeader() {
                       </span>
                     )}
                   </div>
+                </>
+              );
+              const layoutClass = isVertical
+                ? "flex flex-col items-center gap-0.5 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors"
+                : "flex items-center gap-2 min-w-0 max-w-full rounded px-1.5 py-1 transition-colors";
+              // Without Motive, AssetDetailModal would render empty —
+              // so swap the button for a non-interactive div so there's
+              // no hover hint or cursor signal implying clickability.
+              if (!motiveOn) {
+                return (
+                  <div className={layoutClass}>
+                    {innerBlock}
+                  </div>
+                );
+              }
+              return (
+                <button
+                  className={layoutClass}
+                  onClick={() => setDetailPanel({ asset, location: loc ?? null })}
+                  title={`${asset.name}${asset.unit ? ` · #${asset.unit}` : ""} — View location + movement history`}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {innerBlock}
                 </button>
               );
             })()}
