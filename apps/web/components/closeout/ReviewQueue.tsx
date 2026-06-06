@@ -3354,21 +3354,6 @@ function DocSelectionDialog({
                         </span>
                       )}
 
-                      {/* Primary rate-con badge — only on the doc whose
-                          storage_path matches loads.rate_con_pdf. Same
-                          pill recipe as the Invoice badge so they read
-                          as a family. */}
-                      {d.kind === 'rate_con' && d.id === primaryRateConId && (
-                        <span className="flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
-                          style={{
-                            background: '#dcfce7', color: '#166534',
-                            border: '1px solid #86efac', borderRadius: 999,
-                          }}
-                          title="This rate-con is the one the invoice packet uses">
-                          <CheckCircle2 size={11} /> Primary
-                        </span>
-                      )}
-
                       {/* Filename — inline editable in manageMode rename
                           state; otherwise a click on the row toggles the
                           checkbox via label-for. In manage mode we
@@ -3432,6 +3417,21 @@ function DocSelectionDialog({
                               is auto-mirrored on every upload), so
                               giving the user a toggle here would imply
                               control they don't actually have. */}
+                          {/* Primary rate-con badge — same slot as the
+                              Make Primary button so the chip sits at
+                              the far right, inline with the Invoice
+                              pill on POD/BOL rows. Reads as "this is
+                              the one the invoice packet uses." */}
+                          {d.kind === 'rate_con' && d.id === primaryRateConId && (
+                            <span className="flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                              style={{
+                                background: '#dcfce7', color: '#166534',
+                                border: '1px solid #86efac', borderRadius: 999,
+                              }}
+                              title="This rate-con is the one the invoice packet uses">
+                              <CheckCircle2 size={11} /> Primary
+                            </span>
+                          )}
                           {/* Make Primary — only on non-primary
                               rate-cons. Demotes whichever rate-con
                               is currently primary by mirroring
