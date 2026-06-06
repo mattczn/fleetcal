@@ -1318,7 +1318,7 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
   const has = count > 0;
   return (
     <button onClick={e => { e.stopPropagation(); onOpen(); }}
-      className="rounded-full p-1 transition-colors relative"
+      className="rounded-full p-1.5 transition-colors relative"
       title={has ? `${count} internal note${count !== 1 ? 's' : ''}` : 'Add internal note'}
       style={{
         background: has ? '#dbeafe' : 'transparent',
@@ -1326,24 +1326,29 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
         color:      has ? '#1a73e8' : 'var(--gc-text-3)',
         overflow:   'visible',
       }}>
-      <MessageSquare size={11} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
+      <MessageSquare size={12} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
       {has && (
         <span
-          className="absolute text-[9px] font-bold rounded-full tabular-nums flex items-center justify-center"
+          className="absolute text-[9.5px] font-bold rounded-full tabular-nums flex items-center justify-center"
           style={{
-            // Anchor close to the icon's top-right corner instead of
-            // popping the badge 5px outside the button — at -5 the
-            // badge clears the row's vertical bounds when the row
-            // sits at the top of the OpsTable viewport and gets
-            // clipped by the body's overflow.
-            top:        -3,
-            right:      -3,
-            minWidth:   13,
-            height:     13,
+            // Anchor INSIDE the button's top-right corner so the badge
+            // can never clip the row's vertical bounds. Earlier
+            // negative offsets popped the badge 3-5px above the
+            // button — fine in isolation, but the first row of the
+            // OpsTable sits at the top of the body's overflow:auto
+            // viewport, which would clip anything spilling above.
+            // The button's p-1.5 padding leaves enough room for the
+            // 14px badge to overlap the icon's top-right corner
+            // without losing legibility, and the white ring keeps
+            // the badge distinct from the button background.
+            top:        0,
+            right:      0,
+            minWidth:   14,
+            height:     14,
             padding:    '0 3px',
             background: '#1a73e8',
             color:      '#fff',
-            boxShadow:  '0 0 0 2px var(--gc-surface)',
+            boxShadow:  '0 0 0 1.5px var(--gc-surface)',
             lineHeight: 1,
           }}>
           {count > 9 ? '9+' : count}
