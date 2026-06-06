@@ -1868,22 +1868,32 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 etc. with their amounts so the dispatcher knows what
                 support docs they're verifying against. */}
             {(current.accessorials ?? []).length > 0 && (
-              <div className="shrink-0 px-4 py-3" style={{ background: '#fef9c3', borderBottom: '1px solid #fde68a' }}>
-                <div className="text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#854d0e' }}>
+              <div className="shrink-0 px-4 py-3"
+                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                <div className="text-[11px] font-bold uppercase tracking-wider mb-1.5"
+                  style={{ color: 'var(--gc-text-3)' }}>
                   Accessorials ({(current.accessorials ?? []).length})
                 </div>
                 <ul className="space-y-1">
-                  {(current.accessorials ?? []).map((a, i) => (
-                    <li key={i} className="flex items-center justify-between text-[12px]">
-                      <span style={{ color: '#78350f' }}>
-                        {ACCESSORIAL_LABEL[a.category] ?? a.category}
-                        {a.description && <span className="ml-1" style={{ color: '#a16207', fontSize: 11 }}>· {a.description}</span>}
-                      </span>
-                      <span className="font-semibold tabular-nums" style={{ color: '#78350f' }}>
-                        {a.amount != null ? moneyFmt.format(a.amount) : '—'}
-                      </span>
-                    </li>
-                  ))}
+                  {(current.accessorials ?? []).map((a, i) => {
+                    const status = (a as { status?: string }).status;
+                    return (
+                      <li key={i} className="flex items-center justify-between gap-2 text-[12px]">
+                        <span className="min-w-0 truncate" style={{ color: 'var(--gc-text-1)' }}>
+                          {ACCESSORIAL_LABEL[a.category] ?? a.category}
+                          {a.description && (
+                            <span className="ml-1" style={{ color: 'var(--gc-text-3)', fontSize: 11 }}>· {a.description}</span>
+                          )}
+                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {status && <AccessorialStatusPill status={status} />}
+                          <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                            {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}
@@ -2822,6 +2832,29 @@ function fmtMetaDate(iso: string | undefined): string {
 
 function Sep() {
   return <span aria-hidden="true" style={{ color: 'var(--gc-text-3)', opacity: 0.4 }}>·</span>;
+}
+
+/** Compact pill for an accessorial's status (requested / approved /
+ *  denied). Matches the doc-row Primary / Invoice pill recipe so the
+ *  status reads as one of the row-level state badges. */
+function AccessorialStatusPill({ status }: { status: string }) {
+  const tone = (() => {
+    switch (status) {
+      case 'approved':  return { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Approved'  };
+      case 'denied':    return { bg: '#fee2e2', fg: '#991b1b', border: '#fca5a5', label: 'Denied'    };
+      case 'requested': return { bg: '#fef3c7', fg: '#92400e', border: '#fde68a', label: 'Requested' };
+      default:          return { bg: 'var(--gc-bg)', fg: 'var(--gc-text-3)', border: 'var(--gc-border)', label: status };
+    }
+  })();
+  return (
+    <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5"
+      style={{
+        background: tone.bg, color: tone.fg,
+        border: `1px solid ${tone.border}`, borderRadius: 999,
+      }}>
+      {tone.label}
+    </span>
+  );
 }
 
 /** Inline copy-to-clipboard for the load number; mirrors the table's
