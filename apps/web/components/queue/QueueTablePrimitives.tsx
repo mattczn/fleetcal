@@ -357,6 +357,11 @@ export function AccessorialsCell({ items }: { items?: AccessorialItem[] }) {
   const sum = list.reduce((s, a) => s + (a.amount ?? 0), 0);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [popPos, setPopPos] = useState<{ top: number; right: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  // SSR safety — createPortal needs document.body, which doesn't
+  // exist during the server pass.
+  useEffect(() => { setMounted(true); }, []);
 
   if (count === 0) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
 
@@ -365,6 +370,31 @@ export function AccessorialsCell({ items }: { items?: AccessorialItem[] }) {
     if (!r) return;
     setPopPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
   };
+
+  // The popover renders through a portal into document.body for the
+  // same reason FastTooltip does — OpsTable sticky cells create their
+  // own stacking contexts (z-index 2-3), and a child popover with
+  // z-[100] only ranks within its parent context. The visual symptom
+  // was a "transparent" popover with the underlying table cells
+  // showing through; really the popover was being painted under
+  // sibling sticky cells. Portal escapes the trap and the explicit
+  // z-index sits above ConfirmDialog (260) and everything else.
+  const popoverNode = popPos && (
+    <div
+      className="fixed min-w-[260px] rounded-lg p-2.5 text-left pointer-events-none"
+      style={{
+        top:        popPos.top,
+        right:      popPos.right,
+        background: '#ffffff',
+        border:     '1px solid var(--gc-border)',
+        boxShadow:  '0 8px 24px rgba(0,0,0,0.18)',
+        zIndex:     10_000,
+      }}
+    >
+      {/* inner content set below to keep the diff small */}
+      <PopoverContents list={list} sum={sum} />
+    </div>
+  );
 
   return (
     <>
@@ -379,60 +409,58 @@ export function AccessorialsCell({ items }: { items?: AccessorialItem[] }) {
           {count} item{count !== 1 ? 's' : ''}
         </div>
       </span>
-      {popPos && (
-        <div
-          className="fixed z-[100] min-w-[260px] rounded-lg p-2.5 text-left pointer-events-none"
-          style={{
-            top:        popPos.top,
-            right:      popPos.right,
-            background: 'var(--gc-surface)',
-            border:     '1px solid var(--gc-border)',
-            boxShadow:  '0 8px 24px rgba(0,0,0,0.12)',
-          }}
-        >
-          <ul className="space-y-1">
-            {list.map((a, i) => {
-              const status = a.status ?? 'requested';
-              const statusTint =
-                status === 'approved' ? { fg: '#15803d', label: 'Approved' } :
-                status === 'denied'   ? { fg: '#991b1b', label: 'Denied'   } :
-                                        { fg: '#92400e', label: 'Pending'  };
-              return (
-                <li key={a.id ?? i} className="flex items-start justify-between gap-3 text-[12px]">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-                        {ACCESSORIAL_LABEL[a.category] ?? a.category}
-                      </span>
-                      <span
-                        className="text-[9.5px] font-bold uppercase tracking-wider"
-                        style={{ color: statusTint.fg }}
-                      >
-                        {statusTint.label}
-                      </span>
-                    </div>
-                    {a.description && (
-                      <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                        {a.description}
-                      </div>
-                    )}
-                  </div>
-                  <span className="tabular-nums font-semibold shrink-0" style={{ color: 'var(--gc-text-1)' }}>
-                    {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+      {mounted && popoverNode && createPortal(popoverNode, document.body)}
+    </>
+  );
+}
+
+/** Internal — renders the list + total inside the AccessorialsCell
+ *  popover. Split out so the parent component's portal wiring stays
+ *  small and the children read top-to-bottom. */
+function PopoverContents({ list, sum }: { list: AccessorialItem[]; sum: number }) {
+  return (
+    <>
+      <ul className="space-y-1">
+        {list.map((a, i) => {
+          const status = a.status ?? 'requested';
+          const statusTint =
+            status === 'approved' ? { fg: '#15803d', label: 'Approved' } :
+            status === 'denied'   ? { fg: '#991b1b', label: 'Denied'   } :
+                                    { fg: '#92400e', label: 'Pending'  };
+          return (
+            <li key={a.id ?? i} className="flex items-start justify-between gap-3 text-[12px]">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                    {ACCESSORIAL_LABEL[a.category] ?? a.category}
                   </span>
-                </li>
-              );
-            })}
-          </ul>
-          <div
-            className="mt-2 pt-2 flex justify-between text-[11.5px] font-bold"
-            style={{ borderTop: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}
-          >
-            <span>Total</span>
-            <span className="tabular-nums">{moneyFmt.format(sum)}</span>
-          </div>
-        </div>
-      )}
+                  <span
+                    className="text-[9.5px] font-bold uppercase tracking-wider"
+                    style={{ color: statusTint.fg }}
+                  >
+                    {statusTint.label}
+                  </span>
+                </div>
+                {a.description && (
+                  <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                    {a.description}
+                  </div>
+                )}
+              </div>
+              <span className="tabular-nums font-semibold shrink-0" style={{ color: 'var(--gc-text-1)' }}>
+                {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <div
+        className="mt-2 pt-2 flex justify-between text-[11.5px] font-bold"
+        style={{ borderTop: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}
+      >
+        <span>Total</span>
+        <span className="tabular-nums">{moneyFmt.format(sum)}</span>
+      </div>
     </>
   );
 }

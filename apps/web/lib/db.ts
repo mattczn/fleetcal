@@ -88,12 +88,27 @@ export async function fetchTrailers(_orgId: string): Promise<Trailer[]> {
 
 export async function createTrailer(_orgId: string, t: Omit<Trailer, 'id'>, _sortOrder: number): Promise<Trailer | null> {
   try {
+    // Forward every wire-shape field so newly-added Trailer fields
+    // don't get silently dropped by this shim. Previously this
+    // forwarded only 5 fields (name/number/category/notes/motiveId),
+    // which meant the caller-provided activeFrom ('2026-01-01') +
+    // the new vehicle details (make/model/vin/plate/state/exp) all
+    // hit the API as undefined — the server then fell back to
+    // todayUtcDateKey() for activeFrom and NULL for everything else.
     const { trailer } = await railway.createTrailer({
-      name:            t.name,
-      trailerNumber:   t.trailerNumber  ?? null,
-      category:        t.category,
-      notes:           t.notes          ?? null,
-      motiveVehicleId: t.motiveVehicleId ?? null,
+      name:               t.name,
+      trailerNumber:      t.trailerNumber      ?? null,
+      category:           t.category,
+      notes:              t.notes              ?? null,
+      motiveVehicleId:    t.motiveVehicleId    ?? null,
+      make:               t.make               ?? null,
+      model:              t.model              ?? null,
+      vin:                t.vin                ?? null,
+      licensePlate:       t.licensePlate       ?? null,
+      licenseState:       t.licenseState       ?? null,
+      licenseExpiration:  t.licenseExpiration  ?? null,
+      activeFrom:         t.activeFrom,
+      activeTo:           t.activeTo           ?? null,
     });
     return trailer;
   } catch (err) { console.error('createTrailer:', err); return null; }
