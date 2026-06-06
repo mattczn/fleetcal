@@ -140,6 +140,20 @@ function isPdfDocFn(d: LoadDocument): boolean {
   return (d.mimeType ?? '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(d.fileName);
 }
 
+/** Merged docs get "_MERGED" inserted before the extension by
+ *  mergeDocsToPdf's post-upload rename. Recognize them from the
+ *  filename so the sidebar kind chip can append "Merged". */
+function isMergedDocFn(d: LoadDocument): boolean {
+  return /_MERGED(?:\.[^.]+)?$/i.test(d.fileName);
+}
+
+/** Renders the side-panel + middle-viewer kind chip text. Appends
+ *  " Merged" when the doc came out of Merge by Type / manual merge,
+ *  so the dispatcher can spot the merged copy at a glance. */
+function kindChipLabel(d: LoadDocument, baseLabel: string): string {
+  return isMergedDocFn(d) ? `${baseLabel} Merged` : baseLabel;
+}
+
 function ageDays(iso: string): number {
   const t = new Date(iso).getTime();
   if (isNaN(t)) return 0;
@@ -1633,8 +1647,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   // matching the right sidebar list's row labels.
                   // Bare kind in the toolbar too — same call as the
                   // side-panel rows. "POD 1 / POD 2" numbering implied
-                  // an ordering the user didn't intend.
-                  const kindLabel     = KIND_LABEL[active.kind] ?? active.kind;
+                  // an ordering the user didn't intend. Suffix with
+                  // " Merged" when the doc came out of the merge engine.
+                  const kindLabel     = kindChipLabel(active, KIND_LABEL[active.kind] ?? active.kind);
                   return (
                     <div className="flex items-center gap-2 min-w-0">
                       {/* Pill chip + 13px bold filename — same recipe
@@ -1910,7 +1925,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                       // matching the default left-viewer state.
                       const active   = activeRateConId === d.id
                                      || (activeRateConId === null && isVirtual);
-                      const rowKindLabel  = KIND_LABEL[d.kind] ?? d.kind;
+                      // Append " Merged" when the doc's fileName has
+                      // _MERGED inserted (output of the merge engine)
+                      // so dispatchers can spot the merged copy.
+                      const rowKindLabel  = kindChipLabel(d, KIND_LABEL[d.kind] ?? d.kind);
                       return (
                         <div key={d.id}
                           className="group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors cursor-pointer"
@@ -1993,11 +2011,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                   const tint     = KIND_TINT[d.kind] ?? KIND_TINT.other;
                   const active   = i === activeDocIdx;
                   const included = includedDocIds.has(d.id);
-                  // Row label = bare kind ("POD"). We used to suffix
-                  // "N" when 2+ docs shared a kind ("POD 1", "POD 2"),
-                  // but the numbering implied an order/step the user
-                  // didn't intend — flatten to the bare kind.
-                  const rowKindLabel  = KIND_LABEL[d.kind] ?? d.kind;
+                  // Bare kind ("POD") + a " Merged" suffix when the
+                  // fileName carries the _MERGED tag so the merged
+                  // copy is identifiable at a glance.
+                  const rowKindLabel  = kindChipLabel(d, KIND_LABEL[d.kind] ?? d.kind);
                   return (
                     <div key={d.id}
                       className="group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors cursor-pointer"
@@ -3235,15 +3252,27 @@ function DocSelectionDialog({
         {manageMode ? (
           <div className="flex items-center justify-end gap-2 px-5 py-4"
             style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-            {/* Convert to PDF — enabled only when the selection has
-                at least one NON-PDF doc. Disabling on all-PDF avoids
-                a click that silently no-ops (the parent handler
-                drops PDFs from the input set). */}
+            {/* Convert to PDF — enabled only when the selection is
+                exactly ONE non-PDF doc.
+                Multi-select is intentionally rejected: a previous
+                build silently dropped PDFs from a mixed selection and
+                only converted the JPGs, so a user who selected
+                [PDF + JPG] thought they were going to merge into one
+                file but only the JPG converted. Force them to use the
+                Merge button for multi-doc intent — Convert is a
+                single-file → single-PDF action. */}
             {onConvertSelected && (() => {
-              const selectedNonPdfCount = docs
-                .filter(d => selected.has(d.id) && !isPdfDocFn(d))
-                .length;
-              const convertDisabled = busy || selectedNonPdfCount < 1;
+              const selectedDocs = docs.filter(d => selected.has(d.id));
+              const exactlyOne   = selectedDocs.length === 1;
+              const onlyNonPdf   = exactlyOne && !isPdfDocFn(selectedDocs[0]);
+              const convertDisabled = busy || !onlyNonPdf;
+              const hint = selectedDocs.length > 1
+                ? 'Convert to PDF only takes one doc — use Merge for multiple'
+                : selectedDocs.length === 1 && !onlyNonPdf
+                  ? 'That doc is already a PDF'
+                  : exactlyOne
+                    ? `Convert ${selectedDocs[0].fileName} to PDF`
+                    : 'Select exactly one non-PDF doc';
               return (
                 <button type="button"
                   onClick={() => { void onConvertSelected(); }}
@@ -3254,9 +3283,7 @@ function DocSelectionDialog({
                     color:      'var(--gc-blue)',
                     border:     '1px solid var(--gc-blue)',
                   }}
-                  title={selectedNonPdfCount > 0
-                    ? `Convert ${selectedNonPdfCount} non-PDF doc${selectedNonPdfCount === 1 ? '' : 's'} to PDF`
-                    : 'Select at least one non-PDF doc'}>
+                  title={hint}>
                   <FileText size={13} /> Convert to PDF
                 </button>
               );
