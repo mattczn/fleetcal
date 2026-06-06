@@ -75,6 +75,67 @@ Return a single JSON object with this exact shape — no markdown, no explanatio
 The current timezone is ${timezone}.`;
 }
 
+/**
+ * Pass-2 corrective prompt. Fires only when pass-1's output fails the
+ * date cross-check (stops[0].apptStart !== start, stops[last].apptStart
+ * !== end, or a middle stop falls outside the window). Sonnet gets the
+ * failed JSON, the specific discrepancies, AND pass-1's own citations
+ * for where it claimed to find each date — so it has explicit context
+ * for what to re-read instead of starting from scratch.
+ *
+ * Returns ONLY the corrected date fields, not the full schema — the
+ * route merges these back into the original parsed object so we don't
+ * lose the other fields pass-1 got right.
+ */
+export function buildRateConCorrectivePrompt(
+  failedOutput: Record<string, unknown>,
+  discrepancies: string[],
+  variables: PromptVariables = DEFAULT_PROMPT_VARIABLES,
+): string {
+  const stripped = {
+    start: failedOutput.start,
+    end:   failedOutput.end,
+    stops: Array.isArray(failedOutput.stops)
+      ? (failedOutput.stops as Array<Record<string, unknown>>).map(s => ({
+          sequence:  s.sequence,
+          type:      s.type,
+          facilityName: s.facilityName,
+          apptStart: s.apptStart,
+          apptEnd:   s.apptEnd,
+        }))
+      : [],
+    dateJustifications: failedOutput.dateJustifications,
+  };
+
+  return `${variables.systemRole}
+
+A first-pass extraction (Haiku) returned dates that violate the rate-con's internal consistency. Your job: re-read the PDF and return corrected dates. The previous pass cited where it claimed to find each date — use those citations as starting points, but verify against the actual PDF, not the citations alone.
+
+PREVIOUS EXTRACTION (showing only the date fields + the model's own citations):
+${JSON.stringify(stripped, null, 2)}
+
+DISCREPANCIES THAT MUST BE FIXED:
+${discrepancies.map(d => `- ${d}`).join('\n')}
+
+GROUND TRUTH RULES:
+- The load's "start" field is the FIRST stop's appointment time. They MUST be the same datetime, to the minute.
+- The load's "end" field is the LAST stop's appointment time. They MUST be the same datetime, to the minute.
+- Every middle stop's appointment time MUST fall within [start, end] inclusive.
+- IGNORE non-appointment dates: issue date, signature date, tendered date, ready-by, available-by, payment terms, insurance certs.
+
+Return ONLY a JSON object with the corrected date fields — no markdown, no explanation:
+
+{
+  "start": "<YYYY-MM-DDTHH:mm in ${variables.timezone}>",
+  "end":   "<YYYY-MM-DDTHH:mm in ${variables.timezone}>",
+  "stops": [
+    { "sequence": <integer matching the original>, "apptStart": "<corrected>", "apptEnd": "<corrected or empty>" }
+  ]
+}
+
+Include every stop from the original output, in the same sequence order. Do not add or remove stops.`;
+}
+
 export function buildRateConPrompt(
   enabledFieldIds: string[],
   customInstructions: string,
@@ -135,7 +196,14 @@ export function buildRateConPrompt(
       "apptEnd": "<window end time in YYYY-MM-DDTHH:mm if a time window is given, otherwise empty string>",
       "instructions": "<any stop-specific instructions, notes, gate codes, or requirements listed on the rate con for this location, or empty string>"
     }
-  ]`;
+  ],
+  "dateJustifications": {
+    "start":   "<short citation of WHERE on the PDF you found the load start datetime — quote the exact text or describe the section, e.g. \\"Pickup #1 row: 06/10/2026 23:00 - 06/10/2026 23:59\\" or \\"Top of page 2, Appointment field under origin\\". Keep under 120 chars.>",
+    "end":     "<same shape, but for the load end datetime>",
+    "stops": [
+      { "sequence": <matches stop sequence>, "apptStart": "<short citation for this stop's apptStart>", "apptEnd": "<citation for apptEnd, or empty string>" }
+    ]
+  }`;
 
   return `${variables.systemRole} Extract every field you can find and return ONLY a valid JSON object — no markdown, no explanation.
 

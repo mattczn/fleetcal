@@ -1,7 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam, DocumentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { NextRequest, NextResponse } from 'next/server';
-import { buildRateConPrompt, DEFAULT_PROMPT_VARIABLES, PromptVariables } from '@/lib/prompt';
+import {
+  buildRateConPrompt,
+  buildRateConCorrectivePrompt,
+  DEFAULT_PROMPT_VARIABLES,
+  PromptVariables,
+} from '@/lib/prompt';
 import { geocodeAll } from '@/lib/geocode';
 import { cleanBrokerName } from '@/lib/brokerName';
 import type { StopType, GeocodeStatus } from '@/lib/types';
@@ -24,23 +29,28 @@ interface IncomingCustomer {
   parseHints?: string;
 }
 
-// Single-pass extraction with Sonnet at temperature 0. The two-pass
-// design (Haiku broker harvest → Sonnet full extraction with
-// parseHints injection) was dropped because:
-//   • parseHints was barely used (a few customers had hints)
-//   • Pass 1 added a second source of prompt drift between orgs
-//   • Customer matching is a fine post-process — no model needed
-const MODEL = 'claude-sonnet-4-5-20250929';
+// Two-model design with conditional escalation:
+//   • Pass 1 (Haiku): cheap full extraction. Schema includes a
+//     dateJustifications block citing where on the PDF each date came
+//     from — this both improves Haiku's own extraction (citation
+//     pressure makes the model look harder) and gives pass 2 context
+//     if it fires.
+//   • Pass 2 (Sonnet): runs ONLY when pass-1's output fails the
+//     date cross-check. Receives the failed JSON + discrepancies +
+//     pass-1's citations, returns corrected dates only. Merged back
+//     into the pass-1 object so we keep the fields pass-1 got right.
+//
+// Most parses end at pass 1 → ~5× cheaper than always-Sonnet. The
+// minority that escalate are the ones where we'd have produced
+// inconsistent appointments before, so the average accuracy goes up.
+const PASS_1_MODEL = 'claude-haiku-4-5-20251001';
+const PASS_2_MODEL = 'claude-sonnet-4-5-20250929';
 
 function extractJson(text: string): Record<string, unknown> {
   const match = text.match(/\{[\s\S]*\}/);
   return JSON.parse(match ? match[0] : text);
 }
 
-/** Generous output budget. Long multi-stop rate cons can easily
- *  exceed 2k tokens of JSON; 8k covers every realistic case (15+
- *  stops, full schema) without affecting cost — Anthropic only
- *  charges for tokens actually generated. */
 const MAX_TOKENS = 8192;
 
 /** Match the extracted broker name against the org's customer roster
@@ -53,6 +63,94 @@ function matchBroker(brokerName: string, customers: IncomingCustomer[]): Incomin
     c.name.toLowerCase() === lower ||
     (c.aliases ?? []).some(a => a.toLowerCase() === lower),
   );
+}
+
+/** Parse a naive ISO datetime into epoch millis. Returns NaN if
+ *  unparseable. Treats date-only strings as midnight on that day. */
+function parseNaive(iso: unknown): number {
+  if (typeof iso !== 'string' || !iso) return NaN;
+  // Tolerate space separator and missing seconds.
+  return Date.parse(iso.replace(' ', 'T'));
+}
+
+/** Compare two datetime strings, allowing a 1-minute slack to absorb
+ *  rounding (HH:mm vs HH:mm:ss). Returns true if both parse and the
+ *  difference is under the tolerance. */
+function datesEqual(a: unknown, b: unknown): boolean {
+  const ax = parseNaive(a);
+  const bx = parseNaive(b);
+  if (!isFinite(ax) || !isFinite(bx)) return false;
+  return Math.abs(ax - bx) < 60_000;
+}
+
+/** Build a list of cross-check violations between the load's
+ *  start/end and the stops array. Empty list = consistent. */
+function findDateDiscrepancies(parsed: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const start = parsed.start;
+  const end   = parsed.end;
+  const stops = Array.isArray(parsed.stops) ? (parsed.stops as RawStop[]) : [];
+
+  if (typeof start !== 'string' || !start) out.push('Missing or invalid "start" datetime.');
+  if (typeof end   !== 'string' || !end)   out.push('Missing or invalid "end" datetime.');
+  if (stops.length === 0) out.push('No stops were extracted — every rate con must have at least one stop.');
+
+  if (out.length > 0) return out;
+
+  const startMs = parseNaive(start);
+  const endMs   = parseNaive(end);
+
+  const first = stops[0];
+  const last  = stops[stops.length - 1];
+
+  if (!datesEqual(first.apptStart, start)) {
+    out.push(`stops[0].apptStart="${first.apptStart}" but load.start="${start}" — the first stop's appointment time MUST equal the load's start time.`);
+  }
+  if (!datesEqual(last.apptStart, end)) {
+    out.push(`stops[${stops.length - 1}].apptStart="${last.apptStart}" but load.end="${end}" — the last stop's appointment time MUST equal the load's end time.`);
+  }
+
+  // Middle stops should fall within [start, end], inclusive.
+  for (let i = 1; i < stops.length - 1; i++) {
+    const apptMs = parseNaive(stops[i].apptStart);
+    if (!isFinite(apptMs)) {
+      out.push(`stops[${i}].apptStart="${stops[i].apptStart}" is missing or unparseable.`);
+      continue;
+    }
+    if (apptMs < startMs || apptMs > endMs) {
+      out.push(`stops[${i}].apptStart="${stops[i].apptStart}" falls outside the load window [${start}, ${end}].`);
+    }
+  }
+
+  return out;
+}
+
+/** Apply a pass-2 corrective response back onto the pass-1 object.
+ *  Pass 2 returns only the date fields; we keep everything else from
+ *  pass 1 (broker, ref nums, stops addresses/facilities, etc.). */
+function applyCorrection(pass1: Record<string, unknown>, correction: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...pass1 };
+  if (typeof correction.start === 'string') merged.start = correction.start;
+  if (typeof correction.end   === 'string') merged.end   = correction.end;
+
+  if (Array.isArray(correction.stops) && Array.isArray(pass1.stops)) {
+    const correctedBySeq = new Map<number, { apptStart?: string; apptEnd?: string }>();
+    for (const s of correction.stops as Array<{ sequence?: number; apptStart?: string; apptEnd?: string }>) {
+      if (typeof s.sequence === 'number') correctedBySeq.set(s.sequence, { apptStart: s.apptStart, apptEnd: s.apptEnd });
+    }
+    merged.stops = (pass1.stops as Array<Record<string, unknown>>).map(stop => {
+      const seq = typeof stop.sequence === 'number' ? stop.sequence : undefined;
+      const fix = seq !== undefined ? correctedBySeq.get(seq) : undefined;
+      if (!fix) return stop;
+      return {
+        ...stop,
+        apptStart: fix.apptStart ?? stop.apptStart,
+        apptEnd:   fix.apptEnd   ?? stop.apptEnd,
+      };
+    });
+  }
+
+  return merged;
 }
 
 export async function POST(req: NextRequest) {
@@ -74,9 +172,8 @@ export async function POST(req: NextRequest) {
       enabledFields = [],
       customInstructions = '',
       promptVariables = DEFAULT_PROMPT_VARIABLES,
-      // Customer roster for post-parse name matching. NOT injected
-      // into the prompt anymore — that was the two-pass design that
-      // produced inconsistent results across orgs.
+      // Customer roster for post-parse name matching only — NOT
+      // injected into the prompt anymore.
       customers = [],
     } = await req.json());
     if (!data) throw new Error('missing data');
@@ -86,13 +183,15 @@ export async function POST(req: NextRequest) {
 
   const client = new Anthropic({ apiKey: key });
 
+  // The PDF block is cached so pass 2 (if it fires) doesn't re-upload
+  // the bytes — Anthropic charges ~10% of normal input rate on cache
+  // hits, so the conditional retry is nearly free in token cost.
   const docBlock: DocumentBlockParam = {
     type: 'document',
     source: { type: 'base64', media_type: 'application/pdf', data },
+    cache_control: { type: 'ephemeral' },
   };
 
-  // Build the single prompt. brokerRules is always empty now — the
-  // per-broker parseHints feature was dropped along with pass 1.
   const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, []);
 
   // Debug short-circuit: ?debug=1 returns the exact inputs without
@@ -101,7 +200,8 @@ export async function POST(req: NextRequest) {
   if (url.searchParams.get('debug') === '1') {
     return NextResponse.json({
       debug: true,
-      model: MODEL,
+      pass1Model: PASS_1_MODEL,
+      pass2Model: PASS_2_MODEL,
       enabledFields,
       customInstructions,
       promptVariables,
@@ -111,12 +211,13 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // ── Pass 1 (Haiku) ───────────────────────────────────────────────
   let parsed: Record<string, unknown>;
   try {
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
     const content: ContentBlockParam[] = [docBlock, textBlock];
     const response = await client.messages.create({
-      model: MODEL,
+      model: PASS_1_MODEL,
       max_tokens: MAX_TOKENS,
       temperature: 0,
       messages: [{ role: 'user', content }],
@@ -125,7 +226,7 @@ export async function POST(req: NextRequest) {
     try {
       parsed = extractJson(text);
     } catch (parseErr) {
-      console.error('[parse-ratecon] JSON parse failed:', {
+      console.error('[parse-ratecon] pass-1 JSON parse failed:', {
         stopReason: response.stop_reason,
         textLength: text.length,
         tail: text.slice(-200),
@@ -137,16 +238,54 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
+  // ── Cross-check + conditional pass-2 escalation ──────────────────
+  const discrepancies = findDateDiscrepancies(parsed);
+  let escalatedToSonnet = false;
+  if (discrepancies.length > 0) {
+    escalatedToSonnet = true;
+    console.warn('[parse-ratecon] pass-1 date check failed, escalating to Sonnet:', discrepancies);
+
+    try {
+      const correctivePrompt = buildRateConCorrectivePrompt(parsed, discrepancies, promptVariables);
+      const textBlock: TextBlockParam = { type: 'text', text: correctivePrompt };
+      const content: ContentBlockParam[] = [docBlock, textBlock];
+      const response = await client.messages.create({
+        model: PASS_2_MODEL,
+        max_tokens: 2048,
+        temperature: 0,
+        messages: [{ role: 'user', content }],
+      });
+      const text = response.content[0].type === 'text' ? response.content[0].text : '';
+      const correction = extractJson(text);
+      parsed = applyCorrection(parsed, correction);
+
+      // Re-check. We accept whatever Sonnet returns even if still
+      // inconsistent — at that point the PDF is genuinely ambiguous
+      // and we'd rather surface what the better model thinks than
+      // loop indefinitely. Log for visibility.
+      const stillBad = findDateDiscrepancies(parsed);
+      if (stillBad.length > 0) {
+        console.warn('[parse-ratecon] pass-2 (Sonnet) also failed cross-check; accepting anyway:', stillBad);
+      }
+    } catch (err) {
+      // Non-fatal — fall through with pass-1 output. Better to return
+      // a slightly inconsistent parse than fail the whole request.
+      console.error('[parse-ratecon] pass-2 corrective call failed, returning pass-1:', err);
+    }
+  }
+
+  // Strip dateJustifications from the response — internal scratchpad,
+  // the client doesn't need to see citations.
+  delete (parsed as Record<string, unknown>).dateJustifications;
+
   // Strip legal/industry suffixes from the broker name AI returned so
   // the title doesn't read "Direct Connect Logistics Inc: …".
   if (typeof parsed.broker === 'string') {
     parsed.broker = cleanBrokerName(parsed.broker);
   }
 
-  // Post-parse customer matching. Replaces what pass 1 used to do —
-  // matches the extracted broker name against the org's roster and
-  // returns the canonical customer name if found. Pure post-process,
-  // no model involvement.
+  // Post-parse customer matching. Replaces what the old pass-1 broker
+  // harvest used to do — pure post-process, no model involvement.
   let matchedCustomerName: string | undefined;
   if (typeof parsed.broker === 'string' && customers.length > 0) {
     const matched = matchBroker(parsed.broker, customers)
@@ -173,9 +312,6 @@ export async function POST(req: NextRequest) {
         type:          (stop.type ?? 'stop') as StopType,
         facilityName:  stop.facilityName || undefined,
         address:       stop.address       || undefined,
-        // Prefer Google's structured address_components over the AI's
-        // guess — those are the canonical city / state for the
-        // geocoded address.
         city:          geo?.city          ?? stop.city ?? undefined,
         state:         geo?.state         ?? undefined,
         lat:           geo?.lat           ?? undefined,
@@ -194,5 +330,13 @@ export async function POST(req: NextRequest) {
     ...parsed,
     stops: enrichedStops,
     matchedCustomerName,
+    // Surface whether Sonnet was needed. Useful for the UI to show a
+    // "AI rechecked these dates" badge and for you to see how often
+    // pass 1 fails in practice.
+    parseMeta: {
+      escalatedToSonnet,
+      pass1Model: PASS_1_MODEL,
+      pass2Model: escalatedToSonnet ? PASS_2_MODEL : null,
+    },
   });
 }
