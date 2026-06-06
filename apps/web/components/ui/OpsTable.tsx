@@ -850,6 +850,12 @@ export function OpsTable<T>({
           className="grid items-center"
           style={{
             gridTemplateColumns: gridTemplate,
+            // Force the grid to span the full scroll container so the
+            // 1fr filler track has room to expand. Without this, a
+            // grid container in block layout collapses to the sum of
+            // its track widths and the filler is 0px wide — leaving
+            // a visible gap between data cells and pinned-right cells.
+            minWidth: '100%',
             background: 'var(--gc-surface)',
             borderBottom: '1px solid var(--gc-border-light)',
             minHeight: 44,
@@ -987,6 +993,12 @@ export function OpsTable<T>({
                 className="grid items-stretch transition-colors"
                 style={{
                   gridTemplateColumns: gridTemplate,
+                  // Match the header — force the grid to span the full
+                  // scroll container so the row's `background: rowBg`
+                  // (priority tint, hover, etc.) paints the full row
+                  // width, not just up to the sum of fixed column
+                  // widths. The 1fr filler track absorbs any leftover.
+                  minWidth: '100%',
                   minHeight: rowHeightPx,
                   borderTop: '1px solid #f1f3f4',
                   cursor: onRowClick ? 'pointer' : 'default',
