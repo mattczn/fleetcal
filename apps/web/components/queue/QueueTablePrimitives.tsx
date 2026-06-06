@@ -12,7 +12,7 @@
  * empty-state copy, filter logic) stays in the page file.
  */
 
-import { useEffect, useRef, useState, forwardRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Check, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, MessageSquare, Columns3, Users, GripVertical,
@@ -235,7 +235,8 @@ export function FastTooltip({
   delay?:   number;
 }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; ready: boolean } | null>(null);
   const [mounted, setMounted] = useState(false);
   const timerRef = useRef<number | null>(null);
 
@@ -244,12 +245,31 @@ export function FastTooltip({
   // first render pass.
   useEffect(() => { setMounted(true); }, []);
 
+  // After the tooltip mounts at a center-anchored position, measure
+  // its rect and shift horizontally if it overflows the viewport.
+  // The `ready` flag prevents the layout effect from firing twice
+  // for the same hover and looping forever. While ready=false, the
+  // tooltip is rendered with opacity:0 so the user never sees the
+  // pre-shift position.
+  useLayoutEffect(() => {
+    if (!pos || pos.ready || !tooltipRef.current) return;
+    const tr = tooltipRef.current.getBoundingClientRect();
+    const padding = 8;
+    let dx = 0;
+    if (tr.right > window.innerWidth - padding) {
+      dx = -(tr.right - (window.innerWidth - padding));
+    } else if (tr.left < padding) {
+      dx = padding - tr.left;
+    }
+    setPos({ top: pos.top, left: pos.left + dx, ready: true });
+  }, [pos]);
+
   const show = () => {
     if (timerRef.current != null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
       const r = triggerRef.current?.getBoundingClientRect();
       if (!r) return;
-      setPos({ top: r.top - 4, left: r.left + r.width / 2 });
+      setPos({ top: r.top - 4, left: r.left + r.width / 2, ready: false });
     }, delay);
   };
   const hide = () => {
@@ -262,6 +282,7 @@ export function FastTooltip({
 
   const tooltipNode = pos && (
     <div
+      ref={tooltipRef}
       className="fixed px-2 py-1 rounded-md pointer-events-none whitespace-nowrap"
       style={{
         top:        pos.top,
@@ -277,6 +298,9 @@ export function FastTooltip({
         // open. 10000 sits above ConfirmDialog (z-260) and well above
         // the OpsTable sticky chrome.
         zIndex:     10_000,
+        // Hide the first paint at the center-anchored position so a
+        // viewport-overflow shift doesn't flash to the user.
+        opacity:    pos.ready ? 1 : 0,
       }}
     >
       {text}
