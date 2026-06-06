@@ -979,12 +979,12 @@ export default function CloseoutView() {
     const PAPERWORK_ORDER: string[] = [
       'flags',
       'age', 'loadNum', 'title', 'customer',
-      'rate', 'accessorials', 'total',
+      'rate', 'accessorials', 'total', 'docs',
       'driver', 'truck',
       'internalId',
       'pickedUp', 'delivered',
       'stops', 'miles', 'rpm',
-      'billingStatus', 'docs',
+      'billingStatus',
       'actions',
     ];
     const rank = (k: string) => {
@@ -1063,9 +1063,14 @@ export default function CloseoutView() {
   return (
     <AppShell title="Paperwork" icon={FileCheck2} noPageScroll>
       {/* Fixed-height content area — table claims the remaining space
-          and scrolls inside its own viewport. Outer padding lives here. */}
-      <div className="flex-1 flex flex-col min-h-0 px-6 py-5 gap-4">
-        <div className="w-full min-h-0 flex-1 flex flex-col gap-4">
+          and scrolls inside its own viewport. Outer padding lives here.
+          Bottom padding is tighter than top (pb-2 vs pt-5) so the table
+          card extends close to the viewport edge; the page footer
+          ("Showing X of Y records") gets the breathing room it needs
+          via its own mt-3 and there's no value in stacking another
+          20px of dead space underneath it. */}
+      <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-2 gap-4">
+        <div className="w-full min-h-0 flex-1 flex flex-col gap-3">
 
           {/* Purpose hint — keeps the split between Paperwork and
               Billing visible while users are still building muscle

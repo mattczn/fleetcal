@@ -1133,14 +1133,14 @@ function AccountingPageInner() {
     const BILLING_ORDER: string[] = [
       'flags',
       'age', 'loadNum', 'title', 'customer',
-      'rate', 'accessorials', 'total',
+      'rate', 'accessorials', 'total', 'docs',
       'driver', 'truck',
       'internalId',
       'pickupAt', 'deliveryAt', 'released',
       'stops', 'miles', 'rpm',
       'method', 'sendTo',
       'issued', 'due', 'paidAt',
-      'docs', 'status',
+      'status',
     ];
     const rank = (k: string) => {
       const i = BILLING_ORDER.indexOf(k);
