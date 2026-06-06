@@ -471,7 +471,7 @@ const PDF_ZOOM_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 // Renders a PDF data URL to canvas elements via PDF.js with zoom controls.
 function UploadedDocsPanel({
-  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange, onSignedUrlError,
+  docs, invoices, selectedId, onSelect, signedUrl, headerColor, loadId, onChange, onSignedUrlError, onPendingChange,
 }: {
   docs: import('@/lib/db').LoadDocument[];
   /** Generated invoices for this load. Rendered as virtual rows at the
@@ -492,11 +492,20 @@ function UploadedDocsPanel({
    *  stale signed URL. Parent re-mints and pushes a fresh `signedUrl`
    *  back in via props on the next render. */
   onSignedUrlError?: () => void;
+  /** Fires whenever the staged-file state changes (true = a file has
+   *  been picked but no type chosen yet). EventModal listens so it can
+   *  show a "you have a doc waiting for a type" dialog if the user
+   *  tries to close the load modal mid-upload. */
+  onPendingChange?: (hasPending: boolean) => void;
 }) {
   const addFileRef = useRef<HTMLInputElement>(null);
   // Two-stage upload: pick file → choose kind → commit. Pending file
   // stays in state so the user can change kind without re-picking.
   const [pendingFile,   setPendingFile]   = useState<File | null>(null);
+  // Bubble pendingFile state up so the load modal can intercept its
+  // close path and prompt the user — otherwise the staged file is
+  // silently dropped if they tap X mid-upload.
+  useEffect(() => { onPendingChange?.(pendingFile !== null); }, [pendingFile, onPendingChange]);
   const [uploading,     setUploading]     = useState(false);
   const [uploadError,   setUploadError]   = useState<string | null>(null);
   const [deletingId,    setDeletingId]    = useState<string | null>(null);
@@ -893,28 +902,85 @@ function UploadedDocsPanel({
                     <div className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>{fmt(d.uploadedAt)}</div>
                   </div>
                 </button>
-                {/* Edit kind — toggles the inline picker below. Hidden
-                    when no loadId (create-mode rendering of the panel,
-                    docs aren't yet attached anywhere). */}
+                {/* Per-card action group: Download · Edit (change type) · Delete.
+                    Lets the user manage a doc without opening the viewer.
+                    Edit kind toggles the inline picker below; Delete + Download
+                    follow the same flow the in-viewer buttons use so the wire
+                    behavior is identical. Hidden when no loadId (create-mode
+                    rendering of the panel — docs aren't attached anywhere yet). */}
                 {loadId && (
-                  <Tooltip content={editingDocId === d.id ? 'Cancel' : 'Change type'}>
-                    <button type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingDocId(prev => prev === d.id ? null : d.id);
-                      }}
-                      className="flex items-center justify-center transition-colors"
-                      style={{
-                        width: 28, height: 28, borderRadius: 8,
-                        color: editingDocId === d.id ? LOAD_ACCENT : 'var(--gc-text-3)',
-                        background: editingDocId === d.id ? LOAD_ACCENT_BG : 'transparent',
-                        border: `1px solid ${editingDocId === d.id ? LOAD_ACCENT_BORDER : 'var(--gc-border-light)'}`,
-                      }}
-                      onMouseEnter={e => { if (editingDocId !== d.id) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                      onMouseLeave={e => { if (editingDocId !== d.id) e.currentTarget.style.background = 'transparent'; }}>
-                      <Pencil size={12} />
-                    </button>
-                  </Tooltip>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Tooltip content="Download">
+                      <button type="button"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const { railway } = await import('@/lib/railway');
+                            const { url } = await railway.getDocumentUrl(d.id);
+                            if (!url) return;
+                            const res = await fetch(url);
+                            const blob = await res.blob();
+                            const blobUrl = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = blobUrl;
+                            a.download = d.fileName;
+                            document.body.appendChild(a);
+                            a.click();
+                            a.remove();
+                            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                          } catch (err) {
+                            console.error('[doc download from card] failed', err);
+                          }
+                        }}
+                        className="flex items-center justify-center transition-colors"
+                        style={{
+                          width: 28, height: 28, borderRadius: 8,
+                          color: 'var(--gc-text-3)',
+                          background: 'transparent',
+                          border: '1px solid var(--gc-border-light)',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        <Download size={12} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content={editingDocId === d.id ? 'Cancel' : 'Change type'}>
+                      <button type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingDocId(prev => prev === d.id ? null : d.id);
+                        }}
+                        className="flex items-center justify-center transition-colors"
+                        style={{
+                          width: 28, height: 28, borderRadius: 8,
+                          color: editingDocId === d.id ? LOAD_ACCENT : 'var(--gc-text-3)',
+                          background: editingDocId === d.id ? LOAD_ACCENT_BG : 'transparent',
+                          border: `1px solid ${editingDocId === d.id ? LOAD_ACCENT_BORDER : 'var(--gc-border-light)'}`,
+                        }}
+                        onMouseEnter={e => { if (editingDocId !== d.id) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                        onMouseLeave={e => { if (editingDocId !== d.id) e.currentTarget.style.background = 'transparent'; }}>
+                        <Pencil size={12} />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content="Delete">
+                      <button type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteTarget({ id: d.id, name: d.fileName });
+                        }}
+                        className="flex items-center justify-center transition-colors"
+                        style={{
+                          width: 28, height: 28, borderRadius: 8,
+                          color: 'var(--gc-text-3)',
+                          background: 'transparent',
+                          border: '1px solid var(--gc-border-light)',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.color = '#d93025'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent';  e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
+                        <Trash2 size={12} />
+                      </button>
+                    </Tooltip>
+                  </div>
                 )}
               </div>
               {editingDocId === d.id && (
@@ -922,29 +988,34 @@ function UploadedDocsPanel({
                   <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', marginBottom: 6 }}>
                     Change document type
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  {/* Mirror the upload "WHAT IS THIS?" picker — same
+                      3-column grid of tinted pill buttons so the
+                      change-type flow visually matches the create
+                      flow. The active kind shows a check + dims to
+                      muted styling to signal "you're already here." */}
+                  <div className="grid grid-cols-3 gap-1.5">
                     {KIND_UPLOAD_OPTIONS.map(opt => {
+                      const tint   = KIND_TINT[opt.kind] ?? KIND_TINT.other;
                       const active = opt.kind === d.kind;
                       return (
                         <button key={opt.kind} type="button"
                           disabled={savingEdit || active}
                           onClick={() => void saveKindEdit(d.id, opt.kind)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                          className="flex items-center justify-center gap-1 rounded-lg text-[11px] font-black uppercase tracking-wider py-2 transition-opacity disabled:opacity-50"
                           style={{
-                            color: active ? 'var(--gc-text-3)' : LOAD_ACCENT,
-                            background: active ? 'var(--gc-bg)' : LOAD_ACCENT_BG,
-                            border: `1px solid ${active ? 'var(--gc-border-light)' : LOAD_ACCENT_BORDER}`,
-                            opacity: savingEdit ? 0.5 : 1,
-                            cursor: active ? 'default' : 'pointer',
-                          }}
-                          onMouseEnter={e => { if (!active && !savingEdit) e.currentTarget.style.background = LOAD_ACCENT_BG_HOVER; }}
-                          onMouseLeave={e => { if (!active && !savingEdit) e.currentTarget.style.background = LOAD_ACCENT_BG; }}>
+                            background: tint.bg,
+                            color:      tint.fg,
+                            boxShadow:  '0 1px 3px rgba(0,0,0,0.12)',
+                            textShadow: '0 1px 1px rgba(0,0,0,0.25)',
+                            opacity:    active ? 0.55 : 1,
+                            cursor:     active ? 'default' : 'pointer',
+                          }}>
                           {active && <CheckCircle2 size={11} />}
+                          {savingEdit && !active ? <Loader2 size={11} className="animate-spin" /> : null}
                           {opt.label}
                         </button>
                       );
                     })}
-                    {savingEdit && <Loader2 size={14} className="animate-spin" style={{ color: 'var(--gc-text-3)', marginLeft: 4 }} />}
                   </div>
                   <div className="text-[10px]" style={{ color: 'var(--gc-text-3)', marginTop: 6 }}>
                     Filename will be renamed to match the new type.
@@ -2125,6 +2196,12 @@ export default function EventModal() {
   // Dirty tracking
   const [isDirty,        setIsDirty]        = useState(false);
   const [showSavePrompt, setShowSavePrompt] = useState(false);
+  // Mirror of UploadedDocsPanel's local pendingFile state. True when
+  // the user has staged a doc but not yet picked a type. We block the
+  // modal close path with a dedicated confirm so the staged file
+  // doesn't silently disappear.
+  const [hasPendingDoc, setHasPendingDoc] = useState(false);
+  const [showDocCloseConfirm, setShowDocCloseConfirm] = useState(false);
   const [savePromptAfterNav, setSavePromptAfterNav] = useState<string | null>(null); // relay partner id to open after save
   const [dupLoadNum,     setDupLoadNum]     = useState<string | null>(null); // load# that triggered duplicate warning
   const [pendingSave,    setPendingSave]    = useState<'single' | 'batch' | null>(null);
@@ -3391,6 +3468,7 @@ export default function EventModal() {
 
   const handleBackdropClick = () => {
     if (isBatch) return;
+    if (hasPendingDoc) { setShowDocCloseConfirm(true); return; }
     if (isDirty) setShowSavePrompt(true);
     else closeModal();
   };
@@ -3398,6 +3476,7 @@ export default function EventModal() {
   // Used by the explicit close affordances (X button, Cancel button).
   // Unlike the backdrop, these still work in batch mode.
   const attemptClose = () => {
+    if (hasPendingDoc) { setShowDocCloseConfirm(true); return; }
     if (isDirty) setShowSavePrompt(true);
     else closeModal();
   };
@@ -4391,6 +4470,23 @@ export default function EventModal() {
         onConfirm={confirmCreateBroker}
       />
     )}
+    {showDocCloseConfirm && (
+      <ConfirmDialog
+        title="Discard pending document?"
+        message="You picked a file but haven't chosen a type yet. Close anyway and lose the upload?"
+        confirmLabel="Discard upload"
+        cancelLabel="Keep editing"
+        destructive
+        zIndex={240}
+        onCancel={() => setShowDocCloseConfirm(false)}
+        onConfirm={() => {
+          setShowDocCloseConfirm(false);
+          setHasPendingDoc(false);
+          if (isDirty) setShowSavePrompt(true);
+          else closeModal();
+        }}
+      />
+    )}
     {showSavePrompt && (
       <div className="fixed inset-0 z-[210] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}>
         <div
@@ -4645,6 +4741,7 @@ export default function EventModal() {
                   const fresh = await fetchLoadDocuments(ev.loadId, orgId);
                   setLoadDocuments(fresh);
                 }}
+                onPendingChange={setHasPendingDoc}
               />
             )}
           </div>

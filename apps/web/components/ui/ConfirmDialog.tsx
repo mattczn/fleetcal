@@ -34,6 +34,10 @@ export default function ConfirmDialog({
       onMouseDown={e => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="rounded-2xl flex flex-col w-full"
         style={{
+          // overflow: hidden so the footer's gc-bg fill respects the
+          // 16px rounded corners — without it the footer fill paints
+          // square against the bottom edge.
+          overflow:   'hidden',
           maxWidth:   420,
           background: 'var(--gc-surface)',
           boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
