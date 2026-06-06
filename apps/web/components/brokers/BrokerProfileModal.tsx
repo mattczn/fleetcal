@@ -116,7 +116,8 @@ function BrokerProfileModal({
   onClose,
   embedded,
 }, modalRef) {
-  const { customers, orgId, openEditModal, assets, modalOpen } = useCalendarStore();
+  const { customers, orgId, openEditModal, assets, modalOpen, addCustomer } = useCalendarStore();
+  const [adding, setAdding] = useState(false);
   const tz = useCalendarStore(s => s.calendarTimezone);
   const sorted = [...customers].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -297,10 +298,42 @@ function BrokerProfileModal({
           {/* Sidebar */}
           <div className="flex flex-col shrink-0"
             style={{ width: 220, borderRight: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-            <div className="shrink-0 px-4 pt-5 pb-1">
+            <div className="shrink-0 flex items-center justify-between px-4 pt-5 pb-1">
               <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--gc-text-3)' }}>
                 Customers
               </span>
+              <button
+                onClick={async () => {
+                  if (adding) return;
+                  setAdding(true);
+                  try {
+                    // Seed a brand-new customer with a placeholder name
+                    // and empty alias/contact arrays — the same shape as
+                    // the legacy "Add customer" affordance in the rate-
+                    // con review modal. The detail panel opens with the
+                    // name field focused so the dispatcher can type
+                    // their real customer name immediately.
+                    const created = await addCustomer({
+                      name:     'New customer',
+                      aliases:  [],
+                      contacts: [],
+                    });
+                    if (created) tryClose(() => { setSelectedId(created.id); setSelectedLoadId(null); });
+                  } catch (err) {
+                    console.error('[BrokerProfileModal] add customer failed:', err);
+                  } finally {
+                    setAdding(false);
+                  }
+                }}
+                disabled={adding}
+                title="Add customer"
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
+                style={{ color: ACCENT, background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
+                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                <Plus size={12} />
+                {adding ? 'Adding…' : 'Customer'}
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {sorted.length === 0 ? (
