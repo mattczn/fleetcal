@@ -102,12 +102,29 @@ export default function DateTimeInput({
     );
   }
 
+  // For the compact (sm) variant, override both the DatePicker
+  // trigger's size AND its display string. The default trigger uses
+  // its own internal 13.5px font and renders "Sat, Jun 6, 2026" —
+  // which dominates an inline form row. We tighten to 12px and drop
+  // the weekday + add a short month, giving "Jun 6, 2026" at the
+  // same visual weight as the time field next to it.
+  const dpButtonStyle = size === 'sm'
+    ? { fontSize: 12, padding: '5px 9px' }
+    : undefined;
+  const dpContainerStyle = size === 'sm'
+    ? { flex: '0 0 auto' }   // don't eat the whole row width
+    : undefined;
+  const dpDisplay = size === 'sm' ? formatCompactDate(datePart) : undefined;
+
   return (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
       <DatePicker
         value={datePart}
         onChange={d => onChange(`${d}T${timePart || defaultTime}`)}
         headerColor={accentColor}
+        displayText={dpDisplay}
+        buttonStyle={dpButtonStyle}
+        containerStyle={dpContainerStyle}
       />
       <TimeText
         value={timePart}
@@ -126,4 +143,15 @@ export default function DateTimeInput({
       >×</button>
     </div>
   );
+}
+
+/** "2026-06-06" → "Jun 6, 2026". No weekday — keeps the sm
+ *  trigger button compact next to its sibling time input. */
+function formatCompactDate(v: string): string {
+  if (!v) return '';
+  const [y, m, d] = v.split('-').map(Number);
+  if (!y || !m || !d) return v;
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
 }
