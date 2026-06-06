@@ -1541,16 +1541,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 the planned route, or when the rate-con doesn't carry
                 appointment / facility detail clearly. */}
             <div className="flex-1 flex flex-col min-w-0 border-r" style={{ borderColor: 'var(--gc-border-light)' }}>
-              {/* minHeight:40 matches the doc-viewer header on the right
-                  so both viewers' tops line up exactly — the tab toggle
-                  was making this side ~4px taller before. */}
-              <div className="shrink-0 flex items-center justify-between px-3 py-2 gap-2"
-                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)', minHeight: 40 }}>
-                {/* Tab toggle (Rate Con / Stops) — tightened to py-1 so
-                    the toggle fits inside the 40px header without
-                    eating extra vertical space. */}
-                <div className="flex items-center gap-0.5 p-0.5 rounded-full"
-                  style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
+              {/* Explicit height:40 (not minHeight) so the header
+                  matches the doc-viewer header on the right pixel-for-
+                  pixel. The previous minHeight:40 only set a floor —
+                  the tab-toggle pill (p-0.5 + 1px border + rounded-
+                  full) was 30+px tall, pushing the whole header to
+                  ~46px. */}
+              <div className="shrink-0 flex items-center justify-between px-3 gap-2"
+                style={{ height: 40, background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
+                {/* Tab toggle (Rate Con / Stops) — dropped the pill
+                    wrapper border + padding that were inflating the
+                    header. Buttons render as naked pills; the blue
+                    active fill still signals selection clearly. */}
+                <div className="flex items-center gap-1">
                   {([
                     { key: 'rateCon' as const, label: 'Rate Con' },
                     { key: 'stops'   as const, label: `Stops${allStopsForView.length ? ` (${allStopsForView.length})` : ''}` },
@@ -1563,6 +1566,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                         style={{
                           background: active ? 'var(--gc-blue)' : 'transparent',
                           color:      active ? '#fff' : 'var(--gc-text-2)',
+                          border:     active ? 'none' : '1px solid var(--gc-border-light)',
                         }}>
                         {t.label}
                       </button>
@@ -1628,9 +1632,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 Doc list + Manage Documents live in the right sidebar;
                 verification chips live in the right sidebar's header. */}
             <div className="flex-1 flex flex-col min-w-0">
-              {/* Viewer header */}
-              <div className="shrink-0 px-3 py-2 flex items-center justify-between gap-3"
-                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)', minHeight: 40 }}>
+              {/* Viewer header — explicit height:40 matches the
+                  Rate-Con header on the left (see comment above). */}
+              <div className="shrink-0 px-3 flex items-center justify-between gap-3"
+                style={{ height: 40, background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
                 {(() => {
                   // Middle viewer only shows non-rate-con docs. Rate cons
                   // render in the left panel via selectRateCon.
@@ -2376,6 +2381,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           onDownload={handleDownloadDoc}
           onMergeByType={handleMergeByType}
           onConvertSelected={handleConvertFromManage}
+          // Surface the include-in-invoice toggle inside the dialog
+          // too — same state the sidebar drives, so flipping here
+          // mirrors there instantly.
+          includedIds={includedDocIds}
+          onToggleIncluded={(id) => setIncludedDocIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          })}
           kindOptions={KIND_OPTIONS}
           // Pending kind picker — when the user clicks "+ Add document"
           // and picks files, the OS file picker fires (via pickFile).
@@ -2764,6 +2778,8 @@ function DocSelectionDialog({
   onDownload,
   onMergeByType,
   onConvertSelected,
+  includedIds,
+  onToggleIncluded,
   kindOptions,
   pendingArea,
   zIndex = 240,
@@ -2828,6 +2844,14 @@ function DocSelectionDialog({
    *  render. Independent from `extraAction` (which the caller can
    *  still use for the secondary "open Convert dialog" affordance). */
   onConvertSelected?: () => Promise<void>;
+  /** Set of doc IDs currently flagged "include in invoice". Drives the
+   *  per-row Invoice pill in manageMode. Pass undefined to hide the
+   *  pill entirely (e.g. in the standalone Convert dialog where it's
+   *  not relevant). */
+  includedIds?: Set<string>;
+  /** Flip a doc's invoice-include state. Parent owns the actual state
+   *  (includedDocIds); we just bubble the click up. */
+  onToggleIncluded?: (id: string) => void;
   /** Drives the kind <select> options in manageMode. Same shape as the
    *  parent's KIND_OPTIONS constant. ReadonlyArray so the parent's
    *  `as const` literal is assignable without a defensive copy. */
@@ -2912,7 +2936,11 @@ function DocSelectionDialog({
       onMouseDown={e => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
       <div className="rounded-2xl flex flex-col w-full"
         style={{
-          maxWidth:   manageMode ? 560 : 480,
+          // Manage mode bumped 560 → 720 so the doc rows fit:
+          //   [chip] [filename] [Invoice toggle] [download · pencil · trash]
+          // ...without the action group elbowing the filename to ~1
+          // word truncated. Standalone convert/merge dialogs stay 480.
+          maxWidth:   manageMode ? 720 : 480,
           maxHeight:  '85vh',
           background: 'var(--gc-surface)',
           boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
@@ -3133,6 +3161,29 @@ function DocSelectionDialog({
                           ("the colored ones look tacky"). */}
                       {manageMode && !isRenaming && (
                         <div className="flex items-center gap-1.5 shrink-0">
+                          {/* Include-in-invoice toggle — same pill recipe
+                              as the sidebar list so the two surfaces
+                              stay in sync at a glance. Hidden when the
+                              parent doesn't pass includedIds (e.g.
+                              standalone Convert dialog). */}
+                          {includedIds && onToggleIncluded && (() => {
+                            const isOn = includedIds.has(d.id);
+                            return (
+                              <button type="button"
+                                onClick={e => { e.stopPropagation(); onToggleIncluded(d.id); }}
+                                className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                                style={{
+                                  background: isOn ? '#dcfce7' : 'transparent',
+                                  color:      isOn ? '#166534' : 'var(--gc-text-3)',
+                                  border:     `1px solid ${isOn ? '#86efac' : 'var(--gc-border)'}`,
+                                  borderRadius: 999,
+                                }}
+                                title={isOn ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
+                                {isOn ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                                Invoice
+                              </button>
+                            );
+                          })()}
                           {isPending && (
                             <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
                           )}
