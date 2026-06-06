@@ -6160,18 +6160,37 @@ export default function EventModal() {
             if (!ev) return null;
             const hasHistory = auditLog.length > 0;
             if (!ev.createdByName && !hasHistory) return null;
-            const fmtDate = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+            // Both formatters render in the org timezone instead of
+            // the browser's local clock. Without this, a dispatcher
+            // in MT and a dispatcher in ET reviewing the same load
+            // would see different timestamps on the same audit
+            // entry — confusing on multi-region teams.
+            //
+            // changedAt is a full ISO with offset (set by
+            // `new Date().toISOString()` at write time), so passing
+            // timeZone to toLocaleString shifts the display correctly.
+            const fmtDate = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: calendarTimezone });
             const assetName = (id: number) => assets.find(a => a.id === id)?.name ?? `Asset ${id}`;
             const fmt$ = (n?: number) => n != null ? `$${n.toLocaleString()}` : '—';
-            // Stored as naive ISO ("YYYY-MM-DDTHH:mm") — no timezone
-            // suffix so new Date() treats it as local. That matches
-            // the rest of the modal which renders event times in the
-            // user's local clock; the audit panel does the same.
+            // prevStart/newStart/prevEnd/newEnd are stored as NAIVE
+            // ISO strings ("YYYY-MM-DDTHH:mm" with no offset) —
+            // they already represent a wall-clock time in the org's
+            // timezone. Parsing as UTC and then formatting with
+            // timeZone:calendarTimezone would double-shift; instead
+            // we parse manually and format the components directly.
             const fmtAuditTime = (iso?: string) => {
               if (!iso) return '—';
-              const d = new Date(iso.includes(' ') ? iso.replace(' ', 'T') : iso);
-              if (!isFinite(d.getTime())) return iso;
-              return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+              const s = iso.includes(' ') ? iso.replace(' ', 'T') : iso;
+              const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s);
+              if (!m) return iso;
+              const [, y, mo, d, hh, mm] = m;
+              // Build a Date in UTC from the parts, then format with
+              // the org TZ. Since the parts represent the wall-clock
+              // time the dispatcher saw, this round-trip preserves
+              // them exactly when timeZone:'UTC' is used for the
+              // construction and the desired tz for display.
+              const dt = new Date(Date.UTC(+y, +mo - 1, +d, +hh, +mm));
+              return dt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
             };
             return (
               <div style={{ borderTop: '1px solid var(--gc-border-light)', padding: '12px 32px' }}>
