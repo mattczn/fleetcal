@@ -670,14 +670,59 @@ export function OpsTable<T>({
   // actions cell.
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [cardInnerWidth, setCardInnerWidth] = useState(0);
+  // Card's full scroll width. Used by the sticky horizontal scrollbar
+  // below — the proxy needs a child that matches the card's
+  // scrollWidth so its native scrollbar tracks the same range.
+  const [cardScrollWidth, setCardScrollWidth] = useState(0);
   useEffect(() => {
     if (!cardRef.current) return;
-    const ro = new ResizeObserver(entries => {
-      const e = entries[0];
-      if (e) setCardInnerWidth(e.contentRect.width);
-    });
-    ro.observe(cardRef.current);
-    return () => ro.disconnect();
+    const card = cardRef.current;
+    const sync = () => {
+      setCardInnerWidth(card.clientWidth);
+      setCardScrollWidth(card.scrollWidth);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(card);
+    // The scrollWidth changes when rows mount / unmount or column
+    // visibility flips, not only on viewport resize. A MutationObserver
+    // on the card's subtree keeps the scrollbar proxy in sync without
+    // requiring callers to thread updates.
+    const mo = new MutationObserver(sync);
+    mo.observe(card, { childList: true, subtree: true });
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, []);
+
+  // Sticky horizontal scrollbar — bidirectional sync between the card
+  // and a thin proxy that sits at the bottom of the card's visible
+  // viewport via position:sticky. Wide tables otherwise force the
+  // user to scroll all the way down to reach the native horizontal
+  // scrollbar at the end of content.
+  const scrollProxyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const card = cardRef.current;
+    const proxy = scrollProxyRef.current;
+    if (!card || !proxy) return;
+    let suppressCardEcho = false;
+    let suppressProxyEcho = false;
+    const onCardScroll = () => {
+      if (suppressProxyEcho) return;
+      suppressCardEcho = true;
+      proxy.scrollLeft = card.scrollLeft;
+      requestAnimationFrame(() => { suppressCardEcho = false; });
+    };
+    const onProxyScroll = () => {
+      if (suppressCardEcho) return;
+      suppressProxyEcho = true;
+      card.scrollLeft = proxy.scrollLeft;
+      requestAnimationFrame(() => { suppressProxyEcho = false; });
+    };
+    card.addEventListener('scroll', onCardScroll, { passive: true });
+    proxy.addEventListener('scroll', onProxyScroll, { passive: true });
+    return () => {
+      card.removeEventListener('scroll', onCardScroll);
+      proxy.removeEventListener('scroll', onProxyScroll);
+    };
   }, []);
 
   // Sum of the fixed-pixel track widths. Non-px widths (e.g. "1fr"
@@ -1137,6 +1182,32 @@ export function OpsTable<T>({
               </div>
             );
           })
+        )}
+
+        {/* Sticky horizontal scrollbar proxy. Anchored to the bottom
+            of the card's visible viewport via position:sticky so wide
+            tables can be horizontally scrolled from any vertical
+            position without having to scroll all the way down to
+            reach the native scrollbar at the end of content. The
+            proxy's child mirrors the card's scrollWidth; scroll
+            position is synced bidirectionally via the effect above.
+            Only renders when there's actually horizontal overflow. */}
+        {cardScrollWidth > cardInnerWidth + 1 && (
+          <div
+            ref={scrollProxyRef}
+            style={{
+              position:   'sticky',
+              bottom:     0,
+              zIndex:     4,
+              height:     14,
+              overflowX:  'auto',
+              overflowY:  'hidden',
+              background: 'var(--gc-surface)',
+              borderTop:  '1px solid var(--gc-border-light)',
+            }}
+          >
+            <div style={{ width: cardScrollWidth, height: 1 }} aria-hidden />
+          </div>
         )}
       </div>
 
