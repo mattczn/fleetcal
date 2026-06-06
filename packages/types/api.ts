@@ -623,6 +623,30 @@ export interface GetDriverDocumentUrlResponse {
   url: string;
 }
 
+// ── /v1/assets/:id/documents + /v1/asset-documents ───────────────────────
+
+export interface ListAssetDocumentsResponse {
+  documents: import("./domain").AssetDocument[];
+}
+export interface CreateAssetDocumentResponse {
+  document: import("./domain").AssetDocument;
+}
+export interface GetAssetDocumentUrlResponse {
+  url: string;
+}
+
+// ── /v1/trailers/:id/documents + /v1/trailer-documents ───────────────────
+
+export interface ListTrailerDocumentsResponse {
+  documents: import("./domain").TrailerDocument[];
+}
+export interface CreateTrailerDocumentResponse {
+  document: import("./domain").TrailerDocument;
+}
+export interface GetTrailerDocumentUrlResponse {
+  url: string;
+}
+
 // ── /v1/customers ────────────────────────────────────────────────────────
 
 export interface ListCustomersResponse { customers: Customer[]; }
@@ -717,26 +741,38 @@ export interface RefreshCustomerInvoicingResponse {
 
 export interface ListTrailersResponse { trailers: Trailer[]; }
 export interface CreateTrailerRequest {
-  name:             string;
-  trailerNumber?:   string | null;
-  category:         TrailerCategory;
-  notes?:           string | null;
-  motiveVehicleId?: string | null;
+  name:               string;
+  trailerNumber?:     string | null;
+  category:           TrailerCategory;
+  notes?:             string | null;
+  motiveVehicleId?:   string | null;
+  make?:              string | null;
+  model?:             string | null;
+  vin?:               string | null;
+  licensePlate?:      string | null;
+  licenseState?:      string | null;
+  licenseExpiration?: string | null;
   /** YYYY-MM-DD; defaults to today server-side. */
-  activeFrom?:      string;
+  activeFrom?:        string;
   /** YYYY-MM-DD or null. null = currently active. */
-  activeTo?:        string | null;
+  activeTo?:          string | null;
 }
 export interface CreateTrailerResponse { trailer: Trailer; }
 export interface UpdateTrailerRequest {
-  name?:            string;
-  trailerNumber?:   string | null;
-  category?:        TrailerCategory;
-  notes?:           string | null;
-  motiveVehicleId?: string | null;
-  activeFrom?:      string;
+  name?:              string;
+  trailerNumber?:     string | null;
+  category?:          TrailerCategory;
+  notes?:             string | null;
+  motiveVehicleId?:   string | null;
+  make?:              string | null;
+  model?:             string | null;
+  vin?:               string | null;
+  licensePlate?:      string | null;
+  licenseState?:      string | null;
+  licenseExpiration?: string | null;
+  activeFrom?:        string;
   /** Stamp/clear the retire date. null = currently active (unretire). */
-  activeTo?:        string | null;
+  activeTo?:          string | null;
 }
 export interface UpdateTrailerResponse { trailer: Trailer; }
 

@@ -12,6 +12,7 @@ import {
   type UpdateTrailerRequest,
   type UpdateTrailerResponse,
   type ApiErrorResponse,
+  TRAILER_DOCUMENT_KINDS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -27,6 +28,12 @@ interface DbTrailerRow {
   category: TrailerCategory;
   notes: string | null;
   motive_vehicle_id: string | null;
+  make: string | null;
+  model: string | null;
+  vin: string | null;
+  license_plate: string | null;
+  license_state: string | null;
+  license_expiration: string | null;
   sort_order: number;
   active_from: string;
   active_to: string | null;
@@ -34,19 +41,25 @@ interface DbTrailerRow {
 
 function rowToTrailer(r: DbTrailerRow): Trailer {
   return {
-    id:               r.id,
-    name:             r.name,
-    trailerNumber:    r.trailer_number    ?? undefined,
-    category:         r.category,
-    notes:            r.notes             ?? undefined,
-    motiveVehicleId:  r.motive_vehicle_id ?? undefined,
-    sortOrder:        r.sort_order,
-    activeFrom:       r.active_from,
-    activeTo:         r.active_to,
+    id:                r.id,
+    name:              r.name,
+    trailerNumber:     r.trailer_number     ?? undefined,
+    category:          r.category,
+    notes:             r.notes              ?? undefined,
+    motiveVehicleId:   r.motive_vehicle_id  ?? undefined,
+    make:              r.make               ?? undefined,
+    model:             r.model              ?? undefined,
+    vin:               r.vin                ?? undefined,
+    licensePlate:      r.license_plate      ?? undefined,
+    licenseState:      r.license_state      ?? undefined,
+    licenseExpiration: r.license_expiration ?? null,
+    sortOrder:         r.sort_order,
+    activeFrom:        r.active_from,
+    activeTo:          r.active_to,
   };
 }
 
-const COLS = "id,name,trailer_number,category,notes,motive_vehicle_id,sort_order,active_from,active_to";
+const COLS = "id,name,trailer_number,category,notes,motive_vehicle_id,make,model,vin,license_plate,license_state,license_expiration,sort_order,active_from,active_to";
 
 function todayUtcDateKey(): string {
   return new Date().toISOString().slice(0, 10);
@@ -79,15 +92,21 @@ trailers.post("/", requireCapability("trailers.create"), async (c) => {
     .select("*", { count: "exact", head: true })
     .eq("org_id", orgId);
   const insert = {
-    org_id:            orgId,
-    name:              body.name,
-    trailer_number:    body.trailerNumber   ?? null,
-    category:          body.category,
-    notes:             body.notes           ?? null,
-    motive_vehicle_id: body.motiveVehicleId ?? null,
-    sort_order:        count ?? 0,
-    active_from:       body.activeFrom      ?? todayUtcDateKey(),
-    active_to:         body.activeTo        ?? null,
+    org_id:             orgId,
+    name:               body.name,
+    trailer_number:     body.trailerNumber     ?? null,
+    category:           body.category,
+    notes:              body.notes             ?? null,
+    motive_vehicle_id:  body.motiveVehicleId   ?? null,
+    make:               body.make              ?? null,
+    model:              body.model             ?? null,
+    vin:                body.vin               ?? null,
+    license_plate:      body.licensePlate      ?? null,
+    license_state:      body.licenseState      ?? null,
+    license_expiration: body.licenseExpiration ?? null,
+    sort_order:         count ?? 0,
+    active_from:        body.activeFrom        ?? todayUtcDateKey(),
+    active_to:          body.activeTo          ?? null,
   };
   const { data, error } = await supabase
     .from("trailers")
@@ -110,13 +129,19 @@ trailers.patch("/:id", requireCapability("trailers.edit"), async (c) => {
   }
   const body = await c.req.json<UpdateTrailerRequest>();
   const update: Record<string, unknown> = {};
-  if ("name"            in body) update.name              = body.name;
-  if ("trailerNumber"   in body) update.trailer_number    = body.trailerNumber    ?? null;
-  if ("category"        in body) update.category          = body.category;
-  if ("notes"           in body) update.notes             = body.notes            ?? null;
-  if ("motiveVehicleId" in body) update.motive_vehicle_id = body.motiveVehicleId  ?? null;
-  if ("activeFrom"      in body) update.active_from       = body.activeFrom;
-  if ("activeTo"        in body) update.active_to         = body.activeTo ?? null;
+  if ("name"              in body) update.name               = body.name;
+  if ("trailerNumber"     in body) update.trailer_number     = body.trailerNumber     ?? null;
+  if ("category"          in body) update.category           = body.category;
+  if ("notes"             in body) update.notes              = body.notes             ?? null;
+  if ("motiveVehicleId"   in body) update.motive_vehicle_id  = body.motiveVehicleId   ?? null;
+  if ("make"              in body) update.make               = body.make              ?? null;
+  if ("model"             in body) update.model              = body.model             ?? null;
+  if ("vin"               in body) update.vin                = body.vin               ?? null;
+  if ("licensePlate"      in body) update.license_plate      = body.licensePlate      ?? null;
+  if ("licenseState"      in body) update.license_state      = body.licenseState      ?? null;
+  if ("licenseExpiration" in body) update.license_expiration = body.licenseExpiration ?? null;
+  if ("activeFrom"        in body) update.active_from        = body.activeFrom;
+  if ("activeTo"          in body) update.active_to          = body.activeTo          ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }
@@ -250,5 +275,158 @@ async function countTrailerBlockers(orgId: string, trailerId: number): Promise<R
   if (maintItems  > 0) out.maintenance_action_items  = maintItems;
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Trailer documents — ops surface. Same shape as asset / driver
+// documents; the kinds are the same (registration / inspection /
+// insurance / title / other).
+//   GET    /v1/trailers/:id/documents          — list
+//   POST   /v1/trailers/:id/documents          — upload (multipart)
+//   GET    /v1/trailer-documents/:docId/url    — fresh signed URL
+//   DELETE /v1/trailer-documents/:docId        — remove (cascades storage)
+// ─────────────────────────────────────────────────────────────────────────
+
+export const TRAILER_DOC_BUCKET = "trailer-documents";
+type TrailerDocKind = typeof TRAILER_DOCUMENT_KINDS[number];
+
+interface TrailerDocRow {
+  id:           string;
+  org_id:       string;
+  trailer_id:   number;
+  kind:         string;
+  storage_path: string;
+  file_name:    string;
+  mime_type:    string | null;
+  size_bytes:   number | null;
+  expires_on:   string | null;
+  notes:        string | null;
+  uploaded_at:  string;
+  uploaded_by:  string;
+}
+
+export const TRAILER_DOC_COLS =
+  "id,org_id,trailer_id,kind,storage_path,file_name,mime_type,size_bytes," +
+  "expires_on,notes,uploaded_at,uploaded_by";
+
+export function rowToTrailerDoc(r: TrailerDocRow, signedUrl?: string) {
+  return {
+    id:         r.id,
+    orgId:      r.org_id,
+    trailerId:  r.trailer_id,
+    kind:       r.kind as TrailerDocKind,
+    fileName:   r.file_name,
+    mimeType:   r.mime_type ?? undefined,
+    sizeBytes:  r.size_bytes ?? undefined,
+    expiresOn:  r.expires_on ?? undefined,
+    notes:      r.notes ?? undefined,
+    uploadedAt: r.uploaded_at,
+    uploadedBy: r.uploaded_by,
+    signedUrl,
+  };
+}
+
+export async function listDocsForTrailer(orgId: string, trailerId: number) {
+  const { data, error } = await supabase
+    .from("trailer_documents")
+    .select(TRAILER_DOC_COLS)
+    .eq("org_id", orgId)
+    .eq("trailer_id", trailerId)
+    .order("uploaded_at", { ascending: false });
+  if (error) return { error, docs: [] as ReturnType<typeof rowToTrailerDoc>[] };
+
+  const rows = (data ?? []) as unknown as TrailerDocRow[];
+  if (rows.length === 0) return { error: null, docs: [] };
+
+  const paths = rows.map(r => r.storage_path);
+  const { data: signed } = await supabase.storage.from(TRAILER_DOC_BUCKET).createSignedUrls(paths, 3600);
+  const urlByPath = new Map<string, string>();
+  for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+    urlByPath.set(s.path, s.signedUrl);
+  }
+  return { error: null, docs: rows.map(r => rowToTrailerDoc(r, urlByPath.get(r.storage_path))) };
+}
+
+trailers.get("/:id/documents", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  const { error, docs } = await listDocsForTrailer(orgId, id);
+  if (error) {
+    console.error("[GET /v1/trailers/:id/documents] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ documents: docs });
+});
+
+trailers.post("/:id/documents", requireCapability("trailers.edit"), async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const id     = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+
+  let body: { file?: File; kind?: string; expiresOn?: string; notes?: string };
+  try { body = await c.req.parseBody() as typeof body; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] } satisfies ApiErrorResponse, 400); }
+
+  const file = body.file;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
+  }
+  const kind = (body.kind ?? "other").toString() as TrailerDocKind;
+  if (!(TRAILER_DOCUMENT_KINDS as readonly string[]).includes(kind)) {
+    return c.json({ error: "validation_failed", errors: [`kind must be one of ${TRAILER_DOCUMENT_KINDS.join("|")}`] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Confirm the trailer belongs to this org.
+  const { data: trailerRow } = await supabase
+    .from("trailers").select("id").eq("id", id).eq("org_id", orgId).maybeSingle();
+  if (!trailerRow) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${id}/${kind}_${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: upErr } = await supabase.storage
+    .from(TRAILER_DOC_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (upErr) {
+    console.error("[POST trailers/:id/documents] storage:", upErr);
+    return c.json({ error: "upload_failed", detail: upErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("trailer_documents")
+    .insert({
+      org_id:       orgId,
+      trailer_id:   id,
+      kind,
+      storage_path: storagePath,
+      file_name:    file.name,
+      mime_type:    file.type || null,
+      size_bytes:   bytes.length,
+      expires_on:   body.expiresOn?.trim() || null,
+      notes:        body.notes?.trim() || null,
+      uploaded_by:  userId,
+    } as any)
+    .select(TRAILER_DOC_COLS)
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(TRAILER_DOC_BUCKET).remove([storagePath]);
+    console.error("[POST trailers/:id/documents] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  const { data: signed } = await supabase.storage.from(TRAILER_DOC_BUCKET).createSignedUrl(storagePath, 3600);
+  const doc = rowToTrailerDoc(data as unknown as TrailerDocRow, signed?.signedUrl);
+  return c.json({ document: doc });
+});
 
 export default trailers;

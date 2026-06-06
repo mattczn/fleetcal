@@ -43,6 +43,8 @@ import maintenanceReportsRoute from "./routes/maintenance-reports.js";
 import inspectionReportsRoute from "./routes/inspection-reports.js";
 import maintenanceActionItemsRoute from "./routes/maintenance-action-items.js";
 import driverDocumentsRoute from "./routes/driver-documents.js";
+import assetDocumentsRoute from "./routes/asset-documents.js";
+import trailerDocumentsRoute from "./routes/trailer-documents.js";
 import reportsRoute from "./routes/reports.js";
 import internalRoute from "./routes/internal.js";
 import movementsRoute from "./routes/movements.js";
@@ -134,6 +136,8 @@ authed.route("/maintenance-reports", maintenanceReportsRoute);
 authed.route("/inspection-reports", inspectionReportsRoute);
 authed.route("/maintenance-action-items", maintenanceActionItemsRoute);
 authed.route("/driver-documents", driverDocumentsRoute);
+authed.route("/asset-documents", assetDocumentsRoute);
+authed.route("/trailer-documents", trailerDocumentsRoute);
 authed.route("/reports", reportsRoute);
 
 // ── Bot routes (API key auth, read-only load access) ────────────────────

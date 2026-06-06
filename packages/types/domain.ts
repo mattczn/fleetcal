@@ -201,6 +201,60 @@ export interface DriverDocument {
   signedUrl?:  string;
 }
 
+// ── Asset (truck) documents ─────────────────────────────────────────────
+//
+// Same shape as DriverDocument, scoped to a single truck.
+// `kind` covers the common fleet-asset paperwork:
+//   - registration  : state title + plate registration
+//   - inspection    : annual DOT inspection cert
+//   - insurance     : insurance card / policy declaration page
+//   - title         : title certificate
+//   - other         : anything not in the above (IFTA permit, etc.)
+
+export type AssetDocumentKind = 'registration' | 'inspection' | 'insurance' | 'title' | 'other';
+export const ASSET_DOCUMENT_KINDS: readonly AssetDocumentKind[] = [
+  'registration', 'inspection', 'insurance', 'title', 'other',
+];
+
+export interface AssetDocument {
+  id:          string;
+  orgId:       string;
+  assetId:     number;
+  kind:        AssetDocumentKind;
+  fileName:    string;
+  mimeType?:   string;
+  sizeBytes?:  number;
+  expiresOn?:  string;
+  notes?:      string;
+  uploadedAt:  string;
+  uploadedBy:  string;
+  signedUrl?:  string;
+}
+
+// ── Trailer documents ───────────────────────────────────────────────────
+//
+// Same shape as AssetDocument. Same five kinds — trailers have the same
+// paperwork lifecycle (state registration + annual DOT inspection +
+// insurance + title), just on a separate row.
+
+export type TrailerDocumentKind = AssetDocumentKind;
+export const TRAILER_DOCUMENT_KINDS: readonly TrailerDocumentKind[] = ASSET_DOCUMENT_KINDS;
+
+export interface TrailerDocument {
+  id:          string;
+  orgId:       string;
+  trailerId:   number;
+  kind:        TrailerDocumentKind;
+  fileName:    string;
+  mimeType?:   string;
+  sizeBytes?:  number;
+  expiresOn?:  string;
+  notes?:      string;
+  uploadedAt:  string;
+  uploadedBy:  string;
+  signedUrl?:  string;
+}
+
 // ── Asset (the assets table — trucks/vehicles) ──────────────────────────
 
 export interface Asset {
@@ -248,6 +302,18 @@ export interface Trailer {
   category: TrailerCategory;
   notes?: string;
   motiveVehicleId?: string;
+  /** Trailer manufacturer, e.g. "Wabash", "Great Dane", "Utility". */
+  make?: string;
+  /** Trailer model, e.g. "DuraPlate", "Everest CL". */
+  model?: string;
+  /** 17-character Vehicle Identification Number. */
+  vin?: string;
+  /** State-issued license plate number. */
+  licensePlate?: string;
+  /** 2-letter US state code for the plate issuer (e.g. "CA", "IL"). */
+  licenseState?: string;
+  /** ISO YYYY-MM-DD expiration date for the plate / registration. */
+  licenseExpiration?: string | null;
   sortOrder?: number;
   /** Active lifecycle — see Driver.activeFrom for semantics. */
   activeFrom?: string;

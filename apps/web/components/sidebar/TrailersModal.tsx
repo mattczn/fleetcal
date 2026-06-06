@@ -1,14 +1,15 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { X, Container, Plus, Trash2 } from 'lucide-react';
+import { X, Container, Plus, Trash2, Loader2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { formatHardDeleteError } from '@/lib/hardDeleteError';
+import { railway } from '@/lib/railway';
 import LifecycleEditor from './LifecycleEditor';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
-import { TRAILER_CATEGORIES, type TrailerCategory } from '@fleetcal/types';
+import { TRAILER_CATEGORIES, type TrailerCategory, type TrailerDocument, type TrailerDocumentKind } from '@fleetcal/types';
 import type { Trailer } from '@/lib/types';
 
 /**
@@ -321,14 +322,20 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
   // profile form AND from the small header sub-line under the name.
   const showCategory    = moduleEnabled('trailer_categories');
 
-  const [name,            setName]            = useState(trailer.name);
-  const [trailerNumber,   setTrailerNumber]   = useState(trailer.trailerNumber ?? '');
-  const [category,        setCategory]        = useState<TrailerCategory>(trailer.category);
-  const [notes,           setNotes]           = useState(trailer.notes ?? '');
-  const [motiveVehicleId, setMotiveVehicleId] = useState(trailer.motiveVehicleId ?? '');
-  const [motiveEditing,   setMotiveEditing]   = useState(false);
-  const [motiveDraft,     setMotiveDraft]     = useState(trailer.motiveVehicleId ?? '');
-  const [confirmDelete,   setConfirmDelete]   = useState(false);
+  const [name,              setName]              = useState(trailer.name);
+  const [trailerNumber,     setTrailerNumber]     = useState(trailer.trailerNumber ?? '');
+  const [category,          setCategory]          = useState<TrailerCategory>(trailer.category);
+  const [notes,             setNotes]             = useState(trailer.notes ?? '');
+  const [make,              setMake]              = useState(trailer.make ?? '');
+  const [model,             setModel]             = useState(trailer.model ?? '');
+  const [vin,               setVin]               = useState(trailer.vin ?? '');
+  const [licensePlate,      setLicensePlate]      = useState(trailer.licensePlate ?? '');
+  const [licenseState,      setLicenseState]      = useState(trailer.licenseState ?? '');
+  const [licenseExpiration, setLicenseExpiration] = useState(trailer.licenseExpiration ?? '');
+  const [motiveVehicleId,   setMotiveVehicleId]   = useState(trailer.motiveVehicleId ?? '');
+  const [motiveEditing,     setMotiveEditing]     = useState(false);
+  const [motiveDraft,       setMotiveDraft]       = useState(trailer.motiveVehicleId ?? '');
+  const [confirmDelete,     setConfirmDelete]     = useState(false);
 
   const save = (updates: Partial<Omit<Trailer, 'id'>>) => updateTrailer(trailer.id, updates);
 
@@ -423,6 +430,89 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
           </div>
         )}
 
+        {/* Make + Model — mirrors the trucks profile shape. */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <PField label="Make">
+            <input type="text" value={make} onChange={e => setMake(e.target.value)}
+              placeholder="e.g. Wabash" style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                setMake(v);
+                save({ make: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+          <PField label="Model">
+            <input type="text" value={model} onChange={e => setModel(e.target.value)}
+              placeholder="e.g. DuraPlate" style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim();
+                setModel(v);
+                save({ model: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+        </div>
+
+        {/* VIN + License Plate */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <PField label="VIN">
+            <input type="text" value={vin} onChange={e => setVin(e.target.value)}
+              placeholder="17-character VIN" style={P_INPUT}
+              maxLength={17}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim().toUpperCase().replace(/\s+/g, '');
+                setVin(v);
+                save({ vin: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+          <PField label="License Plate">
+            <input type="text" value={licensePlate} onChange={e => setLicensePlate(e.target.value)}
+              placeholder="e.g. 9XY-Z123" style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim().toUpperCase();
+                setLicensePlate(v);
+                save({ licensePlate: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+        </div>
+
+        {/* License State + Expiration — trailers cross state lines
+            and get registered in different jurisdictions more often
+            than trucks, so the state + expiry are useful primary
+            data, not optional. */}
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <PField label="License State">
+            <input type="text" value={licenseState} onChange={e => setLicenseState(e.target.value)}
+              placeholder="e.g. CA" style={P_INPUT}
+              maxLength={2}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value.trim().toUpperCase();
+                setLicenseState(v);
+                save({ licenseState: v || undefined });
+                blurBorder(e);
+              }} />
+          </PField>
+          <PField label="License Expiration">
+            <input type="date" value={licenseExpiration} onChange={e => setLicenseExpiration(e.target.value)}
+              style={P_INPUT}
+              onFocus={focusBorder}
+              onBlur={e => {
+                const v = e.target.value;
+                setLicenseExpiration(v);
+                save({ licenseExpiration: v || null });
+                blurBorder(e);
+              }} />
+          </PField>
+        </div>
+
         {/* Notes */}
         <PField label="Notes">
           <textarea value={notes} onChange={e => setNotes(e.target.value)}
@@ -489,6 +579,10 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete }: {
         </div>
         )}
       </div>
+      {/* Documents — registration, inspection, insurance, title,
+          other. Same UX as the truck + driver doc surfaces. */}
+      <TrailerDocumentsSection trailerId={trailer.id} accent={TRAILER_ACCENT} canEdit={canEdit} />
+
       </fieldset>
 
       {/* Lifecycle editor */}
@@ -603,6 +697,133 @@ function PermanentDeleteBlock({ label, onConfirm }: {
               Cancel
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Trailer Documents Section ────────────────────────────────────────────────
+
+const TRAILER_DOC_KINDS: { key: TrailerDocumentKind; label: string }[] = [
+  { key: 'registration', label: 'Registration' },
+  { key: 'inspection',   label: 'Annual Inspection' },
+  { key: 'insurance',    label: 'Insurance' },
+  { key: 'title',        label: 'Title' },
+  { key: 'other',        label: 'Other' },
+];
+
+function TrailerDocumentsSection({ trailerId, accent, canEdit }: {
+  trailerId: number;
+  accent: string;
+  canEdit: boolean;
+}) {
+  const [documents, setDocuments]         = useState<TrailerDocument[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [uploadingKind, setUploadingKind] = useState<TrailerDocumentKind | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      try {
+        const res = await railway.listTrailerDocuments(trailerId);
+        if (alive) setDocuments(res.documents);
+      } catch (err) {
+        console.warn('[TrailersModal] load documents:', err);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [trailerId]);
+
+  async function uploadDoc(kind: TrailerDocumentKind, file: File) {
+    setUploadingKind(kind);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('kind', kind);
+      await railway.uploadTrailerDocument(trailerId, form);
+      const res = await railway.listTrailerDocuments(trailerId);
+      setDocuments(res.documents);
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setUploadingKind(null);
+    }
+  }
+
+  async function deleteDoc(docId: string) {
+    if (!confirm('Delete this document?')) return;
+    try {
+      await railway.deleteTrailerDocument(docId);
+      setDocuments(docs => docs.filter(d => d.id !== docId));
+    } catch (err) {
+      alert(`Delete failed: ${(err as Error).message}`);
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <div className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--gc-text-3)' }}>
+        Documents
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+          <Loader2 size={14} className="animate-spin" /> Loading…
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {TRAILER_DOC_KINDS.map((k, idx) => {
+            const forKind = documents.filter(d => d.kind === k.key);
+            return (
+              <div key={k.key}
+                style={{ paddingTop: idx === 0 ? 0 : 12, borderTop: idx === 0 ? 'none' : '1px solid var(--gc-border-light)' }}>
+                <div className="flex items-center mb-2">
+                  <span className="text-sm font-semibold flex-1" style={{ color: 'var(--gc-text-1)' }}>{k.label}</span>
+                  {canEdit && (
+                    <label
+                      className="text-xs font-semibold px-2.5 py-1 rounded-lg cursor-pointer flex items-center gap-1"
+                      style={{ background: 'var(--gc-blue-light)', color: accent, opacity: uploadingKind === k.key ? 0.6 : 1 }}>
+                      {uploadingKind === k.key ? <Loader2 size={11} className="animate-spin" /> : '+'} Upload
+                      <input type="file" hidden
+                        accept="image/*,application/pdf"
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0];
+                          if (f) await uploadDoc(k.key, f);
+                          (e.currentTarget as HTMLInputElement).value = '';
+                        }} />
+                    </label>
+                  )}
+                </div>
+                {forKind.length === 0 ? (
+                  <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>None uploaded.</div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {forKind.map(d => (
+                      <div key={d.id}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                        style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+                        <span className="text-xs truncate flex-1" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</span>
+                        <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                          {new Date(d.uploadedAt).toLocaleDateString()}
+                        </span>
+                        {d.signedUrl && (
+                          <a href={d.signedUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-xs font-medium" style={{ color: accent }}>View</a>
+                        )}
+                        {canEdit && (
+                          <button onClick={() => deleteDoc(d.id)}
+                            className="text-xs font-medium" style={{ color: '#b91c1c' }}>Delete</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

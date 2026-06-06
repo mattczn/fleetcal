@@ -19,6 +19,7 @@ import {
   type UpdateAssetResponse,
   type ReorderAssetsRequest,
   type ApiErrorResponse,
+  ASSET_DOCUMENT_KINDS,
 } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
@@ -317,5 +318,156 @@ async function countAssetBlockers(orgId: string, assetId: number): Promise<Recor
   if (maintenance > 0) out.maintenance_reports = maintenance;
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Asset documents — ops surface.
+//   GET    /v1/assets/:id/documents          — list
+//   POST   /v1/assets/:id/documents          — upload (multipart)
+//   GET    /v1/asset-documents/:docId/url    — fresh signed URL
+//   DELETE /v1/asset-documents/:docId        — remove (cascades storage)
+// ─────────────────────────────────────────────────────────────────────────
+
+export const ASSET_DOC_BUCKET = "asset-documents";
+type AssetDocKind = typeof ASSET_DOCUMENT_KINDS[number];
+
+interface AssetDocRow {
+  id:           string;
+  org_id:       string;
+  asset_id:     number;
+  kind:         string;
+  storage_path: string;
+  file_name:    string;
+  mime_type:    string | null;
+  size_bytes:   number | null;
+  expires_on:   string | null;
+  notes:        string | null;
+  uploaded_at:  string;
+  uploaded_by:  string;
+}
+
+export const ASSET_DOC_COLS =
+  "id,org_id,asset_id,kind,storage_path,file_name,mime_type,size_bytes," +
+  "expires_on,notes,uploaded_at,uploaded_by";
+
+export function rowToAssetDoc(r: AssetDocRow, signedUrl?: string) {
+  return {
+    id:         r.id,
+    orgId:      r.org_id,
+    assetId:    r.asset_id,
+    kind:       r.kind as AssetDocKind,
+    fileName:   r.file_name,
+    mimeType:   r.mime_type ?? undefined,
+    sizeBytes:  r.size_bytes ?? undefined,
+    expiresOn:  r.expires_on ?? undefined,
+    notes:      r.notes ?? undefined,
+    uploadedAt: r.uploaded_at,
+    uploadedBy: r.uploaded_by,
+    signedUrl,
+  };
+}
+
+export async function listDocsForAsset(orgId: string, assetId: number) {
+  const { data, error } = await supabase
+    .from("asset_documents")
+    .select(ASSET_DOC_COLS)
+    .eq("org_id", orgId)
+    .eq("asset_id", assetId)
+    .order("uploaded_at", { ascending: false });
+  if (error) return { error, docs: [] as ReturnType<typeof rowToAssetDoc>[] };
+
+  const rows = (data ?? []) as unknown as AssetDocRow[];
+  if (rows.length === 0) return { error: null, docs: [] };
+
+  const paths = rows.map(r => r.storage_path);
+  const { data: signed } = await supabase.storage.from(ASSET_DOC_BUCKET).createSignedUrls(paths, 3600);
+  const urlByPath = new Map<string, string>();
+  for (const s of (signed ?? []) as Array<{ path: string; signedUrl: string }>) {
+    urlByPath.set(s.path, s.signedUrl);
+  }
+  return { error: null, docs: rows.map(r => rowToAssetDoc(r, urlByPath.get(r.storage_path))) };
+}
+
+assets.get("/:id/documents", async (c) => {
+  const orgId = c.get("orgId");
+  const id    = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+  const { error, docs } = await listDocsForAsset(orgId, id);
+  if (error) {
+    console.error("[GET /v1/assets/:id/documents] failed:", error);
+    return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ documents: docs });
+});
+
+assets.post("/:id/documents", requireCapability("assets.edit"), async (c) => {
+  const orgId  = c.get("orgId");
+  const userId = c.get("userId");
+  const id     = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) {
+    return c.json({ error: "validation_failed", errors: ["id must be numeric"] } satisfies ApiErrorResponse, 400);
+  }
+
+  let body: { file?: File; kind?: string; expiresOn?: string; notes?: string };
+  try { body = await c.req.parseBody() as typeof body; }
+  catch { return c.json({ error: "validation_failed", errors: ["multipart parse failed"] } satisfies ApiErrorResponse, 400); }
+
+  const file = body.file;
+  if (!file || typeof file === 'string') {
+    return c.json({ error: "validation_failed", errors: ["file required"] } satisfies ApiErrorResponse, 400);
+  }
+  const kind = (body.kind ?? "other").toString() as AssetDocKind;
+  if (!(ASSET_DOCUMENT_KINDS as readonly string[]).includes(kind)) {
+    return c.json({ error: "validation_failed", errors: [`kind must be one of ${ASSET_DOCUMENT_KINDS.join("|")}`] } satisfies ApiErrorResponse, 400);
+  }
+
+  // Confirm the asset belongs to this org.
+  const { data: assetRow } = await supabase
+    .from("assets").select("id").eq("id", id).eq("org_id", orgId).maybeSingle();
+  if (!assetRow) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const ext  = (file.name.split(".").pop() ?? "bin").toLowerCase();
+  const rand = Math.random().toString(36).slice(2, 10);
+  const storagePath = `${orgId}/${id}/${kind}_${Date.now()}_${rand}.${ext}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  const { error: upErr } = await supabase.storage
+    .from(ASSET_DOC_BUCKET)
+    .upload(storagePath, bytes, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (upErr) {
+    console.error("[POST assets/:id/documents] storage:", upErr);
+    return c.json({ error: "upload_failed", detail: upErr.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("asset_documents")
+    .insert({
+      org_id:       orgId,
+      asset_id:     id,
+      kind,
+      storage_path: storagePath,
+      file_name:    file.name,
+      mime_type:    file.type || null,
+      size_bytes:   bytes.length,
+      expires_on:   body.expiresOn?.trim() || null,
+      notes:        body.notes?.trim() || null,
+      uploaded_by:  userId,
+    } as any)
+    .select(ASSET_DOC_COLS)
+    .single();
+  if (error || !data) {
+    void supabase.storage.from(ASSET_DOC_BUCKET).remove([storagePath]);
+    console.error("[POST assets/:id/documents] insert:", error);
+    return c.json({ error: "insert_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
+  }
+  const { data: signed } = await supabase.storage.from(ASSET_DOC_BUCKET).createSignedUrl(storagePath, 3600);
+  const doc = rowToAssetDoc(data as unknown as AssetDocRow, signed?.signedUrl);
+  return c.json({ document: doc });
+});
 
 export default assets;

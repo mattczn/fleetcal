@@ -428,6 +428,115 @@ export type Database = {
           },
         ]
       }
+      // Hand-authored — will be regenerated when `supabase gen types
+      // typescript` runs next. Mirrors driver_documents but FK'd to
+      // assets / trailers instead of drivers.
+      asset_documents: {
+        Row: {
+          asset_id: number
+          expires_on: string | null
+          file_name: string
+          id: string
+          kind: string
+          mime_type: string | null
+          notes: string | null
+          org_id: string
+          size_bytes: number | null
+          storage_path: string
+          uploaded_at: string
+          uploaded_by: string
+        }
+        Insert: {
+          asset_id: number
+          expires_on?: string | null
+          file_name: string
+          id?: string
+          kind: string
+          mime_type?: string | null
+          notes?: string | null
+          org_id: string
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_at?: string
+          uploaded_by: string
+        }
+        Update: {
+          asset_id?: number
+          expires_on?: string | null
+          file_name?: string
+          id?: string
+          kind?: string
+          mime_type?: string | null
+          notes?: string | null
+          org_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_at?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "asset_documents_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: false
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trailer_documents: {
+        Row: {
+          trailer_id: number
+          expires_on: string | null
+          file_name: string
+          id: string
+          kind: string
+          mime_type: string | null
+          notes: string | null
+          org_id: string
+          size_bytes: number | null
+          storage_path: string
+          uploaded_at: string
+          uploaded_by: string
+        }
+        Insert: {
+          trailer_id: number
+          expires_on?: string | null
+          file_name: string
+          id?: string
+          kind: string
+          mime_type?: string | null
+          notes?: string | null
+          org_id: string
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_at?: string
+          uploaded_by: string
+        }
+        Update: {
+          trailer_id?: number
+          expires_on?: string | null
+          file_name?: string
+          id?: string
+          kind?: string
+          mime_type?: string | null
+          notes?: string | null
+          org_id?: string
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_at?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trailer_documents_trailer_id_fkey"
+            columns: ["trailer_id"]
+            isOneToOne: false
+            referencedRelation: "trailers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       events: {
         Row: {
           accessorials: Json | null

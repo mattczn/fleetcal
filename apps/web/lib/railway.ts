@@ -689,6 +689,42 @@ class RailwayClient {
     return this.req<{ url: string }>('GET', `/v1/driver-documents/${documentId}/url`);
   }
 
+  // Asset (truck) documents — mirror of the driver-docs surface.
+  listAssetDocuments(assetId: number) {
+    return this.req<{ documents: import('@fleetcal/types').AssetDocument[] }>(
+      'GET', `/v1/assets/${assetId}/documents`,
+    );
+  }
+  uploadAssetDocument(assetId: number, form: FormData) {
+    return this.req<{ document: import('@fleetcal/types').AssetDocument }>(
+      'POST', `/v1/assets/${assetId}/documents`, form,
+    );
+  }
+  deleteAssetDocument(documentId: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/asset-documents/${documentId}`);
+  }
+  getAssetDocumentUrl(documentId: string) {
+    return this.req<{ url: string }>('GET', `/v1/asset-documents/${documentId}/url`);
+  }
+
+  // Trailer documents — mirror of the driver-docs surface.
+  listTrailerDocuments(trailerId: number) {
+    return this.req<{ documents: import('@fleetcal/types').TrailerDocument[] }>(
+      'GET', `/v1/trailers/${trailerId}/documents`,
+    );
+  }
+  uploadTrailerDocument(trailerId: number, form: FormData) {
+    return this.req<{ document: import('@fleetcal/types').TrailerDocument }>(
+      'POST', `/v1/trailers/${trailerId}/documents`, form,
+    );
+  }
+  deleteTrailerDocument(documentId: string) {
+    return this.req<{ ok: true }>('DELETE', `/v1/trailer-documents/${documentId}`);
+  }
+  getTrailerDocumentUrl(documentId: string) {
+    return this.req<{ url: string }>('GET', `/v1/trailer-documents/${documentId}/url`);
+  }
+
   listCustomers()                            { return this.req<ListCustomersResponse>('GET', '/v1/customers'); }
   createCustomer(body: CreateCustomerRequest) { return this.req<CreateCustomerResponse>('POST', '/v1/customers', body); }
   updateCustomer(id: string, body: UpdateCustomerRequest) {

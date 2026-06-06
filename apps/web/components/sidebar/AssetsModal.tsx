@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink } from 'lucide-react';
+import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink, Loader2 } from 'lucide-react';
+import { railway } from '@/lib/railway';
+import type { AssetDocument, AssetDocumentKind } from '@fleetcal/types';
 import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
@@ -662,6 +664,11 @@ function AssetProfilePanel({ asset, events, drivers, openEditModal, onRemove, on
       </div>
       )}
 
+      {/* Documents — registration, inspection, insurance, title, other.
+          Per-kind upload + list mirrors the driver-docs pattern so the
+          UX is consistent across the truck/driver/trailer directories. */}
+      <AssetDocumentsSection assetId={asset.id} accent={color} canEdit={canEdit} />
+
       </fieldset>
 
       {/* Recent loads — In Progress / Upcoming / Completed with search.
@@ -816,6 +823,136 @@ function PermanentDeleteBlock({ label, onConfirm, localBlockerHint }: {
               Cancel
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Asset Documents Section ──────────────────────────────────────────────────
+
+/** Per-truck document attachments. Mirrors the DriversModal pattern:
+ *  one row per document kind, with an inline upload button and a list
+ *  of attached files (file name + uploaded date + View + Delete). */
+const ASSET_DOC_KINDS: { key: AssetDocumentKind; label: string }[] = [
+  { key: 'registration', label: 'Registration' },
+  { key: 'inspection',   label: 'Annual Inspection' },
+  { key: 'insurance',    label: 'Insurance' },
+  { key: 'title',        label: 'Title' },
+  { key: 'other',        label: 'Other' },
+];
+
+function AssetDocumentsSection({ assetId, accent, canEdit }: {
+  assetId: number;
+  accent: string;
+  canEdit: boolean;
+}) {
+  const [documents, setDocuments]     = useState<AssetDocument[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [uploadingKind, setUploadingKind] = useState<AssetDocumentKind | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      try {
+        const res = await railway.listAssetDocuments(assetId);
+        if (alive) setDocuments(res.documents);
+      } catch (err) {
+        console.warn('[AssetsModal] load documents:', err);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [assetId]);
+
+  async function uploadDoc(kind: AssetDocumentKind, file: File) {
+    setUploadingKind(kind);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('kind', kind);
+      await railway.uploadAssetDocument(assetId, form);
+      const res = await railway.listAssetDocuments(assetId);
+      setDocuments(res.documents);
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setUploadingKind(null);
+    }
+  }
+
+  async function deleteDoc(docId: string) {
+    if (!confirm('Delete this document?')) return;
+    try {
+      await railway.deleteAssetDocument(docId);
+      setDocuments(docs => docs.filter(d => d.id !== docId));
+    } catch (err) {
+      alert(`Delete failed: ${(err as Error).message}`);
+    }
+  }
+
+  return (
+    <div className="mb-8">
+      <div className="text-[10px] font-bold uppercase tracking-widest mb-4" style={{ color: 'var(--gc-text-3)' }}>
+        Documents
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--gc-text-3)' }}>
+          <Loader2 size={14} className="animate-spin" /> Loading…
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {ASSET_DOC_KINDS.map((k, idx) => {
+            const forKind = documents.filter(d => d.kind === k.key);
+            return (
+              <div key={k.key}
+                style={{ paddingTop: idx === 0 ? 0 : 12, borderTop: idx === 0 ? 'none' : '1px solid var(--gc-border-light)' }}>
+                <div className="flex items-center mb-2">
+                  <span className="text-sm font-semibold flex-1" style={{ color: 'var(--gc-text-1)' }}>{k.label}</span>
+                  {canEdit && (
+                    <label
+                      className="text-xs font-semibold px-2.5 py-1 rounded-lg cursor-pointer flex items-center gap-1"
+                      style={{ background: 'var(--gc-blue-light)', color: accent, opacity: uploadingKind === k.key ? 0.6 : 1 }}>
+                      {uploadingKind === k.key ? <Loader2 size={11} className="animate-spin" /> : '+'} Upload
+                      <input type="file" hidden
+                        accept="image/*,application/pdf"
+                        onChange={async (e) => {
+                          const f = e.target.files?.[0];
+                          if (f) await uploadDoc(k.key, f);
+                          (e.currentTarget as HTMLInputElement).value = '';
+                        }} />
+                    </label>
+                  )}
+                </div>
+                {forKind.length === 0 ? (
+                  <div className="text-xs" style={{ color: 'var(--gc-text-3)' }}>None uploaded.</div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {forKind.map(d => (
+                      <div key={d.id}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                        style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}>
+                        <span className="text-xs truncate flex-1" style={{ color: 'var(--gc-text-1)' }}>{d.fileName}</span>
+                        <span className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                          {new Date(d.uploadedAt).toLocaleDateString()}
+                        </span>
+                        {d.signedUrl && (
+                          <a href={d.signedUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-xs font-medium" style={{ color: accent }}>View</a>
+                        )}
+                        {canEdit && (
+                          <button onClick={() => deleteDoc(d.id)}
+                            className="text-xs font-medium" style={{ color: '#b91c1c' }}>Delete</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
