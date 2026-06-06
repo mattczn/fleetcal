@@ -699,9 +699,17 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // virtual rate-con primary is excluded since we don't reliably know
   // its mime type without an extra fetch.
   const convertCandidates = useMemo<LoadDocument[]>(() => docs.filter(d => !isPdfDoc(d)), [docs]);
-  const handleConvertSelected = async () => {
+  // Convert a specific set of docs (any kind) to PDF. Shared between
+  // the standalone Convert dialog (operates on convertSelection) and
+  // the Manage Documents dialog's "Convert selected" footer button
+  // (operates on mergeSelection). Non-PDF docs in the input get
+  // converted; PDFs are silently skipped so a mixed selection is safe.
+  const convertDocsByIds = async (ids: Iterable<string>): Promise<void> => {
     if (!loadId || converting) return;
-    const selected = convertCandidates.filter(d => convertSelection.has(d.id));
+    const idSet = new Set(ids);
+    // Only non-PDF docs from the load are eligible — drop anything
+    // that's already a PDF (or unknown) so we don't re-wrap PDFs.
+    const selected = docs.filter(d => idSet.has(d.id) && !isPdfDoc(d));
     if (selected.length === 0) return;
     setConverting(true);
     try {
@@ -737,9 +745,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       alert(`Conversion failed: ${(err as Error).message ?? 'Unknown error'}`);
     } finally {
       setConverting(false);
-      setConvertDialogOpen(false);
-      setConvertSelection(new Set());
     }
+  };
+  const handleConvertSelected = async () => {
+    await convertDocsByIds(convertSelection);
+    setConvertDialogOpen(false);
+    setConvertSelection(new Set());
+  };
+  // Manage dialog → Convert selected. Reuses convertDocsByIds with the
+  // shared mergeSelection so the user doesn't have to bounce to the
+  // standalone convert dialog.
+  const handleConvertFromManage = async () => {
+    await convertDocsByIds(mergeSelection);
+    setMergeSelection(new Set());
   };
 
   // Sentinel id for the primary rate-con (loads.rate_con_pdf). When
@@ -2212,6 +2230,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           onDelete={handleDeleteDoc}
           onDownload={handleDownloadDoc}
           onMergeByType={handleMergeByType}
+          onConvertSelected={handleConvertFromManage}
           kindOptions={KIND_OPTIONS}
           // Pending kind picker — when the user clicks "+ Add document"
           // and picks files, the OS file picker fires (via pickFile).
@@ -2286,28 +2305,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               )}
             </div>
           ) : undefined}
-          // Convert-to-PDF lives here as a secondary action chip.
-          // Closes Manage Documents and opens the convert flow. Hidden
-          // when there's nothing non-PDF on the load.
-          extraAction={convertCandidates.length >= 1 ? (
-            <button type="button"
-              onClick={() => {
-                setMergeDialogOpen(false);
-                setMergeSelection(new Set());
-                setConvertSelection(new Set());
-                setConvertDialogOpen(true);
-              }}
-              disabled={merging || converting}
-              className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-              style={{
-                background: 'var(--gc-surface)',
-                color:      'var(--gc-blue)',
-                border:     '1px solid var(--gc-blue)',
-              }}
-              title={`Convert ${convertCandidates.length} non-PDF doc${convertCandidates.length === 1 ? '' : 's'} to PDF`}>
-              <FileText size={11} /> Convert to PDF
-            </button>
-          ) : undefined}
+          // Convert-to-PDF moved out of the header chip and into the
+          // footer as a selection-driven button (onConvertSelected).
+          // Single path now — pick docs, click "Convert selected" —
+          // instead of two parallel flows (header chip → separate
+          // convert dialog vs. inline footer).
           zIndex={zIndex + 60}
         />
       )}
@@ -2608,6 +2610,7 @@ function DocSelectionDialog({
   onDelete,
   onDownload,
   onMergeByType,
+  onConvertSelected,
   kindOptions,
   pendingArea,
   zIndex = 240,
@@ -2666,6 +2669,12 @@ function DocSelectionDialog({
    *  failed) so the dialog can show a red inline message next to the
    *  button instead of a blocking alert. */
   onMergeByType?: () => Promise<{ ok: boolean; error?: string }>;
+  /** Manage-mode "Convert selected" footer button. Caller pulls bytes
+   *  for every doc in `selected`, wraps each as a PDF, and re-uploads
+   *  (originals stay). Optional — when undefined the button doesn't
+   *  render. Independent from `extraAction` (which the caller can
+   *  still use for the secondary "open Convert dialog" affordance). */
+  onConvertSelected?: () => Promise<void>;
   /** Drives the kind <select> options in manageMode. Same shape as the
    *  parent's KIND_OPTIONS constant. ReadonlyArray so the parent's
    *  `as const` literal is assignable without a defensive copy. */
@@ -2794,20 +2803,19 @@ function DocSelectionDialog({
             selection-based UI would be misleading. The convert-flow
             extraAction (Convert to PDF) still slots in either layout. */}
         <div className="flex items-center gap-2 px-5 pb-2 flex-wrap">
-          {!manageMode && (
-            <>
-              <button type="button" onClick={onSelectAll} disabled={busy || docs.length === 0}
-                className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-                style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-                Select all
-              </button>
-              <button type="button" onClick={onSelectNone} disabled={busy}
-                className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
-                style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-                None
-              </button>
-            </>
-          )}
+          {/* Select all / None — always rendered. Manage mode uses
+              selection too now (drives the Merge / Convert footer
+              buttons), so the chips are useful in both flows. */}
+          <button type="button" onClick={onSelectAll} disabled={busy || docs.length === 0}
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            Select all
+          </button>
+          <button type="button" onClick={onSelectNone} disabled={busy}
+            className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            None
+          </button>
           {manageMode && onMergeByType && docs.length >= 2 && (
             <>
               <button type="button"
@@ -2839,13 +2847,11 @@ function DocSelectionDialog({
           )}
           <div className="flex-1" />
           {extraAction}
-          {/* The "N selected" hint only makes sense paired with the
-              footer Merge action — manage mode hides both. */}
-          {!manageMode && (
-            <span className="text-[11px] font-bold" style={{ color: canConfirm ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
-              {count} selected
-            </span>
-          )}
+          {/* "N selected" hint — useful in both manage and non-manage
+              flows now that selection drives the manage-mode footer too. */}
+          <span className="text-[11px] font-bold" style={{ color: count > 0 ? 'var(--gc-text-1)' : 'var(--gc-text-3)' }}>
+            {count} selected
+          </span>
         </div>
 
         {/* Pending kind picker (manage mode only). Lives above the doc
@@ -2877,16 +2883,13 @@ function DocSelectionDialog({
                                   : isOn          ? 'rgba(26,115,232,0.06)'
                                   : 'transparent',
                       }}>
-                      {/* Row checkbox only renders outside manage mode —
-                          the merge/convert flows need it to drive the
-                          footer action. Manage mode replaces per-row
-                          selection with the "Merge by type" header chip,
-                          so a checkbox column would be inert noise. */}
-                      {!manageMode && (
-                        <input type="checkbox" checked={isOn} disabled={rowDisabled}
-                          style={{ accentColor: 'var(--gc-blue)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
-                          onChange={() => onToggle(d.id)} />
-                      )}
+                      {/* Row checkbox drives both the standalone
+                          merge/convert footer (non-manage) AND the
+                          new manage-mode "Merge selected" / "Convert
+                          selected" footer buttons. Always on. */}
+                      <input type="checkbox" checked={isOn} disabled={rowDisabled}
+                        style={{ accentColor: 'var(--gc-blue)', cursor: rowDisabled ? 'not-allowed' : 'pointer' }}
+                        onChange={() => onToggle(d.id)} />
 
                       {/* Kind chip — static label by default, native
                           <select> dropdown in manageMode so the user can
@@ -3057,14 +3060,42 @@ function DocSelectionDialog({
           </div>
         )}
 
-        {/* Footer — manage mode is read/CRUD only, so the footer
-            collapses to a single Close button. Convert + standalone
-            merge flows still need their Cancel/Confirm action pair
-            (they're driven by selection counts, not row-level
-            mutations). */}
+        {/* Footer — manage mode keeps Close as the primary exit but
+            also surfaces selection-driven Merge + Convert buttons so
+            the dispatcher doesn't have to bounce to a separate dialog
+            to act on what they just picked. */}
         {manageMode ? (
           <div className="flex items-center justify-end gap-2 px-5 py-4"
             style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+            {/* Convert selected — enabled when at least 1 doc is
+                picked. The parent's handler silently skips PDFs in the
+                selection, so the button doesn't need to gate on kind. */}
+            {onConvertSelected && (
+              <button type="button"
+                onClick={() => { void onConvertSelected(); }}
+                disabled={busy || count < 1}
+                className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-colors disabled:opacity-40"
+                style={{
+                  background: 'var(--gc-surface)',
+                  color:      'var(--gc-blue)',
+                  border:     '1px solid var(--gc-blue)',
+                }}
+                title="Convert each selected non-PDF doc to its own PDF (originals stay)">
+                <FileText size={13} /> Convert selected
+              </button>
+            )}
+            {/* Merge selected — calls the standard onConfirm path
+                (parent wires it to handleMergeSelected). Enabled at
+                2+ since merging a single doc is meaningless. */}
+            <button type="button"
+              onClick={() => { if (canConfirm) onConfirm(); }}
+              disabled={!canConfirm}
+              className="flex items-center gap-1.5 text-[13px] font-extrabold px-4 py-2 rounded-lg transition-opacity text-white disabled:opacity-40"
+              style={{ background: '#7c3aed' }}
+              title="Merge selected docs into one PDF (any types)">
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+              {busy ? busyLabel : count >= minSelect ? `Merge ${count}` : 'Merge'}
+            </button>
             <button type="button" onClick={onCancel} disabled={busy}
               className="text-[13px] font-extrabold px-5 py-2 rounded-lg transition-opacity text-white disabled:opacity-40"
               style={{ background: 'var(--gc-blue)' }}>
