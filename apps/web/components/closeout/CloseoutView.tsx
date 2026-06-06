@@ -80,12 +80,17 @@ interface CacheEntry {
 // from v1 of the port).
 const DEFAULT_COL_WIDTHS = {
   age:          80,
+  pickedUp:     100,
   delivered:    100,
   internalId:   110,
   loadNum:      120,
   title:        280,
   customer:     170,
   driver:       140,
+  truck:        80,
+  stops:        65,
+  miles:        70,
+  rpm:          75,
   rate:         110,
   accessorials: 130,
   total:        120,
@@ -542,6 +547,15 @@ export default function CloseoutView() {
     });
 
     cols.push({
+      key: 'pickedUp', header: 'Picked up', width: DEFAULT_COL_WIDTHS.pickedUp,
+      sortable: true,
+      // `start` is the leg's pickup time — for relays this is the
+      // pickup leg's start; the delivery leg is dedup'd out earlier.
+      sortValue: r => r.start ?? '',
+      render: r => fmtDate(r.start) || '—',
+    });
+
+    cols.push({
       key: 'delivered', header: 'Delivered', width: DEFAULT_COL_WIDTHS.delivered,
       sortable: true,
       sortValue: r => effectiveDeliveryEnd(r),
@@ -622,6 +636,64 @@ export default function CloseoutView() {
             <div className="text-[12.5px]">{drivers[0]}</div>
             <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
           </div>
+        );
+      },
+    });
+
+    cols.push({
+      key: 'truck', header: 'Truck', width: DEFAULT_COL_WIDTHS.truck,
+      sortable: true,
+      sortValue: r => r.assetName ?? '',
+      render: r => r.assetName
+        ? <span className="font-semibold tabular-nums">{r.assetName}</span>
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    cols.push({
+      key: 'stops', header: 'Stops', width: DEFAULT_COL_WIDTHS.stops,
+      align: 'right', sortable: true,
+      sortValue: r => (r.stops ?? []).length,
+      render: r => {
+        const n = (r.stops ?? []).length;
+        return n === 0
+          ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
+          : <span className="tabular-nums">{n}</span>;
+      },
+    });
+
+    cols.push({
+      key: 'miles', header: 'Miles', width: DEFAULT_COL_WIDTHS.miles,
+      align: 'right', sortable: true,
+      sortValue: r => r.loadedMiles ?? 0,
+      render: r => r.loadedMiles != null && r.loadedMiles > 0
+        ? <span className="tabular-nums">{Math.round(r.loadedMiles).toLocaleString()}</span>
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+    });
+
+    cols.push({
+      key: 'rpm', header: 'RPM', width: DEFAULT_COL_WIDTHS.rpm,
+      align: 'right', sortable: true,
+      // Revenue per mile — linehaul ÷ loaded miles. Tonu / 0-mile loads
+      // and missing-mile rows sort to the bottom (0). Coloured against
+      // common book rates: <$1.75 red, $1.75–$2.25 amber, >$2.25 green.
+      sortValue: r => {
+        const m = r.loadedMiles ?? 0;
+        return m > 0 && r.loadPrice != null ? r.loadPrice / m : 0;
+      },
+      render: r => {
+        const m = r.loadedMiles ?? 0;
+        if (m <= 0 || r.loadPrice == null) {
+          return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        }
+        const rpm = r.loadPrice / m;
+        const fg =
+          rpm >= 2.25 ? '#15803d' :
+          rpm >= 1.75 ? '#92400e' :
+                        '#991b1b';
+        return (
+          <span className="tabular-nums font-semibold" style={{ color: fg }}>
+            ${rpm.toFixed(2)}
+          </span>
         );
       },
     });
@@ -826,6 +898,9 @@ export default function CloseoutView() {
     const driverOpts = Array.from(new Set(
       dedup.map(r => r.driverName ?? '').filter(Boolean),
     )).sort().map(v => ({ value: v, label: v }));
+    const truckOpts = Array.from(new Set(
+      dedup.map(r => r.assetName ?? '').filter(Boolean),
+    )).sort().map(v => ({ value: v, label: v }));
     return [
       { kind: 'select', key: 'customer', label: 'Customer',
         options: customerOpts,
@@ -833,6 +908,11 @@ export default function CloseoutView() {
       { kind: 'select', key: 'driver',   label: 'Driver',
         options: driverOpts,
         predicate: (r, v) => (r.driverName ?? '') === v },
+      { kind: 'select', key: 'truck',    label: 'Truck',
+        options: truckOpts,
+        predicate: (r, v) => (r.assetName ?? '') === v },
+      { kind: 'date-range', key: 'pickedUp', label: 'Picked up',
+        getDate: r => r.start ?? '' },
       { kind: 'date-range', key: 'delivered', label: 'Delivered',
         getDate: r => effectiveDeliveryEnd(r) },
     ];
