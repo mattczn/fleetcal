@@ -158,6 +158,12 @@ function AccountingPageInner() {
   // its internal selection set + sort/filter reset cleanly.
   const [tableResetKey, setTableResetKey] = useState(0);
   const [search, setSearch] = useState('');
+  // Collapses the bucket tiles' detail rows ($ value + subtitle) once
+  // the user scrolls down inside the table. Hysteresis on the
+  // thresholds (40 px to collapse / 8 px to expand) avoids flicker
+  // when the operator noodles near the top. Mirrors the Paperwork
+  // page so both surfaces feel the same.
+  const [tilesCompact, setTilesCompact] = useState(false);
 
   // Sibling modals
   const [brokerProfileId, setBrokerProfileId] = useState<string | null>(null);
@@ -738,6 +744,18 @@ function AccountingPageInner() {
       rowsForBucket.map(r => r.customer?.name ?? r.load.broker ?? '').filter(Boolean),
     )).sort().map(v => ({ value: v, label: v }));
 
+    // Accessorial filter — operator-centric presets mirror Paperwork.
+    const accessorialOpts = [
+      { value: '__any',        label: 'Has any accessorial' },
+      { value: '__pending',    label: 'Has pending accessorial' },
+      { value: '__none',       label: 'No accessorials' },
+      { value: 'detention',    label: 'Detention' },
+      { value: 'lumper',       label: 'Lumper' },
+      { value: 'layover',      label: 'Layover' },
+      { value: 'scale_ticket', label: 'Scale' },
+      { value: 'extra_stop',   label: 'Extra stop' },
+      { value: 'other',        label: 'Other' },
+    ];
     const filters: OpsFilter<Row>[] = [
       { kind: 'select', key: 'customer', label: 'Customer',
         options: customerOpts,
@@ -748,6 +766,15 @@ function AccountingPageInner() {
           { value: 'portal', label: 'Portal' },
         ],
         predicate: (r, v) => (r.customer?.invoiceMethod ?? 'email') === v },
+      { kind: 'select', key: 'accessorial', label: 'Accessorial',
+        options: accessorialOpts,
+        predicate: (r, v) => {
+          const accs = r.load.accessorials ?? [];
+          if (v === '__any')     return accs.length > 0;
+          if (v === '__pending') return accs.some(a => a.status !== 'approved' && a.status !== 'denied');
+          if (v === '__none')    return accs.length === 0;
+          return accs.some(a => a.category === v);
+        } },
     ];
     // Status only meaningful on All bucket — other buckets are
     // already filtered to one status (Queued = draft, Invoiced = sent,
@@ -812,7 +839,7 @@ function AccountingPageInner() {
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <AppShell title="Billing" icon={Receipt}>
+    <AppShell title="Billing" icon={Receipt} noPageScroll>
       <DataLoader />
 
       {/* The content area is a fixed-height flex column so the table
@@ -827,8 +854,12 @@ function AccountingPageInner() {
             Generate invoices, track delivery, mark paid.
           </div>
 
-          {/* Bucket tiles */}
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
+          {/* Bucket tiles — full padding + value + subtitle on lg+ at
+              the top of the page; collapse to a one-row icon + label +
+              count once the user scrolls past 40 px inside the table
+              (or on narrow screens). Mirrors the Paperwork bucket
+              behaviour so the two surfaces feel the same. */}
+          <div className={`grid ${tilesCompact ? 'gap-2' : 'gap-2 lg:gap-3'}`} style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
             {BUCKETS.map(b => {
               const active = bucket === b.key;
               const s = stats[b.key];
@@ -836,7 +867,9 @@ function AccountingPageInner() {
               return (
                 <button key={b.key}
                   onClick={() => setBucket(b.key)}
-                  className="text-left px-4 py-3 rounded-xl transition-all"
+                  className={`text-left rounded-xl transition-all ${
+                    tilesCompact ? 'px-3 py-2' : 'px-3 lg:px-4 py-2 lg:py-3'
+                  }`}
                   style={{
                     background: 'var(--gc-surface)',
                     border: active ? `2px solid ${b.tint}` : '1px solid var(--gc-border-light)',
@@ -844,13 +877,19 @@ function AccountingPageInner() {
                   }}>
                   <div className="flex items-center gap-2">
                     <Icon size={16} style={{ color: b.tint }} />
-                    <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
-                    <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
+                    <span className="text-[12.5px] font-semibold truncate" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
+                    <span className="ml-auto text-[15px] lg:text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
                   </div>
-                  <div className="mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                  <div
+                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-1.5 text-[12px] tabular-nums transition-all`}
+                    style={{ color: 'var(--gc-text-3)' }}
+                  >
                     {moneyFmt.format(s.total)}
                   </div>
-                  <div className="mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                  <div
+                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold transition-all`}
+                    style={{ color: 'var(--gc-text-3)' }}
+                  >
                     {b.subtitle}
                   </div>
                 </button>
@@ -911,6 +950,10 @@ function AccountingPageInner() {
                 onSelectionChange={setSelectedIds}
                 pageSize={PAGE_SIZE}
                 fillHeight
+                onScrollChange={({ scrollTop }) => {
+                  if (scrollTop > 40 && !tilesCompact) setTilesCompact(true);
+                  else if (scrollTop < 8 && tilesCompact) setTilesCompact(false);
+                }}
                 emptyLabel={search.trim() !== ''
                   ? `No rows match "${search.trim()}".`
                   : 'No loads in this bucket.'}
