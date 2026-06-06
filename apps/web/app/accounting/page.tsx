@@ -60,7 +60,7 @@ const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ s
 // ─── Columns ────────────────────────────────────────────────────────────
 
 type ColKey =
-  | 'invoiceNum' | 'loadNum' | 'customer' | 'title'
+  | 'internalId' | 'invoiceNum' | 'loadNum' | 'customer' | 'driver' | 'truck' | 'title'
   | 'rate' | 'accessorials' | 'total'
   | 'docs'
   | 'age' | 'pickupAt' | 'deliveryAt' | 'released' | 'issued' | 'due'
@@ -78,8 +78,11 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
   released:     100,
   issued:       100,
   due:          100,
+  internalId:   110,
   invoiceNum:   120,
   loadNum:      120,
+  driver:       140,
+  truck:         80,
   title:        280,
   customer:     170,
   method:       100,
@@ -128,6 +131,18 @@ function AccountingPageInner() {
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const { user } = useUser();
   const customers = useCalendarStore(s => s.customers);
+  // Assets from the calendar store — used to resolve pickupAssetId to a
+  // truck display string in the Truck column. The store hydrates on
+  // app start so it's reliably populated by the time Billing renders.
+  const assets = useCalendarStore(s => s.assets);
+  const assetNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const a of assets) {
+      const label = `${a.name ?? ''}${a.unit ? ` #${a.unit}` : ''}`.trim();
+      if (label) m.set(a.id, label);
+    }
+    return m;
+  }, [assets]);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const openEditModal = useCalendarStore(s => s.openEditModal);
 
@@ -419,6 +434,15 @@ function AccountingPageInner() {
 
   const actorName = user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined;
 
+  // In-place patch on the locally-cached loads array. Used to avoid
+  // a full refresh() round-trip for lightweight mutations (priority
+  // star, internal-note add) — those land via Supabase realtime in
+  // the next natural refresh cycle anyway, so the local optimistic
+  // update is a free win on perceived latency.
+  const patchLoadInState = useCallback((loadId: string, patch: Partial<LoadSummary>) => {
+    setLoads(prev => prev.map(l => l.loadId === loadId ? { ...l, ...patch } : l));
+  }, []);
+
   // ── OpsTable column config ──────────────────────────────────────────
   // One OpsColumn per visible column. Closures capture state setters
   // so each cell can wire its own action handlers. Per-bucket col
@@ -440,7 +464,8 @@ function AccountingPageInner() {
         const notesCount = (r.load.internalNotes ?? []).length;
         return (
           <div className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            <PriorityToggle load={r.load} actorName={actorName} onAfter={() => void refresh()} />
+            <PriorityToggle load={r.load} actorName={actorName}
+              onAfter={(nextPriority) => patchLoadInState(r.load.loadId, { pickupPriority: nextPriority })} />
             <NotesButton count={notesCount} onOpen={() => setNotesTarget(r.load)} />
             {r.invoice ? (
               <button onClick={() => setInvoiceModalId(r.invoice!.id)}
@@ -460,6 +485,15 @@ function AccountingPageInner() {
           </div>
         );
       },
+    });
+
+    all.push({
+      key: 'internalId', header: 'ID / Inv #', width: DEFAULT_COL_WIDTHS.internalId,
+      sortable: true,
+      sortValue: r => r.load.internalLoadId ?? 0,
+      render: r => r.load.internalLoadId != null
+        ? <CopyableCell value={String(r.load.internalLoadId)} displayValue={String(r.load.internalLoadId)} title="Copy ID / invoice #" />
+        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
     });
 
     all.push({
@@ -505,6 +539,47 @@ function AccountingPageInner() {
                 style={{ background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' }}
                 title="No invoice email set"><AlertCircle size={9} /> No email</button>
             ) : null}
+          </div>
+        );
+      },
+    });
+
+    all.push({
+      key: 'driver', header: 'Driver(s)', width: DEFAULT_COL_WIDTHS.driver,
+      sortable: true,
+      sortValue: r => r.load.pickupDriverName ?? '',
+      render: r => {
+        const pickup = r.load.pickupDriverName;
+        const delivery = r.load.deliveryDriverName;
+        const drivers: string[] = [];
+        if (pickup) drivers.push(pickup);
+        if (delivery && delivery !== pickup) drivers.push(delivery);
+        if (drivers.length === 0) return <span style={{ color: 'var(--gc-text-3)' }}>Unassigned</span>;
+        if (drivers.length === 1) return <span>{drivers[0]}</span>;
+        return (
+          <div>
+            <div className="text-[12.5px]">{drivers[0]}</div>
+            <div className="text-[10.5px]" style={{ color: 'var(--gc-text-3)' }}>+ {drivers[1]}</div>
+          </div>
+        );
+      },
+    });
+
+    all.push({
+      key: 'truck', header: 'Truck', width: DEFAULT_COL_WIDTHS.truck,
+      sortable: true,
+      sortValue: r => assetNameById.get(r.load.pickupAssetId) ?? '',
+      render: r => {
+        const pickup = assetNameById.get(r.load.pickupAssetId);
+        const delivery = assetNameById.get(r.load.deliveryAssetId);
+        if (!pickup && !delivery) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        if (!delivery || pickup === delivery) {
+          return <span className="font-semibold tabular-nums">{pickup ?? '—'}</span>;
+        }
+        return (
+          <div>
+            <div className="text-[12.5px] font-semibold tabular-nums">{pickup ?? '—'}</div>
+            <div className="text-[10.5px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>+ {delivery}</div>
           </div>
         );
       },
@@ -733,7 +808,7 @@ function AccountingPageInner() {
     const omit = COLS_OMITTED_PER_BUCKET[bucket];
     return all.filter(c => !omit.has(c.key as ColKey));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customers, bucket, actorName]);
+  }, [customers, bucket, actorName, assetNameById, patchLoadInState]);
 
   // OpsTable filters — Customer / Method / Status multi-selects plus
   // Released / Issued / Due date-range chips. Options come from the
@@ -1089,7 +1164,18 @@ function AccountingPageInner() {
       {notesTarget && (
         <InternalNotesModal load={notesTarget} actorName={actorName}
           onClose={() => setNotesTarget(null)}
-          onSaved={async () => { setNotesTarget(null); await refresh(); }} />
+          onSaved={(newNote) => {
+            // Optimistic local append — avoid a full refresh round-trip.
+            // The modal's optimistic write call ensures the server has
+            // already accepted; a realtime echo will reconcile via the
+            // store on the next natural refresh.
+            if (newNote && notesTarget) {
+              patchLoadInState(notesTarget.loadId, {
+                internalNotes: [...(notesTarget.internalNotes ?? []), newNote],
+              });
+            }
+            setNotesTarget(null);
+          }} />
       )}
     </AppShell>
   );
@@ -1108,7 +1194,10 @@ function PriorityToggle({
   /** LoadSummary's pickup-leg priority is the load's priority. */
   load:     { loadId: string; pickupPriority?: boolean };
   actorName?: string;
-  onAfter:  () => void;
+  /** Receives the NEW priority value once the server confirms the
+   *  write. Used to optimistically patch the page's local row state
+   *  without a full table refresh. */
+  onAfter:  (nextPriority: boolean) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const on = !!load.pickupPriority;
@@ -1126,7 +1215,7 @@ function PriorityToggle({
         action: on ? 'clear_priority' : 'set_priority',
         actorName,
       });
-      onAfter();
+      onAfter(!on);
     } catch (err) {
       console.error('[accounting] priority toggle failed:', err);
     } finally {
