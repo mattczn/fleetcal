@@ -2039,7 +2039,8 @@ export default function EventModal() {
   // get an error back. To genuinely walk one back: void the
   // invoice first, billing_status drops back to 'pending', then
   // cancel is offered again.
-  const cancelLocked = !!ev?.billingStatus && ev.billingStatus !== 'pending';
+  const cancelLockedEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+  const cancelLocked = !!cancelLockedEv?.billingStatus && cancelLockedEv.billingStatus !== 'pending';
   // ── Read-only gate for this modal ────────────────────────────────
   // Maintenance opens a revenue load → has loads.view but not
   // loads.edit, so the form should be a static view. We disable all
