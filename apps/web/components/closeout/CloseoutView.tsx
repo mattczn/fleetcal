@@ -770,6 +770,15 @@ export default function CloseoutView() {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
         const rcCount = Math.max(counts.rate_con ?? 0, r.rateConPdf ? 1 : 0);
         const podCount = counts.pod ?? 0;
+        // Lumper / Scale are conditionally required — only when the
+        // load has a matching accessorial line item. Mirrors the
+        // ReviewQueue's verification-chips logic so the badges and
+        // the chips read the same.
+        const accs = r.accessorials ?? [];
+        const needsLumper = accs.some(a => a.category === 'lumper');
+        const needsScale  = accs.some(a => a.category === 'scale_ticket');
+        const lumperCount = counts.lumper ?? 0;
+        const scaleCount  = counts.scale  ?? 0;
         return (
           <div>
             <div className="flex flex-wrap items-center gap-1">
@@ -789,9 +798,30 @@ export default function CloseoutView() {
                   missingTitle="No POD uploaded"
                 />
               )}
+              {needsLumper && (
+                <RequiredDocBadge
+                  label="Lumper"
+                  present={lumperCount > 0}
+                  count={lumperCount}
+                  presentTint={DOC_BADGE_TINT.Lumper}
+                  missingTitle="No lumper receipt uploaded"
+                />
+              )}
+              {needsScale && (
+                <RequiredDocBadge
+                  label="Scale"
+                  present={scaleCount > 0}
+                  count={scaleCount}
+                  presentTint={DOC_BADGE_TINT.Scale}
+                  missingTitle="No scale ticket uploaded"
+                />
+              )}
               {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
-              {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
-              {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
+              {/* Lumper / Scale fall back to the plain DocBadge only when the
+                  load has NO matching accessorial but still happens to have
+                  the doc on file (rare — preserves the chip if it's there). */}
+              {!needsLumper && lumperCount > 0 && <DocBadge label="Lumper"  count={lumperCount} />}
+              {!needsScale  && scaleCount  > 0 && <DocBadge label="Scale"   count={scaleCount} />}
               {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt} />}
               {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
               {((counts.invoice ?? 0) > 0 || r.billingStatus === 'invoiced' || r.billingStatus === 'paid') && (

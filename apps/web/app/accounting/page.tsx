@@ -548,6 +548,14 @@ function AccountingPageInner() {
         const counts = r.load.documentCounts ?? {};
         const rcCount  = Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0);
         const podCount = counts.pod ?? 0;
+        // Lumper / Scale are conditionally required — only when the
+        // load has a matching accessorial line item. Mirrors the
+        // Paperwork docs column + the ReviewQueue verification chips.
+        const accs = r.load.accessorials ?? [];
+        const needsLumper = accs.some(a => a.category === 'lumper');
+        const needsScale  = accs.some(a => a.category === 'scale_ticket');
+        const lumperCount = counts.lumper ?? 0;
+        const scaleCount  = counts.scale  ?? 0;
         return (
           <div className="flex flex-wrap gap-1">
             <RequiredDocBadge
@@ -564,9 +572,27 @@ function AccountingPageInner() {
                 missingTitle="No POD uploaded"
               />
             )}
+            {needsLumper && (
+              <RequiredDocBadge
+                label="Lumper"
+                present={lumperCount > 0}
+                count={lumperCount}
+                missingTitle="No lumper receipt uploaded"
+              />
+            )}
+            {needsScale && (
+              <RequiredDocBadge
+                label="Scale"
+                present={scaleCount > 0}
+                count={scaleCount}
+                missingTitle="No scale ticket uploaded"
+              />
+            )}
             {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}          />}
-            {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}       />}
-            {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}        />}
+            {/* Lumper / Scale fall back to plain DocBadge only when the
+                load has NO matching accessorial but the doc is on file. */}
+            {!needsLumper && lumperCount > 0 && <DocBadge label="Lumper"  count={lumperCount}       />}
+            {!needsScale  && scaleCount  > 0 && <DocBadge label="Scale"   count={scaleCount}        />}
             {(counts.receipt      ?? 0) > 0 && <DocBadge label="Receipt" count={counts.receipt}      />}
             {(counts.driver_sheet ?? 0) > 0 && <DocBadge label="Driver"  count={counts.driver_sheet} />}
             {(counts.invoice      ?? 0) > 0 && <DocBadge label="Invoice" count={counts.invoice}      />}
