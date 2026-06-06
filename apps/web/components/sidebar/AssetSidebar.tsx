@@ -8,11 +8,10 @@ import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
-import DriversModal from './DriversModal';
-import AssetsModal from './AssetsModal';
-import TrailersModal from './TrailersModal';
+import DirectoryModal, { type DirectoryTab } from './DirectoryModal';
 import MiniCalendar from './MiniCalendar';
 import type { Capability, OrgModule } from '@fleetcal/types';
+import { ChevronRight, ChevronDown, Building2, MapPin } from 'lucide-react';
 
 export default function AssetSidebar() {
   // The truck/asset list itself has moved to the right-hand TruckFleetPanel
@@ -24,12 +23,21 @@ export default function AssetSidebar() {
   // moved into the truck tray alongside the truck list itself.)
   const { openCreateModal, sidebarOpen, toggleSidebar, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, cardFontScale } = useCalendarStore();
   const { organization } = useOrganization();
-  const [showDrivers,  setShowDrivers]  = useState(false);
-  const [showAssets,   setShowAssets]   = useState(false);
-  const [showTrailers, setShowTrailers] = useState(false);
+  // Single unified directory entry point — collapses the old 3-button
+  // "Manage trucks / drivers / trailers" group into one expandable
+  // "Manage Assets" with 5 children (Drivers, Trucks, Trailers,
+  // Customers, Locations). Each child opens the new DirectoryModal
+  // pre-selected to its tab.
+  const [manageOpen,   setManageOpen]   = useState(false);
+  const [directoryTab, setDirectoryTab] = useState<DirectoryTab | null>(null);
   const [batchHovered, setBatchHovered] = useState(false);
   const { enabled: moduleEnabled } = useModules();
   const trailersOn = moduleEnabled('trailers');
+
+  const openDirectory = (tab: DirectoryTab) => {
+    setDirectoryTab(tab);
+    setManageOpen(true); // keep the group expanded after open
+  };
   const batchFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleBatchFiles = async (files: FileList | null) => {
@@ -206,42 +214,29 @@ export default function AssetSidebar() {
             (e.g.) payroll.access doesn't see Payroll here either. */}
         <PageNavSection />
 
-        {/* Manage buttons */}
+        {/* Manage Assets — expandable group with 5 children. Each
+            child button opens the DirectoryModal pre-selected to
+            the right tab. The header itself toggles expansion. */}
         <div className="shrink-0 p-3 space-y-0.5" style={{ borderTop: '1px solid var(--gc-border-light)' }}>
           <button
-            onClick={() => setShowAssets(true)}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
-            style={{ color: 'var(--gc-blue)' }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-          >
-            <Truck size={16} />
-            Manage trucks
+            onClick={() => setManageOpen(o => !o)}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+            style={{ color: 'var(--gc-text-1)' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            {manageOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span className="flex-1 text-left">Manage Assets</span>
           </button>
-          <button
-            onClick={() => setShowDrivers(true)}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
-            style={{ color: 'var(--gc-blue)' }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-          >
-            <Users size={16} />
-            Manage drivers
-          </button>
-          {/* Trailers — gated on the trailers module so orgs without
-              the feature (e.g. small flatbed operations that don't
-              swap trailers) don't see the affordance. */}
-          {trailersOn && (
-            <button
-              onClick={() => setShowTrailers(true)}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors"
-              style={{ color: 'var(--gc-blue)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-            >
-              <Container size={16} />
-              Manage trailers
-            </button>
+          {manageOpen && (
+            <div className="pl-3 space-y-0.5">
+              <SubNavButton icon={Users}     label="Drivers"   onClick={() => openDirectory('drivers')} />
+              <SubNavButton icon={Truck}     label="Trucks"    onClick={() => openDirectory('trucks')} />
+              {trailersOn && (
+                <SubNavButton icon={Container} label="Trailers" onClick={() => openDirectory('trailers')} />
+              )}
+              <SubNavButton icon={Building2} label="Customers" onClick={() => openDirectory('customers')} />
+              <SubNavButton icon={MapPin}    label="Locations" onClick={() => openDirectory('locations')} />
+            </div>
           )}
           <Link
             href="/settings"
@@ -256,10 +251,33 @@ export default function AssetSidebar() {
         </div>
       </aside>
 
-      {showAssets   && <AssetsModal   onClose={() => setShowAssets(false)} />}
-      {showDrivers  && <DriversModal  onClose={() => setShowDrivers(false)} />}
-      {showTrailers && <TrailersModal onClose={() => setShowTrailers(false)} />}
+      {directoryTab && (
+        <DirectoryModal
+          initial={directoryTab}
+          onClose={() => setDirectoryTab(null)}
+        />
+      )}
     </>
+  );
+}
+
+// ── Sub-nav button helper ──────────────────────────────────────────────
+
+function SubNavButton({ icon: Icon, label, onClick }: {
+  icon: typeof Truck;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px] transition-colors"
+      style={{ color: 'var(--gc-blue)' }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+      <Icon size={14} />
+      {label}
+    </button>
   );
 }
 

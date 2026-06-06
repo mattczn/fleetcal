@@ -14,6 +14,12 @@ export type AssetDetailHandle = {
   save:    () => Promise<void>;
   discard: () => void;
 };
+
+// Imported from DirectoryModal so the embedded mode forwards a
+// handle the directory shell can call. Identical shape to
+// AssetDetailHandle — kept as a named import for clarity at the
+// modal boundary.
+import type { DirectoryDetailHandle } from './DirectoryModal';
 import Link from 'next/link';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
@@ -50,7 +56,20 @@ const P_INPUT: React.CSSProperties = {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function AssetsModal({ onClose, initialAssetId }: { onClose: () => void; initialAssetId?: number }) {
+interface AssetsModalProps {
+  onClose: () => void;
+  initialAssetId?: number;
+  /** When mounted inside DirectoryModal, skip the outer chrome
+   *  (backdrop, container, header, footer) and render only the body
+   *  (left list + right detail). The parent shell provides the
+   *  chrome + the close action; the unsaved-changes dialog stays
+   *  internal because it's scoped to switching trucks *within* this
+   *  directory. */
+  embedded?: boolean;
+}
+
+const AssetsModal = forwardRef<DirectoryDetailHandle, AssetsModalProps>(
+function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
   const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, hardDeleteAsset, unassignedAssetId } = useCalendarStore();
   // Drop the 'Unassigned' bucket, then sort retired trucks to the
   // bottom so the directory leads with everything currently in service.
@@ -76,6 +95,16 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
   const [showUnsaved, setShowUnsaved] = useState(false);
   const [saving,      setSaving]      = useState(false);
   const pendingActionRef = useRef<(() => void) | null>(null);
+
+  // Forward the inner detail handle up so the DirectoryModal shell
+  // can query / drive unsaved-changes state across tab switches and
+  // shell-level close. Standalone callers (the legacy code path) get
+  // the same handle for free but typically ignore it.
+  useImperativeHandle(modalRef, () => ({
+    isDirty: () => detailRef.current?.isDirty() ?? false,
+    save:    () => detailRef.current?.save() ?? Promise.resolve(),
+    discard: () => { detailRef.current?.discard(); },
+  }), []);
 
   // Track the id of the row we created via "+ Add Asset" as a
   // placeholder. If the user navigates away (selection change, close,
@@ -192,23 +221,11 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
 
   const selectedAsset = assets.find(a => a.id === selected) ?? null;
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.32)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
-    >
-      <div
-        className="flex flex-col relative"
-        style={{
-          background: 'var(--gc-surface)',
-          width: '100%', maxWidth: 1020, height: '82vh',
-          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
-        }}
-      >
-        {/* Unsaved-changes guard — mirrors the EventModal pattern. Sits
-            inside the modal container with absolute positioning so it
-            dims only the truck directory, not the entire screen. */}
+  const content = (
+    <>
+      {/* Unsaved-changes guard — mirrors the EventModal pattern. Sits
+          inside the modal container with absolute positioning so it
+          dims only the truck directory, not the entire screen. */}
         {showUnsaved && (
           <div className="absolute inset-0 z-10 flex items-center justify-center"
             style={{ background: 'rgba(0,0,0,0.4)', borderRadius: 14 }}>
@@ -252,7 +269,9 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
           </div>
         )}
 
-        {/* Header */}
+      {/* Header — hidden in embedded mode (DirectoryModal provides
+          its own tab strip + close button). */}
+      {!embedded && (
         <div className="shrink-0 flex items-center justify-between px-7 py-5"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-center gap-2.5">
@@ -268,9 +287,10 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
             <X size={16} />
           </button>
         </div>
+      )}
 
-        {/* Body */}
-        <div className="flex-1 overflow-hidden flex min-h-0">
+      {/* Body */}
+      <div className="flex-1 overflow-hidden flex min-h-0">
 
           {/* ── Left Sidebar ── */}
           <div className="flex flex-col shrink-0"
@@ -357,7 +377,8 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
           </div>
         </div>
 
-        {/* Footer */}
+      {/* Footer — hidden in embedded mode. */}
+      {!embedded && (
         <div className="shrink-0 flex justify-end px-7 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button onClick={handleClose}
@@ -368,10 +389,31 @@ export default function AssetsModal({ onClose, initialAssetId }: { onClose: () =
             Done
           </button>
         </div>
+      )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.32)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}>
+      <div
+        className="flex flex-col relative"
+        style={{
+          background: 'var(--gc-surface)',
+          width: '100%', maxWidth: 1020, height: '82vh',
+          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
+        }}>
+        {content}
       </div>
     </div>
   );
-}
+});
+
+export default AssetsModal;
 
 // ─── Nav Asset Row ────────────────────────────────────────────────────────────
 
