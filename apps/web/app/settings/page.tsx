@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, useMemo } from 'react';
-import { parseTimeInput } from '@/lib/time-utils';
+import { parseTimeInput, todayDateKeyInTz } from '@/lib/time-utils';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
 import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
@@ -2669,7 +2669,7 @@ function Textarea({ value, onChange, placeholder, rows }: { value: string; onCha
 }
 
 function IntegrationsPanel() {
-  const { assets: allAssets, unassignedAssetId, updateAsset, trailers, updateTrailer } = useCalendarStore();
+  const { assets: allAssets, unassignedAssetId, updateAsset, trailers, updateTrailer, calendarTimezone } = useCalendarStore();
   const assets = allAssets.filter(a => a.id !== unassignedAssetId);
 
   // ── API key state ─────────────────────────────────────────────────────────
@@ -2888,8 +2888,22 @@ function IntegrationsPanel() {
   const [debugError,     setDebugError]     = useState('');
 
   // ── Verify: per-vehicle Motive vs DB comparison for a date range ──────────
-  const today = new Date().toISOString().slice(0, 10);
-  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  // "Today" must be computed in the org's tz so the debug range
+  // matches what the rest of the app considers today. Old UTC slice
+  // was wrong for any dispatcher inspecting the verify tool from
+  // any timezone east/west of London at the wrong hour.
+  const today = todayDateKeyInTz(calendarTimezone);
+  // Week-ago is also in org tz — derive it by walking the date string
+  // back 7 days rather than subtracting epoch ms (which would carry
+  // a UTC offset through). The date string format YYYY-MM-DD lets
+  // Date parse it as UTC; we round-trip through epoch to subtract
+  // 7 full days, then slice back to YYYY-MM-DD. Safe because no
+  // DST transition spans a whole day.
+  const weekAgo = (() => {
+    const d = new Date(today + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() - 7);
+    return d.toISOString().slice(0, 10);
+  })();
   const [verifyFrom,    setVerifyFrom]    = useState(weekAgo);
   const [verifyTo,      setVerifyTo]      = useState(today);
   const [verifyRunning, setVerifyRunning] = useState(false);

@@ -17,7 +17,8 @@
 
 import { useEffect, useState } from 'react';
 import DatePicker from '@/components/calendar/DatePicker';
-import { parseTimeInput } from '@/lib/time-utils';
+import { parseTimeInput, todayDateKeyInTz } from '@/lib/time-utils';
+import { useCalendarStore } from '@/store/useCalendarStore';
 
 interface Props {
   /** "YYYY-MM-DDTHH:mm" or "" when empty. */
@@ -72,6 +73,11 @@ export default function DateTimeInput({
   size = 'md',
   defaultTime = '08:00',
 }: Props) {
+  // Org timezone for the "today" default in the empty-state button.
+  // Without this, the button primed UTC date — wrong for any user
+  // east of London before noon UTC or west after, so a Mountain Time
+  // dispatcher clicking "Today" near midnight got tomorrow's date.
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const m = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
   const datePart = m ? m[1] : '';
   const timePart = m ? m[2] : '';
@@ -84,7 +90,7 @@ export default function DateTimeInput({
       <button
         type="button"
         onClick={() => {
-          const today = new Date().toISOString().slice(0, 10);
+          const today = todayDateKeyInTz(calendarTimezone);
           onChange(`${today}T${defaultTime}`);
         }}
         style={{

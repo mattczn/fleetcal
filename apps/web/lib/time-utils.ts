@@ -77,6 +77,50 @@ export function todayAtNoon(): Date {
 }
 
 /**
+ * Return today's date as a YYYY-MM-DD string in the given IANA
+ * timezone. Use this instead of `new Date().toISOString().slice(0,10)`
+ * anywhere the result is shown to a user or used as the default for an
+ * org-scoped query — the UTC slice is wrong for any org east of London
+ * before noon UTC, west of London after, etc.
+ *
+ *   todayDateKeyInTz('America/Denver') → "2026-06-05" at 11pm Mountain
+ *                                        even though UTC has already
+ *                                        flipped to "2026-06-06".
+ */
+export function todayDateKeyInTz(tz: string): string {
+  // en-CA ISO-style ("YYYY-MM-DD") is the cleanest output format
+  // Intl supports without us having to reassemble parts.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+/**
+ * Format an ISO timestamp (with or without offset) for display in the
+ * given IANA timezone. Use anywhere a user-facing audit/created/
+ * updated/recorded timestamp is rendered. Without the explicit tz,
+ * `toLocaleString` falls back to the browser, which silently drifts
+ * across regions and produces inconsistent timestamps on the same
+ * record for different users.
+ *
+ * Returns "—" for nullish/unparseable input so call sites can drop
+ * their own null-guards.
+ */
+export function formatTimestampInTz(
+  iso: string | null | undefined,
+  tz: string,
+  opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return '—';
+  return d.toLocaleString('en-US', { ...opts, timeZone: tz });
+}
+
+/**
  * Coerce whatever's stored as the "timezone" setting into something
  * Intl.DateTimeFormat will accept, or undefined.
  *

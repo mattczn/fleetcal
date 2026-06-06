@@ -2220,8 +2220,14 @@ function WorkOrderModal({
   // calendar" button (create-mode CTA + edit-mode CalendarLinkBlock)
   // can route the user to /calendar with an opening event modal
   // pre-filled for this work order.
-  const router          = useRouter();
-  const openCreateModal = useCalendarStore(s => s.openCreateModal);
+  const router            = useRouter();
+  const openCreateModal   = useCalendarStore(s => s.openCreateModal);
+  // Org tz for the created/completed timestamp rows further down.
+  // Same fix-pattern as the History panel — without this, a multi-tz
+  // team sees different "Created" / "Completed" wall-clock times on
+  // the same action item depending on which browser they're looking
+  // from.
+  const calendarTimezone  = useCalendarStore(s => s.calendarTimezone);
 
   // Reference photos from the source driver report — fetched when:
   //   • create-from-convert: fromReport already has photos in-hand,
@@ -3006,7 +3012,7 @@ function WorkOrderModal({
                   <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                     <span style={{ color: 'var(--gc-text-3)' }}>Created</span>{' '}
                     <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
-                      {new Date(item.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                      {new Date(item.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: calendarTimezone })}
                     </span>
                     {createdName && (
                       <>
@@ -3019,7 +3025,7 @@ function WorkOrderModal({
                     <div className="text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
                       <span style={{ color: 'var(--gc-text-3)' }}>Completed</span>{' '}
                       <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>
-                        {new Date(item.completedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+                        {new Date(item.completedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: calendarTimezone })}
                       </span>
                       {completedName && (
                         <>
@@ -5800,6 +5806,9 @@ function FuelDetail({
   const [t, setT] = useState<FuelTransaction | null>(initialTx);
   useEffect(() => { setT(initialTx); }, [initialTx]);
 
+  // Org tz for the Recorded / Created-in-FleetCal timestamp rows.
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
+
   // Pull values from whichever side has them. Transaction first
   // because it's the receipt (machine-generated, no driver typo).
   const dateIso       = t?.transactionDate ?? report?.reportedAt ?? null;
@@ -6036,11 +6045,11 @@ function FuelDetail({
           )}
           {report?.notes && <DetailRow label="Driver notes">{report.notes}</DetailRow>}
           <DetailRow label="Recorded">
-            {dateIso ? new Date(dateIso).toLocaleString() : <Muted />}
+            {dateIso ? new Date(dateIso).toLocaleString('en-US', { timeZone: calendarTimezone }) : <Muted />}
           </DetailRow>
           {t && (
             <DetailRow label="Created in FleetCal">
-              {new Date(t.createdAt).toLocaleString()}
+              {new Date(t.createdAt).toLocaleString('en-US', { timeZone: calendarTimezone })}
             </DetailRow>
           )}
           {t?.legacyFormResponseId != null && (
@@ -6352,6 +6361,8 @@ function DriverReportPicker({
   busy:            boolean;
   onPick:          (reportId: string) => void;
 }) {
+  // Org tz for the candidate timestamps + header day.
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const [loading, setLoading] = useState(true);
   const [rows, setRows]       = useState<FuelReport[]>([]);
   const [error, setError]     = useState<string | null>(null);
@@ -6389,7 +6400,7 @@ function DriverReportPicker({
       <div className="px-3 py-2 flex items-center justify-between"
         style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
         <div className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
-          Unmatched driver reports near {new Date(transactionDate).toLocaleDateString()}
+          Unmatched driver reports near {new Date(transactionDate).toLocaleDateString('en-US', { timeZone: calendarTimezone })}
         </div>
         <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
           ±3 days
@@ -6440,7 +6451,7 @@ function DriverReportPicker({
                     {driverName} <span style={{ color: 'var(--gc-text-3)', fontWeight: 400 }}>·</span> {assetName}
                   </div>
                   <div className="text-[11px] mt-0.5 tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-                    {new Date(r.reportedAt).toLocaleString()} · {r.dieselGallons.toFixed(1)} gal
+                    {new Date(r.reportedAt).toLocaleString('en-US', { timeZone: calendarTimezone })} · {r.dieselGallons.toFixed(1)} gal
                     {galDiff != null && galDiff > 0.001 && ` · Δ${galDiff.toFixed(1)} gal from receipt`}
                     {r.state && ` · ${r.state}`}
                   </div>
