@@ -75,6 +75,15 @@ input[type="number"] {
 .gc-grid-line      { border-top: 1px solid var(--gc-grid-line-color, #eaecef); }
 .gc-grid-line-half { border-top: 1px solid var(--gc-grid-line-half-color, #f3f4f6); }
 
+/* ── OpsTable: hide the native horizontal scrollbar so the sticky
+ *    scrollbar proxy is the only one visible. The card still scrolls
+ *    horizontally (overflow-x: auto stays in effect) — we just zero
+ *    out the scrollbar's painted height. Native trackpad / shift-wheel
+ *    horizontal scrolling continues to work. */
+.ops-card-no-h-scrollbar::-webkit-scrollbar:horizontal {
+  height: 0 !important;
+}
+
 
 /* ── Range accent ── */
 input[type="range"] { accent-color: var(--gc-blue); }

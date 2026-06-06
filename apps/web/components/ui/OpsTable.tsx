@@ -922,7 +922,7 @@ export function OpsTable<T>({
           untouched: horizontal scroll only, natural row height. */}
       <div
         ref={cardRef}
-        className={fillHeight ? 'rounded-lg flex-1 min-h-0' : 'rounded-lg'}
+        className={`ops-card-no-h-scrollbar ${fillHeight ? 'rounded-lg flex-1 min-h-0' : 'rounded-lg'}`}
         style={{
           background: 'var(--gc-surface)',
           border: '1px solid var(--gc-border-light)',
