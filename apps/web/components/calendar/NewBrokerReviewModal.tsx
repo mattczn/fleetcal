@@ -18,17 +18,26 @@ import { railway } from '@/lib/railway';
  */
 export interface NewBrokerReviewModalProps {
   initialName: string;
-  /** Base64-encoded rate-con PDF (no data: prefix). When set, the
-   *  "Extract from rate con" button appears and calls the AI harvest
-   *  to pre-fill contact + invoicing fields. */
+  /** The rate con in whatever form the parent has it — a base64 data
+   *  URL (right after upload + parse), a Supabase signed URL (when
+   *  the user re-opens an existing load), or a raw storage path.
+   *  When set, the "Extract from rate con" button appears; the
+   *  modal converts to base64 internally on click via fetch +
+   *  arrayBuffer + bufferToBase64. */
   rateConPdf?: string;
+  /** Optional pre-resolved object URL for the PDF (created via
+   *  URL.createObjectURL in the parent). When present, prefer
+   *  fetching from this URL over the rateConPdf path — same trick
+   *  used by handleFullReparse to avoid double-fetching the blob
+   *  the parent has already paged into memory. */
+  pdfObjectUrl?: string;
   accentColor?: string;
   onCancel:    () => void;
   onConfirm:   (payload: Omit<Customer, 'id'>) => Promise<void> | void;
 }
 
 export function NewBrokerReviewModal({
-  initialName, rateConPdf, accentColor = '#0369a1', onCancel, onConfirm,
+  initialName, rateConPdf, pdfObjectUrl, accentColor = '#0369a1', onCancel, onConfirm,
 }: NewBrokerReviewModalProps) {
   const ACCENT = accentColor;
 
@@ -55,6 +64,31 @@ export function NewBrokerReviewModal({
   const trimmedName = name.trim();
   const canCreate   = trimmedName.length > 0 && !busy;
 
+  /** Resolve the parent-provided rateConPdf (data URL, signed URL, or
+   *  storage path) into raw base64 the harvest endpoint expects.
+   *  Mirrors the bufferToBase64 + fetch pattern in EventModal's
+   *  handleFullReparse. Chunked encoding because spreading a Uint8Array
+   *  into String.fromCharCode hits the JS arg limit on PDFs over ~100 KB. */
+  const resolvePdfBase64 = async (): Promise<string> => {
+    if (!rateConPdf) throw new Error('no rate con available');
+    // Fast path: caller already has a data URL — strip the prefix.
+    if (rateConPdf.startsWith('data:')) return rateConPdf.split(',')[1];
+    // Otherwise fetch the bytes. Prefer the pre-resolved object URL
+    // when the parent created one (avoids a second roundtrip to
+    // Supabase storage); fall back to the raw value.
+    const src = pdfObjectUrl || rateConPdf;
+    const resp = await fetch(src);
+    if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    const CHUNK = 0x8000; // 32 KB — safely under any spread limit
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  };
+
   /** Extract invoicing + contact fields from the rate-con PDF and
    *  drop them into form state. Doesn't blow away anything the user
    *  has already typed — only fills empty fields. */
@@ -63,7 +97,8 @@ export function NewBrokerReviewModal({
     setExtracting(true);
     setExtractError(null);
     try {
-      const res = await railway.harvestRateConFromPdf({ pdfBase64: rateConPdf });
+      const pdfBase64 = await resolvePdfBase64();
+      const res = await railway.harvestRateConFromPdf({ pdfBase64 });
       const p = res.parsed;
 
       // Invoicing fields — only set if currently empty so re-running
@@ -183,7 +218,7 @@ export function NewBrokerReviewModal({
             <Input value={name} onChange={setName} placeholder="Customer name" autoFocus accent={ACCENT} />
           </Field>
 
-          <Field label="Display abbreviation" hint="Shown on calendar chips and compact tables when the full name doesn't fit. Optional.">
+          <Field label="Nickname" hint="Shortened name or abbreviation for the customer.">
             <Input value={shortName} onChange={setShortName} placeholder="e.g. UBR" accent={ACCENT} />
           </Field>
 

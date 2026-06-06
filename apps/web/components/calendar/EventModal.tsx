@@ -4385,16 +4385,12 @@ export default function EventModal() {
     {pendingNewBroker !== null && (
       <NewBrokerReviewModal
         initialName={pendingNewBroker}
-        // Hand the rate-con PDF bytes to the modal so its "Extract
-        // from rate con" button can run the harvest. Only when
-        // rateConPdf is a base64 data URL (which it is right after
-        // upload + parse) — signed URLs and storage paths would
-        // require a fetch + bufferToBase64 conversion and that
-        // complexity isn't worth it for the existing-load reparse
-        // case where the user already has the customer matched.
-        rateConPdf={rateConPdf && rateConPdf.startsWith('data:')
-          ? rateConPdf.split(',')[1]
-          : undefined}
+        // Pass the rate-con regardless of format — data URL (fresh
+        // upload + parse), signed URL (re-opened load), or storage
+        // path. The modal detects the format and resolves bytes on
+        // click via fetch + bufferToBase64.
+        rateConPdf={rateConPdf}
+        pdfObjectUrl={pdfObjectUrl}
         onCancel={() => setPendingNewBroker(null)}
         onConfirm={confirmCreateBroker}
       />

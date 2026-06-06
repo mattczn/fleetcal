@@ -457,7 +457,6 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     return () => clearTimeout(t);
   }, [confirmDeleteContactId]);
   const [notes,               setNotes]               = useState(broker.notes               ?? '');
-  const [parseHints,          setParseHints]          = useState(broker.parseHints          ?? '');
   const [invoiceMethod,       setInvoiceMethod]       = useState<'' | 'email' | 'portal'>(broker.invoiceMethod ?? '');
   const [invoiceEmail,        setInvoiceEmail]        = useState(broker.invoiceEmail        ?? '');
   const [invoicePortal,       setInvoicePortal]       = useState(broker.invoicePortal       ?? '');
@@ -482,7 +481,6 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setMcNum(broker.mcNum ?? '');
     setContacts(seedContacts(broker));
     setNotes(broker.notes ?? '');
-    setParseHints(broker.parseHints ?? '');
     setInvoiceMethod(broker.invoiceMethod ?? '');
     setInvoiceEmail(broker.invoiceEmail ?? '');
     setInvoicePortal(broker.invoicePortal ?? '');
@@ -512,7 +510,6 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     mcNum.trim()               !== (broker.mcNum               ?? '') ||
     normalizeContacts(contacts) !== normalizeContacts(seedContacts(broker)) ||
     notes.trim()               !== (broker.notes               ?? '') ||
-    parseHints.trim()          !== (broker.parseHints          ?? '') ||
     invoiceMethod              !== (broker.invoiceMethod       ?? '') ||
     invoiceEmail.trim()        !== (broker.invoiceEmail        ?? '') ||
     invoicePortal.trim()       !== (broker.invoicePortal       ?? '') ||
@@ -578,7 +575,6 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
         }))
         .filter(c => c.name || c.email || c.phone),
       notes:               notes.trim()               || undefined,
-      parseHints:          parseHints.trim()          || undefined,
       invoiceMethod:       invoiceMethod || undefined,
       // Only persist the field that matches the chosen method; clears stale
       // values left over from a previous selection.
@@ -592,13 +588,12 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setMcNum(broker.mcNum ?? '');
       setContacts(seedContacts(broker));
       setNotes(broker.notes ?? '');
-      setParseHints(broker.parseHints ?? '');
       setInvoiceMethod(broker.invoiceMethod ?? '');
       setInvoiceEmail(broker.invoiceEmail ?? '');
       setInvoicePortal(broker.invoicePortal ?? '');
       setInvoiceInstructions(broker.invoiceInstructions ?? '');
     },
-  }), [name, shortName, mcNum, contacts, notes, parseHints, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
+  }), [name, shortName, mcNum, contacts, notes, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -684,7 +679,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
           )}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <PField label="Short Name" icon={<Hash size={11} />}>
+          <PField label="Nickname" icon={<Hash size={11} />} hint="Shortened name or abbreviation for the customer.">
             <input type="text" value={shortName} onChange={e => setShortName(e.target.value)}
               placeholder="e.g. Echo, Coyote…" style={P_INPUT}
               onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
@@ -804,16 +799,11 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
               onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
           </PField>
         </div>
-        <div className="mt-3">
-          <PField label="Rate-con parse hints" icon={<FileText size={11} />}>
-            <textarea value={parseHints} onChange={e => setParseHints(e.target.value)}
-              placeholder={'Customer-specific guidance for the AI parser. e.g.\n• Load # always follows "Order:"\n• Pickup # is in the BOL field on page 2'}
-              rows={3}
-              style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
-              onFocus={e => (e.currentTarget.style.borderColor = ACCENT)}
-              onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
-          </PField>
-        </div>
+        {/* Rate-con parse hints field removed — the parseHints
+            injection feature was dropped when the rate-con parser
+            collapsed to a single Sonnet pass with strict prompt
+            rules. The DB column is preserved for any historical
+            data; the UI just no longer exposes it. */}
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1.5 gap-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
@@ -1361,7 +1351,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function PField({ label, icon, children }: { label: string; icon?: React.ReactNode; children: React.ReactNode }) {
+function PField({ label, icon, hint, children }: { label: string; icon?: React.ReactNode; hint?: string; children: React.ReactNode }) {
   return (
     <div>
       <label className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider mb-1.5"
@@ -1369,6 +1359,11 @@ function PField({ label, icon, children }: { label: string; icon?: React.ReactNo
         {icon}{label}
       </label>
       {children}
+      {hint && (
+        <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }
