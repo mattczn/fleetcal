@@ -36,7 +36,7 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
-  Th, Td, DocBadge, RequiredDocBadge, CopyableCell, CopyableLoadNum, NotesButton,
+  Th, Td, DocBadge, RequiredDocBadge, AccessorialsCell, CopyableCell, CopyableLoadNum, NotesButton,
   moneyFmt, fmtShortDate, daysSince,
 } from '@/components/queue/QueueTablePrimitives';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
@@ -519,13 +519,7 @@ function AccountingPageInner() {
       key: 'accessorials', header: 'Accessorials', width: DEFAULT_COL_WIDTHS.accessorials,
       align: 'right', sortable: true,
       sortValue: r => (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
-      render: r => {
-        const accSum = (r.load.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-        const accCount = (r.load.accessorials ?? []).length;
-        return accCount === 0
-          ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-          : <span className="tabular-nums" title={`${accCount} accessorial${accCount === 1 ? '' : 's'}`}>{moneyFmt.format(accSum)}</span>;
-      },
+      render: r => <AccessorialsCell items={r.load.accessorials} />,
     });
 
     all.push({

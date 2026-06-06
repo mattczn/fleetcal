@@ -34,6 +34,7 @@ import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
+import { AccessorialsCell } from '@/components/queue/QueueTablePrimitives';
 
 type Tab = 'pending' | 'flagged' | 'all' | 'released';
 
@@ -640,18 +641,7 @@ export default function CloseoutView() {
       key: 'accessorials', header: 'Accessorials', width: DEFAULT_COL_WIDTHS.accessorials,
       align: 'right', sortable: true,
       sortValue: r => (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0),
-      render: r => {
-        const accSum = (r.accessorials ?? []).reduce((s, a) => s + (a.amount ?? 0), 0);
-        const accCount = (r.accessorials ?? []).length;
-        return accCount === 0
-          ? <span style={{ color: 'var(--gc-text-3)' }}>—</span>
-          : (
-            <div>
-              <div className="font-semibold tabular-nums">{moneyFmt.format(accSum)}</div>
-              <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>{accCount} item{accCount !== 1 ? 's' : ''}</div>
-            </div>
-          );
-      },
+      render: r => <AccessorialsCell items={r.accessorials} />,
     });
 
     // Total / Billing are mutually exclusive per tab — Released loads
@@ -1324,12 +1314,11 @@ export function computeFlagReasons(
   // column (red + transparent when absent, opaque green when present),
   // so we no longer emit a duplicate FlagChip for it. Server-side
   // flagged-bucket placement is unchanged.
-  // Pending accessorials — one chip per item still in flux.
-  for (const a of load.accessorials ?? []) {
-    if (a.status !== 'approved' && a.status !== 'denied') {
-      out.push({ kind: 'accessorial', accessorialId: a.id, category: a.category, amount: a.amount });
-    }
-  }
+  // Pending accessorials are surfaced via the Accessorials column's
+  // hover popover (status pill per line item). They used to render as
+  // green FlagChips under the docs badges, but that stacked noisy chips
+  // on every load with a pending detention/lumper request — duplicating
+  // info that the dedicated Accessorials column already carries.
   return out;
 }
 

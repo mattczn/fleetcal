@@ -200,6 +200,126 @@ export function RequiredDocBadge({
   );
 }
 
+// ─── Accessorials cell ──────────────────────────────────────────────────
+
+/** Display labels for accessorial categories. Mirrors the ones used in
+ *  FollowUpModal + ReviewQueue so the popover reads the same as the
+ *  rest of the system. Unknown categories fall back to the raw string. */
+export const ACCESSORIAL_LABEL: Record<string, string> = {
+  detention:    'Detention',
+  lumper:       'Lumper',
+  layover:      'Layover',
+  scale_ticket: 'Scale',
+  extra_stop:   'Extra stop',
+  other:        'Accessorial',
+};
+
+type AccessorialItem = {
+  id?:          string;
+  category:     string;
+  amount?:      number | null;
+  description?: string | null;
+  status?:      'requested' | 'approved' | 'denied';
+};
+
+/**
+ * Right-aligned cell for the Accessorials column.
+ *
+ * Collapsed view shows the sum + item count ("$468 / 5 items"). On
+ * hover, a fixed-position popover anchored to the cell's bottom-right
+ * lists every line — category, optional description, status pill, and
+ * amount — with a Total footer. Position is computed from
+ * getBoundingClientRect so the popover escapes table overflow without
+ * needing a portal.
+ *
+ * Renders "—" when there are no accessorials.
+ */
+export function AccessorialsCell({ items }: { items?: AccessorialItem[] }) {
+  const list = items ?? [];
+  const count = list.length;
+  const sum = list.reduce((s, a) => s + (a.amount ?? 0), 0);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [popPos, setPopPos] = useState<{ top: number; right: number } | null>(null);
+
+  if (count === 0) return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+
+  const openPopover = () => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setPopPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+  };
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        className="inline-block cursor-default"
+        onMouseEnter={openPopover}
+        onMouseLeave={() => setPopPos(null)}
+      >
+        <div className="font-semibold tabular-nums">{moneyFmt.format(sum)}</div>
+        <div className="text-[10px]" style={{ color: 'var(--gc-text-3)' }}>
+          {count} item{count !== 1 ? 's' : ''}
+        </div>
+      </span>
+      {popPos && (
+        <div
+          className="fixed z-[100] min-w-[260px] rounded-lg p-2.5 text-left pointer-events-none"
+          style={{
+            top:        popPos.top,
+            right:      popPos.right,
+            background: 'var(--gc-surface)',
+            border:     '1px solid var(--gc-border)',
+            boxShadow:  '0 8px 24px rgba(0,0,0,0.12)',
+          }}
+        >
+          <ul className="space-y-1">
+            {list.map((a, i) => {
+              const status = a.status ?? 'requested';
+              const statusTint =
+                status === 'approved' ? { fg: '#15803d', label: 'Approved' } :
+                status === 'denied'   ? { fg: '#991b1b', label: 'Denied'   } :
+                                        { fg: '#92400e', label: 'Pending'  };
+              return (
+                <li key={a.id ?? i} className="flex items-start justify-between gap-3 text-[12px]">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                        {ACCESSORIAL_LABEL[a.category] ?? a.category}
+                      </span>
+                      <span
+                        className="text-[9.5px] font-bold uppercase tracking-wider"
+                        style={{ color: statusTint.fg }}
+                      >
+                        {statusTint.label}
+                      </span>
+                    </div>
+                    {a.description && (
+                      <div className="text-[11px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                        {a.description}
+                      </div>
+                    )}
+                  </div>
+                  <span className="tabular-nums font-semibold shrink-0" style={{ color: 'var(--gc-text-1)' }}>
+                    {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <div
+            className="mt-2 pt-2 flex justify-between text-[11.5px] font-bold"
+            style={{ borderTop: '1px solid var(--gc-border-light)', color: 'var(--gc-text-1)' }}
+          >
+            <span>Total</span>
+            <span className="tabular-nums">{moneyFmt.format(sum)}</span>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Copy-to-clipboard cells ────────────────────────────────────────────
 
 export function CopyableLoadNum({ value }: { value: string }) {
