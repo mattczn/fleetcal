@@ -15,9 +15,10 @@
  * browsers, while this matches the load modal exactly.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import DatePicker from '@/components/calendar/DatePicker';
-import { parseTimeInput, todayDateKeyInTz } from '@/lib/time-utils';
+import TimePicker from '@/components/calendar/TimePicker';
+import { todayDateKeyInTz } from '@/lib/time-utils';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
 interface Props {
@@ -36,34 +37,21 @@ interface Props {
   defaultTime?: string;
 }
 
+/** Thin wrapper around TimePicker — translates the sm/md size variant
+ *  into the picker's width + font overrides so the trigger lines up
+ *  with the sibling DatePicker at the right scale. */
 function TimeText({ value, onChange, accentColor, size }: {
   value: string; onChange: (v: string) => void; accentColor: string; size: 'sm' | 'md';
 }) {
-  const [raw, setRaw] = useState(value);
-  useEffect(() => { setRaw(value); }, [value]);
-  const commit = () => {
-    const parsed = parseTimeInput(raw);
-    if (parsed) { setRaw(parsed); onChange(parsed); }
-    else setRaw(value);
-  };
-  const dims = size === 'sm'
-    ? { width: 64, padding: '5px 7px', fontSize: 12 }
-    : { width: 'calc(68px * var(--ui-scale, 1))', padding: 'calc(8.5px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1))', fontSize: 'calc(13.5px * var(--ui-scale, 1))' as const };
+  if (size === 'sm') {
+    return (
+      <TimePicker value={value} onChange={onChange} headerColor={accentColor}
+        inputWidth={56}
+        inputStyle={{ padding: '5px 7px', fontSize: 12 }} />
+    );
+  }
   return (
-    <input
-      type="text" value={raw}
-      onChange={e => setRaw(e.target.value)}
-      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
-      placeholder="8am"
-      style={{
-        ...dims,
-        border: '1px solid var(--gc-border)', borderRadius: 8,
-        color: 'var(--gc-text-1)', outline: 'none', cursor: 'text',
-        transition: 'border-color 150ms', background: 'var(--gc-surface)',
-      }}
-      onFocus={e => { requestAnimationFrame(() => e.target.select()); e.currentTarget.style.borderColor = accentColor; }}
-      onBlur={e => { commit(); e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
-    />
+    <TimePicker value={value} onChange={onChange} headerColor={accentColor} />
   );
 }
 
