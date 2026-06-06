@@ -8,13 +8,14 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { useUser } from '@clerk/nextjs';
 import { usePermissions } from '@/lib/usePermissions';
+import { useModules } from '@/lib/useModules';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import Tooltip from '@/components/ui/Tooltip';
 import { localDateStr, parseTimeInput } from '@/lib/time-utils';
 import { isActiveOn } from '@/lib/lifecycle';
 import { AssetSelect } from './AssetSelect';
 import type { CalendarEvent, Driver, EventStatus, Accessorial, Stop, RefNum, LoadAuditEntry, AccessorialChange, CustomerMatchResult } from '@/lib/types';
-import { NON_REVENUE_TYPES } from '@/lib/types';
+import { NON_REVENUE_TYPES, type NonRevenueType } from '@/lib/types';
 import { matchCustomer, buildBrokerRules } from '@/lib/customerMatch';
 import { cleanBrokerName } from '@/lib/brokerName';
 import { NewBrokerReviewModal } from './NewBrokerReviewModal';
@@ -1949,6 +1950,25 @@ export default function EventModal() {
   // the financial section's field list (and from the relay per-leg
   // pay block) when this is false.
   const { can: canDo } = usePermissions();
+  // Module gates — controls whether feature-gated sub-sections render
+  // inside the modal. MVP orgs see a cleaner non-revenue event without
+  // the Linked Work Orders section (maintenance module is OFF) and
+  // without "Maintenance" / "Inspection" / "Trailer Move" / "Drop
+  // Trailer" as non-revenue type options.
+  const { enabled: moduleEnabled } = useModules();
+  const maintenanceEnabled = moduleEnabled('maintenance');
+  const trailersEnabled    = moduleEnabled('trailers');
+  // Filter the non-revenue type chip list to only types the org can
+  // actually act on. Universal types (Deadhead, Training, Other) stay;
+  // Maintenance + Inspection require maintenance; Trailer Move + Drop
+  // Trailer require trailers.
+  const availableNonRevenueTypes = useMemo(() => {
+    return NON_REVENUE_TYPES.filter(t => {
+      if (t === 'Maintenance' || t === 'Inspection') return maintenanceEnabled;
+      if (t === 'Trailer Move' || t === 'Drop Trailer') return trailersEnabled;
+      return true;
+    });
+  }, [maintenanceEnabled, trailersEnabled]);
   const canViewDriverPay = canDo('loads.view_driver_pay');
   // Hide the load price / rate field for roles without loads.view_price
   // (Maintenance). Same pattern as canViewDriverPay below — strip the
@@ -2062,6 +2082,19 @@ export default function EventModal() {
   const [priority,   setPriority]   = useState(false);
   const [eventKind,  setEventKind]  = useState<'revenue' | 'non_revenue'>('revenue');
   const [nonRevenueType, setNonRevenueType] = useState<string>('Maintenance');
+  // If the currently-selected non-revenue type isn't in the org's
+  // available list (e.g. an MVP org without the maintenance module
+  // toggles a new event to "Non-revenue" — the default 'Maintenance'
+  // isn't a button they can see), snap to the first available type.
+  // Runs whenever the available list changes (module flag changes
+  // mid-session) or the user toggles eventKind into 'non_revenue'.
+  useEffect(() => {
+    if (eventKind !== 'non_revenue') return;
+    if (availableNonRevenueTypes.length === 0) return;
+    if (!availableNonRevenueTypes.includes(nonRevenueType as NonRevenueType)) {
+      setNonRevenueType(availableNonRevenueTypes[0]);
+    }
+  }, [eventKind, availableNonRevenueTypes, nonRevenueType]);
   // Buffer of maintenance work-order IDs the dispatcher has checked
   // in the Linked Work Orders section, but not yet saved (because the
   // event is still being created). On a successful create save we
@@ -5068,7 +5101,7 @@ export default function EventModal() {
                   Type
                 </label>
                 <div className="flex flex-wrap gap-1.5">
-                  {NON_REVENUE_TYPES.map(t => (
+                  {availableNonRevenueTypes.map(t => (
                     <button
                       key={t}
                       type="button"
@@ -5090,9 +5123,12 @@ export default function EventModal() {
                 represents shop time (Maintenance type). The section
                 handles its own data fetch + asset-empty state; we
                 just pass through eventId + the currently-selected
-                asset. On save the parent flushes pendingWorkOrderLinks
-                into PATCH calls. */}
-            {eventKind === 'non_revenue' && nonRevenueType === 'Maintenance' && (
+                truck. On save the parent flushes pendingWorkOrderLinks
+                into PATCH calls. Also gated on the maintenance module
+                — MVP orgs can still create non-revenue events (PTO,
+                detention, etc.) but the "Linked Work Orders" section
+                points at Equipment → Maintenance which they don't have. */}
+            {maintenanceEnabled && eventKind === 'non_revenue' && nonRevenueType === 'Maintenance' && (
               <LinkedWorkOrdersSection
                 eventId={isEdit ? (modalEventId ?? null) : null}
                 assetId={assetId ?? null}
