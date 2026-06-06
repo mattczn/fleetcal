@@ -1758,17 +1758,21 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             {loadId && (
               <div className="shrink-0 px-3 py-2"
                 style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                {/* Solid blue CTA so it reads as the obvious primary
+                    action — this is the only entry point for add /
+                    rename / retype / delete now that the per-row
+                    edit/delete affordances are gone. */}
                 <button type="button"
                   onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
                   disabled={merging}
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-extrabold uppercase tracking-wider transition-colors disabled:opacity-50"
                   style={{
-                    background: 'transparent',
-                    color:      'var(--gc-text-2)',
-                    border:     '1px dashed var(--gc-border)',
+                    background: 'var(--gc-blue)',
+                    color:      'white',
+                    border:     '1px solid var(--gc-blue)',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  onMouseEnter={e => { if (!merging) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+                  onMouseLeave={e => { if (!merging) e.currentTarget.style.background = 'var(--gc-blue)'; }}>
                   {merging ? <Loader2 size={11} className="animate-spin" /> : <Layers size={11} />}
                   Manage documents
                 </button>
@@ -1847,28 +1851,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                               {d.fileName}
                             </span>
                           )}
-                          {!isVirtual && renamingDocId !== d.id && (
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
-                                className="rounded-full p-1 transition-colors"
-                                title={`Rename — ${d.fileName}`}
-                                style={{ color: tint.bg, background: 'transparent' }}
-                                onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
-                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                                <Pencil size={11} />
-                              </button>
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                                className="rounded-full p-1 transition-colors"
-                                title={`Delete — ${d.fileName}`}
-                                style={{ color: '#d93025', background: 'transparent' }}
-                                onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                                <Trash2 size={11} />
-                              </button>
-                            </div>
-                          )}
+                          {/* Per-row Rename/Delete moved into the
+                              "Manage documents" dialog — keeps the
+                              side panel as a read-only navigator and
+                              funnels destructive ops through a single
+                              surface that surfaces confirms + bulk. */}
                         </div>
                       );
                     })}
@@ -1932,28 +1919,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                           {d.fileName}
                         </span>
                       )}
-                      {renamingDocId !== d.id && (
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                          <button type="button"
-                            onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
-                            className="rounded-full p-1 transition-colors"
-                            title={`Rename — ${d.fileName}`}
-                            style={{ color: tint.bg, background: 'transparent' }}
-                            onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
-                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                            <Pencil size={11} />
-                          </button>
-                          <button type="button"
-                            onClick={e => { e.stopPropagation(); setDeleteTarget({ id: d.id, name: d.fileName }); }}
-                            className="rounded-full p-1 transition-colors"
-                            title={`Delete — ${d.fileName}`}
-                            style={{ color: '#d93025', background: 'transparent' }}
-                            onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                            onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
-                            <Trash2 size={11} />
-                          </button>
-                        </div>
-                      )}
+                      {/* Per-row Rename/Delete moved into the
+                          "Manage documents" dialog. Side panel is
+                          navigation-only now. */}
                       {/* Per-row include-in-invoice toggle. Rendered for
                           every doc kind including invoices — the
                           dispatcher gets to decide whether a prior
