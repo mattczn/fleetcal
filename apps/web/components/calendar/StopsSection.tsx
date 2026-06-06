@@ -5,7 +5,8 @@ import { GripVertical, Plus, Trash2, MapPin, CheckCircle2, AlertCircle, Clock, L
 import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import DatePicker from './DatePicker';
-import { parseTimeInput, naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
+import TimePicker from './TimePicker';
+import { naiveHomeToView, naiveViewToHome } from '@/lib/time-utils';
 import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 
 interface Props {
@@ -73,32 +74,20 @@ export function fmtStopWindow(stop: { apptStart?: string; apptEnd?: string; sche
   return `Appt: ${start}`;
 }
 
+/** Stop appointment time pill. Forwards to the shared TimePicker so
+ *  the load modal's stop times pick up the same hour/minute popover
+ *  as every other DateTimeInput in the app. */
 function StopTimeInput({ value, onChange, headerColor }: { value: string; onChange: (v: string) => void; headerColor: string }) {
-  const [raw, setRaw] = useState(value);
-  useEffect(() => { setRaw(value); }, [value]);
-  const commit = () => {
-    const parsed = parseTimeInput(raw);
-    if (parsed) { setRaw(parsed); onChange(parsed); }
-    else setRaw(value);
-  };
   return (
-    <input
-      type="text" value={raw}
-      onChange={e => setRaw(e.target.value)}
-      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
-      placeholder="8am"
-      style={{
-        // Scales with the load modal's --ui-scale so the stop time
-        // pill matches the surrounding fields at any preset.
-        width: 'calc(68px * var(--ui-scale, 1))',
-        border: '1px solid var(--gc-border)', borderRadius: 8,
+    <TimePicker
+      value={value}
+      onChange={onChange}
+      headerColor={headerColor}
+      inputWidth={'calc(68px * var(--ui-scale, 1))'}
+      inputStyle={{
         padding: 'calc(8.5px * var(--ui-scale, 1)) calc(8px * var(--ui-scale, 1))',
         fontSize: 'calc(13.5px * var(--ui-scale, 1))',
-        color: 'var(--gc-text-1)', outline: 'none', cursor: 'text',
-        transition: 'border-color 150ms', background: 'var(--gc-surface)',
       }}
-      onFocus={e => { requestAnimationFrame(() => e.target.select()); e.currentTarget.style.borderColor = headerColor; }}
-      onBlur={e => { commit(); e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
     />
   );
 }
