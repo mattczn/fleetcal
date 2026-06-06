@@ -4203,7 +4203,15 @@ export default function EventModal() {
           <div className="flex flex-col gap-2">
             <button
               type="button"
-              onClick={() => { setPendingNewBroker(brokerMatch.extracted); }}
+              onClick={() => {
+                // Dismiss this prompt before opening the review modal —
+                // both render via portal-style fixed overlays, and this
+                // prompt sits at z-[220] vs the review modal's z-[210],
+                // so leaving it mounted blocks all interaction with the
+                // form behind it.
+                setBrokerSaveBlocked(false);
+                setPendingNewBroker(brokerMatch.extracted);
+              }}
               className="flex items-center justify-center gap-1.5 w-full py-2.5 rounded-xl text-sm font-semibold"
               style={{ background: '#0369a1', color: '#fff', border: 'none', cursor: 'pointer' }}>
               <Plus size={14} /> Review and save
