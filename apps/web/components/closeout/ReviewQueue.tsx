@@ -2980,18 +2980,30 @@ function DocSelectionDialog({
                         </button>
                       )}
 
-                      {/* Per-row management actions — only in manageMode. */}
+                      {/* Per-row management actions — only in manageMode.
+                          28×28 outline squares matching the load modal's
+                          doc-card buttons: neutral gc-text-3 icon on a
+                          transparent fill with a light border. Hover
+                          state colors the delete icon red; everything
+                          else just brightens via gc-hover. Consistency
+                          with the load modal was specifically requested
+                          ("the colored ones look tacky"). */}
                       {manageMode && !isRenaming && (
-                        <div className="flex items-center gap-0.5 shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           {isPending && (
                             <Loader2 size={12} className="animate-spin" style={{ color: 'var(--gc-text-3)' }} />
                           )}
                           {onDownload && !isPending && (
                             <button type="button"
                               onClick={e => { e.stopPropagation(); void onDownload(d.id, d.fileName); }}
-                              className="rounded-full p-1 transition-colors"
+                              className="flex items-center justify-center transition-colors"
                               title={`Download — ${d.fileName}`}
-                              style={{ color: 'var(--gc-text-2)', background: 'transparent' }}
+                              style={{
+                                width: 28, height: 28, borderRadius: 8,
+                                color: 'var(--gc-text-3)',
+                                background: 'transparent',
+                                border: '1px solid var(--gc-border-light)',
+                              }}
                               onMouseEnter={ev => (ev.currentTarget.style.background = 'var(--gc-hover)')}
                               onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
                               <Download size={12} />
@@ -3000,10 +3012,15 @@ function DocSelectionDialog({
                           {onRename && !isPending && (
                             <button type="button"
                               onClick={e => { e.stopPropagation(); startRename(d.id, d.fileName); }}
-                              className="rounded-full p-1 transition-colors"
+                              className="flex items-center justify-center transition-colors"
                               title={`Rename — ${d.fileName}`}
-                              style={{ color: tint.bg, background: 'transparent' }}
-                              onMouseEnter={ev => (ev.currentTarget.style.background = tint.bg + '14')}
+                              style={{
+                                width: 28, height: 28, borderRadius: 8,
+                                color: 'var(--gc-text-3)',
+                                background: 'transparent',
+                                border: '1px solid var(--gc-border-light)',
+                              }}
+                              onMouseEnter={ev => (ev.currentTarget.style.background = 'var(--gc-hover)')}
                               onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
                               <Pencil size={12} />
                             </button>
@@ -3013,16 +3030,25 @@ function DocSelectionDialog({
                               <>
                                 <button type="button"
                                   onClick={e => { e.stopPropagation(); void handleDeleteClick(d.id); }}
-                                  className="rounded text-[10px] font-extrabold uppercase tracking-wider px-2 py-1 transition-colors"
-                                  style={{ background: '#d93025', color: '#fff' }}
+                                  className="text-[10px] font-extrabold uppercase tracking-wider px-2 transition-colors"
+                                  style={{
+                                    height: 28, borderRadius: 8,
+                                    background: '#d93025', color: '#fff',
+                                    border: '1px solid #d93025',
+                                  }}
                                   title="Confirm delete">
                                   Delete
                                 </button>
                                 <button type="button"
                                   onClick={e => { e.stopPropagation(); setDeleteConfirmId(null); }}
-                                  className="rounded-full p-1 transition-colors"
+                                  className="flex items-center justify-center transition-colors"
                                   title="Cancel"
-                                  style={{ color: 'var(--gc-text-3)' }}
+                                  style={{
+                                    width: 28, height: 28, borderRadius: 8,
+                                    color: 'var(--gc-text-3)',
+                                    background: 'transparent',
+                                    border: '1px solid var(--gc-border-light)',
+                                  }}
                                   onMouseEnter={ev => (ev.currentTarget.style.background = 'var(--gc-hover)')}
                                   onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
                                   <X size={12} />
@@ -3031,11 +3057,16 @@ function DocSelectionDialog({
                             ) : (
                               <button type="button"
                                 onClick={e => { e.stopPropagation(); void handleDeleteClick(d.id); }}
-                                className="rounded-full p-1 transition-colors"
+                                className="flex items-center justify-center transition-colors"
                                 title={`Delete — ${d.fileName}`}
-                                style={{ color: '#d93025', background: 'transparent' }}
-                                onMouseEnter={ev => (ev.currentTarget.style.background = '#fce8e6')}
-                                onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}>
+                                style={{
+                                  width: 28, height: 28, borderRadius: 8,
+                                  color: 'var(--gc-text-3)',
+                                  background: 'transparent',
+                                  border: '1px solid var(--gc-border-light)',
+                                }}
+                                onMouseEnter={ev => { ev.currentTarget.style.background = '#fee2e2'; ev.currentTarget.style.color = '#d93025'; }}
+                                onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = 'var(--gc-text-3)'; }}>
                                 <Trash2 size={12} />
                               </button>
                             )
