@@ -525,6 +525,12 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
   const canDelete       = canDo('drivers.delete');
   const canViewPayroll  = canDo('payroll.access');
   const canEdit         = canDo('drivers.edit');
+
+  // Top-of-panel tab selector — mirrors AssetsModal. Details =
+  // profile + documents + lifecycle + retire/hard-delete. History =
+  // loads + pay history (both fit the "what's happened with this
+  // driver?" frame).
+  const [view, setView] = useState<'details' | 'history'>('details');
   // Module gates — hide driver-app status / owner-op exclusion when
   // the corresponding modules are OFF. MVP orgs see a cleaner driver
   // profile without the "Driver app: never opened" row (driver_app)
@@ -740,6 +746,30 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
           )}
         </div>
       </div>
+
+      {/* Details / History tab selector. Details = profile + driver
+          app status + documents + lifecycle + retire/hard-delete.
+          History = the loads list + the pay-history table, so the
+          long "what's happened" surfaces don't push the editable
+          fields off the screen. Same shape as AssetsModal. */}
+      <div className="flex items-center gap-1 mb-6 p-0.5 rounded-lg"
+        style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)', width: 'fit-content' }}>
+        {(['details', 'history'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setView(tab)}
+            className="px-4 py-1.5 rounded-md text-sm font-semibold transition-colors capitalize"
+            style={{
+              background: view === tab ? 'var(--gc-surface)' : 'transparent',
+              color:      view === tab ? ACCENT : 'var(--gc-text-3)',
+              boxShadow:  view === tab ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+            }}>
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {view === 'details' && (<>
 
       {/* Read-only notice for roles (e.g. maintenance) that have
           drivers.view but not drivers.edit. The fieldset below makes
@@ -1024,74 +1054,6 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
 
       </fieldset>
 
-      {/* Recent loads — In Progress / Upcoming / Completed with search.
-          Same structure as BrokerProfileModal's load history surface. */}
-      <LoadHistorySection
-        loads={driverLoads}
-        assets={assets}
-        onSelect={openEditModal}
-        heading="Loads"
-        emptyLabel="No loads found for this driver"
-      />
-
-      {/* Pay History — gated on payroll.access. Hidden entirely for
-          roles (e.g. dispatcher) that can't read /v1/payroll/records;
-          the fetch in the useEffect above is skipped in lockstep. */}
-      {canViewPayroll && (
-      <div className="mt-8">
-        <div className="text-[10px] font-bold uppercase tracking-widest mb-3"
-          style={{ color: 'var(--gc-text-3)' }}>
-          Pay History
-        </div>
-
-        {payHistory.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-8 rounded-xl"
-            style={{ border: '1px dashed var(--gc-border-light)' }}>
-            <DollarSign size={22} style={{ color: 'var(--gc-text-3)', opacity: 0.45 }} />
-            <span className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No finalized pay records yet</span>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {payHistory.map(rec => {
-              const [y, m, d] = rec.weekStart.split('-').map(Number);
-              const sat = new Date(y, m - 1, d);
-              const fri = new Date(y, m - 1, d + 6);
-              const weekStr = `${sat.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${fri.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-              const finalDate = new Date(rec.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-              const isDownloading = downloadingId === rec.id;
-              return (
-                <div key={rec.id}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl group"
-                  style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-                  <div className="w-2 h-2 rounded-full shrink-0" style={{ background: '#1e8e3e' }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{weekStr}</div>
-                    <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>Finalized {finalDate}</div>
-                  </div>
-                  <div className="text-sm font-semibold shrink-0" style={{ color: '#1e8e3e' }}>
-                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(rec.totalPay)}
-                  </div>
-                  <button
-                    onClick={() => handleHistoryPdf(rec)}
-                    disabled={!!downloadingId}
-                    title="Download pay stub PDF"
-                    className="flex items-center justify-center rounded-full transition-colors opacity-0 group-hover:opacity-100"
-                    style={{ width: 28, height: 28, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-3)', flexShrink: 0 }}
-                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-1)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}
-                  >
-                    {isDownloading
-                      ? <Loader2 size={12} className="animate-spin" style={{ color: ACCENT }} />
-                      : <Download size={12} />}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-      )}
-
       {/* Lifecycle editor — set/edit active_from + retire date. Backdate,
           schedule future retirement, or un-retire here. The big Retire
           button below remains the one-tap "retire today" shortcut. */}
@@ -1185,6 +1147,81 @@ function DriverProfilePanel({ driver, events, deletedEvents, assets, updateDrive
             ? `${loadsAttached} load${loadsAttached === 1 ? '' : 's'} attached`
             : null}
         />
+      )}
+
+      </>)}
+
+      {view === 'history' && (
+        <>
+          {/* Recent loads — In Progress / Upcoming / Completed with
+              search. Same structure as BrokerProfileModal's load
+              history surface. */}
+          <LoadHistorySection
+            loads={driverLoads}
+            assets={assets}
+            onSelect={openEditModal}
+            heading="Loads"
+            emptyLabel="No loads found for this driver"
+          />
+
+          {/* Pay History — gated on payroll.access. Hidden entirely
+              for roles (e.g. dispatcher) that can't read
+              /v1/payroll/records; the fetch in the useEffect above
+              is skipped in lockstep. */}
+          {canViewPayroll && (
+            <div className="mt-8">
+              <div className="text-[10px] font-bold uppercase tracking-widest mb-3"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Pay History
+              </div>
+              {payHistory.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-8 rounded-xl"
+                  style={{ border: '1px dashed var(--gc-border-light)' }}>
+                  <DollarSign size={22} style={{ color: 'var(--gc-text-3)', opacity: 0.45 }} />
+                  <span className="text-sm" style={{ color: 'var(--gc-text-3)' }}>No finalized pay records yet</span>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {payHistory.map(rec => {
+                    const [y, m, d] = rec.weekStart.split('-').map(Number);
+                    const sat = new Date(y, m - 1, d);
+                    const fri = new Date(y, m - 1, d + 6);
+                    const weekStr = `${sat.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${fri.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+                    const finalDate = new Date(rec.finalizedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    const isDownloading = downloadingId === rec.id;
+                    return (
+                      <div key={rec.id}
+                        className="flex items-center gap-3 px-4 py-3 rounded-xl group"
+                        style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+                        <div className="w-2 h-2 rounded-full shrink-0" style={{ background: '#1e8e3e' }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium" style={{ color: 'var(--gc-text-1)' }}>{weekStr}</div>
+                          <div className="text-xs mt-0.5" style={{ color: 'var(--gc-text-3)' }}>Finalized {finalDate}</div>
+                        </div>
+                        <div className="text-sm font-semibold shrink-0" style={{ color: '#1e8e3e' }}>
+                          {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(rec.totalPay)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleHistoryPdf(rec)}
+                          disabled={!!downloadingId}
+                          title="Download pay stub PDF"
+                          className="flex items-center justify-center rounded-full transition-colors opacity-0 group-hover:opacity-100"
+                          style={{ width: 28, height: 28, border: '1px solid var(--gc-border)', background: 'transparent', color: 'var(--gc-text-3)', flexShrink: 0 }}
+                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; e.currentTarget.style.color = 'var(--gc-text-1)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}>
+                          {isDownloading
+                            ? <Loader2 size={12} className="animate-spin" style={{ color: ACCENT }} />
+                            : <Download size={12} />}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
