@@ -37,7 +37,12 @@ interface Props {
   load: NotesLoad;
   actorName?: string;
   onClose: () => void;
-  onSaved: () => Promise<void> | void;
+  /** Fired after a successful append. Receives the optimistic note
+   *  the modal just stitched into its local thread so the parent can
+   *  mirror it on its own surfaces (banners, lists) without waiting
+   *  for a refetch. Pre-existing callers can continue ignoring the
+   *  argument. */
+  onSaved: (note?: InternalNote) => Promise<void> | void;
   /** zIndex layer for the modal. Defaults to 50 (covers the page).
    *  Pass a higher value when stacking over the closeout review queue
    *  (z-180) or an open EventModal (z-200) so the notes panel sits on
@@ -73,14 +78,15 @@ export default function InternalNotesModal({
         noteText:  trimmed,
         actorName,
       });
-      setNotes(prev => [...prev, {
+      const optimistic: InternalNote = {
         id:     'tmp-' + Date.now(),
         text:   trimmed,
         author: actorName ?? null,
         at:     new Date().toISOString(),
-      }]);
+      };
+      setNotes(prev => [...prev, optimistic]);
       setText('');
-      void onSaved();
+      void onSaved(optimistic);
     } finally {
       setSaving(false);
     }

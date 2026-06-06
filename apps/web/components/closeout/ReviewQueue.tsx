@@ -597,6 +597,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // the queue's keyboard handler while it's open so Esc / arrows /
   // Cmd+Enter all belong to the notes composer.
   const [notesOpen, setNotesOpen] = useState(false);
+  // Optimistic note additions per loadId. The parent loads array is
+  // owned by whoever opened the queue (the closeout page or the
+  // calendar) and we can't push back into it, so notes appended via
+  // the InternalNotesModal would otherwise disappear from the queue's
+  // banner the moment the modal closed (the modal's local thread
+  // dies with it, and `current.internalNotes` is still the
+  // pre-append snapshot until the parent refetches). Mirroring the
+  // optimistic note here keeps both the banner + the modal's next
+  // open in sync without forcing a round trip.
+  const [optimisticNotes, setOptimisticNotes] = useState<Record<string, import('@fleetcal/types').InternalNote[]>>({});
 
   // Left panel toggle — dispatcher's choice of seeing the rate-con
   // (default) vs the load's stops list. Stops view is useful when
@@ -1502,9 +1512,22 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
 
         {/* Internal notes — banner when there are notes, slim "Add note"
             row when there aren't. Both surfaces open the full thread
-            modal so the user can read older entries / compose new ones. */}
+            modal so the user can read older entries / compose new ones.
+            Source = server-authoritative notes from `current` ++ any
+            optimistic adds the user just made via the notes modal
+            (which the parent loads array can't see). Dedupe by id so
+            a parent refetch that surfaces the canonical row replaces
+            the tmp- placeholder cleanly. */}
         {(() => {
-          const notes = current.internalNotes ?? [];
+          const targetId = (current as Load).loadId ?? current.id ?? '';
+          const extras   = optimisticNotes[targetId] ?? [];
+          const seen     = new Set<string>();
+          const notes: import('@fleetcal/types').InternalNote[] = [];
+          for (const n of [...(current.internalNotes ?? []), ...extras]) {
+            if (seen.has(n.id)) continue;
+            seen.add(n.id);
+            notes.push(n);
+          }
           if (notes.length === 0) {
             return (
               <div className="shrink-0 flex items-center justify-between px-5 py-1.5"
@@ -2309,20 +2332,44 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         />
       )}
 
-      {notesOpen && (
-        <InternalNotesModal
-          load={current as Load}
-          actorName={user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined}
-          // Always one tier above our own Shell. Sized off `zIndex` so
-          // that when the queue is hoisted (e.g. opened from the load
-          // modal at z-250), our nested overlays follow rather than
-          // getting stranded behind the queue panel.
-          zIndex={zIndex + 50}
-          onClose={() => setNotesOpen(false)}
-          onSaved={() => { /* nothing to refresh — note appears
-                              optimistically in the modal's local thread */ }}
-        />
-      )}
+      {notesOpen && (() => {
+        const targetId = (current as Load).loadId ?? current.id ?? '';
+        const extras   = optimisticNotes[targetId] ?? [];
+        // Seed the modal with server notes + any optimistic adds we
+        // already captured this session, so re-opening the thread
+        // doesn't drop the new note the user just wrote.
+        const seen: Set<string> = new Set();
+        const mergedNotes: import('@fleetcal/types').InternalNote[] = [];
+        for (const n of [...(current.internalNotes ?? []), ...extras]) {
+          if (seen.has(n.id)) continue;
+          seen.add(n.id);
+          mergedNotes.push(n);
+        }
+        const seededLoad = { ...(current as Load), internalNotes: mergedNotes };
+        return (
+          <InternalNotesModal
+            load={seededLoad}
+            actorName={user?.fullName ?? user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? undefined}
+            // Always one tier above our own Shell. Sized off `zIndex` so
+            // that when the queue is hoisted (e.g. opened from the load
+            // modal at z-250), our nested overlays follow rather than
+            // getting stranded behind the queue panel.
+            zIndex={zIndex + 50}
+            onClose={() => setNotesOpen(false)}
+            onSaved={(note) => {
+              // Mirror the optimistic note onto the queue so the
+              // banner reflects it immediately — without this, closing
+              // the modal would drop the user's note from the visible
+              // surface until the parent refetched on its own cadence.
+              if (!note || !targetId) return;
+              setOptimisticNotes(prev => ({
+                ...prev,
+                [targetId]: [...(prev[targetId] ?? []), note],
+              }));
+            }}
+          />
+        );
+      })()}
 
       {deleteTarget && (
         <ConfirmDialog
