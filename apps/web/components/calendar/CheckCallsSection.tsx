@@ -5,6 +5,8 @@ import { Phone, MessageSquare, Mail, FileText, Plus, Trash2, Clock, ChevronDown,
 import { railway } from '@/lib/railway';
 import { getSupabase } from '@/lib/supabase';
 import type { CheckCall, CheckCallChannel, CheckCallParty } from '@fleetcal/types';
+import DateTimeInput from '@/components/ui/DateTimeInput';
+import { LOAD_ACCENT } from '@/lib/loadAccent';
 
 interface Props {
   loadId: string;
@@ -188,11 +190,12 @@ export default function CheckCallsSection({ loadId, currentUserName, accentColor
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <label style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>Next check (optional)</label>
-            <input
-              type="datetime-local"
+            <DateTimeInput
               value={nextCheckAt}
-              onChange={e => setNextCheckAt(e.target.value)}
-              style={{ fontSize: 11, padding: '4px 6px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-1)' }}
+              onChange={setNextCheckAt}
+              accentColor={accentColor ?? LOAD_ACCENT}
+              placeholder="Pick date and time"
+              size="sm"
             />
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
               <button
