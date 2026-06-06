@@ -144,11 +144,12 @@ export function DocBadge({ label, count }: { label: string; count?: number }) {
   const bg = DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
   const countSuffix = count && count > 1 ? ` (×${count})` : '';
   return (
-    <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${label} — Present${countSuffix}`}
-      style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
-      {label}{count && count > 1 ? ` ×${count}` : ''}
-    </span>
+    <FastTooltip text={`${label} — Present${countSuffix}`}>
+      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+        style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
+        {label}{count && count > 1 ? ` ×${count}` : ''}
+      </span>
+    </FastTooltip>
   );
 }
 
@@ -181,27 +182,97 @@ export function RequiredDocBadge({
     const bg = presentTint ?? DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
     const countSuffix = count && count > 1 ? ` (×${count})` : '';
     return (
-      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-        title={`${label} — Present${countSuffix}`}
-        style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
-        {label}{count && count > 1 ? ` ×${count}` : ''}
-      </span>
+      <FastTooltip text={`${label} — Present${countSuffix}`}>
+        <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+          style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
+          {label}{count && count > 1 ? ` ×${count}` : ''}
+        </span>
+      </FastTooltip>
     );
   }
   return (
-    <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${label} — Missing`}
-      style={{
-        background: 'transparent',
-        color:      '#991b1b',
-        border:     '1px dashed #991b1b',
-        // Subtract the 1px border so the missing chip lines up at the
-        // same height as the opaque present chips (which have no
-        // border but do have the same vertical padding).
-        padding:    '1px 7px',
-      }}>
-      {label}
-    </span>
+    <FastTooltip text={`${label} — Missing`}>
+      <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
+        style={{
+          background: 'transparent',
+          color:      '#991b1b',
+          border:     '1px dashed #991b1b',
+          // Subtract the 1px border so the missing chip lines up at the
+          // same height as the opaque present chips (which have no
+          // border but do have the same vertical padding).
+          padding:    '1px 7px',
+        }}>
+        {label}
+      </span>
+    </FastTooltip>
+  );
+}
+
+// ─── Fast tooltip ───────────────────────────────────────────────────────
+
+/**
+ * Small zero-dependency tooltip with a configurable hover delay.
+ *
+ * Why this exists: the native `title=` attribute waits ~1-2 s before
+ * surfacing, which makes the doc-badge present/missing hint feel
+ * broken on first hover. FastTooltip shows after `delay` ms (default
+ * 80) and disappears immediately on leave.
+ *
+ * Positioning is `position: fixed` with coords derived from the
+ * trigger's bounding rect, so the tooltip escapes any table/cell
+ * overflow without needing a portal.
+ */
+export function FastTooltip({
+  text, children, delay = 80,
+}: {
+  text:     string;
+  children: React.ReactNode;
+  /** ms to wait after mouseenter before showing. Default 80 ms. */
+  delay?:   number;
+}) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const show = () => {
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setPos({ top: r.top - 4, left: r.left + r.width / 2 });
+    }, delay);
+  };
+  const hide = () => {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setPos(null);
+  };
+
+  return (
+    <>
+      <span ref={triggerRef} onMouseEnter={show} onMouseLeave={hide} className="inline-flex">
+        {children}
+      </span>
+      {pos && (
+        <div
+          className="fixed z-[200] px-2 py-1 rounded-md pointer-events-none whitespace-nowrap"
+          style={{
+            top:        pos.top,
+            left:       pos.left,
+            transform:  'translate(-50%, -100%)',
+            background: 'rgba(32, 33, 36, 0.94)',
+            color:      '#fff',
+            fontSize:   11,
+            fontWeight: 600,
+            boxShadow:  '0 4px 12px rgba(0,0,0,0.18)',
+          }}
+        >
+          {text}
+        </div>
+      )}
+    </>
   );
 }
 

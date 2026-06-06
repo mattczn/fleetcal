@@ -764,6 +764,60 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const random = Math.random().toString(36).slice(2, 10);
   const storagePath = `${orgId}/${eventId}/${Date.now()}_${random}.${ext}`;
 
+  // ─── Idempotency: collapse rapid-fire duplicate uploads ───────────
+  // The user has reported single uploads producing 3 audit entries
+  // ("BOL document uploaded" × 3 within the same second). The
+  // handler itself only writes once per request, so the root cause
+  // is upstream — likely a rapid double-click before the button
+  // disables, a browser/proxy retry on a slow response, or a
+  // file-input onChange firing multiple times. Each retry generates
+  // a unique storage path (Date.now() + random) so nothing collides
+  // at the storage or row level; 3 distinct rows survive.
+  //
+  // Defend with a 5-second window dedup keyed on (load_id, kind,
+  // size_bytes). Two requests within 5s with identical kind +
+  // byte count are overwhelmingly the same upload being retried.
+  // A legitimate re-upload of a corrected file takes longer than
+  // 5 s in practice (file picker, navigation) and would differ in
+  // bytes anyway. On match, return the existing row instead of
+  // writing a second one — no storage upload, no audit append.
+  {
+    const sinceIso = new Date(Date.now() - 5_000).toISOString();
+    const { data: dupRow } = await supabase
+      .from("load_documents")
+      .select("id, load_id, storage_path, file_name, mime_type, size_bytes, kind, uploaded_at")
+      .eq("load_id", loadId)
+      .eq("org_id", orgId)
+      .eq("kind", kind)
+      .eq("size_bytes", bytes.length)
+      .gt("uploaded_at", sinceIso)
+      .order("uploaded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (dupRow) {
+      const dup = dupRow as {
+        id: string; load_id: string | null; storage_path: string;
+        file_name: string; mime_type: string | null; size_bytes: number | null;
+        kind: string; uploaded_at: string;
+      };
+      console.log(
+        "[POST /v1/loads/:id/documents] coalesced duplicate upload",
+        { loadId, kind, sizeBytes: bytes.length, existingId: dup.id },
+      );
+      return c.json({
+        document: {
+          id:         dup.id,
+          loadId:     dup.load_id,
+          fileName:   dup.file_name,
+          mimeType:   dup.mime_type   ?? undefined,
+          sizeBytes:  dup.size_bytes  ?? undefined,
+          kind:       dup.kind        as "bol" | "pod" | "scale" | "other",
+          uploadedAt: dup.uploaded_at,
+        },
+      });
+    }
+  }
+
   // Build a display filename in the {LoadNum}_{KIND}{_N}.{ext} convention
   // so dispatchers can read the file list at a glance without opening
   // each one. Falls back to the original name if we can't resolve a

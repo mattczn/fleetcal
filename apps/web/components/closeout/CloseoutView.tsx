@@ -34,7 +34,7 @@ import InternalNotesModal from './InternalNotesModal';
 import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
-import { AccessorialsCell } from '@/components/queue/QueueTablePrimitives';
+import { AccessorialsCell, FastTooltip } from '@/components/queue/QueueTablePrimitives';
 
 type Tab = 'pending' | 'flagged' | 'all' | 'released';
 
@@ -1208,15 +1208,16 @@ function DocBadge({ label, count }: { label: string; count?: number }) {
   const bg = DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
   const countSuffix = count && count > 1 ? ` (×${count})` : '';
   return (
-    <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${label} — Present${countSuffix}`}
-      style={{
-        background: bg,
-        color:      '#fff',
-        boxShadow:  '0 1px 2px rgba(0,0,0,0.08)',
-      }}>
-      {label}{count && count > 1 ? ` ×${count}` : ''}
-    </span>
+    <FastTooltip text={`${label} — Present${countSuffix}`}>
+      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+        style={{
+          background: bg,
+          color:      '#fff',
+          boxShadow:  '0 1px 2px rgba(0,0,0,0.08)',
+        }}>
+        {label}{count && count > 1 ? ` ×${count}` : ''}
+      </span>
+    </FastTooltip>
   );
 }
 
@@ -1245,31 +1246,33 @@ function RequiredDocBadge({
   if (present) {
     const countSuffix = count && count > 1 ? ` (×${count})` : '';
     return (
-      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-        title={`${label} — Present${countSuffix}`}
-        style={{
-          background: presentTint,
-          color:      '#fff',
-          boxShadow:  '0 1px 2px rgba(0,0,0,0.08)',
-        }}>
-        {label}{count && count > 1 ? ` ×${count}` : ''}
-      </span>
+      <FastTooltip text={`${label} — Present${countSuffix}`}>
+        <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+          style={{
+            background: presentTint,
+            color:      '#fff',
+            boxShadow:  '0 1px 2px rgba(0,0,0,0.08)',
+          }}>
+          {label}{count && count > 1 ? ` ×${count}` : ''}
+        </span>
+      </FastTooltip>
     );
   }
   return (
-    <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${label} — Missing`}
-      style={{
-        background: 'transparent',
-        color:      '#991b1b',
-        border:     '1px dashed #991b1b',
-        // Subtract the 1px border so the missing chip lines up at the
-        // same height as the opaque present chips (which have no
-        // border but do have the same vertical padding).
-        padding:    '1px 7px',
-      }}>
-      {label}
-    </span>
+    <FastTooltip text={`${label} — Missing`}>
+      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+        style={{
+          background: 'transparent',
+          color:      '#991b1b',
+          border:     '1px dashed #991b1b',
+          // Subtract the 1px border so the missing chip lines up at the
+          // same height as the opaque present chips (which have no
+          // border but do have the same vertical padding).
+          padding:    '1px 7px',
+        }}>
+        {label}
+      </span>
+    </FastTooltip>
   );
 }
 
