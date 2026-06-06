@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
-import { View, ActivityIndicator } from "react-native";
+import { View, ActivityIndicator, AppState, type AppStateStatus } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
-import { onlineManager } from "@tanstack/react-query";
+import { focusManager, onlineManager } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import NetInfo from "@react-native-community/netinfo";
 import {
@@ -26,6 +26,16 @@ import { drainQueue } from "@/lib/uploadQueue";
 // React Query mutations and the upload queue are intentionally separate
 // systems because FormData payloads don't serialize through the React
 // Query persister — see lib/uploadQueue.ts for why.
+// Drive React Query's focus state from AppState so any query with a
+// `refetchInterval` (driver NotificationsBell, truck-location on the
+// load screen, etc.) automatically pauses when the app backgrounds
+// and resumes — with one immediate refetch — when the driver returns.
+// Without this wiring, polling continues at full cadence even while
+// the phone is locked, burning Motive quota for no UX benefit.
+AppState.addEventListener("change", (state: AppStateStatus) => {
+  focusManager.setFocused(state === "active");
+});
+
 let lastOnline: boolean | null = null;
 onlineManager.setEventListener(setOnline => {
   return NetInfo.addEventListener(state => {

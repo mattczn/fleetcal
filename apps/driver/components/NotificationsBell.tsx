@@ -89,13 +89,16 @@ export function NotificationsBell({ tint = "dark" }: Props = {}) {
   const buttonBg         = tint === "light" ? "rgba(255,255,255,0.12)" : "transparent";
   const buttonBorder     = tint === "light" ? "rgba(255,255,255,0.18)" : "transparent";
 
-  // Background fetch every 30s while mounted so the badge stays current
-  // without forcing the driver to open the panel.
+  // Background fetch every 2 min while mounted so the badge stays
+  // current without forcing the driver to open the panel. 2 min is a
+  // deliberate compromise — fast enough that a fresh notification
+  // surfaces in roughly one work-cycle, slow enough that dozens of
+  // drivers with the app open don't hammer the API.
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["driver-notifications"],
     queryFn:  () => railway.listMyNotifications(),
-    refetchInterval: 30_000,
-    staleTime: 10_000,
+    refetchInterval: 2 * 60_000,
+    staleTime: 60_000,
   });
   const notifications = data?.notifications ?? [];
   const pendingCount = notifications.filter(n => !n.acknowledgedAt).length;

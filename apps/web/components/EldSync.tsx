@@ -2,27 +2,27 @@
 
 import { useEffect } from 'react';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import type { EldLocation } from '@/store/useCalendarStore';
 
-async function fetchEldLocations(): Promise<EldLocation[]> {
-  try {
-    const res = await fetch('/api/motive/locations');
-    if (!res.ok) return [];
-    const body = await res.json();
-    return Array.isArray(body) ? body : (Array.isArray(body?.locations) ? body.locations : []);
-  } catch {
-    return [];
-  }
-}
+/**
+ * Mounted once globally on the calendar shell. Kicks off the initial
+ * Motive `/locations` fetch and re-polls every 10 min — the API route
+ * itself caches for 10 min, so polling more often just hits the cache.
+ *
+ * Both this and CalendarHeader's "X min ago" pill read from the same
+ * `eldLocations` slice in `useCalendarStore`; there is a single fetcher
+ * (`refreshEldLocations`) so we never have two pollers racing each
+ * other against the same endpoint.
+ */
+const POLL_MS = 10 * 60_000;
 
 export default function EldSync() {
-  const setEldLocations = useCalendarStore(s => s.setEldLocations);
+  const refresh = useCalendarStore(s => s.refreshEldLocations);
 
   useEffect(() => {
-    fetchEldLocations().then(setEldLocations);
-    const iv = setInterval(() => fetchEldLocations().then(setEldLocations), 10 * 60 * 1000);
+    refresh();
+    const iv = setInterval(refresh, POLL_MS);
     return () => clearInterval(iv);
-  }, [setEldLocations]);
+  }, [refresh]);
 
   return null;
 }

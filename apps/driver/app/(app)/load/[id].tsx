@@ -886,8 +886,12 @@ export default function LoadDetailScreen() {
       }
     },
     enabled:  !!id && !!driver,
-    refetchInterval: 60 * 1000, // poll once a minute while open
-    staleTime: 30 * 1000,
+    // Poll once every 2 min while the screen is open and the app is
+    // foregrounded. focusManager (wired at the root) automatically
+    // pauses this when the driver backgrounds the app, so the Motive
+    // quota only burns while the driver is actually looking.
+    refetchInterval: 2 * 60 * 1000,
+    staleTime: 60 * 1000,
   });
 
   const { mutate: confirmLoadMut, isPending: isConfirming } = useMutation({

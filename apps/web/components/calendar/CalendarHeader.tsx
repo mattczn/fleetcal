@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { MapPin, Loader2, RefreshCw, Truck, Activity } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { GUTTER_W } from '@/lib/time-utils';
@@ -9,8 +9,6 @@ import AssetDetailModal from './AssetDetailModal';
 import type { Asset } from '@/lib/types';
 import { tzAbbr } from '@/lib/time-utils';
 import { isActiveInRange, dateKeyInTz } from '@/lib/lifecycle';
-
-const POLL_MS = 30 * 60_000; // 30 minutes
 
 function relativeTime(date: Date): string {
   const ms = Date.now() - date.getTime();
@@ -35,63 +33,37 @@ function staleness(locatedAt: string): 'fresh' | 'stale' | 'old' {
 
 const STALENESS_COLOR = { fresh: '#16a34a', stale: '#b45309', old: '#9ca3af' };
 
-function useMotiveLocations(hasMotiveAssets: boolean) {
-  const [locations,    setLocations]    = useState<Record<string, MotiveLocation>>({});
-  const [loading,      setLoading]      = useState(false);
-  const [lastFetched,  setLastFetched]  = useState<Date | null>(null);
+/**
+ * Thin selector over the store's centralized Motive-locations slice.
+ * The actual polling lives in `EldSync` (mounted globally on the
+ * calendar shell); this hook just maps the store array into the
+ * record-keyed-by-vehicleId shape the header UI expects and ticks
+ * every 30 s so the "X min ago" label stays current.
+ */
+function useMotiveLocations() {
+  const eldLocations            = useCalendarStore(s => s.eldLocations);
+  const eldLocationsFetchedAt   = useCalendarStore(s => s.eldLocationsFetchedAt);
+  const loading                 = useCalendarStore(s => s.eldLocationsLoading);
+  const refresh                 = useCalendarStore(s => s.refreshEldLocations);
+
+  const locations = useMemo(() => {
+    const map: Record<string, MotiveLocation> = {};
+    for (const loc of eldLocations) map[loc.vehicleId] = loc;
+    return map;
+  }, [eldLocations]);
+
+  const lastFetched = useMemo(
+    () => (eldLocationsFetchedAt ? new Date(eldLocationsFetchedAt) : null),
+    [eldLocationsFetchedAt]
+  );
+
+  // Tick every 30 s so "X min ago" stays current between fetches.
   const [, setTick] = useState(0);
-
-  const fetchFnRef = useRef<(() => Promise<void>) | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const startInterval = useCallback((fn: () => Promise<void>) => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(fn, POLL_MS);
-  }, []);
-
-  useEffect(() => {
-    if (!hasMotiveAssets) { setLocations({}); setLastFetched(null); return; }
-
-    let cancelled = false;
-
-    const doFetch = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/motive/locations');
-        if (!res.ok) return;
-        const json = await res.json() as { locations?: MotiveLocation[] };
-        if (cancelled) return;
-        const map: Record<string, MotiveLocation> = {};
-        for (const loc of json.locations ?? []) map[loc.vehicleId] = loc;
-        setLocations(map);
-        setLastFetched(new Date());
-      } catch { /* stale data fine */ }
-      finally { if (!cancelled) setLoading(false); }
-    };
-
-    fetchFnRef.current = doFetch;
-    doFetch();
-    startInterval(doFetch);
-
-    return () => {
-      cancelled = true;
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [hasMotiveAssets, startInterval]);
-
-  // Tick every 30 s so "X min ago" stays current between fetches
   useEffect(() => {
     if (!lastFetched) return;
     const id = setInterval(() => setTick(t => t + 1), 30_000);
     return () => clearInterval(id);
   }, [lastFetched]);
-
-  const refresh = useCallback(() => {
-    if (!fetchFnRef.current) return;
-    const fn = fetchFnRef.current;
-    fn();
-    startInterval(fn);
-  }, [startInterval]);
 
   return { locations, loading, lastFetched, refresh };
 }
@@ -125,7 +97,7 @@ export default function CalendarHeader() {
   ];
 
   const hasMotiveAssets = visibleAssets.some(a => !!a.motiveVehicleId);
-  const { locations, loading, lastFetched, refresh } = useMotiveLocations(hasMotiveAssets);
+  const { locations, loading, lastFetched, refresh } = useMotiveLocations();
 
   const [detailPanel, setDetailPanel] = useState<{ asset: Asset; location: MotiveLocation | null } | null>(null);
 

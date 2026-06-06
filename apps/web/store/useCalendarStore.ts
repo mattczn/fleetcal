@@ -467,7 +467,18 @@ interface CalendarStore extends ModalState {
   requestBatchCancel: () => void;
 
   eldLocations: EldLocation[];
+  /** Epoch ms of the last successful Motive `/locations` fetch.
+   *  Drives the "X min ago" pill in CalendarHeader. */
+  eldLocationsFetchedAt: number | null;
+  /** True while a refresh is in flight — drives spinner state. */
+  eldLocationsLoading: boolean;
   setEldLocations: (locs: EldLocation[]) => void;
+  /** Single source of truth for fetching Motive vehicle locations.
+   *  EldSync polls this on a 10-min cadence; CalendarHeader's refresh
+   *  button also calls it. Centralizing here means there's exactly one
+   *  fetcher for `/api/motive/locations` regardless of how many UIs
+   *  display the data. */
+  refreshEldLocations: () => Promise<void>;
 
   openCreateModal: (defaults?: Partial<CalendarEvent>, opts?: { prefillWorkOrderLinkIds?: string[] }) => void;
   openEditModal: (eventId: string) => void;
@@ -2178,7 +2189,23 @@ export const useCalendarStore = create<CalendarStore>()(
   prefillWorkOrderLinkIds: undefined,
 
   eldLocations: [],
-  setEldLocations: (locs) => set({ eldLocations: locs }),
+  eldLocationsFetchedAt: null,
+  eldLocationsLoading: false,
+  setEldLocations: (locs) => set({ eldLocations: locs, eldLocationsFetchedAt: Date.now() }),
+  refreshEldLocations: async () => {
+    if (get().eldLocationsLoading) return; // coalesce overlapping calls
+    set({ eldLocationsLoading: true });
+    try {
+      const res = await fetch('/api/motive/locations');
+      if (!res.ok) return;
+      const body = await res.json();
+      const locs: EldLocation[] = Array.isArray(body)
+        ? body
+        : (Array.isArray(body?.locations) ? body.locations : []);
+      set({ eldLocations: locs, eldLocationsFetchedAt: Date.now() });
+    } catch { /* stale data is fine — leave previous list in place */ }
+    finally { set({ eldLocationsLoading: false }); }
+  },
 
   openCreateModal: (defaults, opts) =>
     set({
