@@ -151,6 +151,55 @@ export function DocBadge({ label, count }: { label: string; count?: number }) {
   );
 }
 
+/**
+ * Required-doc slot — always renders, even when the doc is missing.
+ *
+ * Present  → opaque tint + white text (visually identical to DocBadge).
+ * Missing  → transparent background, dashed red border + red text. The
+ *            slot reads as "expected but not uploaded yet" without
+ *            adding a separate FlagChip line.
+ *
+ * Used for RC (every row) and POD (every non-TONU row) in the
+ * Paperwork + Billing loads tables.
+ */
+export function RequiredDocBadge({
+  label, present, count, presentTint, missingTitle,
+}: {
+  label:        string;
+  present:      boolean;
+  count?:       number;
+  /** Background colour when the doc is present. Defaults to the tint
+   *  registered in DOC_BADGE_TINT for `label`, falling back to Other. */
+  presentTint?: string;
+  missingTitle: string;
+}) {
+  if (present) {
+    const bg = presentTint ?? DOC_BADGE_TINT[label] ?? DOC_BADGE_TINT.Other;
+    return (
+      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+        title={`${count ?? ''} ${label}`.trim()}
+        style={{ background: bg, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
+        {label}{count && count > 1 ? ` ×${count}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
+      title={missingTitle}
+      style={{
+        background: 'transparent',
+        color:      '#991b1b',
+        border:     '1px dashed #991b1b',
+        // Subtract the 1px border so the missing chip lines up at the
+        // same height as the opaque present chips (which have no
+        // border but do have the same vertical padding).
+        padding:    '1px 7px',
+      }}>
+      {label}
+    </span>
+  );
+}
+
 // ─── Copy-to-clipboard cells ────────────────────────────────────────────
 
 export function CopyableLoadNum({ value }: { value: string }) {

@@ -706,21 +706,27 @@ export default function CloseoutView() {
       key: 'docs', header: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
       render: r => {
         const counts = docCounts[r.loadId ?? r.id] ?? {};
-        const hasRC = !!r.rateConPdf || (counts.rate_con ?? 0) > 0;
+        const rcCount = Math.max(counts.rate_con ?? 0, r.rateConPdf ? 1 : 0);
+        const podCount = counts.pod ?? 0;
         return (
           <div>
             <div className="flex flex-wrap items-center gap-1">
-              {hasRC
-                ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.rateConPdf ? 1 : 0)} />
-                : (
-                  <span
-                    className="flex items-center gap-1 text-[10px] font-semibold"
-                    style={{ color: '#991b1b' }}
-                    title="No rate confirmation uploaded">
-                    <Flag size={9} /> Missing RC
-                  </span>
-                )}
-              {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod} />}
+              <RequiredDocBadge
+                label="RC"
+                present={rcCount > 0}
+                count={rcCount}
+                presentTint={DOC_BADGE_TINT.RC}
+                missingTitle="No rate confirmation uploaded"
+              />
+              {!r.isTonu && (
+                <RequiredDocBadge
+                  label="POD"
+                  present={podCount > 0}
+                  count={podCount}
+                  presentTint={DOC_BADGE_TINT.POD}
+                  missingTitle="No POD uploaded"
+                />
+              )}
               {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol} />}
               {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper} />}
               {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale} />}
@@ -1143,6 +1149,56 @@ function DocBadge({ label, count }: { label: string; count?: number }) {
   );
 }
 
+/**
+ * Required-doc slot — always renders, even when the doc is missing.
+ *
+ * Present  → opaque tint + white text (visually identical to DocBadge).
+ * Missing  → transparent background, dashed red border + red text. The
+ *            slot reads as "expected but not uploaded yet" without
+ *            adding a separate FlagChip line.
+ *
+ * Used for RC on every row and POD on every non-TONU row in the
+ * Paperwork loads table.
+ */
+function RequiredDocBadge({
+  label, present, count, presentTint, missingTitle,
+}: {
+  label: string;
+  present: boolean;
+  count?: number;
+  presentTint: string;
+  missingTitle: string;
+}) {
+  if (present) {
+    return (
+      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+        title={`${count ?? ''} ${label}`.trim()}
+        style={{
+          background: presentTint,
+          color:      '#fff',
+          boxShadow:  '0 1px 2px rgba(0,0,0,0.08)',
+        }}>
+        {label}{count && count > 1 ? ` ×${count}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+      title={missingTitle}
+      style={{
+        background: 'transparent',
+        color:      '#991b1b',
+        border:     '1px dashed #991b1b',
+        // Subtract the 1px border so the missing chip lines up at the
+        // same height as the opaque present chips (which have no
+        // border but do have the same vertical padding).
+        padding:    '1px 7px',
+      }}>
+      {label}
+    </span>
+  );
+}
+
 /** Load # button with a 1.5s "Copied" confirmation flip. */
 function CopyableLoadNum({ value }: { value: string }) {
   return <CopyableCell value={value} displayValue={`#${value}`} title="Copy load #" />;
@@ -1264,14 +1320,10 @@ export function computeFlagReasons(
   if (load.flaggedReason) {
     out.push({ kind: 'manual', label: MANUAL_FLAG_LABELS[load.flaggedReason] ?? load.flaggedReason });
   }
-  // Missing POD — count comes from the closeout queue's docCounts.
-  // TONU loads don't need POD, so we skip this check entirely. The
-  // server applies the 24h grace-period before flagging; the row
-  // wouldn't be in the Flagged bucket if it weren't already past
-  // that threshold, so the chip just mirrors the server's decision.
-  if (!load.isTonu && (counts.pod ?? 0) === 0) {
-    out.push({ kind: 'missing_pod' });
-  }
+  // Missing POD is surfaced by the always-rendered POD slot in the Docs
+  // column (red + transparent when absent, opaque green when present),
+  // so we no longer emit a duplicate FlagChip for it. Server-side
+  // flagged-bucket placement is unchanged.
   // Pending accessorials — one chip per item still in flux.
   for (const a of load.accessorials ?? []) {
     if (a.status !== 'approved' && a.status !== 'denied') {

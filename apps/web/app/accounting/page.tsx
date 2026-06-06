@@ -36,7 +36,7 @@ import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
-  Th, Td, DocBadge, CopyableCell, CopyableLoadNum, NotesButton,
+  Th, Td, DocBadge, RequiredDocBadge, CopyableCell, CopyableLoadNum, NotesButton,
   moneyFmt, fmtShortDate, daysSince,
 } from '@/components/queue/QueueTablePrimitives';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
@@ -552,20 +552,24 @@ function AccountingPageInner() {
       key: 'docs', header: 'Docs', width: DEFAULT_COL_WIDTHS.docs,
       render: r => {
         const counts = r.load.documentCounts ?? {};
-        const hasRC = !!r.load.rateConPdf || (counts.rate_con ?? 0) > 0;
+        const rcCount  = Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0);
+        const podCount = counts.pod ?? 0;
         return (
           <div className="flex flex-wrap gap-1">
-            {hasRC
-              ? <DocBadge label="RC" count={Math.max(counts.rate_con ?? 0, r.load.rateConPdf ? 1 : 0)} />
-              : (
-                <span
-                  className="text-[10px] font-semibold"
-                  style={{ color: '#991b1b' }}
-                  title="No rate confirmation uploaded">
-                  Missing RC
-                </span>
-              )}
-            {(counts.pod          ?? 0) > 0 && <DocBadge label="POD"     count={counts.pod}          />}
+            <RequiredDocBadge
+              label="RC"
+              present={rcCount > 0}
+              count={rcCount}
+              missingTitle="No rate confirmation uploaded"
+            />
+            {!r.load.isTonu && (
+              <RequiredDocBadge
+                label="POD"
+                present={podCount > 0}
+                count={podCount}
+                missingTitle="No POD uploaded"
+              />
+            )}
             {(counts.bol          ?? 0) > 0 && <DocBadge label="BOL"     count={counts.bol}          />}
             {(counts.lumper       ?? 0) > 0 && <DocBadge label="Lumper"  count={counts.lumper}       />}
             {(counts.scale        ?? 0) > 0 && <DocBadge label="Scale"   count={counts.scale}        />}
