@@ -1,0 +1,72 @@
+/**
+ * Server-side audit-log appenders.
+ *
+ * Mirrors the client-side LoadAuditEntry pattern in
+ * apps/web/components/calendar/EventModal.tsx but writes from inside
+ * route handlers — used wherever a mutation happens server-side
+ * without a corresponding client-built entry (document operations,
+ * status changes via dispatcher PATCH, billing transitions in
+ * closeout/invoices, etc.).
+ *
+ * Two columns exist:
+ *   • events.audit_log  — per-leg entries (driver actions, per-leg
+ *                          dispatcher edits, document uploads keyed
+ *                          to a specific event)
+ *   • loads.audit_log   — load-level entries (broker, customer, price,
+ *                          billing status — things that don't pin to
+ *                          a single leg)
+ *
+ * The read path in routes/events.ts merges both before returning to
+ * the client, so it doesn't matter for display which table you write
+ * to — but it does matter for correctness. Use appendEventAudit for
+ * leg-scoped facts and appendLoadAudit for load-level facts.
+ */
+
+import type { LoadAuditEntry } from "@fleetcal/types";
+import { supabase } from "./supabase.js";
+
+/** Append a single entry to events.audit_log for one specific event id. */
+export async function appendEventAudit(
+  eventId: string,
+  orgId:   string,
+  entry:   LoadAuditEntry,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("events")
+    .select("audit_log")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) { console.error("[appendEventAudit] read:", error); return; }
+  const existing = ((data as { audit_log: LoadAuditEntry[] | null } | null)?.audit_log) ?? [];
+  const next = [...existing, entry];
+  const { error: writeErr } = await supabase
+    .from("events")
+    .update({ audit_log: next as never })
+    .eq("id", eventId)
+    .eq("org_id", orgId);
+  if (writeErr) console.error("[appendEventAudit] write:", writeErr);
+}
+
+/** Append a single entry to loads.audit_log for one specific load id. */
+export async function appendLoadAudit(
+  loadId: string,
+  orgId:  string,
+  entry:  LoadAuditEntry,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("loads")
+    .select("audit_log")
+    .eq("id", loadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (error) { console.error("[appendLoadAudit] read:", error); return; }
+  const existing = ((data as { audit_log: LoadAuditEntry[] | null } | null)?.audit_log) ?? [];
+  const next = [...existing, entry];
+  const { error: writeErr } = await supabase
+    .from("loads")
+    .update({ audit_log: next as never })
+    .eq("id", loadId)
+    .eq("org_id", orgId);
+  if (writeErr) console.error("[appendLoadAudit] write:", writeErr);
+}

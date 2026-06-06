@@ -20,6 +20,7 @@ import { joinEventLoadToApp } from "@fleetcal/types";
 
 import { supabase } from "../lib/supabase.js";
 import { fetchStopsByEvent } from "../lib/stops.js";
+import { appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
 
@@ -816,12 +817,49 @@ closeout.patch("/loads/:id", async (c) => {
       return c.json({ error: "validation_failed", errors: [`unknown action '${(body as { action?: string }).action}'`] } satisfies ApiErrorResponse, 400);
   }
 
+  // Snapshot the prior billing_status BEFORE the write so we can
+  // append a load-level audit entry for any closeout-driven
+  // transition (verify, flag, clear_flag, mark_invoiced, mark_paid,
+  // reopen — all funnel through this PATCH and set billing_status
+  // in the switch above). Closeout writes only fire when the action
+  // actually changes the value, but we still gate on `update`
+  // containing a new billing_status before reading to avoid an
+  // extra round-trip on no-op paths like set_invoice_docs.
+  let priorBillingStatus: string | null = null;
+  if ("billing_status" in update) {
+    const { data: prior } = await supabase
+      .from("loads")
+      .select("billing_status")
+      .eq("id", loadId)
+      .eq("org_id", orgId)
+      .maybeSingle();
+    priorBillingStatus = (prior as { billing_status: string | null } | null)?.billing_status ?? null;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await supabase.from("loads").update(update as any).eq("id", loadId).eq("org_id", orgId);
   if (error) {
     console.error("[PATCH /v1/closeout/loads/:id] failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
+
+  // Audit the billing-status transition. Loads-table audit (vs the
+  // per-event one) since billing_status is a load-level field.
+  // actorName preferred over the JWT name lookup because the
+  // closeout UI passes the dispatcher's typed-in identity in the
+  // body, matching verified_by / flagged_by semantics.
+  if (
+    "billing_status" in update &&
+    update.billing_status !== priorBillingStatus
+  ) {
+    await appendLoadAudit(loadId, orgId, {
+      changedAt:         new Date().toISOString(),
+      changedByName:     body.actorName ?? "Closeout",
+      prevBillingStatus: (priorBillingStatus ?? undefined) as never,
+      newBillingStatus:  update.billing_status as never,
+    });
+  }
+
   return c.json({ ok: true });
 });
 

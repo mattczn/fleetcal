@@ -573,6 +573,41 @@ export interface LoadAuditEntry {
   newLoadPrice?: number;
   prevDriverPay?: number;
   newDriverPay?: number;
+  /** Customer name (broker) free-text — when the dispatcher edits the
+   *  Customer field directly. Customer-id changes (linking a load to a
+   *  saved customer) carry both name + id. */
+  prevBroker?: string;
+  newBroker?: string;
+  prevCustomerId?: string;
+  newCustomerId?: string;
+  /** Resolved display name for the linked customer at audit time —
+   *  needed because the customers list isn't part of the audit fetch
+   *  and the IDs alone aren't readable. */
+  prevCustomerName?: string;
+  newCustomerName?: string;
+  prevDispatcher?: string;
+  newDispatcher?: string;
+  prevTrailerId?: number;
+  newTrailerId?: number;
+  /** Stored alongside the IDs for the same readability reason as
+   *  customer names — the trailer list isn't fetched with the audit. */
+  prevTrailerNum?: string;
+  newTrailerNum?: string;
+  prevPriority?: boolean;
+  newPriority?: boolean;
+  /** Naive ISO strings ("YYYY-MM-DDTHH:mm"); the modal renders them in
+   *  the org's timezone via the same formatter as the chip strip. */
+  prevStart?: string;
+  newStart?: string;
+  prevEnd?: string;
+  newEnd?: string;
+  /** Closeout / accounting transitions:
+   *    pending → verified → invoiced → paid
+   *  on_hold can interpose at any point. Written server-side from the
+   *  closeout/invoices routes (apps/api/src/routes/closeout.ts +
+   *  invoices.ts) since dispatchers don't directly edit this field. */
+  prevBillingStatus?: 'pending' | 'verified' | 'invoiced' | 'paid' | 'on_hold';
+  newBillingStatus?:  'pending' | 'verified' | 'invoiced' | 'paid' | 'on_hold';
   stopsAdded?: number;
   stopsRemoved?: number;
   relayCreated?: boolean;

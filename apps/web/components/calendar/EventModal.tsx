@@ -3005,7 +3005,30 @@ export default function EventModal() {
 
   function buildAuditEntry(
     existing: CalendarEvent,
-    next: { assetId: number; driverName?: string; newLoadPrice?: number; newDriverPay?: number; newStopCount: number; newAccessorials?: Accessorial[]; relayCreated?: boolean },
+    next: {
+      assetId: number;
+      driverName?: string;
+      newLoadPrice?: number;
+      newDriverPay?: number;
+      newStopCount: number;
+      newAccessorials?: Accessorial[];
+      relayCreated?: boolean;
+      newBroker?: string;
+      newCustomerId?: string;
+      newCustomerName?: string;
+      newDispatcher?: string;
+      newTrailerId?: number;
+      newTrailerNum?: string;
+      newPriority?: boolean;
+      newStart?: string;
+      newEnd?: string;
+    },
+    // Callers resolve readable display names for any ID-typed fields
+    // before invoking — the audit log is fetched later without the
+    // customers / trailers lists in scope, so storing raw IDs alone
+    // would render as opaque uuids. See the doSave caller for the
+    // lookup pattern (find by id in customers / trailers arrays).
+    prevNames: { customerName?: string; trailerNum?: string },
     byName: string,
   ): LoadAuditEntry | null {
     const driverChanged    = (existing.driverName ?? '') !== (next.driverName ?? '');
@@ -3016,8 +3039,27 @@ export default function EventModal() {
     const stopsAdded       = Math.max(0, next.newStopCount - prevStopCount);
     const stopsRemoved     = Math.max(0, prevStopCount - next.newStopCount);
     const accessorialsChanged = diffAccessorials(existing.accessorials, next.newAccessorials);
-    const hasChanges = driverChanged || assetChanged || loadPriceChanged || driverPayChanged || stopsAdded > 0 || stopsRemoved > 0 || next.relayCreated || accessorialsChanged.length > 0;
+
+    // New diffs added per user request. Each is gated on (a) the field
+    // actually changing AND (b) at least one side being defined — a
+    // load with no broker that gets saved as no broker shouldn't write
+    // an entry just because the empty-vs-undefined coercion differs.
+    const brokerChanged     = (existing.broker ?? '') !== (next.newBroker ?? '') && (existing.broker || next.newBroker);
+    const customerIdChanged = (existing.customerId ?? '') !== (next.newCustomerId ?? '') && (existing.customerId || next.newCustomerId);
+    const dispatcherChanged = (existing.dispatcher ?? '') !== (next.newDispatcher ?? '') && (existing.dispatcher || next.newDispatcher);
+    const trailerIdChanged  = (existing.trailerId ?? null) !== (next.newTrailerId ?? null);
+    const priorityChanged   = !!existing.priority !== !!next.newPriority;
+    const startChanged      = (existing.start ?? '') !== (next.newStart ?? '') && (existing.start || next.newStart);
+    const endChanged        = (existing.end   ?? '') !== (next.newEnd   ?? '') && (existing.end   || next.newEnd);
+
+    const hasChanges =
+      driverChanged || assetChanged || loadPriceChanged || driverPayChanged ||
+      stopsAdded > 0 || stopsRemoved > 0 || next.relayCreated ||
+      accessorialsChanged.length > 0 ||
+      brokerChanged || customerIdChanged || dispatcherChanged ||
+      trailerIdChanged || priorityChanged || startChanged || endChanged;
     if (!hasChanges) return null;
+
     return {
       changedAt: new Date().toISOString(),
       changedByName: byName,
@@ -3025,6 +3067,23 @@ export default function EventModal() {
       ...(assetChanged           ? { prevAssetId:    existing.assetId,     newAssetId:    next.assetId }       : {}),
       ...(loadPriceChanged       ? { prevLoadPrice:  existing.loadPrice,   newLoadPrice:  next.newLoadPrice }  : {}),
       ...(driverPayChanged       ? { prevDriverPay:  existing.driverPay,   newDriverPay:  next.newDriverPay }  : {}),
+      ...(brokerChanged          ? { prevBroker:     existing.broker,      newBroker:     next.newBroker }     : {}),
+      ...(customerIdChanged      ? {
+        prevCustomerId:   existing.customerId,
+        newCustomerId:    next.newCustomerId,
+        prevCustomerName: prevNames.customerName,
+        newCustomerName:  next.newCustomerName,
+      } : {}),
+      ...(dispatcherChanged      ? { prevDispatcher: existing.dispatcher,  newDispatcher: next.newDispatcher } : {}),
+      ...(trailerIdChanged       ? {
+        prevTrailerId:  existing.trailerId,
+        newTrailerId:   next.newTrailerId,
+        prevTrailerNum: prevNames.trailerNum,
+        newTrailerNum:  next.newTrailerNum,
+      } : {}),
+      ...(priorityChanged        ? { prevPriority: !!existing.priority, newPriority: !!next.newPriority }       : {}),
+      ...(startChanged           ? { prevStart: existing.start, newStart: next.newStart }                       : {}),
+      ...(endChanged             ? { prevEnd:   existing.end,   newEnd:   next.newEnd }                         : {}),
       ...(stopsAdded   > 0       ? { stopsAdded }   : {}),
       ...(stopsRemoved > 0       ? { stopsRemoved } : {}),
       ...(next.relayCreated      ? { relayCreated: true } : {}),
@@ -3174,7 +3233,47 @@ export default function EventModal() {
       const rgId = crypto.randomUUID();
       const delivEndDate = deliveryLegStart.split('T')[0] > endDate ? deliveryLegStart.split('T')[0] : endDate;
       const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
-      const relayAuditLog = isEdit && existingEv ? appendAuditEntry(auditLog, buildAuditEntry(existingEv, { assetId, driverName: driverName || undefined, newLoadPrice: parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined, newDriverPay: parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined, newStopCount: stops.length, newAccessorials: accessorials, relayCreated: true }, currentUserName)) : undefined;
+      // Pre-resolve display names so the audit entry survives later
+      // customer/trailer deletes — same pattern as the non-relay
+      // path below. See doSave for the rationale.
+      const _prevCustomerName = existingEv?.customerId
+        ? customers.find(c => c.id === existingEv.customerId)?.name
+        : undefined;
+      const _newCustomerIdVal = typeof fieldValues['customerId'] === 'string' ? (fieldValues['customerId'] as string) : undefined;
+      const _newCustomerName  = _newCustomerIdVal
+        ? customers.find(c => c.id === _newCustomerIdVal)?.name
+        : undefined;
+      const _prevTrailerNum = existingEv?.trailerId
+        ? trailers.find(t => t.id === existingEv.trailerId)?.trailerNumber
+        : undefined;
+      const _newTrailerNum = linkedTrailerId
+        ? trailers.find(t => t.id === linkedTrailerId)?.trailerNumber
+        : undefined;
+      const relayAuditLog = isEdit && existingEv
+        ? appendAuditEntry(auditLog, buildAuditEntry(
+            existingEv,
+            {
+              assetId,
+              driverName:      driverName || undefined,
+              newLoadPrice:    parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined,
+              newDriverPay:    parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined,
+              newStopCount:    stops.length,
+              newAccessorials: accessorials,
+              relayCreated:    true,
+              newBroker:       typeof fieldValues['broker']     === 'string' ? (fieldValues['broker']     as string) : undefined,
+              newCustomerId:   _newCustomerIdVal,
+              newCustomerName: _newCustomerName,
+              newDispatcher:   typeof fieldValues['dispatcher'] === 'string' ? (fieldValues['dispatcher'] as string) : undefined,
+              newTrailerId:    linkedTrailerId,
+              newTrailerNum:   _newTrailerNum,
+              newPriority:     priority,
+              newStart:        `${startDate}T${startTime}`,
+              newEnd:          `${endDate}T${endTime}`,
+            },
+            { customerName: _prevCustomerName, trailerNum: _prevTrailerNum },
+            currentUserName,
+          ))
+        : undefined;
       const pickupData: Omit<CalendarEvent, 'id'> = {
         ...shared, assetId, driverName: driverName || undefined, driverId,
         start: `${startDate}T${startTime}`, end: pickupLegEnd,
@@ -3202,8 +3301,49 @@ export default function EventModal() {
     } else {
       const newDriverName = driverName || undefined;
       const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+      // Resolve display names for the audit's ID-typed fields so the
+      // history panel can render readable text later without needing
+      // to refetch customers / trailers. Lookups use the current
+      // arrays in scope; if a customer/trailer was deleted after this
+      // save, the audit still carries the name that was correct then.
+      const prevCustomerName = existingEv?.customerId
+        ? customers.find(c => c.id === existingEv.customerId)?.name
+        : undefined;
+      const newCustomerIdVal = typeof fieldValues['customerId'] === 'string' ? (fieldValues['customerId'] as string) : undefined;
+      const newCustomerName  = newCustomerIdVal
+        ? customers.find(c => c.id === newCustomerIdVal)?.name
+        : undefined;
+      const prevTrailerNum = existingEv?.trailerId
+        ? trailers.find(t => t.id === existingEv.trailerId)?.trailerNumber
+        : undefined;
+      const newTrailerNum = linkedTrailerId
+        ? trailers.find(t => t.id === linkedTrailerId)?.trailerNumber
+        : undefined;
+      const newStart = `${startDate}T${startTime}`;
+      const newEnd   = `${endDate}T${endTime}`;
       const nextAuditLog = isEdit && existingEv
-        ? appendAuditEntry(auditLog, buildAuditEntry(existingEv, { assetId, driverName: newDriverName, newLoadPrice: parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined, newDriverPay: parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined, newStopCount: stops.length, newAccessorials: accessorials }, currentUserName))
+        ? appendAuditEntry(auditLog, buildAuditEntry(
+            existingEv,
+            {
+              assetId,
+              driverName:      newDriverName,
+              newLoadPrice:    parseFloat(String(fieldValues['loadPrice'] ?? '')) || undefined,
+              newDriverPay:    parseFloat(String(fieldValues['driverPay'] ?? '')) || undefined,
+              newStopCount:    stops.length,
+              newAccessorials: accessorials,
+              newBroker:       typeof fieldValues['broker']     === 'string' ? (fieldValues['broker']     as string) : undefined,
+              newCustomerId:   newCustomerIdVal,
+              newCustomerName,
+              newDispatcher:   typeof fieldValues['dispatcher'] === 'string' ? (fieldValues['dispatcher'] as string) : undefined,
+              newTrailerId:    linkedTrailerId,
+              newTrailerNum,
+              newPriority:     priority,
+              newStart,
+              newEnd,
+            },
+            { customerName: prevCustomerName, trailerNum: prevTrailerNum },
+            currentUserName,
+          ))
         : undefined;
 
       const payload: Omit<CalendarEvent, 'id'> = {
@@ -6023,6 +6163,16 @@ export default function EventModal() {
             const fmtDate = (iso: string) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
             const assetName = (id: number) => assets.find(a => a.id === id)?.name ?? `Asset ${id}`;
             const fmt$ = (n?: number) => n != null ? `$${n.toLocaleString()}` : '—';
+            // Stored as naive ISO ("YYYY-MM-DDTHH:mm") — no timezone
+            // suffix so new Date() treats it as local. That matches
+            // the rest of the modal which renders event times in the
+            // user's local clock; the audit panel does the same.
+            const fmtAuditTime = (iso?: string) => {
+              if (!iso) return '—';
+              const d = new Date(iso.includes(' ') ? iso.replace(' ', 'T') : iso);
+              if (!isFinite(d.getTime())) return iso;
+              return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+            };
             return (
               <div style={{ borderTop: '1px solid var(--gc-border-light)', padding: '12px 32px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
@@ -6048,14 +6198,37 @@ export default function EventModal() {
                       const b = (txt: string) => <strong style={{ fontWeight: 700 }}>{txt}</strong>;
                       type Part = { key: string; node: React.ReactNode };
                       const parts: Part[] = [];
+                      // Renamed Asset → Truck per user-facing convention
+                      // (dispatch ops talk about trucks, not assets).
                       if (entry.prevAssetId !== undefined)
-                        parts.push({ key: 'asset', node: <>{b('Asset')} changed from {b(assetName(entry.prevAssetId))} to {b(entry.newAssetId !== undefined ? assetName(entry.newAssetId) : '—')}</> });
+                        parts.push({ key: 'asset', node: <>{b('Truck')} changed from {b(assetName(entry.prevAssetId))} to {b(entry.newAssetId !== undefined ? assetName(entry.newAssetId) : '—')}</> });
                       if (entry.prevDriverName !== undefined || entry.newDriverName !== undefined)
                         parts.push({ key: 'driver', node: <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</> });
                       if (entry.prevLoadPrice !== undefined)
                         parts.push({ key: 'lprice', node: <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</> });
                       if (entry.prevDriverPay !== undefined)
                         parts.push({ key: 'dpay', node: <>{b('Driver pay')} changed from {b(fmt$(entry.prevDriverPay))} to {b(fmt$(entry.newDriverPay))}</> });
+                      // Customer changes — prefer the named link when
+                      // available; fall back to the free-text broker
+                      // diff when only the text changed.
+                      if (entry.prevCustomerId !== undefined || entry.newCustomerId !== undefined)
+                        parts.push({ key: 'customer', node: <>{b('Customer')} changed from {b(entry.prevCustomerName || entry.prevBroker || '—')} to {b(entry.newCustomerName || entry.newBroker || '—')}</> });
+                      else if (entry.prevBroker !== undefined || entry.newBroker !== undefined)
+                        parts.push({ key: 'broker', node: <>{b('Customer')} changed from {b(entry.prevBroker || '—')} to {b(entry.newBroker || '—')}</> });
+                      if (entry.prevDispatcher !== undefined || entry.newDispatcher !== undefined)
+                        parts.push({ key: 'disp', node: <>{b('Dispatcher')} changed from {b(entry.prevDispatcher || '—')} to {b(entry.newDispatcher || '—')}</> });
+                      if (entry.prevTrailerId !== undefined || entry.newTrailerId !== undefined)
+                        parts.push({ key: 'trailer', node: <>{b('Trailer')} changed from {b(entry.prevTrailerNum || (entry.prevTrailerId ? `#${entry.prevTrailerId}` : '—'))} to {b(entry.newTrailerNum || (entry.newTrailerId ? `#${entry.newTrailerId}` : '—'))}</> });
+                      if (entry.prevPriority !== undefined || entry.newPriority !== undefined)
+                        parts.push({ key: 'priority', node: <>{b('Priority')} {entry.newPriority ? <>flagged {b('on')}</> : <>flag {b('removed')}</>}</> });
+                      // Render the times in the org's TZ via the same
+                      // formatter as the load chip strip. The stored
+                      // string is naive ISO; pass it through to the
+                      // existing fmtAuditTime helper.
+                      if (entry.prevStart !== undefined || entry.newStart !== undefined)
+                        parts.push({ key: 'start', node: <>{b('Start')} changed from {b(fmtAuditTime(entry.prevStart))} to {b(fmtAuditTime(entry.newStart))}</> });
+                      if (entry.prevEnd !== undefined || entry.newEnd !== undefined)
+                        parts.push({ key: 'end', node: <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</> });
                       if (entry.stopsAdded)
                         parts.push({ key: 'sadd', node: <>{b(String(entry.stopsAdded))} stop{entry.stopsAdded > 1 ? 's' : ''} added</> });
                       if (entry.stopsRemoved)
@@ -6070,6 +6243,8 @@ export default function EventModal() {
                         parts.push({ key: 'lrest', node: <>{b('Load')} reinstated</> });
                       if (entry.prevStatus !== undefined || entry.newStatus !== undefined)
                         parts.push({ key: 'status', node: <>{b('Status')} changed from {b(entry.prevStatus ?? '—')} to {b(entry.newStatus ?? '—')}</> });
+                      if (entry.prevBillingStatus !== undefined || entry.newBillingStatus !== undefined)
+                        parts.push({ key: 'bstatus', node: <>{b('Billing')} status changed from {b(entry.prevBillingStatus ?? '—')} to {b(entry.newBillingStatus ?? '—')}</> });
                       if (entry.documentUploaded)
                         parts.push({ key: 'docup', node: <>{b(entry.documentUploaded.kind.toUpperCase())} document {b('uploaded')} ({entry.documentUploaded.fileName})</> });
                       if (entry.documentDeleted)

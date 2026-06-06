@@ -57,8 +57,47 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { getOrgIdentity } from "../lib/clerk.js";
+import { appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability, requireModule } from "../middleware/require.js";
+
+/**
+ * Set loads.billing_status AND write a load-level audit entry in one
+ * call. Reads the prior value first so the audit shows the actual
+ * transition (e.g. "verified → invoiced") instead of just the new
+ * value. No-ops the audit when the value didn't actually change —
+ * which fires often because multiple invoice flows can repeatedly
+ * mark a load "invoiced" without it being a new transition.
+ *
+ * Used by every billing-status mutation in invoices.ts so the
+ * History panel in the load modal shows the closeout/invoicing
+ * timeline alongside dispatcher edits.
+ */
+async function setBillingStatus(
+  loadId:    string,
+  orgId:     string,
+  next:      "pending" | "verified" | "invoiced" | "paid" | "on_hold",
+  actorName: string | undefined,
+): Promise<void> {
+  const { data: prior } = await supabase
+    .from("loads")
+    .select("billing_status")
+    .eq("id", loadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const prev = (prior as { billing_status: string | null } | null)?.billing_status ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await supabase.from("loads").update({ billing_status: next } as any)
+    .eq("id", loadId).eq("org_id", orgId);
+  if (prev !== next) {
+    await appendLoadAudit(loadId, orgId, {
+      changedAt:         new Date().toISOString(),
+      changedByName:     actorName ?? "Invoicing",
+      prevBillingStatus: (prev ?? undefined) as never,
+      newBillingStatus:  next,
+    });
+  }
+}
 
 const invoices = new Hono<{ Variables: AuthVariables }>();
 
@@ -573,9 +612,12 @@ invoices.post("/", async (c) => {
   }
 
   // Mirror onto loads.billing_status so the closeout queue advances.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await supabase.from("loads").update({ billing_status: "invoiced" } as any)
-    .eq("id", load.id).eq("org_id", orgId);
+  // Helper writes the load row + a load-level audit entry in one
+  // call (no-op when value didn't change). Actor name is left
+  // undefined here so the helper falls back to "Invoicing" — the
+  // POST /v1/invoices flow doesn't carry a dispatcher's typed name
+  // through the request body the way closeout actions do.
+  await setBillingStatus(load.id, orgId, "invoiced", undefined);
 
   const newInvoice = rowToInvoice(data as unknown as InvoiceRow);
 
@@ -1277,9 +1319,9 @@ invoices.post("/batch-generate", async (c) => {
 
       // Always heal billing_status — covers both the fresh-insert
       // case and the rescue case where the prior flip didn't land.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await supabase.from("loads").update({ billing_status: "invoiced" } as any)
-        .eq("id", load.id).eq("org_id", orgId);
+      // setBillingStatus audits the transition iff value actually
+      // changed, so the heal-no-op case doesn't pollute the history.
+      await setBillingStatus(load.id, orgId, "invoiced", undefined);
 
       const newInvoice = rowToInvoice(invoiceRow as unknown as InvoiceRow);
       void rescued; // info-only; UI doesn't distinguish today
@@ -1878,9 +1920,7 @@ invoices.post("/:id/mark-paid", async (c) => {
 
   // Mirror onto loads.billing_status so the closeout queue advances.
   const invoice = data as unknown as InvoiceRow;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await supabase.from("loads").update({ billing_status: "paid" } as any)
-    .eq("id", invoice.load_id).eq("org_id", orgId);
+  await setBillingStatus(invoice.load_id, orgId, "paid", undefined);
 
   const res: MarkInvoicePaidResponse = { invoice: rowToInvoice(invoice) };
   return c.json(res);
@@ -1912,9 +1952,7 @@ invoices.post("/:id/void", async (c) => {
   // Revert load's billing_status — voiding releases the load back to the
   // verified queue so it can be re-invoiced.
   const invoice = data as unknown as InvoiceRow;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await supabase.from("loads").update({ billing_status: "verified" } as any)
-    .eq("id", invoice.load_id).eq("org_id", orgId);
+  await setBillingStatus(invoice.load_id, orgId, "verified", undefined);
 
   const res: VoidInvoiceResponse = { invoice: rowToInvoice(invoice) };
   return c.json(res);
@@ -2029,9 +2067,7 @@ invoices.post("/:id/regenerate", async (c) => {
   //    'invoiced' on the load (the original void had flipped it to
   //    verified, or it could be in any state if other ops touched it).
   if (wasVoided) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await supabase.from("loads").update({ billing_status: "invoiced" } as any)
-      .eq("id", load.id).eq("org_id", orgId);
+    await setBillingStatus(load.id, orgId, "invoiced", undefined);
   }
 
   const newInvoice = rowToInvoice(updatedRow as unknown as InvoiceRow);

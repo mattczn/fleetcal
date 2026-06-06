@@ -21,6 +21,8 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { bucketReadOrder } from "../lib/docBuckets.js";
+import { getUserDisplayName } from "../lib/clerk.js";
+import { appendEventAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 
@@ -95,7 +97,7 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
   // and miss the auto-rename opportunity.
   const { data: existing, error: readErr } = await supabase
     .from("load_documents")
-    .select("file_name, kind, load_id")
+    .select("file_name, kind, load_id, event_id")
     .eq("id", docId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -104,7 +106,7 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
     return c.json({ error: "fetch_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
   }
   if (!existing) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
-  const row = existing as { file_name: string; kind: string; load_id: string | null };
+  const row = existing as { file_name: string; kind: string; load_id: string | null; event_id: string | null };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updates: Record<string, any> = {};
@@ -196,6 +198,22 @@ documents.patch("/:id", requireCapability("loads.edit"), async (c) => {
       console.warn("[PATCH /v1/documents/:id] document_counts re-aggregate failed:", recountErr);
     }
   }
+  // Audit the kind change. PATCH on file_name only is cosmetic
+  // (rename in the docs list) — no audit, intentionally; only the
+  // categorize-as-something-else action gets logged because that's
+  // the one that affects what counts toward POD/BOL/etc. completion.
+  if (hasKind && body.kind !== row.kind && row.event_id) {
+    const actorName = await getUserDisplayName(c.get("userId"));
+    await appendEventAudit(row.event_id, orgId, {
+      changedAt:        new Date().toISOString(),
+      changedByName:    actorName ?? "Dispatcher",
+      // Mirrors driver.ts kind-change audit: the new kind carries the
+      // "old → new" form so the History panel can render the
+      // transition without a separate field.
+      documentUploaded: { fileName: cleanName ?? row.file_name, kind: `${row.kind} → ${body.kind}` },
+    });
+  }
+
   return c.json({
     ok: true,
     ...(cleanName !== undefined ? { fileName: cleanName } : {}),
@@ -212,7 +230,7 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
 
   const { data, error: fetchErr } = await supabase
     .from("load_documents")
-    .select("storage_path, kind")
+    .select("storage_path, kind, file_name, event_id")
     .eq("id", docId)
     .eq("org_id", orgId)
     .maybeSingle();
@@ -222,7 +240,7 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
   }
   if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
 
-  const row = data as { storage_path: string; kind: string };
+  const row = data as { storage_path: string; kind: string; file_name: string; event_id: string | null };
   const { error: delErr } = await supabase
     .from("load_documents")
     .delete()
@@ -239,6 +257,18 @@ documents.delete("/:id", requireCapability("loads.edit"), async (c) => {
   for (const bucket of bucketReadOrder(row.kind)) {
     const { error: blobErr } = await supabase.storage.from(bucket).remove([row.storage_path]);
     if (!blobErr) break;
+  }
+
+  // Audit the dispatcher delete, mirroring the driver-side delete
+  // handler in driver.ts. Writes to the same event the doc was
+  // attached to so the load's History panel reads it correctly.
+  if (row.event_id) {
+    const actorName = await getUserDisplayName(c.get("userId"));
+    await appendEventAudit(row.event_id, orgId, {
+      changedAt:       new Date().toISOString(),
+      changedByName:   actorName ?? "Dispatcher",
+      documentDeleted: { fileName: row.file_name, kind: row.kind },
+    });
   }
 
   return c.json({ ok: true });

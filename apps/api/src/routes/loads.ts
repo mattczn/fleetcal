@@ -51,6 +51,7 @@ import {
 
 import { supabase } from "../lib/supabase.js";
 import { getUserDisplayName } from "../lib/clerk.js";
+import { appendEventAudit, appendLoadAudit } from "../lib/auditLog.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
 import { checkCallsScopedRouter } from "./check-calls.js";
@@ -853,6 +854,17 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
     }
   }
 
+  // Dispatcher document upload — write to events.audit_log so the
+  // load modal's History panel can show "uploaded BOL.pdf · 3:14pm".
+  // Mirrors driver.ts POST /v1/driver/loads/:id/documents, closing the
+  // dispatcher-vs-driver asymmetry the audit revealed.
+  const uploaderName = await getUserDisplayName(c.get("userId"));
+  await appendEventAudit(eventId, orgId, {
+    changedAt:        new Date().toISOString(),
+    changedByName:    uploaderName ?? "Dispatcher",
+    documentUploaded: { fileName: d.file_name, kind: d.kind },
+  });
+
   return c.json({
     document: {
       id:         d.id,
@@ -1115,15 +1127,23 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
   // clear — same driver, still on the hook.) The dispatcher client is
   // responsible for sending the "load reassigned" push to the old driver
   // since it already runs the assignment-push flow.
-  if ("driverId" in body) {
+  //
+  // We also fetch the existing status here (single read, reused) so we
+  // can write an audit entry if it changes — the cancel path on the
+  // client builds its own entry, but every other dispatcher-driven
+  // status flip (scheduled → confirmed → in_transit → delivered →
+  // released) was silent before this.
+  let prevStatus: string | null = null;
+  if ("driverId" in body || "status" in body) {
     const { data: prev } = await supabase
       .from("events")
-      .select("driver_id")
+      .select("driver_id, status")
       .eq("id", eventId)
       .eq("org_id", orgId)
       .maybeSingle();
-    const prevRow = prev as { driver_id: number | null } | null;
-    if ((prevRow?.driver_id ?? null) !== (body.driverId ?? null)) {
+    const prevRow = prev as { driver_id: number | null; status: string | null } | null;
+    prevStatus = prevRow?.status ?? null;
+    if ("driverId" in body && (prevRow?.driver_id ?? null) !== (body.driverId ?? null)) {
       update.confirmed_at             = null;
       update.confirmed_by             = null;
       update.confirm_reminder_sent_at = null;
@@ -1140,6 +1160,26 @@ loads.patch("/:id/events/:eventId", requireCapability("loads.edit"), async (c) =
   if (error) {
     console.error("[PATCH /v1/loads/:id/events/:eventId] update failed:", error);
     return c.json({ error: "update_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+
+  // Status diff audit. The client-built audit handles the cancel
+  // path (with its multi-mode `loadCancelled` shape) but EVERY other
+  // status transition by a dispatcher was silent. Now any
+  // server-observed status change writes a per-leg audit entry. This
+  // also catches programmatic flips from scripts / other callers.
+  if (
+    "status" in body &&
+    prevStatus !== null &&
+    body.status !== undefined &&
+    body.status !== prevStatus
+  ) {
+    const actorName = await getUserDisplayName(c.get("userId"));
+    await appendEventAudit(eventId, orgId, {
+      changedAt:     new Date().toISOString(),
+      changedByName: actorName ?? "Dispatcher",
+      prevStatus:    prevStatus as never,
+      newStatus:     body.status as never,
+    });
   }
 
   const joined = await fetchLoadJoined(loadId, orgId);
