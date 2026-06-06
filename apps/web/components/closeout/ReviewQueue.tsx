@@ -195,6 +195,11 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const [docsLoading, setDocsLoading] = useState(false);
   // Invoice doc selection: defaults to PODs uploaded on/after delivery
   const [includedDocIds, setIncludedDocIds] = useState<Set<string>>(new Set());
+  // Tracks what's "already saved" so the auto-persist effect can tell
+  // a genuine user change apart from the navigation-reset that fires
+  // whenever the user advances to a new load. Stores both the loadId
+  // it was set for and a stable serialization of the ids.
+  const lastPersistedIncludeRef = useRef<{ loadId: string; ids: string } | null>(null);
   // Active draft invoice for the current load, if any. Drives whether
   // the action button says "Generate invoice" or "Regenerate invoice".
   // Loaded on load-change via listInvoices; refreshed locally after
@@ -274,6 +279,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setSecondaryRateConUrl(null);
       setActiveRateConId(null);
       setIncludedDocIds(new Set());
+      // No load → nothing to compare future changes against. Clear
+      // the ref so the next load's applyAssets can stamp fresh.
+      lastPersistedIncludeRef.current = null;
       return;
     }
 
@@ -301,6 +309,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
             .map(x => x.id),
       );
       setIncludedDocIds(ids);
+      // Stamp the persist-ref to match what we just loaded, so the
+      // auto-persist effect's first fire on this load is a no-op
+      // (it would otherwise see the navigation-reset as a "change"
+      // and re-write the same set we just read).
+      lastPersistedIncludeRef.current = {
+        loadId,
+        ids: JSON.stringify([...ids].sort()),
+      };
     };
 
     const cached = docsCacheRef.current.get(loadId);
@@ -419,6 +435,38 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     { id: 'scale',    label: 'Scale ticket',       pass: !needsScale || hasScale,    skip: !needsScale },
   ];
   const requiredPass = checklist.filter(c => !c.skip).every(c => c.pass);
+
+  // Auto-persist invoice-include changes. Previously the set lived
+  // only in client state until the user clicked Release / Regenerate,
+  // so closing the review panel mid-edit dropped every toggle and
+  // every merge-driven swap-in-place — reopening sent the user back
+  // to the heuristic default ("all PODs near delivery"). Now any
+  // change to includedDocIds queues a debounced PATCH so the next
+  // time the dispatcher opens the load, the same set is waiting.
+  //
+  // lastPersistedIncludeRef holds the (loadId, ids) tuple we last
+  // synced. The applyAssets stamp on load means the first fire on a
+  // new load is a no-op (state == ref). Only user-driven changes
+  // make it past the equality check.
+  useEffect(() => {
+    if (!loadId) return;
+    const serialized = JSON.stringify([...includedDocIds].sort());
+    const ref = lastPersistedIncludeRef.current;
+    if (ref && ref.loadId === loadId && ref.ids === serialized) return;
+    const t = setTimeout(() => {
+      void persistInvoiceDocs()
+        .then(() => {
+          lastPersistedIncludeRef.current = { loadId, ids: serialized };
+        })
+        .catch(err => console.error('[invoice-include auto-persist] failed', err));
+    }, 500);
+    return () => clearTimeout(t);
+    // persistInvoiceDocs reads `current` + `includedDocIds` via closure;
+    // re-pinning it on every render would prevent the debounce from
+    // batching rapid clicks. The listed deps cover the only inputs
+    // that change the desired write payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [includedDocIds, loadId]);
 
   // ── Actions ───────────────────────────────────────────────────────
   async function persistInvoiceDocs() {
