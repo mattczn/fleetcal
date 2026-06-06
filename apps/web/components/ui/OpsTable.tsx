@@ -889,12 +889,11 @@ export function OpsTable<T>({
           className="grid items-center"
           style={{
             gridTemplateColumns: gridTemplate,
-            // Force the grid to span the full scroll container so the
-            // 1fr filler track has room to expand. Without this, a
-            // grid container in block layout collapses to the sum of
-            // its track widths and the filler is 0px wide — leaving
-            // a visible gap between data cells and pinned-right cells.
-            minWidth: '100%',
+            // Match the body rows — sized to intrinsic content width
+            // on narrow screens so the header's bottom border stays
+            // aligned with the data cells across the entire scroll
+            // range.
+            minWidth: 'max-content',
             background: 'var(--gc-surface)',
             borderBottom: '1px solid var(--gc-border-light)',
             minHeight: 44,
@@ -1032,12 +1031,24 @@ export function OpsTable<T>({
                 className="grid items-stretch transition-colors"
                 style={{
                   gridTemplateColumns: gridTemplate,
-                  // Match the header — force the grid to span the full
-                  // scroll container so the row's `background: rowBg`
-                  // (priority tint, hover, etc.) paints the full row
-                  // width, not just up to the sum of fixed column
-                  // widths. The 1fr filler track absorbs any leftover.
-                  minWidth: '100%',
+                  // Force the row's CSS box to span at least its
+                  // intrinsic content width. Without this, on a small
+                  // screen where the grid template's fixed widths
+                  // exceed the scroll container, the row's `width:
+                  // auto` resolves to the container's content width
+                  // (e.g. 1500px) while the grid tracks still total
+                  // their intrinsic 2304px — the grid items overflow
+                  // and scroll correctly, but the row's
+                  // `background: rowBg` only paints inside the row's
+                  // box (the 1500px), leaving the scrolled-into
+                  // region painting the card's white bg instead of
+                  // the priority tint.
+                  //
+                  // `min-width: max-content` grows the row's box to
+                  // intrinsic content width whenever that exceeds
+                  // the parent. The 1fr filler absorbs the leftover
+                  // on wide screens.
+                  minWidth: 'max-content',
                   minHeight: rowHeightPx,
                   borderTop: '1px solid #f1f3f4',
                   cursor: onRowClick ? 'pointer' : 'default',
