@@ -1279,10 +1279,10 @@ function AssetPreferencesPanel({ assets, drivers, driverPrefs, driverPrefsSecond
         Truck Preferences
       </div>
       <p className="text-sm mb-1" style={{ color: 'var(--gc-text-2)' }}>
-        Assign drivers to each truck. The <strong>Primary</strong> driver auto-fills when the truck is picked on a load; picking either driver in the load modal auto-fills this truck.
+        Assign drivers to each truck. The <strong>Primary</strong>{' '}driver auto-fills when the truck is picked on a load; picking either driver in the load modal auto-fills this truck.
       </p>
       <p className="text-xs mb-6" style={{ color: 'var(--gc-text-3)' }}>
-        The <strong>Secondary</strong> slot is for drivers who don&apos;t have their own truck and share this one when they work.
+        The <strong>Secondary</strong>{' '}slot is for drivers who don&apos;t have their own truck and share this one when they work.
       </p>
 
       <div className="space-y-3" style={{ maxWidth: 720 }}>
