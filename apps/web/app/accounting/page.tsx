@@ -818,6 +818,18 @@ function AccountingPageInner() {
     const customerOpts = Array.from(new Set(
       rowsForBucket.map(r => r.customer?.name ?? r.load.broker ?? '').filter(Boolean),
     )).sort().map(v => ({ value: v, label: v }));
+    // Driver / Truck options scoped to the current bucket so the
+    // dropdown only ever lists values that actually appear in the
+    // visible loads. Mirrors the Paperwork filter pattern.
+    const driverOpts = Array.from(new Set(
+      rowsForBucket.flatMap(r => [r.load.pickupDriverName ?? '', r.load.deliveryDriverName ?? '']).filter(Boolean),
+    )).sort().map(v => ({ value: v, label: v }));
+    const truckOpts = Array.from(new Set(
+      rowsForBucket.flatMap(r => [
+        assetNameById.get(r.load.pickupAssetId) ?? '',
+        assetNameById.get(r.load.deliveryAssetId) ?? '',
+      ]).filter(Boolean),
+    )).sort().map(v => ({ value: v, label: v }));
 
     // Accessorial filter — operator-centric presets mirror Paperwork.
     const accessorialOpts = [
@@ -835,6 +847,16 @@ function AccountingPageInner() {
       { kind: 'select', key: 'customer', label: 'Customer',
         options: customerOpts,
         predicate: (r, v) => (r.customer?.name ?? r.load.broker ?? '') === v },
+      { kind: 'select', key: 'driver', label: 'Driver',
+        options: driverOpts,
+        // Match either leg's driver — relays carry two drivers so the
+        // user expects either name to surface the load.
+        predicate: (r, v) => (r.load.pickupDriverName ?? '') === v
+          || (r.load.deliveryDriverName ?? '') === v },
+      { kind: 'select', key: 'truck', label: 'Truck',
+        options: truckOpts,
+        predicate: (r, v) => (assetNameById.get(r.load.pickupAssetId) ?? '') === v
+          || (assetNameById.get(r.load.deliveryAssetId) ?? '') === v },
       { kind: 'select', key: 'method',   label: 'Method',
         options: [
           { value: 'email',  label: 'Email'  },
@@ -884,7 +906,7 @@ function AccountingPageInner() {
         getDate: r => r.invoice?.dueAt ?? null });
     }
     return filters;
-  }, [rowsForBucket, bucket]);
+  }, [rowsForBucket, bucket, assetNameById]);
 
   // Row id for selection — bucket-specific (loadId on released,
   // invoice.id elsewhere with the loadId as the fallback).
