@@ -1959,6 +1959,11 @@ export default function EventModal() {
   // is hidden, not the type chip.
   const { enabled: moduleEnabled } = useModules();
   const maintenanceEnabled = moduleEnabled('maintenance');
+  // Driver-app module gates the Notify-driver popover below — without
+  // the driver app there's nobody on the other end of those nudges
+  // (confirm load / mark picked up / mark delivered / upload POD /
+  // report trailer) so the button has no useful behavior on MVP orgs.
+  const driverAppEnabled   = moduleEnabled('driver_app');
   const canViewDriverPay = canDo('loads.view_driver_pay');
   // Hide the load price / rate field for roles without loads.view_price
   // (Maintenance). Same pattern as canViewDriverPay below — strip the
@@ -5334,7 +5339,7 @@ export default function EventModal() {
                   const sel = findDriverByName(driverName) ?? null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
                   const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
-                  const showNotify = eventKind === 'revenue' && isEdit && !!sel?.id && !!modalEventId;
+                  const showNotify = driverAppEnabled && eventKind === 'revenue' && isEdit && !!sel?.id && !!modalEventId;
                   if (!sel?.phone && !showSummaryBtn && !showNotify) return null;
                   // Per-kind ack state — drives which buttons in the
                   // popover are greyed out. The server is authoritative
