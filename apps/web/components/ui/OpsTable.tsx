@@ -263,6 +263,11 @@ export interface OpsTableProps<T> {
    *  picker dropdown. Persists order alongside visibility to the
    *  same `persistKey`. Only meaningful when `columnPicker` is true. */
   columnReorder?: boolean;
+  /** Fires whenever the internal scroll container's scrollTop /
+   *  scrollLeft changes. Lets pages above the table react to the
+   *  user scrolling the rows (e.g. collapse a hero strip once the
+   *  user is focused on the table). */
+  onScrollChange?: (info: { scrollTop: number; scrollLeft: number }) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────
@@ -291,6 +296,7 @@ export function OpsTable<T>({
   footerSummary,
   fillHeight = false,
   columnReorder = false,
+  onScrollChange,
 }: OpsTableProps<T>) {
   // ── Filter state ───────────────────────────────────────────────────
   // Keyed by filter.key for select filters and '__search' for search.
@@ -679,6 +685,28 @@ export function OpsTable<T>({
     ro.observe(cardRef.current);
     return () => ro.disconnect();
   }, []);
+
+  // Forward scroll-position changes to any caller that wants to react
+  // to the user scrolling inside the table (e.g. collapse a sticky
+  // hero strip above the table). Throttled to rAF so a fast scroll
+  // doesn't spam the parent with renders.
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card || !onScrollChange) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        onScrollChange({ scrollTop: card.scrollTop, scrollLeft: card.scrollLeft });
+        raf = 0;
+      });
+    };
+    card.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      card.removeEventListener('scroll', onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [onScrollChange]);
 
   // Sum of the fixed-pixel track widths. Non-px widths (e.g. "1fr"
   // for a column without a declared width) contribute 0 — they're

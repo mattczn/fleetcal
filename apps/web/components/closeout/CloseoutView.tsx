@@ -504,6 +504,12 @@ export default function CloseoutView() {
 
   // Internal notes panel
   const [notesTarget, setNotesTarget] = useState<Load | null>(null);
+  // Collapses the bucket tiles' detail rows ($ value + subtitle) once
+  // the user scrolls down inside the table — surfaces a few more rows
+  // when the operator is focused on triage. Hysteresis on the
+  // thresholds (40 px to collapse / 8 px to expand) keeps it from
+  // flickering as the user noodles near the top.
+  const [tilesCompact, setTilesCompact] = useState(false);
   // Follow-up modal target — opened from a row's Follow-up button on
   // the Flagged bucket.
   const [followUpTarget, setFollowUpTarget] = useState<Load | null>(null);
@@ -1059,7 +1065,9 @@ export default function CloseoutView() {
               return (
                 <button key={b.value}
                   onClick={() => setTab(b.value)}
-                  className="text-left px-3 lg:px-4 py-2 lg:py-3 rounded-xl transition-all"
+                  className={`text-left rounded-xl transition-all ${
+                    tilesCompact ? 'px-3 py-2' : 'px-3 lg:px-4 py-2 lg:py-3'
+                  }`}
                   style={{
                     background: 'var(--gc-surface)',
                     border: active ? `2px solid ${b.tint}` : '1px solid var(--gc-border-light)',
@@ -1070,10 +1078,16 @@ export default function CloseoutView() {
                     <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
                     <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
                   </div>
-                  <div className="hidden lg:block mt-1.5 text-[12px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+                  <div
+                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-1.5 text-[12px] tabular-nums transition-all`}
+                    style={{ color: 'var(--gc-text-3)' }}
+                  >
                     {showValue ? moneyFmt.format(value) : ' '}
                   </div>
-                  <div className="hidden lg:block mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold" style={{ color: 'var(--gc-text-3)' }}>
+                  <div
+                    className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-0.5 text-[10.5px] uppercase tracking-wider font-semibold transition-all`}
+                    style={{ color: 'var(--gc-text-3)' }}
+                  >
                     {b.subtitle}
                   </div>
                 </button>
@@ -1170,6 +1184,12 @@ export default function CloseoutView() {
                 paginated
                 pageSize={PAGE_SIZE}
                 fillHeight
+                onScrollChange={({ scrollTop }) => {
+                  // Hysteresis prevents flicker as the user noodles
+                  // near the top of the list.
+                  if (scrollTop > 40 && !tilesCompact) setTilesCompact(true);
+                  else if (scrollTop < 8 && tilesCompact) setTilesCompact(false);
+                }}
                 emptyLabel={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
                 bulkActions={({ selectedIds: ids, clearSelection }) => (
                   <div className="flex items-center gap-2">
