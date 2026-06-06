@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
+import DocViewer from '@/components/closeout/DocViewer';
 import LinkedWorkOrdersSection from './LinkedWorkOrdersSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { StyledSelect } from '@/components/ui/StyledSelect';
@@ -1114,64 +1115,19 @@ function UploadedDocsPanel({
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-auto" style={{ background: '#1a1a1a', textAlign: 'center', minHeight: 0 }}>
-        {!signedUrl ? (
-          <div className="flex items-center justify-center" style={{ height: '100%' }}>
-            <Loader2 size={20} className="animate-spin" style={{ color: '#ffffff' }} />
-          </div>
-        ) : previewError && previewError.docId === selected.id ? (
-          <div className="flex items-center justify-center" style={{ height: '100%' }}>
-            <PreviewErrorPanel
-              fileName={selected.fileName}
-              kind={previewError.kind}
-              detail={previewError.detail}
-              signedUrl={signedUrl}
-            />
-          </div>
-        ) : isImage(selected.mimeType, selected.fileName) ? (
-          // Block layout (no flex centering) so tall images can OVERFLOW
-          // the panel and scroll vertically. Previous version flex-centered
-          // with maxHeight:100% — the image was always sized to fit the
-          // viewport, leaving nothing to scroll. Most PODs are portrait
-          // phone shots and need to scroll to see the bottom signatures.
-          // Width caps at 100% so wide landscape images don't blow out.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={signedUrl}
-            alt={selected.fileName}
-            style={{ maxWidth: '100%', height: 'auto', display: 'block', margin: '0 auto' }}
-            onError={() => {
-              // First failure: maybe the cached signed URL expired. Ask
-              // parent to re-mint and try again. The dedupe ref keeps
-              // us from looping if the same URL is handed back.
-              if (onSignedUrlError && !refreshedUrlsRef.current.has(signedUrl)) {
-                refreshedUrlsRef.current.add(signedUrl);
-                onSignedUrlError();
-                return;
-              }
-              // Refresh already attempted (or no callback wired) — the
-              // problem is the file itself. Sniff the bytes so we can
-              // tell the user WHY ("HEIC, not JPG" / "empty file" /
-              // raw header bytes) instead of just showing a broken icon.
-              void diagnosePreview(selected.id, signedUrl);
-            }}
-          />
-        ) : (
-          <iframe
-            src={signedUrl}
-            title={selected.fileName}
-            style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff' }}
-            onError={() => {
-              if (onSignedUrlError && !refreshedUrlsRef.current.has(signedUrl)) {
-                refreshedUrlsRef.current.add(signedUrl);
-                onSignedUrlError();
-                return;
-              }
-              void diagnosePreview(selected.id, signedUrl);
-            }}
-          />
-        )}
-      </div>
+      {/* Shared multi-format DocViewer. Same component the closeout
+          review queue uses — handles PDF (PdfCanvas), JPG/PNG/WEBP/GIF
+          (<img>), HEIC/HEIF (heic2any → JPEG), with a graceful
+          "Download to view" fallback for anything else.
+          Routing through this drops the old img/iframe split (which
+          couldn't render the HEIC files iPhone drivers upload) and
+          gives the load modal the same coverage as the review queue. */}
+      <DocViewer
+        url={signedUrl ?? ''}
+        mimeType={selected.mimeType}
+        fileName={selected.fileName}
+        onRetry={onSignedUrlError}
+      />
       {deleteTarget && (
         <ConfirmDialog
           title="Delete document?"

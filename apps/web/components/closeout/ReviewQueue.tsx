@@ -125,9 +125,18 @@ const KIND_OPTIONS: ReadonlyArray<{ kind: import('@fleetcal/types').DocumentKind
   { kind: 'other',        label: 'Other',        tint: KIND_TINT.other },
 ];
 
+/** Sentinel id for the virtual rate-con primary (synthesized when a
+ *  load has loads.rate_con_pdf but no kind='rate_con' load_documents
+ *  row). Module-level so isPdfDocFn can recognize it. */
+const RATE_CON_PRIMARY_SENTINEL = '__rate_con_primary__';
+
 /** Module-level so DocSelectionDialog can disable its "Convert to
  *  PDF" button when nothing in the user's selection is convertable. */
 function isPdfDocFn(d: LoadDocument): boolean {
+  // Virtual rate-con primary is backed by loads.rate_con_pdf — a
+  // PDF by construction. Its synthesized fileName doesn't include
+  // the .pdf extension, so we'd otherwise misread it as convertable.
+  if (d.id === RATE_CON_PRIMARY_SENTINEL) return true;
   return (d.mimeType ?? '').toLowerCase() === 'application/pdf' || /\.pdf$/i.test(d.fileName);
 }
 
@@ -677,6 +686,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // remove / change kind without re-picking files.
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  // Confirm-dialog state for closing the Manage Documents dialog while
+  // files are staged but no kind has been picked. Without this the
+  // user's upload silently vanishes when they tap outside.
+  const [pendingCloseConfirm, setPendingCloseConfirm] = useState(false);
   const [uploading, setUploading]       = useState(false);
   const [uploadError, setUploadError]   = useState<string | null>(null);
   const [mergeStatus, setMergeStatus]   = useState<string | null>(null);
@@ -774,7 +787,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // load_documents — which is the case for legacy loads + the
   // first rate-con before the API mirror existed — we synthesize a
   // virtual doc entry so the user can still pick it for merging.
-  const RATE_CON_PRIMARY_ID = '__rate_con_primary__';
+  // Reuse the module-level sentinel so isPdfDocFn (which lives at
+  // module scope) and this in-component synthesizer stay in sync.
+  const RATE_CON_PRIMARY_ID = RATE_CON_PRIMARY_SENTINEL;
   const mergeCandidates = useMemo<LoadDocument[]>(() => {
     const hasRateConDoc = docs.some(d => d.kind === 'rate_con');
     if (!current?.rateConPdf || hasRateConDoc) return docs;
@@ -1283,12 +1298,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
               • 3px blue bottom under-rule (was 1px hairline) so the
                 header reads as one continuous chrome strip with the
                 content area below */}
-        <div className="shrink-0 flex items-center gap-3 px-6 py-4"
+        {/* Top bar — collapsed to a single row so the chrome doesn't
+            eat two text lines on a 13" laptop. Brand anchor + kicker
+            + age pill + title + meta + nav all sit inline; meta uses
+            • separators on the same baseline as the title. */}
+        <div className="shrink-0 flex items-center gap-3 px-5 py-2.5"
           style={{ borderBottom: '3px solid var(--gc-blue)', background: 'var(--gc-surface)' }}>
           <div className="flex items-center justify-center shrink-0"
-            style={{ width: 36, height: 36, borderRadius: 12, background: 'var(--gc-blue)', color: 'white' }}
+            style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--gc-blue)', color: 'white' }}
             title="Closeout Review">
-            <CheckCircle2 size={18} />
+            <CheckCircle2 size={15} />
           </div>
           <span className="text-[11px] font-extrabold uppercase tracking-wider shrink-0"
             style={{ color: 'var(--gc-blue)' }}>
@@ -1297,65 +1316,64 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           <span style={{ background: ageColor.bg, color: ageColor.fg, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
             {days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`}
           </span>
-          <div className="flex flex-col flex-1 min-w-0">
+          {/* Title + meta inline. The title stays bold and clickable;
+              everything else is muted gray text separated by · so the
+              whole strip reads as one continuous line. */}
+          <div className="flex-1 min-w-0 flex items-center gap-2 text-[13px]">
             {onOpenLoadModal ? (
               <button type="button"
                 onClick={() => onOpenLoadModal(current)}
-                className="text-base font-extrabold truncate text-left hover:underline transition-colors"
+                className="font-extrabold truncate text-left hover:underline transition-colors"
                 style={{ color: 'var(--gc-blue)' }}
                 title="Open full load details">
                 {current.title}
               </button>
             ) : (
-              <div className="text-base font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
+              <div className="font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
                 {current.title}
               </div>
             )}
-            <div className="text-xs flex items-center gap-3 flex-wrap" style={{ color: 'var(--gc-text-3)' }}>
-              <span className="tabular-nums">
-                {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
-              </span>
-              {cust && (
-                <>
-                  <Sep />
-                  <span className="truncate max-w-[200px]" title={cust}>{cust}</span>
-                </>
-              )}
-              {current.loadNum && (
-                <>
-                  <Sep />
+            <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
+            <span className="tabular-nums shrink-0" style={{ color: 'var(--gc-text-3)' }}>
+              {fmtMetaDate(pickupDate)} <span style={{ opacity: 0.6 }}>→</span> {fmtMetaDate(deliveryDate)}
+            </span>
+            {cust && (
+              <>
+                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
+                <span className="truncate max-w-[180px]" title={cust} style={{ color: 'var(--gc-text-3)' }}>{cust}</span>
+              </>
+            )}
+            {current.loadNum && (
+              <>
+                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
+                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>
                   <CopyLoadNum value={current.loadNum} />
-                </>
-              )}
-              {(current.totalBillable ?? current.loadPrice) != null && (
-                <>
-                  <Sep />
-                  {/* Show total billable when it differs from linehaul
-                      (i.e., when there's at least one billable accessorial);
-                      otherwise show the bare linehaul. The full breakdown
-                      lives in the load modal — this strip just answers
-                      "how much does this load bill?". */}
-                  <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-2) ' }}
-                        title={current.totalBillable != null && current.loadPrice != null && current.totalBillable !== current.loadPrice
-                          ? `Linehaul ${moneyFmt.format(current.loadPrice)} + accessorials = ${moneyFmt.format(current.totalBillable)}`
-                          : undefined}>
-                    {moneyFmt.format(current.totalBillable ?? current.loadPrice!)}
-                  </span>
-                </>
-              )}
-              <Sep />
-              {drivers.length === 0 ? (
-                <span style={{ color: 'var(--gc-text-3)', fontStyle: 'italic' }}>Unassigned</span>
-              ) : drivers.length === 1 ? (
-                <span className="truncate max-w-[160px]" title={drivers[0]} style={{ color: 'var(--gc-text-2)' }}>
-                  {drivers[0]}
                 </span>
-              ) : (
-                <span className="truncate max-w-[260px]" title={drivers.join(' → ')} style={{ color: 'var(--gc-text-2)' }}>
-                  {drivers[0]} <span style={{ opacity: 0.5 }}>→</span> {drivers[1]}
+              </>
+            )}
+            {(current.totalBillable ?? current.loadPrice) != null && (
+              <>
+                <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
+                <span className="tabular-nums font-semibold shrink-0" style={{ color: 'var(--gc-text-2)' }}
+                      title={current.totalBillable != null && current.loadPrice != null && current.totalBillable !== current.loadPrice
+                        ? `Linehaul ${moneyFmt.format(current.loadPrice)} + accessorials = ${moneyFmt.format(current.totalBillable)}`
+                        : undefined}>
+                  {moneyFmt.format(current.totalBillable ?? current.loadPrice!)}
                 </span>
-              )}
-            </div>
+              </>
+            )}
+            <span className="shrink-0" style={{ color: 'var(--gc-text-3)' }}>·</span>
+            {drivers.length === 0 ? (
+              <span className="shrink-0" style={{ color: 'var(--gc-text-3)', fontStyle: 'italic' }}>Unassigned</span>
+            ) : drivers.length === 1 ? (
+              <span className="truncate max-w-[160px]" title={drivers[0]} style={{ color: 'var(--gc-text-2)' }}>
+                {drivers[0]}
+              </span>
+            ) : (
+              <span className="truncate max-w-[220px]" title={drivers.join(' → ')} style={{ color: 'var(--gc-text-2)' }}>
+                {drivers[0]} <span style={{ opacity: 0.5 }}>→</span> {drivers[1]}
+              </span>
+            )}
           </div>
           <button onClick={prev} disabled={safeIdx === 0}
             className="p-2 rounded-full transition-colors disabled:opacity-30"
@@ -1469,9 +1487,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 the planned route, or when the rate-con doesn't carry
                 appointment / facility detail clearly. */}
             <div className="flex-1 flex flex-col min-w-0 border-r" style={{ borderColor: 'var(--gc-border-light)' }}>
+              {/* minHeight:40 matches the doc-viewer header on the right
+                  so both viewers' tops line up exactly — the tab toggle
+                  was making this side ~4px taller before. */}
               <div className="shrink-0 flex items-center justify-between px-3 py-2 gap-2"
-                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)' }}>
-                {/* Tab toggle (Rate Con / Stops) */}
+                style={{ background: 'var(--gc-bg)', borderBottom: '1px solid var(--gc-border-light)', minHeight: 40 }}>
+                {/* Tab toggle (Rate Con / Stops) — tightened to py-1 so
+                    the toggle fits inside the 40px header without
+                    eating extra vertical space. */}
                 <div className="flex items-center gap-0.5 p-0.5 rounded-full"
                   style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}>
                   {([
@@ -1482,7 +1505,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     return (
                       <button key={t.key} type="button"
                         onClick={() => setLeftPanelView(t.key)}
-                        className="px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors"
+                        className="px-2.5 py-1 rounded-lg text-[12px] font-semibold transition-colors"
                         style={{
                           background: active ? 'var(--gc-blue)' : 'transparent',
                           color:      active ? '#fff' : 'var(--gc-text-2)',
@@ -1500,7 +1523,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                     <button type="button"
                       onClick={() => rateConInputRef.current?.click()}
                       disabled={rateConUploading}
-                      className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
                       style={{
                         background: KIND_TINT.rate_con.bg,
                         color:      KIND_TINT.rate_con.fg,
@@ -1589,7 +1612,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 })()}
                 {loadId && (
                   <button type="button" onClick={pickFile} disabled={uploading}
-                    className="flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-opacity disabled:opacity-50 shrink-0"
+                    className="flex items-center gap-1.5 text-[12px] font-semibold px-2.5 py-1 rounded-lg transition-opacity disabled:opacity-50 shrink-0"
                     style={{
                       background:  'var(--gc-blue)',
                       color:       '#fff',
@@ -1801,14 +1824,14 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 <button type="button"
                   onClick={() => { setMergeSelection(new Set()); setMergeDialogOpen(true); }}
                   disabled={merging}
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[13px] font-semibold transition-colors disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-colors disabled:opacity-50"
                   style={{
                     background: 'var(--gc-blue)',
                     color:      'white',
                   }}
                   onMouseEnter={e => { if (!merging) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
                   onMouseLeave={e => { if (!merging) e.currentTarget.style.background = 'var(--gc-blue)'; }}>
-                  {merging ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+                  {merging ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
                   Manage Documents
                 </button>
               </div>
@@ -2216,6 +2239,24 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         />
       )}
 
+      {pendingCloseConfirm && (
+        <ConfirmDialog
+          title="Discard pending uploads?"
+          message={`You picked ${pendingFiles.length} file${pendingFiles.length === 1 ? '' : 's'} but haven't chosen a type yet. Close anyway and lose the upload?`}
+          confirmLabel="Discard"
+          cancelLabel="Keep editing"
+          destructive
+          zIndex={zIndex + 60}
+          onCancel={() => setPendingCloseConfirm(false)}
+          onConfirm={() => {
+            setPendingCloseConfirm(false);
+            setPendingFiles([]);
+            setMergeDialogOpen(false);
+            setMergeSelection(new Set());
+          }}
+        />
+      )}
+
       {releaseConfirmOpen && (
         <ConfirmDialog
           title="Required docs missing"
@@ -2247,7 +2288,15 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
           })}
           onSelectAll={() => setMergeSelection(new Set(mergeCandidates.map(d => d.id)))}
           onSelectNone={() => setMergeSelection(new Set())}
-          onCancel={() => { setMergeDialogOpen(false); setMergeSelection(new Set()); }}
+          onCancel={() => {
+            // Guard against dropping a staged upload — if the user
+            // picked files but never chose a kind, route through a
+            // confirm so they don't lose their work to an accidental
+            // backdrop/X click.
+            if (pendingFiles.length > 0) { setPendingCloseConfirm(true); return; }
+            setMergeDialogOpen(false);
+            setMergeSelection(new Set());
+          }}
           onConfirm={() => void handleMergeSelected()}
           busy={merging}
           busyLabel="Merging…"
