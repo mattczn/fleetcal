@@ -1627,15 +1627,19 @@ function BatchGenerateResultView({ result }: { result: BatchGenerateInvoicesResp
  * Released-bucket invoice-packet picker. Two-pane layout: a left
  * sidebar listing every doc on the load with checkboxes (Include in
  * invoice) and a right-side viewer that previews the doc the user
- * just clicked. Saves the picked set to loads.invoice_doc_ids via the
- * existing `set_invoice_docs` closeout action — same write path the
- * ReviewQueue uses. The rate confirmation is shown but not toggleable;
- * the server always auto-attaches loads.rate_con_pdf regardless of
- * invoice_doc_ids, and surfacing a fake checkbox would lie about that.
+ * just clicked. Saves to load_documents.included_in_invoice per-doc
+ * via PATCH /v1/documents/:id — the same source of truth the
+ * ReviewQueue uses. Rate cons aren't toggleable; the server picks
+ * the most recent rate-con automatically via loads.rate_con_pdf.
  *
  * Initial selection mirrors apps/api/src/lib/invoicePacket.ts:
- *   - explicit load.invoiceDocIds wins when non-empty
- *   - otherwise newest-per-kind among PACKET_KINDS_ORDER
+ *   - per-doc d.includedInInvoice wins when non-null
+ *   - for NULL docs, the heuristic is newest-per-kind among
+ *     PACKET_KINDS_ORDER (matches the server's resolveDefault)
+ *
+ * Pending toggles live in `pendingChanges` so Save only writes the
+ * docs the user actually changed — leaving NULL on untouched docs
+ * so the heuristic remains the source of truth for them.
  */
 const ACCOUNTING_PACKET_KINDS: readonly string[] = ['pod', 'bol', 'lumper', 'scale', 'receipt', 'driver_sheet'];
 const ACCOUNTING_KIND_LABEL: Record<string, string> = {
@@ -1673,9 +1677,11 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
   const [activeUrl, setActiveUrl]     = useState<string | null>(null);
   const [urlLoading, setUrlLoading]   = useState(false);
   const [urlError, setUrlError]       = useState<string | null>(null);
-  // Local selection — drives the checkboxes. Initialized once from the
-  // server's resolution rules and committed on Save.
-  const [included, setIncluded]       = useState<Set<string> | null>(null);
+  // Per-doc pending toggles — only the docs the user actually flipped.
+  // Lets Save target exactly those rows via per-doc PATCH instead of
+  // re-stamping the whole load (which would lose the NULL=heuristic
+  // distinction for untouched docs).
+  const [pendingChanges, setPendingChanges] = useState<Record<string, boolean>>({});
   const [saving, setSaving]           = useState(false);
   const [saveError, setSaveError]     = useState<string | null>(null);
 
@@ -1693,16 +1699,13 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
     return () => { cancelled = true; };
   }, [load.loadId]);
 
-  // Seed `included` once docs arrive. Same logic as the server's
-  // resolvePacketDocsForLoad: explicit override wins, otherwise
-  // newest-per-kind among PACKET_KINDS_ORDER.
-  useEffect(() => {
-    if (!docs || included) return;
-    const explicit = (load as { invoiceDocIds?: string[] }).invoiceDocIds;
-    if (Array.isArray(explicit) && explicit.length > 0) {
-      setIncluded(new Set(explicit));
-      return;
-    }
+  // Derived effective include state.
+  //   1. Pending toggle wins (the user just clicked it).
+  //   2. Else d.includedInInvoice when not null (server-stored choice).
+  //   3. Else newest-per-kind heuristic among PACKET_KINDS — same
+  //      rule the server's resolveDefaultPacketDocs runs.
+  const heuristicIncluded: Set<string> = useMemo(() => {
+    if (!docs) return new Set();
     const byKind = new Map<string, LoadDoc>();
     const sorted = [...docs].sort((a, b) =>
       (b.uploadedAt ?? '').localeCompare(a.uploadedAt ?? ''),
@@ -1712,8 +1715,24 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
         byKind.set(d.kind, d);
       }
     }
-    setIncluded(new Set(Array.from(byKind.values()).map(d => d.id)));
-  }, [docs, load, included]);
+    return new Set(Array.from(byKind.values()).map(d => d.id));
+  }, [docs]);
+  const effectiveInclude = (d: LoadDoc): boolean => {
+    if (Object.prototype.hasOwnProperty.call(pendingChanges, d.id)) {
+      return pendingChanges[d.id];
+    }
+    if (d.includedInInvoice === true)  return true;
+    if (d.includedInInvoice === false) return false;
+    return heuristicIncluded.has(d.id);
+  };
+  const included: Set<string> = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of (docs ?? [])) if (effectiveInclude(d)) s.add(d.id);
+    return s;
+    // effectiveInclude reads pendingChanges + heuristicIncluded via
+    // closure; both are listed inputs to the derivation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docs, pendingChanges, heuristicIncluded]);
 
   // Default the viewer to the rate con (or the first uploaded doc).
   useEffect(() => {
@@ -1751,21 +1770,20 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
     return () => { cancelled = true; };
   }, [activeId, load.loadId]);
 
-  // Commit the explicit selection to loads.invoice_doc_ids. The
-  // server's generateInvoice flow reads from there directly when it
-  // resolves the packet's supporting docs.
+  // Per-doc PATCH for every flipped row. Skip when nothing pending
+  // so an accidental click-Save click doesn't write no-ops.
   async function handleSave() {
-    if (!included || saving) { onClose(); return; }
+    const entries = Object.entries(pendingChanges);
+    if (entries.length === 0 || saving) { onClose(); return; }
     setSaving(true);
     setSaveError(null);
     try {
       useCalendarStore.getState().markLoadSelfWrite(load.loadId);
-      await railway.updateLoadCloseout(load.loadId, {
-        action: 'set_invoice_docs',
-        invoiceDocIds: Array.from(included),
-      });
-      // Prefer onSaved (refreshes the parent) when wired; fall back
-      // to plain close for callers that don't care about a refetch.
+      await Promise.all(entries.map(([id, val]) =>
+        railway.updateDocumentInvoiceInclude(id, val)
+      ));
+      // Clear local overrides so the next render reads from server.
+      setPendingChanges({});
       if (onSaved) onSaved(); else onClose();
     } catch (err) {
       setSaveError((err as Error)?.message ?? 'save failed');
@@ -1773,14 +1791,25 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
     }
   }
 
+  // Toggle drops the pending entry when the new value matches the
+  // doc's persisted (or heuristic) value — so a flip-back doesn't
+  // leave a no-op in the dirty bucket and force a redundant save.
   const toggle = (id: string) => {
-    if (!included) return;
-    setIncluded(prev => {
-      const next = new Set(prev ?? []);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
+    if (!docs) return;
+    const doc = docs.find(d => d.id === id);
+    if (!doc) return;
+    const persisted: boolean = doc.includedInInvoice === true  ? true
+                              : doc.includedInInvoice === false ? false
+                              : heuristicIncluded.has(id);
+    const nextVal = !included.has(id);
+    setPendingChanges(prev => {
+      const copy = { ...prev };
+      if (persisted === nextVal) delete copy[id];
+      else                       copy[id] = nextVal;
+      return copy;
     });
   };
+  const dirtyCount = Object.keys(pendingChanges).length;
 
   const tintFor = (k: string) => ACCOUNTING_KIND_TINT[k] ?? ACCOUNTING_KIND_TINT.other;
   const nonRateConDocs = (docs ?? []).filter(d => d.kind !== 'rate_con');
@@ -1911,7 +1940,7 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
                   })()}
                   {nonRateConDocs.map(d => {
                     const tint = tintFor(d.kind);
-                    const isIncluded = included?.has(d.id) ?? false;
+                    const isIncluded = included.has(d.id);
                     const active = activeId === d.id;
                     return (
                       <li key={d.id}>
@@ -1922,7 +1951,7 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
                           }}>
                           <input type="checkbox" checked={isIncluded}
                             onChange={() => toggle(d.id)}
-                            disabled={!included}
+                            disabled={!docs}
                             style={{ width: 14, height: 14, accentColor: 'var(--gc-blue)', cursor: 'pointer' }}
                             title={isIncluded ? 'Included in invoice packet' : 'Skipped'}
                             onClick={e => e.stopPropagation()} />
@@ -1981,11 +2010,16 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
             style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
             Cancel
           </button>
-          <button onClick={() => void handleSave()} disabled={saving || !included}
+          <button onClick={() => void handleSave()} disabled={saving || dirtyCount === 0}
             className="text-[12px] font-semibold px-4 py-1.5 rounded-lg disabled:opacity-60"
-            style={{ background: '#1a73e8', color: '#fff' }}>
+            style={{ background: '#1a73e8', color: '#fff' }}
+            title={dirtyCount === 0 ? 'Nothing to save' : `Save ${dirtyCount} change${dirtyCount === 1 ? '' : 's'}`}>
             {saving ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : null}
-            {saving ? 'Saving…' : 'Save selection'}
+            {saving
+              ? 'Saving…'
+              : dirtyCount === 0
+                ? 'Save selection'
+                : `Save ${dirtyCount} change${dirtyCount === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>

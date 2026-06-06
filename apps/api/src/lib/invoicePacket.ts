@@ -376,33 +376,56 @@ export async function resolveDefaultPacketDocs(loadId: string, orgId: string): P
 }
 
 /**
- * Look up explicit invoice_doc_ids from the loads row and translate
- * them to storage paths. Falls back to resolveDefaultPacketDocs when
- * the array is empty. This is how dispatchers customize what goes
- * into a particular invoice without retyping the docs every send.
+ * Look up the dispatcher's explicit invoice-include flags from
+ * load_documents.included_in_invoice and translate the picks into
+ * storage paths. Falls back to resolveDefaultPacketDocs when no doc
+ * on the load has been touched (every column value is NULL) so a
+ * brand-new load still gets a reasonable default packet. This is how
+ * dispatchers customize what goes into a particular invoice.
+ *
+ * Selection rule:
+ *   - if ANY doc on the load has a non-null included_in_invoice value,
+ *     the dispatcher has touched this load — use ONLY the explicit
+ *     TRUEs. Anything they left NULL stays out.
+ *   - if every doc is NULL, fall back to the newest-per-kind heuristic.
+ *
+ * Replaced the legacy loads.invoice_doc_ids array reader on
+ * 2026-06-07 (see migration 20260607_load_documents_included_in_invoice
+ * and ReviewQueue / accounting page Save flows).
  */
 export async function resolvePacketDocsForLoad(loadId: string, orgId: string): Promise<string[]> {
-  const { data: loadRow } = await supabase
-    .from("loads")
-    .select("invoice_doc_ids")
-    .eq("id", loadId)
-    .eq("org_id", orgId)
-    .maybeSingle();
-  const ids = ((loadRow as { invoice_doc_ids: string[] | null } | null)?.invoice_doc_ids) ?? [];
-  if (!ids.length) return resolveDefaultPacketDocs(loadId, orgId);
-
-  const { data } = await supabase
+  const { data: docRows } = await supabase
     .from("load_documents")
-    .select("id,storage_path,kind,uploaded_at")
-    .eq("org_id", orgId)
-    .in("id", ids);
-  const byId = new Map<string, string>();
-  for (const row of (data ?? []) as Array<{ id: string; storage_path: string }>) {
-    byId.set(row.id, row.storage_path);
+    .select("id,storage_path,kind,uploaded_at,included_in_invoice")
+    .eq("load_id", loadId)
+    .eq("org_id", orgId);
+  // The generated supabase types don't carry the new column yet (it
+  // lands once the user reruns the type-pull post-migration). Cast
+  // through unknown so the build stays clean; runtime returns the col.
+  const allDocs = ((docRows ?? []) as unknown as Array<{
+    id: string; storage_path: string; kind: string; uploaded_at: string;
+    included_in_invoice: boolean | null;
+  }>);
+  const anyTouched = allDocs.some(d => d.included_in_invoice !== null);
+  if (anyTouched) {
+    // Explicit picks only — order by kind preference + uploaded_at so
+    // the packet shape stays predictable across loads (POD before
+    // BOL before lumper etc., newest first within a kind).
+    const explicit = allDocs.filter(d => d.included_in_invoice === true);
+    explicit.sort((a, b) => {
+      const ai = PACKET_DOC_KINDS_ORDER.indexOf(a.kind as DocumentKind);
+      const bi = PACKET_DOC_KINDS_ORDER.indexOf(b.kind as DocumentKind);
+      const aRank = ai < 0 ? PACKET_DOC_KINDS_ORDER.length : ai;
+      const bRank = bi < 0 ? PACKET_DOC_KINDS_ORDER.length : bi;
+      if (aRank !== bRank) return aRank - bRank;
+      return b.uploaded_at.localeCompare(a.uploaded_at);
+    });
+    return explicit.map(d => d.storage_path);
   }
-  // Preserve the user's chosen order.
-  return ids.map(id => byId.get(id)).filter((v): v is string => !!v);
+  // No dispatcher touch — heuristic default.
+  return resolveDefaultPacketDocs(loadId, orgId);
 }
+
 
 /**
  * Fetch the load's rate-con storage path for packet assembly. Returns
