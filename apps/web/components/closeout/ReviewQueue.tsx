@@ -896,7 +896,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const mergeDocsToPdf = async (
     sources: LoadDocument[],
     forceKind?: import('@fleetcal/types').DocumentKind,
-  ): Promise<{ id: string } | null> => {
+  ): Promise<{ id: string; sourceIds: string[] } | null> => {
     if (!loadId || sources.length < 2) return null;
     const cache = docsCacheRef.current.get(loadId);
     const files: File[] = [];
@@ -944,7 +944,24 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     }
     useCalendarStore.getState().markLoadSelfWrite(loadId);
     const { document: newDoc } = await railway.uploadLoadDocument(loadId, mergedFile, mergedKind);
-    return { id: newDoc.id };
+    // Tag the merged file so dispatchers can spot it at a glance in
+    // the doc list. The upload endpoint just gave us a name in the
+    // {LoadNum}_{KIND}{_N}.{ext} convention; insert "_MERGED" before
+    // the extension so the dispatcher sees e.g. "7100543356_POD_MERGED.pdf"
+    // (or "7100543356_POD_3_MERGED.pdf" when this is the 3rd POD).
+    // Best-effort — a failed rename leaves the doc with its default
+    // name and we surface the merged-ness via the audit log only.
+    try {
+      const dot = newDoc.fileName.lastIndexOf('.');
+      const stem = dot > 0 ? newDoc.fileName.slice(0, dot) : newDoc.fileName;
+      const ext  = dot > 0 ? newDoc.fileName.slice(dot)    : '';
+      if (!/_MERGED$/i.test(stem)) {
+        await railway.renameDocument(newDoc.id, `${stem}_MERGED${ext}`);
+      }
+    } catch (err) {
+      console.warn('[merge] rename to _MERGED failed; keeping default name', err);
+    }
+    return { id: newDoc.id, sourceIds: sources.map(d => d.id) };
   };
 
   const handleMergeSelected = async () => {
@@ -964,10 +981,19 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         if (result) {
           const newIdx = fresh.docs.findIndex(d => d.id === result.id);
           if (newIdx !== -1) setActiveDocIdx(newIdx);
-          // Auto-include the merged result in the invoice packet —
-          // typically that's what the user wants. Originals stay in
-          // their existing included/excluded state.
-          setIncludedDocIds(prev => new Set([...prev, result.id]));
+          // Replace-in-place in the invoice packet: drop the originals
+          // we merged, add the new merged doc. The merged PDF
+          // supersedes its inputs, so shipping both in the invoice
+          // would just produce duplicate pages.
+          const merged = new Set(result.sourceIds);
+          setIncludedDocIds(prev => {
+            const next = new Set<string>();
+            for (const id of prev) {
+              if (!merged.has(id)) next.add(id);
+            }
+            next.add(result.id);
+            return next;
+          });
         }
       }
     } catch (err) {
@@ -1018,10 +1044,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
     setMergeStatus(null);
     try {
       const newIds: string[] = [];
+      // Track every original ID we merge so we can drop them from
+      // the invoice packet — the merged PDF supersedes them.
+      const mergedOriginalIds = new Set<string>();
       for (const [kind, group] of mergeable) {
         setMergeStatus(`Merging ${group.length} ${KIND_LABEL[kind] ?? kind}…`);
         const res = await mergeDocsToPdf(group, kind);
-        if (res) newIds.push(res.id);
+        if (res) {
+          newIds.push(res.id);
+          for (const sid of res.sourceIds) mergedOriginalIds.add(sid);
+        }
       }
       // One refresh after all groups land — cheaper than refetching
       // between each bucket.
@@ -1030,8 +1062,16 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       const fresh = docsCacheRef.current.get(loadId);
       if (fresh) {
         setDocs(fresh.docs);
+        // Replace-in-place: drop every original that was merged, then
+        // add the new merged docs. Untouched kinds (singletons) keep
+        // their existing included state. This lines up with what the
+        // dispatcher actually wants in the invoice packet — one
+        // merged doc per kind, not the merged doc PLUS the originals.
         setIncludedDocIds(prev => {
-          const next = new Set(prev);
+          const next = new Set<string>();
+          for (const id of prev) {
+            if (!mergedOriginalIds.has(id)) next.add(id);
+          }
           for (const id of newIds) next.add(id);
           return next;
         });
