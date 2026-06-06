@@ -1026,6 +1026,27 @@ function UploadedDocsPanel({
           );
         })}
         </div>
+        {/* Confirm-delete dialog also lives here so the per-card Delete
+            button works from the LIST view, not just the viewer. Before
+            this, setDeleteTarget fired but the dialog only existed in
+            the viewer branch — clicks did nothing until the user opened
+            a doc. */}
+        {deleteTarget && (
+          <ConfirmDialog
+            title="Delete document?"
+            message={`"${deleteTarget.name}" will be removed. This can't be undone.`}
+            confirmLabel="Delete"
+            cancelLabel="Cancel"
+            destructive
+            zIndex={240}
+            onCancel={() => setDeleteTarget(null)}
+            onConfirm={() => {
+              const id = deleteTarget.id;
+              setDeleteTarget(null);
+              void performDelete(id);
+            }}
+          />
+        )}
       </div>
     );
   }
