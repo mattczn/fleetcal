@@ -161,6 +161,33 @@ export async function POST(req: NextRequest) {
   // ── Pass 2: full extraction with the matched broker's hints ──────────────
   const prompt = buildRateConPrompt(enabledFields, customInstructions, promptVariables, effectiveRules);
 
+  // Debug short-circuit: ?debug=1 returns the inputs without calling
+  // the model. Useful when two orgs produce different outputs for what
+  // appears to be the same PDF — paste both responses side-by-side and
+  // the divergence in promptVariables / customInstructions / enabled
+  // fields / matched customer pops out immediately.
+  const url = new URL(req.url);
+  if (url.searchParams.get('debug') === '1') {
+    return NextResponse.json({
+      debug: true,
+      passOne: {
+        model: MODEL_PASS_1,
+        brokerProfileMatchedFromPdf: brokerProfile,
+        matchedCustomerFromRoster:   matchedCustomer ? { name: matchedCustomer.name, aliases: matchedCustomer.aliases, parseHintsLen: matchedCustomer.parseHints?.length ?? 0 } : null,
+      },
+      passTwo: {
+        model: MODEL_PASS_2,
+        enabledFields,
+        customInstructions,
+        promptVariables,
+        effectiveRulesCount: effectiveRules.length,
+        effectiveRules: effectiveRules.map(r => ({ name: r.name, aliases: r.aliases, hintsLen: r.hints.length, hints: r.hints })),
+        fullPrompt: prompt,
+        pdfBytesLength: data.length,                                  // base64 length — a same-PDF check
+      },
+    });
+  }
+
   let parsed: Record<string, unknown>;
   try {
     const textBlock: TextBlockParam = { type: 'text', text: prompt };
