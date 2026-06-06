@@ -518,16 +518,17 @@ export default function CloseoutView() {
       pinned: 'left', alwaysVisible: true, pickerLabel: 'Star / notes',
       render: r => (
         <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => void handleTogglePriority(r)}
-            className="rounded-full p-1 transition-colors"
-            title={r.priority ? 'Unmark priority' : 'Mark as priority'}
-            style={{
-              background: r.priority ? '#fef9c3' : 'transparent',
-              border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
-              color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
-            }}>
-            <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
-          </button>
+          <FastTooltip text={r.priority ? 'Remove priority' : 'Mark as priority'}>
+            <button onClick={() => void handleTogglePriority(r)}
+              className="rounded-full p-1 transition-colors"
+              style={{
+                background: r.priority ? '#fef9c3' : 'transparent',
+                border: `1px solid ${r.priority ? '#eab308' : 'var(--gc-border)'}`,
+                color: r.priority ? '#854d0e' : 'var(--gc-text-3)',
+              }}>
+              <Star size={11} fill={r.priority ? '#eab308' : 'none'} />
+            </button>
+          </FastTooltip>
           <NotesButton load={r} onOpen={() => setNotesTarget(r)} />
         </div>
       ),
@@ -868,44 +869,48 @@ export default function CloseoutView() {
         const rowIdx = visible.findIndex(x => x.id === r.id);
         return (
           <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => { setReviewStartIndex(Math.max(0, rowIdx)); setReviewOpen(true); }}
-              className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-              style={{ background: '#15803d', color: '#fff' }}
-              title="Open in review queue">
-              <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
-            </button>
-            <button onClick={() => void handleVerify(r)}
-              className="rounded-lg transition-colors inline-flex items-center justify-center"
-              style={{
-                background: '#dcfce7', color: '#15803d',
-                border: '1px solid #86efac',
-                width: 26, height: 24,
-              }}
-              title="Release without opening review queue">
-              <CheckCircle2 size={12} />
-            </button>
+            <FastTooltip text="Open this load in the review queue">
+              <button onClick={() => { setReviewStartIndex(Math.max(0, rowIdx)); setReviewOpen(true); }}
+                className="text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                style={{ background: '#15803d', color: '#fff' }}>
+                <Play size={10} fill="currentColor" style={{ display: 'inline', marginRight: 3 }} /> Review
+              </button>
+            </FastTooltip>
+            <FastTooltip text="Release for billing without opening the review queue">
+              <button onClick={() => void handleVerify(r)}
+                className="rounded-lg transition-colors inline-flex items-center justify-center"
+                style={{
+                  background: '#dcfce7', color: '#15803d',
+                  border: '1px solid #86efac',
+                  width: 26, height: 24,
+                }}>
+                <CheckCircle2 size={12} />
+              </button>
+            </FastTooltip>
             {!rowFlagged ? (
-              <button onClick={() => handleFlag(r)}
-                className="rounded-lg transition-colors inline-flex items-center justify-center"
-                style={{
-                  background: '#fef3c7', color: '#92400e',
-                  border: '1px solid #fde68a',
-                  width: 26, height: 24,
-                }}
-                title="Flag — needs follow-up">
-                <Flag size={12} />
-              </button>
+              <FastTooltip text="Flag — mark this load as needing follow-up">
+                <button onClick={() => handleFlag(r)}
+                  className="rounded-lg transition-colors inline-flex items-center justify-center"
+                  style={{
+                    background: '#fef3c7', color: '#92400e',
+                    border: '1px solid #fde68a',
+                    width: 26, height: 24,
+                  }}>
+                  <Flag size={12} />
+                </button>
+              </FastTooltip>
             ) : (
-              <button onClick={() => setFollowUpTarget(r)}
-                className="rounded-lg transition-colors inline-flex items-center justify-center"
-                style={{
-                  background: '#fff7ed', color: '#9a3412',
-                  border: '1px solid #fed7aa',
-                  width: 26, height: 24,
-                }}
-                title="Log a follow-up + optionally update accessorial status / clear flag">
-                <MessageSquare size={12} />
-              </button>
+              <FastTooltip text="Follow up — log a note, approve/deny an accessorial, or clear the flag">
+                <button onClick={() => setFollowUpTarget(r)}
+                  className="rounded-lg transition-colors inline-flex items-center justify-center"
+                  style={{
+                    background: '#fff7ed', color: '#9a3412',
+                    border: '1px solid #fed7aa',
+                    width: 26, height: 24,
+                  }}>
+                  <MessageSquare size={12} />
+                </button>
+              </FastTooltip>
             )}
           </div>
         );
@@ -969,7 +974,7 @@ export default function CloseoutView() {
           <div className="text-[12.5px] flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: 'var(--gc-text-3)' }}>
             <span>
               POD verification. Check paperwork and release loads for billing.
-              Billing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Billing</Link>.
+              Invoicing happens in <Link href="/accounting" className="font-semibold underline" style={{ color: 'var(--gc-blue)' }}>Billing</Link>.
             </span>
             <FastTooltip text="Flagged = POD missing 24h+ · Pending accessorial · Priority load · Manually flagged">
               <span
@@ -1342,45 +1347,51 @@ function CopyableCell({
 }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button type="button"
-      onClick={async e => {
-        e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch { /* clipboard API blocked — silent */ }
-      }}
-      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums w-full"
-      style={{
-        color:      copied ? '#15803d' : 'var(--gc-text-1)',
-        background: copied ? '#dcfce7' : 'transparent',
-        justifyContent: 'flex-start',
-      }}
-      title={copied ? 'Copied!' : title}
-      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
-      {displayValue}
-      {copied
-        ? <Check size={11} style={{ color: '#15803d' }} />
-        : null}
-    </button>
+    <FastTooltip text={copied ? 'Copied!' : title}>
+      <button type="button"
+        onClick={async e => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch { /* clipboard API blocked — silent */ }
+        }}
+        className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums w-full"
+        style={{
+          color:      copied ? '#15803d' : 'var(--gc-text-1)',
+          background: copied ? '#dcfce7' : 'transparent',
+          justifyContent: 'flex-start',
+        }}
+        onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+        onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
+        {copied ? (
+          <>
+            <Check size={12} style={{ color: '#15803d' }} />
+            Copied!
+          </>
+        ) : displayValue}
+      </button>
+    </FastTooltip>
   );
 }
 
 function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
   const count = (load.internalNotes ?? []).length;
   const has = count > 0;
+  const tooltip = has
+    ? `${count} internal note${count !== 1 ? 's' : ''} — click to view`
+    : 'Add an internal note';
   return (
-    <button onClick={e => { e.stopPropagation(); onOpen(); }}
-      className="rounded-full p-1.5 transition-colors relative"
-      title={has ? `${count} internal note${count !== 1 ? 's' : ''}` : 'Add internal note'}
-      style={{
-        background: has ? '#dbeafe' : 'transparent',
-        border:     `1px solid ${has ? '#1a73e8' : 'var(--gc-border)'}`,
-        color:      has ? '#1a73e8' : 'var(--gc-text-3)',
-        overflow:   'visible',
-      }}>
+    <FastTooltip text={tooltip}>
+      <button onClick={e => { e.stopPropagation(); onOpen(); }}
+        className="rounded-full p-1.5 transition-colors relative"
+        style={{
+          background: has ? '#dbeafe' : 'transparent',
+          border:     `1px solid ${has ? '#1a73e8' : 'var(--gc-border)'}`,
+          color:      has ? '#1a73e8' : 'var(--gc-text-3)',
+          overflow:   'visible',
+        }}>
       <MessageSquare size={12} fill={has ? '#1a73e8' : 'none'} stroke={has ? '#1a73e8' : 'currentColor'} />
       {has && (
         <span
@@ -1409,7 +1420,8 @@ function NotesButton({ load, onOpen }: { load: Load; onOpen: () => void }) {
           {count > 9 ? '9+' : count}
         </span>
       )}
-    </button>
+      </button>
+    </FastTooltip>
   );
 }
 

@@ -420,7 +420,10 @@ export function CopyableLoadNum({ value }: { value: string }) {
 }
 
 /** Click-to-copy text cell with a 1.5s "Copied!" green flip. Used for
- *  load # and internal load id (which doubles as the invoice number). */
+ *  load # and internal load id (which doubles as the invoice number).
+ *  The displayed text swaps to "Copied!" on click so the confirmation
+ *  is unmissable — a small check icon next to the original value is
+ *  too easy to overlook. */
 export function CopyableCell({
   value, displayValue, title,
 }: {
@@ -430,29 +433,32 @@ export function CopyableCell({
 }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button type="button"
-      onClick={async e => {
-        e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch { /* clipboard blocked — silent */ }
-      }}
-      className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums w-full"
-      style={{
-        color:      copied ? '#15803d' : 'var(--gc-text-1)',
-        background: copied ? '#dcfce7' : 'transparent',
-        justifyContent: 'flex-start',
-      }}
-      title={copied ? 'Copied!' : title}
-      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
-      {displayValue}
-      {copied
-        ? <Check size={11} style={{ color: '#15803d' }} />
-        : null}
-    </button>
+    <FastTooltip text={copied ? 'Copied!' : title}>
+      <button type="button"
+        onClick={async e => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(value);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          } catch { /* clipboard blocked — silent */ }
+        }}
+        className="font-semibold inline-flex items-center gap-1 text-[13px] rounded px-1.5 py-0.5 transition-colors tabular-nums w-full"
+        style={{
+          color:      copied ? '#15803d' : 'var(--gc-text-1)',
+          background: copied ? '#dcfce7' : 'transparent',
+          justifyContent: 'flex-start',
+        }}
+        onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+        onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
+        {copied ? (
+          <>
+            <Check size={12} style={{ color: '#15803d' }} />
+            Copied!
+          </>
+        ) : displayValue}
+      </button>
+    </FastTooltip>
   );
 }
 
