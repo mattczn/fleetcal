@@ -343,21 +343,52 @@ export function OpsTable<T>({
   // Apply the user-chosen order to the declared columns. Any column
   // not in `columnOrder` falls in at its declared position (so newly-
   // added columns don't vanish for users with a stale persisted
-  // order). Pinned columns keep their pin direction regardless of
-  // where the user moves them in the order — sticky positioning
-  // would break otherwise.
+  // order, and — critically — don't get tacked on past pinned-right
+  // columns like `actions`). Pinned columns keep their pin direction
+  // regardless of where the user moves them in the order — sticky
+  // positioning would break otherwise.
   const orderedColumns = useMemo(() => {
-    const byKey = new Map(columns.map(c => [c.key, c]));
-    const seen  = new Set<string>();
-    const out: OpsColumn<T>[] = [];
-    for (const k of columnOrder) {
-      const c = byKey.get(k);
-      if (c) { out.push(c); seen.add(k); }
+    const byKey         = new Map(columns.map(c => [c.key, c]));
+    const declaredKeys  = columns.map(c => c.key);
+    const persistedSet  = new Set(columnOrder);
+
+    // Start with the persisted order (the user's customisations),
+    // filtering out any keys that no longer exist in the declared
+    // columns array (e.g. a column was removed in a later release).
+    const resultKeys: string[] = columnOrder.filter(k => byKey.has(k));
+
+    // For each declared column NOT in the persisted order, insert it
+    // adjacent to its nearest declared-order neighbour that IS
+    // already in the result. This keeps new columns at the position
+    // the caller intended, instead of appending them at the very end
+    // (which would push them PAST pinned-right columns once persisted
+    // state exists).
+    for (let i = 0; i < declaredKeys.length; i++) {
+      const k = declaredKeys[i];
+      if (persistedSet.has(k)) continue;
+
+      // Walk left in declared order looking for an anchor that's
+      // already placed in the result — insert right after it.
+      let anchored = false;
+      for (let j = i - 1; j >= 0; j--) {
+        const idx = resultKeys.indexOf(declaredKeys[j]);
+        if (idx !== -1) { resultKeys.splice(idx + 1, 0, k); anchored = true; break; }
+      }
+      if (anchored) continue;
+
+      // No left anchor — walk right and insert BEFORE the nearest
+      // right neighbour. Falls back to start-of-array when neither
+      // direction has a placed neighbour (e.g. the very first render
+      // with no persisted state).
+      let inserted = false;
+      for (let j = i + 1; j < declaredKeys.length; j++) {
+        const idx = resultKeys.indexOf(declaredKeys[j]);
+        if (idx !== -1) { resultKeys.splice(idx, 0, k); inserted = true; break; }
+      }
+      if (!inserted) resultKeys.push(k);
     }
-    for (const c of columns) {
-      if (!seen.has(c.key)) out.push(c);
-    }
-    return out;
+
+    return resultKeys.map(k => byKey.get(k)!).filter(Boolean);
   }, [columns, columnOrder]);
 
   // Visible columns = ordered columns minus user-hidden. We do NOT
