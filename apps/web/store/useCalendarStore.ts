@@ -497,6 +497,12 @@ interface CalendarStore extends ModalState {
    *  with edits made via EventModal/calendar without prop-drilling an
    *  onSaved callback through every mount point. */
   loadEditTick: number;
+  /** Externally-triggered bump of loadEditTick. Useful for write paths
+   *  that bypass the store (invoice send/markPaid/void, etc.) but still
+   *  mutate the load row server-side (billing_status moves through
+   *  released → invoiced → paid). Without this, the accounting/closeout
+   *  snapshots would only re-sync on the next page-level Refresh. */
+  bumpLoadEditTick: () => void;
 }
 
 export const useCalendarStore = create<CalendarStore>()(
@@ -2182,6 +2188,7 @@ export const useCalendarStore = create<CalendarStore>()(
   // snapshot subscribe to this and refetch on change. See type comment
   // above for rationale.
   loadEditTick: 0,
+  bumpLoadEditTick: () => set((s) => ({ loadEditTick: s.loadEditTick + 1 })),
 
   // ── Modal ─────────────────────────────────────────────────────────────────
   modalOpen:      false,

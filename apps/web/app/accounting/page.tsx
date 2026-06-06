@@ -20,7 +20,7 @@
  *   All       — every billable artifact (except voids)
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertCircle, Search, X, Send, Check, FilePlus,
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw,
@@ -37,6 +37,7 @@ import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import InternalNotesModal from '@/components/closeout/InternalNotesModal';
 import {
   Th, Td, DocBadge, RequiredDocBadge, AccessorialsCell, CopyableCell, CopyableLoadNum, NotesButton,
+  FastTooltip,
   moneyFmt, fmtShortDate, daysSince,
 } from '@/components/queue/QueueTablePrimitives';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
@@ -60,10 +61,10 @@ const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ s
 // ─── Columns ────────────────────────────────────────────────────────────
 
 type ColKey =
-  | 'internalId' | 'invoiceNum' | 'loadNum' | 'customer' | 'driver' | 'truck' | 'title'
+  | 'internalId' | 'loadNum' | 'customer' | 'driver' | 'truck' | 'title'
   | 'rate' | 'accessorials' | 'total'
   | 'docs'
-  | 'age' | 'pickupAt' | 'deliveryAt' | 'released' | 'issued' | 'due'
+  | 'age' | 'pickupAt' | 'deliveryAt' | 'released' | 'issued' | 'due' | 'paidAt'
   | 'method' | 'sendTo' | 'status'
   | 'flags' | 'view';
 
@@ -78,8 +79,8 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
   released:     100,
   issued:       100,
   due:          100,
+  paidAt:       100,
   internalId:   110,
-  invoiceNum:   120,
   loadNum:      120,
   driver:       140,
   truck:         80,
@@ -106,14 +107,57 @@ const DEFAULT_COL_WIDTHS: Record<ColKey, number> = {
 // now, so the legacy `view` key no longer corresponds to a real
 // column — nothing to omit there.
 const COLS_OMITTED_PER_BUCKET: Record<Bucket, Set<ColKey>> = {
-  released: new Set(['invoiceNum', 'issued', 'due', 'status']),
-  queued:   new Set(['status']),
-  invoiced: new Set(['status', 'sendTo']),
+  released: new Set(['issued', 'due', 'paidAt', 'status']),
+  queued:   new Set(['paidAt', 'status']),
+  invoiced: new Set(['paidAt', 'status', 'sendTo']),
   paid:     new Set(['status', 'sendTo']),
   all:      new Set(['sendTo']),
 };
 
 const PAGE_SIZE = 50;
+
+// ─── Tab-lifetime cache ─────────────────────────────────────────────────
+//
+// Survives mount/unmount within the same browser tab. Navigating away
+// to Dispatch or Paperwork and back to Billing reads from here, so the
+// table paints instantly with last-seen rows while a silent refresh
+// pulls fresh data underneath. Keyed by orgId so an org switch can't
+// serve stale cross-org data. Cleared on full page reload — that's the
+// escape hatch for "give me guaranteed-fresh."
+interface AccountingCache {
+  orgId:     string | null;
+  loads:     LoadSummary[] | null;
+  invoices:  Invoice[] | null;
+  /** Set of billing_status values currently held in `loads`. The
+   *  prioritized-fetch path may only have fetched one slice; this
+   *  lets bucket switches detect when they need to pull more. */
+  loadedBilling: Set<string>;
+  fetchedAt: number;
+}
+const accountingCache: AccountingCache = {
+  orgId: null, loads: null, invoices: null,
+  loadedBilling: new Set(), fetchedAt: 0,
+};
+
+/** Bucket → minimum API params needed to render that bucket.
+ *  `inv === null` means no invoice query needed (Released has no
+ *  invoices; All-bucket pulls every status so passes through). */
+function fetchSliceForBucket(b: Bucket): { billing: string; inv: string | null } {
+  if (b === 'released') return { billing: 'verified', inv: null };
+  if (b === 'queued')   return { billing: 'invoiced', inv: 'draft' };
+  if (b === 'invoiced') return { billing: 'invoiced', inv: 'sent'  };
+  if (b === 'paid')     return { billing: 'paid',     inv: 'paid'  };
+  return { billing: 'verified,invoiced,paid', inv: null };
+}
+
+/** Merge incoming rows on top of existing, dedup by id. Used after
+ *  per-bucket fetches so multiple slices accumulate into one array. */
+function mergeById<T>(prev: T[], incoming: T[], idOf: (x: T) => string): T[] {
+  const m = new Map<string, T>();
+  for (const x of prev) m.set(idOf(x), x);
+  for (const x of incoming) m.set(idOf(x), x);
+  return Array.from(m.values());
+}
 
 // ─── Page ───────────────────────────────────────────────────────────────
 
@@ -128,7 +172,7 @@ export default function AccountingPage() {
 }
 
 function AccountingPageInner() {
-  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { isLoaded: authLoaded, isSignedIn, orgId } = useAuth();
   const { user } = useUser();
   const customers = useCalendarStore(s => s.customers);
   // Assets from the calendar store — used to resolve pickupAssetId to a
@@ -215,8 +259,59 @@ function AccountingPageInner() {
   // we log a warning if we hit the ceiling so the operator catches
   // it before totals start drifting.
   const BUCKET_LIMIT = 5000;
-  async function refresh() {
-    setLoading(true);
+
+  // Tracks which billing_status slices are present in `loads`. Synced
+  // with accountingCache.loadedBilling on every successful fetch so
+  // bucket-switch can detect missing data without hitting the server
+  // when the cache already has it.
+  const loadedBilling = useRef<Set<string>>(new Set());
+  // True once a full-universe refresh has succeeded. Stops the
+  // bucket-switch effect from re-fetching per-bucket slices we've
+  // already pulled via the "load everything" path.
+  const everythingLoaded = useRef(false);
+
+  /** Per-bucket prioritized fetch. Cold-start path — pulls only what
+   *  the active bucket needs (small payload, fast paint), then kicks
+   *  off a background full refresh. Falls back to the cache fetchedAt
+   *  if the API errors so we don't blank the operator's last-good. */
+  async function primeBucket(b: Bucket) {
+    if (!orgId) return;
+    setError(null);
+    const slice = fetchSliceForBucket(b);
+    try {
+      const [loadsRes, invoicesRes] = await Promise.all([
+        railway.listLoadSummaries({
+          billingStatus: slice.billing,
+          limit:         String(BUCKET_LIMIT),
+        }),
+        slice.inv === null && b !== 'all'
+          ? Promise.resolve({ invoices: [] as Invoice[] })
+          : railway.listInvoices(slice.inv ? { status: slice.inv } : {}),
+      ]);
+      // Merge into existing arrays so multiple primeBucket calls
+      // accumulate (user nav: released → queued → invoiced pulls one
+      // slice each and they all stick around for instant switches).
+      setLoads(prev => mergeById(prev, loadsRes.loads, (l) => l.loadId));
+      setAllInvoices(prev => mergeById(prev, invoicesRes.invoices, (i) => i.id));
+      slice.billing.split(',').forEach(s => loadedBilling.current.add(s));
+      setLoading(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load accounting data');
+      setLoading(false);
+    }
+  }
+
+  /** Full-universe refresh. Used for: explicit Refresh button,
+   *  post-mutation re-sync via loadEditTick, and background expansion
+   *  after a prioritized first paint. Writes through to the tab-lifetime
+   *  cache so the next mount is instant.
+   *
+   *  The loading skeleton ONLY ever shows on the very first paint
+   *  (when there are zero rows in state). After that, every refresh
+   *  swaps data underneath without flashing the table. */
+  async function refresh(opts?: { silent?: boolean }) {
+    void opts;
+    if (!orgId) return;
     setError(null);
     try {
       const [loadsRes, invoicesRes] = await Promise.all([
@@ -231,17 +326,65 @@ function AccountingPageInner() {
       }
       setLoads(loadsRes.loads);
       setAllInvoices(invoicesRes.invoices);
+      loadedBilling.current = new Set(['verified', 'invoiced', 'paid']);
+      everythingLoaded.current = true;
+      // Persist to the module cache so the next mount paints instantly.
+      accountingCache.orgId = orgId;
+      accountingCache.loads = loadsRes.loads;
+      accountingCache.invoices = invoicesRes.invoices;
+      accountingCache.loadedBilling = new Set(['verified', 'invoiced', 'paid']);
+      accountingCache.fetchedAt = Date.now();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounting data');
     } finally {
       setLoading(false);
     }
   }
+
+  // Mount: hydrate from cache → paint instantly → background refresh.
+  // Cold start: prioritized fetch of the active bucket → background
+  // refresh expands to the full universe. Either way, the table never
+  // sits on the "Loading…" skeleton longer than one bucket's worth of
+  // rows takes to come over the wire.
   useEffect(() => {
-    if (!authLoaded || !isSignedIn) return;
-    void refresh();
+    if (!authLoaded || !isSignedIn || !orgId) return;
+
+    // Cache hit for this org — paint from memory immediately, then
+    // silently sync fresh data underneath.
+    if (accountingCache.orgId === orgId &&
+        accountingCache.loads && accountingCache.invoices) {
+      setLoads(accountingCache.loads);
+      setAllInvoices(accountingCache.invoices);
+      loadedBilling.current = new Set(accountingCache.loadedBilling);
+      everythingLoaded.current = accountingCache.loadedBilling.size >= 3;
+      setLoading(false);
+      void refresh({ silent: true });
+      return;
+    }
+
+    // Cold start: prime the selected bucket so the user gets rows ASAP,
+    // then expand to the full universe in the background. Buckets
+    // switched to before that finishes hit the per-bucket fetch effect
+    // below.
+    void primeBucket(bucket).then(() => {
+      if (!everythingLoaded.current) void refresh({ silent: true });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoaded, isSignedIn]);
+  }, [authLoaded, isSignedIn, orgId]);
+
+  // Bucket switch: if we don't yet have this bucket's billing_status
+  // slice in memory (cold-started on a different bucket and the user
+  // jumped before the full background refresh finished), kick off a
+  // targeted fetch for just this bucket's slice. No-op once the full
+  // refresh has populated everything.
+  useEffect(() => {
+    if (!authLoaded || !isSignedIn || !orgId) return;
+    if (everythingLoaded.current) return;
+    const needed = fetchSliceForBucket(bucket).billing.split(',');
+    const missing = needed.some(s => !loadedBilling.current.has(s));
+    if (missing) void primeBucket(bucket);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bucket]);
 
   // Re-sync the table whenever a load is edited via EventModal anywhere
   // in the app. The store bumps loadEditTick after each successful
@@ -253,7 +396,9 @@ function AccountingPageInner() {
     if (!authLoaded || !isSignedIn) return;
     // Skip the initial render — the mount-effect above already fetched.
     if (loadEditTick === 0) return;
-    void refresh();
+    // Background re-sync — keep the table interactive while data lands.
+    // Rows shift between buckets fluidly instead of blanking out.
+    void refresh({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadEditTick]);
 
@@ -374,14 +519,16 @@ function AccountingPageInner() {
   // Selection lookups — mirror what the bulk-action handlers need.
   // selectedIds holds the rowKey for each selected row; we resolve
   // them back to load/invoice arrays here.
-  const canSelect = bucket === 'released' || bucket === 'queued' || bucket === 'invoiced';
+  const canSelect = bucket === 'released' || bucket === 'queued' || bucket === 'invoiced' || bucket === 'paid';
   const selectedLoads = useMemo(() => {
     if (bucket !== 'released') return [];
     const set = new Set(selectedIds);
     return rowsForBucket.filter(r => set.has(r.load.loadId)).map(r => r.load);
   }, [bucket, rowsForBucket, selectedIds]);
   const selectedInvoices = useMemo(() => {
-    if (bucket !== 'queued' && bucket !== 'invoiced') return [];
+    // Released bucket has no invoice yet, so no selectedInvoices.
+    // All four other buckets carry an active invoice per row.
+    if (bucket === 'released') return [];
     const set = new Set(selectedIds);
     return rowsForBucket.filter(r => r.invoice && set.has(r.invoice.id)).map(r => r.invoice!);
   }, [bucket, rowsForBucket, selectedIds]);
@@ -394,11 +541,50 @@ function AccountingPageInner() {
         try { await railway.markInvoicePaid(inv.id, {}); }
         catch (err) { console.warn('[accounting] markPaid failed for', inv.invoiceNumber, err); }
       }
-      await refresh();
+      // Silent re-sync: rows slide from Invoiced into Paid without
+      // the table blanking out under the operator.
+      await refresh({ silent: true });
       setSelectedIds([]);
       setTableResetKey(k => k + 1);
     } finally {
       setMarkPaidBusy(false);
+    }
+  }
+
+  // Bulk reverse mark-paid. Confirms once, then walks the selection
+  // serially so a partial failure (e.g. server-side 409 on a void
+  // invoice that slipped into the selection) stops cleanly with the
+  // remaining rows still selected. Each successful reversal rolls
+  // loads.billing_status from 'paid' to 'invoiced' server-side; the
+  // silent refresh brings the row back into the Invoiced bucket.
+  const [unmarkPaidBusy, setUnmarkPaidBusy] = useState(false);
+  async function handleUnmarkPaidBulk() {
+    if (selectedInvoices.length === 0 || unmarkPaidBusy) return;
+    const paidOnes = selectedInvoices.filter(inv => inv.status === 'paid');
+    if (paidOnes.length === 0) return;
+    const ok = window.confirm(
+      `Unmark ${paidOnes.length} invoice${paidOnes.length === 1 ? '' : 's'} as paid? ` +
+      `They'll return to the Invoiced bucket.`
+    );
+    if (!ok) return;
+    setUnmarkPaidBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const inv of paidOnes) {
+        try { await railway.unmarkInvoicePaid(inv.id, {}); }
+        catch (err) {
+          console.warn('[accounting] unmarkPaid failed for', inv.invoiceNumber, err);
+          failed.push(inv.invoiceNumber);
+        }
+      }
+      await refresh({ silent: true });
+      setSelectedIds([]);
+      setTableResetKey(k => k + 1);
+      if (failed.length > 0) {
+        window.alert(`Unmarked ${paidOnes.length - failed.length} of ${paidOnes.length}. Failed: ${failed.join(', ')}`);
+      }
+    } finally {
+      setUnmarkPaidBusy(false);
     }
   }
 
@@ -421,7 +607,9 @@ function AccountingPageInner() {
           failed.push(inv.invoiceNumber);
         }
       }
-      await refresh();
+      // Silent re-sync — the row stays put in Queued (regen doesn't
+      // change status) but the invoice number/issuedAt update in place.
+      await refresh({ silent: true });
       setSelectedIds([]);
       setTableResetKey(k => k + 1);
       if (failed.length > 0) {
@@ -468,41 +656,56 @@ function AccountingPageInner() {
               onAfter={(nextPriority) => patchLoadInState(r.load.loadId, { pickupPriority: nextPriority })} />
             <NotesButton count={notesCount} onOpen={() => setNotesTarget(r.load)} />
             {r.invoice ? (
-              <button onClick={() => setInvoiceModalId(r.invoice!.id)}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
-                style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-                title="View invoice — PDF + actions">
-                <Eye size={11} /> View
-              </button>
+              <FastTooltip text="View invoice packet">
+                <button onClick={() => setInvoiceModalId(r.invoice!.id)}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                  style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                  <Eye size={11} /> Invoice
+                </button>
+              </FastTooltip>
             ) : (
-              <button onClick={() => setDocsPreviewLoad(r.load)}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
-                style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}
-                title="Preview the docs that will be attached to the invoice packet">
-                <Eye size={11} /> Docs
-              </button>
+              <FastTooltip text="View docs selected to be included in the invoice">
+                <button onClick={() => setDocsPreviewLoad(r.load)}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+                  style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                  <Eye size={11} /> Docs
+                </button>
+              </FastTooltip>
             )}
           </div>
         );
       },
     });
 
+    // Single ID column — internalLoadId and invoiceNumber are the same
+    // value across our org (invoice # is derived from internal_load_id).
+    // Showing both was redundant ("10761" + "#10761" side by side); the
+    // operator just wants one identifier. We surface the invoice # form
+    // ("#10761") once an invoice exists so the visual cues whether the
+    // row has billed yet — Released loads (no invoice) render plain
+    // "10761". Copy value stays unprefixed for both so the clipboard
+    // payload is paste-clean into broker portals.
     all.push({
       key: 'internalId', header: 'ID / Inv #', width: DEFAULT_COL_WIDTHS.internalId,
       sortable: true,
+      // Sort by the numeric load ID — invoiceNumber tracks it 1:1, so
+      // either ordering is equivalent and the load ID stays sortable
+      // even for Released-bucket rows that have no invoice yet.
       sortValue: r => r.load.internalLoadId ?? 0,
-      render: r => r.load.internalLoadId != null
-        ? <CopyableCell value={String(r.load.internalLoadId)} displayValue={String(r.load.internalLoadId)} title="Copy ID / invoice #" />
-        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
-    });
-
-    all.push({
-      key: 'invoiceNum', header: 'Invoice #', width: DEFAULT_COL_WIDTHS.invoiceNum,
-      sortable: true,
-      sortValue: r => r.invoice?.invoiceNumber ?? '',
-      render: r => r.invoice
-        ? <CopyableCell value={r.invoice.invoiceNumber} displayValue={`#${r.invoice.invoiceNumber}`} title="Copy invoice #" />
-        : <span style={{ color: 'var(--gc-text-3)' }}>—</span>,
+      render: r => {
+        if (r.load.internalLoadId == null) {
+          return <span style={{ color: 'var(--gc-text-3)' }}>—</span>;
+        }
+        const id = String(r.load.internalLoadId);
+        // Prefer the actual invoice number when an invoice exists —
+        // gracefully handles the rare case where a custom invoice #
+        // was set via createInvoice({ invoiceNumber }).
+        const invNum = r.invoice?.invoiceNumber;
+        const display = invNum ? `#${invNum}` : id;
+        const copy    = invNum ?? id;
+        return <CopyableCell value={copy} displayValue={display}
+          title={invNum ? 'Copy invoice #' : 'Copy load ID'} />;
+      },
     });
 
     all.push({
@@ -685,14 +888,35 @@ function AccountingPageInner() {
     all.push({
       key: 'age', header: 'Age', width: DEFAULT_COL_WIDTHS.age,
       sortable: true,
+      headerTooltip: 'Days since delivery. Loads without a delivery date sort last.',
       // deliveryAt is already the actual delivery (for relays the
-      // server resolves to the delivery leg's end). No leg lookup
-      // needed any more.
-      sortValue: r => daysSince(r.load.deliveryAt),
+      // server resolves to the delivery leg's end). Loads with no
+      // deliveryAt fall back to the verifiedAt (release) date so
+      // we never silently sort them as "0d today" alongside fresh
+      // deliveries — that bug made the column look randomized.
+      // Priority-pinned rows still sit above the sort (OpsTable's
+      // pinning is global), so the operator sees stars at the top
+      // regardless of age ordering.
+      sortValue: r => {
+        const iso = r.load.deliveryAt || r.load.verifiedAt;
+        // Unranked rows (no delivery, no release) push to the bottom
+        // so they don't masquerade as today's fresh loads. -1 sorts
+        // below any non-negative daysSince result for both directions.
+        if (!iso) return -1;
+        return daysSince(iso);
+      },
       render: r => {
-        const a = daysSince(r.load.deliveryAt);
+        const iso = r.load.deliveryAt || r.load.verifiedAt;
+        if (!iso) {
+          return <span style={{ color: 'var(--gc-text-3)' }} title="No delivery date">—</span>;
+        }
+        const a = daysSince(iso);
+        const tooltip = r.load.deliveryAt
+          ? `Delivered ${fmtShortDate(r.load.deliveryAt)} — ${a === 0 ? 'today' : a === 1 ? '1 day ago' : `${a} days ago`}`
+          : `No delivery date — using release date ${fmtShortDate(iso)}`;
         return (
-          <span style={{ background: ageBg(a), color: ageFg(a), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
+          <span title={tooltip}
+            style={{ background: ageBg(a), color: ageFg(a), padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
             {a === 0 ? 'today' : a === 1 ? '1 day' : `${a}d`}
           </span>
         );
@@ -718,6 +942,18 @@ function AccountingPageInner() {
       sortable: true,
       sortValue: r => r.invoice?.dueAt ?? '',
       render: r => r.invoice?.dueAt ? fmtShortDate(r.invoice.dueAt) : '—',
+    });
+
+    // Paid date — when the dispatcher marked the invoice paid. Shown
+    // by default in the Paid bucket (primary date there) and on the
+    // All bucket (helpful when scanning paid-vs-not in one list).
+    // Omitted entirely from Released/Queued/Invoiced — those rows
+    // have no paidAt yet, so a column of em-dashes is just noise.
+    all.push({
+      key: 'paidAt', header: 'Paid', width: DEFAULT_COL_WIDTHS.paidAt,
+      sortable: true,
+      sortValue: r => r.invoice?.paidAt ?? '',
+      render: r => r.invoice?.paidAt ? fmtShortDate(r.invoice.paidAt) : '—',
     });
 
     // Pickup / Delivery — load-level dates, opt-in via the column
@@ -1038,7 +1274,10 @@ function AccountingPageInner() {
                 columns={tableColumns}
                 filters={tableFilters}
                 rowKey={rowKey}
-                loading={loading}
+                /* loading is gated on "table is empty" — once any row
+                   has rendered, never paint the skeleton again. Prevents
+                   the table-blank flash on View / Refresh / mutations. */
+                loading={loading && loads.length === 0}
                 priorityKey={r => !!r.load.pickupPriority}
                 columnPicker
                 columnReorder
@@ -1100,6 +1339,15 @@ function AccountingPageInner() {
                         </button>
                       </>
                     )}
+                    {bucket === 'paid' && (
+                      <button onClick={() => void handleUnmarkPaidBulk()} disabled={unmarkPaidBusy}
+                        className="text-[12px] font-semibold px-3 py-1.5 rounded-lg transition-colors disabled:opacity-60"
+                        style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}
+                        title="Reverse payment — selected loads return to the Invoiced bucket">
+                        {unmarkPaidBusy ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <X size={12} className="inline mr-1.5" />}
+                        Unmark {selectedIds.length} paid
+                      </button>
+                    )}
                     {/* clearSelection is handled by OpsTable's own
                         "Clear" button to the right; no need to wire
                         anything extra. */}
@@ -1126,17 +1374,29 @@ function AccountingPageInner() {
           onClose={() => setBrokerProfileId(null)} />
       )}
       {invoiceModalId && (
+        // No refresh() on close — Edit/void/regen inside the modal flow
+        // through the realtime echo (loadEditTick) which patches affected
+        // rows in place. Refetching the whole loads list was flashing the
+        // entire table for what is almost always a no-op delta. The
+        // toolbar's Refresh button is still available for explicit reload.
         <InvoiceDetailModal invoiceId={invoiceModalId}
-          onClose={() => { setInvoiceModalId(null); void refresh(); }} />
+          onClose={() => setInvoiceModalId(null)} />
       )}
       {docsPreviewLoad && (
         <LoadDocsPreviewModal
           load={docsPreviewLoad}
           onClose={() => setDocsPreviewLoad(null)}
-          // After Save selection writes loads.invoice_doc_ids, refresh
-          // the parent so the next open seeds from the freshly-saved
-          // selection (the table reads invoiceDocIds off LoadSummary).
-          onSaved={() => { setDocsPreviewLoad(null); void refresh(); }}
+          // Patch the row in place instead of a full refresh. The modal
+          // hands back the new included-doc IDs after Save persists; we
+          // drop them straight onto LoadSummary.invoiceDocIds so the
+          // table reads the saved selection on the next open without a
+          // server round-trip.
+          onSaved={(nextIncludedIds) => {
+            patchLoadInState(docsPreviewLoad.loadId, {
+              invoiceDocIds: nextIncludedIds,
+            });
+            setDocsPreviewLoad(null);
+          }}
         />
       )}
       {summaryAction && (
@@ -1146,7 +1406,7 @@ function AccountingPageInner() {
           action={summaryAction}
           onClose={() => setSummaryAction(null)}
           onOpenBroker={(id) => setBrokerProfileId(id)}
-          onComplete={() => { setSummaryAction(null); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh(); }} />
+          onComplete={() => { setSummaryAction(null); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh({ silent: true }); }} />
       )}
       {batchSendOpen && (
         <BatchSendDialog
@@ -1164,7 +1424,7 @@ function AccountingPageInner() {
           })()}
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchSendOpen(false)}
-          onComplete={() => { setBatchSendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh(); }} />
+          onComplete={() => { setBatchSendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh({ silent: true }); }} />
       )}
       {batchResendOpen && (
         // Same dialog as send, just hits the resend endpoint. Mode flag
@@ -1181,7 +1441,7 @@ function AccountingPageInner() {
           mode="resend"
           onOpenBroker={(id) => setBrokerProfileId(id)}
           onClose={() => setBatchResendOpen(false)}
-          onComplete={() => { setBatchResendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh(); }} />
+          onComplete={() => { setBatchResendOpen(false); setSelectedIds([]); setTableResetKey(k => k + 1); void refresh({ silent: true }); }} />
       )}
       {notesTarget && (
         <InternalNotesModal load={notesTarget} actorName={actorName}
@@ -1244,17 +1504,21 @@ function PriorityToggle({
       setBusy(false);
     }
   }
+  const tooltip = on
+    ? 'Priority — click to clear'
+    : 'Mark this load as priority';
   return (
-    <button onClick={handleClick} disabled={busy}
-      className="rounded-full p-1 transition-colors"
-      title={on ? 'Clear priority' : 'Mark priority'}
-      style={{
-        background: on ? '#fef3c7' : 'transparent',
-        border:     `1px solid ${on ? '#eab308' : 'var(--gc-border)'}`,
-        color:      on ? '#854d0e' : 'var(--gc-text-3)',
-      }}>
-      <Star size={11} fill={on ? '#eab308' : 'none'} />
-    </button>
+    <FastTooltip text={tooltip}>
+      <button onClick={handleClick} disabled={busy}
+        className="rounded-full p-1 transition-colors"
+        style={{
+          background: on ? '#fef3c7' : 'transparent',
+          border:     `1px solid ${on ? '#eab308' : 'var(--gc-border)'}`,
+          color:      on ? '#854d0e' : 'var(--gc-text-3)',
+        }}>
+        <Star size={11} fill={on ? '#eab308' : 'none'} />
+      </button>
+    </FastTooltip>
   );
 }
 
@@ -1684,10 +1948,10 @@ const RATE_CON_ACTIVE_ID = '__rate_con__';
 function LoadDocsPreviewModal({ load, onClose, onSaved }: {
   load: LoadSummary;
   onClose: () => void;
-  /** Fired after Save selection persists. Parent refreshes the
-   *  table so the next open seeds from the new invoiceDocIds. When
-   *  omitted, save just calls onClose (legacy behaviour). */
-  onSaved?: () => void;
+  /** Fired after Save selection persists. Receives the new included-doc
+   *  IDs so the parent can patch the row in place (no table-wide refresh).
+   *  When omitted, save just calls onClose (legacy behaviour). */
+  onSaved?: (nextIncludedIds: string[]) => void;
 }) {
   type LoadDoc = import('@fleetcal/types').DocumentSummary;
   const [docs, setDocs]               = useState<LoadDoc[] | null>(null);
@@ -1804,9 +2068,14 @@ function LoadDocsPreviewModal({ load, onClose, onSaved }: {
       await Promise.all(entries.map(([id, val]) =>
         railway.updateDocumentInvoiceInclude(id, val)
       ));
+      // Snapshot the final effective-include set BEFORE clearing the
+      // pending overrides — parent uses this to patch the row in place.
+      const nextIncludedIds = (docs ?? [])
+        .filter(d => effectiveInclude(d))
+        .map(d => d.id);
       // Clear local overrides so the next render reads from server.
       setPendingChanges({});
-      if (onSaved) onSaved(); else onClose();
+      if (onSaved) onSaved(nextIncludedIds); else onClose();
     } catch (err) {
       setSaveError((err as Error)?.message ?? 'save failed');
       setSaving(false);

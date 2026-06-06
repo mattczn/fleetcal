@@ -59,6 +59,7 @@ import type {
   BatchResendInvoicesRequest, BatchResendInvoicesResponse,
   BatchGenerateInvoicesRequest, BatchGenerateInvoicesResponse,
   MarkInvoicePaidRequest, MarkInvoicePaidResponse,
+  UnmarkInvoicePaidRequest, UnmarkInvoicePaidResponse,
   VoidInvoiceRequest, VoidInvoiceResponse,
   ListCheckCallsResponse, CreateCheckCallRequest, CreateCheckCallResponse,
   GetEventResponse,
@@ -1111,6 +1112,12 @@ class RailwayClient {
   }
   markInvoicePaid(id: string, body: MarkInvoicePaidRequest = {}) {
     return this.req<MarkInvoicePaidResponse>('POST', `/v1/invoices/${id}/mark-paid`, body);
+  }
+  /** Reverse a mark-paid — invoice flips back to 'sent' and the load's
+   *  billing_status rolls 'paid' → 'invoiced'. Server-side 409 if the
+   *  invoice is not currently paid. */
+  unmarkInvoicePaid(id: string, body: UnmarkInvoicePaidRequest = {}) {
+    return this.req<UnmarkInvoicePaidResponse>('POST', `/v1/invoices/${id}/unmark-paid`, body);
   }
   voidInvoice(id: string, body: VoidInvoiceRequest = {}) {
     return this.req<VoidInvoiceResponse>('POST', `/v1/invoices/${id}/void`, body);

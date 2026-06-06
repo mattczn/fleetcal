@@ -872,10 +872,13 @@ export function NotesButton({
   onOpen: () => void;
 }) {
   const has = count > 0;
+  const tooltip = has
+    ? `${count} internal note${count !== 1 ? 's' : ''} — click to view`
+    : 'Add an internal note';
   return (
+    <FastTooltip text={tooltip}>
     <button onClick={e => { e.stopPropagation(); onOpen(); }}
       className="rounded-full p-1.5 transition-colors relative"
-      title={has ? `${count} internal note${count !== 1 ? 's' : ''}` : 'Add internal note'}
       style={{
         background: has ? '#dbeafe' : 'transparent',
         border:     `1px solid ${has ? '#1a73e8' : 'var(--gc-border)'}`,
@@ -911,6 +914,7 @@ export function NotesButton({
         </span>
       )}
     </button>
+    </FastTooltip>
   );
 }
 

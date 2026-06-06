@@ -40,6 +40,8 @@ import {
   type BatchGenerateInvoicesResponse,
   type MarkInvoicePaidRequest,
   type MarkInvoicePaidResponse,
+  type UnmarkInvoicePaidRequest,
+  type UnmarkInvoicePaidResponse,
   type VoidInvoiceRequest,
   type VoidInvoiceResponse,
   type BatchResendInvoicesRequest,
@@ -1923,6 +1925,57 @@ invoices.post("/:id/mark-paid", async (c) => {
   await setBillingStatus(invoice.load_id, orgId, "paid", undefined);
 
   const res: MarkInvoicePaidResponse = { invoice: rowToInvoice(invoice) };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /v1/invoices/:id/unmark-paid — paid → sent (payment reversal)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Reverts a mark-paid: clears paid_at/paid_amount/paid_method/paid_note
+// and rolls loads.billing_status back from 'paid' to 'invoiced'. Lands
+// the invoice back in 'sent' state since reaching paid required an
+// invoice send (mark-paid accepts sent OR draft, but draft → paid
+// without a send is rare in practice and still safely lands here as
+// "sent" — the operator can re-send if they need a delivery confirm).
+// The reason (if any) is appended to paid_note so the audit trail
+// preserves WHY the payment was reversed.
+
+invoices.post("/:id/unmark-paid", async (c) => {
+  const orgId = c.get("orgId");
+  const id = c.req.param("id");
+  const body = await c.req.json<UnmarkInvoicePaidRequest>().catch(() => ({} as UnmarkInvoicePaidRequest));
+
+  const update = {
+    status:      "sent",
+    paid_at:     null,
+    paid_amount: null,
+    paid_method: null,
+    // Preserve the reversal reason in paid_note for audit / hover.
+    // Cleared if no reason supplied so a stale prior note doesn't
+    // linger after the reversal.
+    paid_note:   body.reason?.trim() ? `Unmarked paid: ${body.reason.trim()}` : null,
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await supabase
+    .from("invoices")
+    .update(update as any)
+    .eq("id", id)
+    .eq("org_id", orgId)
+    .eq("status", "paid")   // only reverse from paid
+    .select(INVOICE_COLS)
+    .single();
+  if (error) {
+    return c.json({ error: "unmark_paid_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "invalid_state", detail: "invoice is not in paid state" } satisfies ApiErrorResponse, 409);
+
+  // Roll loads.billing_status back to 'invoiced' so the row returns
+  // to the Invoiced bucket on the accounting page.
+  const invoice = data as unknown as InvoiceRow;
+  await setBillingStatus(invoice.load_id, orgId, "invoiced", undefined);
+
+  const res: UnmarkInvoicePaidResponse = { invoice: rowToInvoice(invoice) };
   return c.json(res);
 });
 

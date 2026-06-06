@@ -53,7 +53,7 @@ export function InvoiceDetailView({
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
-  const [busy, setBusy]       = useState<'send' | 'paid' | 'void' | 'email' | 'generate' | null>(null);
+  const [busy, setBusy]       = useState<'send' | 'paid' | 'unpaid' | 'void' | 'email' | 'generate' | null>(null);
   // Signed URL for the most recently generated packet — set on
   // successful "Generate" so the user can click View/Download to
   // preview the bytes the broker will receive. Cleared on every send
@@ -160,6 +160,10 @@ export function InvoiceDetailView({
       const { invoice: updated } = await railway.sendInvoice(invoice.id, { method: 'manual' });
       setInvoice(updated);
       setPdfRefresh(n => n + 1);
+      // Server moved loads.billing_status from 'released' → 'invoiced'.
+      // Bump so the accounting/closeout snapshots re-sync silently and
+      // the row slides into the next bucket without a manual refresh.
+      useCalendarStore.getState().bumpLoadEditTick();
     } catch (err) {
       console.error('[invoice] send failed:', err);
       window.alert('Failed to mark invoice sent.');
@@ -234,6 +238,10 @@ export function InvoiceDetailView({
       // obsolete artifact. Drop it.
       setGeneratedUrl(null);
       setPdfRefresh(n => n + 1);
+      // Email send moved loads.billing_status forward; notify holders
+      // of cached load snapshots (accounting/closeout/timeline) so the
+      // row slides into the Invoiced bucket without a manual refresh.
+      useCalendarStore.getState().bumpLoadEditTick();
     } catch (err) {
       console.error('[invoice] email send failed:', err);
       const msg = err instanceof RailwayError && err.status === 503
@@ -251,9 +259,35 @@ export function InvoiceDetailView({
     try {
       const { invoice: updated } = await railway.markInvoicePaid(invoice.id, {});
       setInvoice(updated);
+      // Server moved loads.billing_status to 'paid' — sync cached pages.
+      useCalendarStore.getState().bumpLoadEditTick();
     } catch (err) {
       console.error('[invoice] mark-paid failed:', err);
       window.alert('Failed to mark invoice paid.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Reverse a mark-paid. Prompts for a reason (e.g. "bounced check",
+   *  "wrong invoice marked") and rolls the load back into the Invoiced
+   *  bucket. Server is the source of truth for state transitions —
+   *  bumpLoadEditTick fires so cached snapshots re-sync silently. */
+  async function handleUnmarkPaid() {
+    if (!invoice) return;
+    const ok = window.confirm(
+      'Unmark this invoice as paid? The load will return to the Invoiced bucket.'
+    );
+    if (!ok) return;
+    const reason = window.prompt('Reason for the payment reversal (optional):') ?? undefined;
+    setBusy('unpaid');
+    try {
+      const { invoice: updated } = await railway.unmarkInvoicePaid(invoice.id, reason ? { reason } : {});
+      setInvoice(updated);
+      useCalendarStore.getState().bumpLoadEditTick();
+    } catch (err) {
+      console.error('[invoice] unmark-paid failed:', err);
+      window.alert('Failed to unmark invoice paid.');
     } finally {
       setBusy(null);
     }
@@ -307,6 +341,9 @@ export function InvoiceDetailView({
       const { invoice: updated } = await railway.voidInvoice(invoice.id, reason ? { reason } : {});
       setInvoice(updated);
       setPdfRefresh(n => n + 1);
+      // Voiding drops the load back to its prior bucket (typically
+      // 'released'); cached snapshots need a silent re-sync.
+      useCalendarStore.getState().bumpLoadEditTick();
     } catch (err) {
       console.error('[invoice] void failed:', err);
       window.alert('Failed to void invoice.');
@@ -545,9 +582,18 @@ export function InvoiceDetailView({
                     </button>
                   )}
                   {invoice.status === 'paid' && (
-                    <div className="text-[12px] text-center py-2" style={{ color: 'var(--gc-text-3)' }}>
-                      Invoice paid — no further actions.
-                    </div>
+                    <>
+                      <button onClick={() => void handleUnmarkPaid()} disabled={busy !== null}
+                        className="w-full text-[12px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-60"
+                        style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}
+                        title="Reverse the payment — load returns to the Invoiced bucket">
+                        {busy === 'unpaid' ? <Loader2 size={12} className="animate-spin inline mr-1.5" /> : <X size={12} className="inline mr-1.5" />}
+                        Unmark Paid
+                      </button>
+                      <div className="text-[11px] text-center" style={{ color: 'var(--gc-text-3)' }}>
+                        Use this if payment bounced or the wrong invoice was marked.
+                      </div>
+                    </>
                   )}
                   {invoice.status === 'void' && (
                     <div className="text-[12px] text-center py-2" style={{ color: 'var(--gc-text-3)' }}>

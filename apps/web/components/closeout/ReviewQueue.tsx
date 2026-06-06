@@ -285,6 +285,9 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       setActiveRateConId(null);
       // Drop any pending include changes when the queue goes empty.
       setPendingIncludeChanges({});
+      // Optimistic Make-Primary overrides are per-load — clear when
+      // the queue empties so a re-open doesn't carry stale state.
+      setPrimaryOverrideId(null);
       return;
     }
 
@@ -303,6 +306,10 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       // navigation through the close confirm, so this branch only
       // discards changes the user already chose to abandon.
       setPendingIncludeChanges({});
+      // Clear the Make-Primary optimistic override on load change.
+      // It's a per-load shim for the stale-current.rateConPdf problem;
+      // a fresh load starts with fresh state from the parent prop.
+      setPrimaryOverrideId(null);
     };
 
     const cached = docsCacheRef.current.get(loadId);
@@ -885,9 +892,13 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   const handleSetRateConPrimary = async (docId: string): Promise<void> => {
     if (!loadId) return;
     // Instant feedback: badge jumps to the clicked row before the
-    // PATCH round-trip. The override holds until fresh docs arrive
-    // with the new storage_path, at which point the canonical
-    // derivation takes over and the override clears.
+    // PATCH round-trip. We CANNOT clear this override after the
+    // refetch — `current.rateConPdf` is owned by the parent loads
+    // array and doesn't refresh on its own, so the canonical
+    // derivation would happily revert to whichever doc still matches
+    // the *stale* parent rate_con_pdf. The override holds for the
+    // rest of the load's session; clearing happens implicitly on the
+    // next load change (applyAssets resets it).
     setPrimaryOverrideId(docId);
     try {
       useCalendarStore.getState().markLoadSelfWrite(loadId);
@@ -905,8 +916,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         setSecondaryRateConUrl(null);
         setActiveRateConId(null);
       }
-      // Refetch landed; canonical derivation is now correct.
-      setPrimaryOverrideId(null);
     } catch (err) {
       console.error('[set-rate-con-primary] failed', err);
       // Roll back the optimistic update so the badge snaps to where
