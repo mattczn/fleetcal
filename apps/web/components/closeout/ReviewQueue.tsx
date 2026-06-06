@@ -1270,13 +1270,6 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
       // Optimistic insert into the local docs list so the new doc shows
       // up immediately in the tabs + checklist + invoice picker.
       setDocs(prev => [...prev, newDoc]);
-      // Keep the cache in sync so leaving and returning to this load
-      // still shows the upload — otherwise the next idx revisit would
-      // overwrite docs from the stale cache entry.
-      const entry = docsCacheRef.current.get(loadId);
-      if (entry) {
-        docsCacheRef.current.set(loadId, { ...entry, docs: [...entry.docs, newDoc] });
-      }
       // PODs auto-include in the invoice packet. With the new
       // per-doc column, the cleanest path is a direct PATCH — that
       // way the include flag is committed without a Save bar entry
@@ -1285,9 +1278,25 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
         railway.updateDocumentInvoiceInclude(document.id, true)
           .catch(err => console.warn('[upload auto-include] failed', err));
       }
-      // Switch the viewer to the freshly uploaded doc so the user can
-      // sanity-check the right page is up.
-      setActiveDocIdx(docs.length); // length pre-update == new index
+      // Refetch from server so any server-side side-effects (e.g. the
+      // rate-con upload's legacy-preservation insert) show up in the
+      // local list. Without this, a rate-con upload appears to "lose"
+      // the original until the next time the queue reopens.
+      docsCacheRef.current.delete(loadId);
+      await prefetchLoadAssets(loadId, !!current?.rateConPdf);
+      const fresh = docsCacheRef.current.get(loadId);
+      if (fresh) {
+        setDocs(fresh.docs);
+        // Anchor the viewer on whichever row matches the upload the
+        // user just made (server may have renamed it via the auto-
+        // naming convention, so we key off id, not list length).
+        const newIdx = fresh.docs.findIndex(d => d.id === newDoc.id);
+        if (newIdx !== -1) setActiveDocIdx(newIdx);
+      } else {
+        // Fallback when the refetch yielded no cache entry — keep
+        // the optimistic local row showing.
+        setActiveDocIdx(docs.length);
+      }
       setPendingFiles([]);
       setMergeStatus(null);
     } catch (err) {

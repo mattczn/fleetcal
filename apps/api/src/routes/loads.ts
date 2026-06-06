@@ -915,12 +915,13 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
     // stays visible alongside the new upload.
     const { data: loadRow } = await supabase
       .from("loads")
-      .select("rate_con_pdf, load_num")
+      .select("rate_con_pdf, load_num, created_at")
       .eq("id", loadId)
       .eq("org_id", orgId)
       .maybeSingle();
     const existingPath = (loadRow as { rate_con_pdf: string | null } | null)?.rate_con_pdf ?? null;
     const existingLoadNum = (loadRow as { load_num: string | null } | null)?.load_num ?? null;
+    const loadCreatedAt = (loadRow as { created_at: string | null } | null)?.created_at ?? null;
     if (existingPath && !existingPath.startsWith("data:") && existingPath !== storagePath) {
       // Does any load_document already point at this storage path?
       // (Covers the case where the mirror has already been wired and
@@ -942,6 +943,16 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
         const ext = existingPath.split(".").pop()?.toLowerCase() || "pdf";
         const safeNum = (existingLoadNum ?? "").replace(/[^A-Za-z0-9_-]/g, "");
         const legacyName = safeNum ? `${safeNum}_RATE_CON_LEGACY.${ext}` : `rate_con_legacy.${ext}`;
+        // Time-stamp the legacy row at the load's own creation time
+        // (best proxy we have for "when the rate-con originally
+        // landed"). Falls back to 1s before the new upload's NOW so
+        // the legacy row is GUARANTEED older than the upload that's
+        // about to be inserted — that's what the "Primary" picker
+        // sorts on (most recent uploadedAt wins). Without a strictly
+        // earlier timestamp, both rows tied at NOW() and the legacy
+        // row could win the primary slot via sort instability.
+        const legacyUploadedAt = loadCreatedAt
+          ?? new Date(Date.now() - 1000).toISOString();
         const { error: preserveErr } = await supabase
           .from("load_documents")
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -954,6 +965,7 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
             mime_type:    null,
             size_bytes:   null,
             kind:         "rate_con",
+            uploaded_at:  legacyUploadedAt,
           } as any);
         if (preserveErr) {
           console.warn(
