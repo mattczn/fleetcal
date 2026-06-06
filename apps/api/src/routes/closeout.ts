@@ -500,6 +500,37 @@ closeout.get("/queue", async (c) => {
     l.stops = stopsByEvent.get(l.id) ?? [];
   }
 
+  // Hydrate Load.assetName via a single bulk asset lookup — the
+  // event rows above carry asset_id but joinEventLoadToApp doesn't
+  // resolve it to a display string. driver.ts/events.ts do this
+  // join inline; mirror the pattern here so the Paperwork table's
+  // Truck column renders something other than "—". One query per
+  // page, not per row.
+  const assetIds = Array.from(new Set(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rawRows.map((r: any) => r.asset_id as number | null | undefined).filter((id): id is number => typeof id === "number"),
+  ));
+  if (assetIds.length > 0) {
+    const { data: assetRows } = await supabase
+      .from("assets")
+      .select("id,name,unit")
+      .eq("org_id", orgId)
+      .in("id", assetIds);
+    const nameById = new Map<number, string>();
+    for (const a of (assetRows ?? []) as Array<{ id: number; name: string | null; unit: string | null }>) {
+      const label = `${a.name ?? ""}${a.unit ? ` #${a.unit}` : ""}`.trim();
+      if (label) nameById.set(a.id, label);
+    }
+    for (let i = 0; i < loads.length; i++) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const assetId = (rawRows[i] as any).asset_id as number | null | undefined;
+      if (typeof assetId === "number") {
+        const label = nameById.get(assetId);
+        if (label) loads[i].assetName = label;
+      }
+    }
+  }
+
   // Roll up doc-kind counts per load so the queue table can render
   // RC/POD/BOL/Lumper/Scale chips in one render pass without N
   // per-load fetches.
