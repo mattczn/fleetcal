@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { X, Container, Plus, Trash2, Loader2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
@@ -11,6 +11,7 @@ import LifecycleEditor from './LifecycleEditor';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import { TRAILER_CATEGORIES, type TrailerCategory, type TrailerDocument, type TrailerDocumentKind } from '@fleetcal/types';
 import type { Trailer } from '@/lib/types';
+import type { DirectoryDetailHandle } from './DirectoryModal';
 
 /**
  * Trailer directory — mirrors AssetsModal/DriversModal layout (left
@@ -45,10 +46,21 @@ const P_INPUT: React.CSSProperties = {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function TrailersModal({ onClose, initialTrailerId }: {
+interface TrailersModalProps {
   onClose: () => void;
   initialTrailerId?: number;
-}) {
+  /** Embedded mode for DirectoryModal — skip outer chrome. */
+  embedded?: boolean;
+}
+
+const TrailersModal = forwardRef<DirectoryDetailHandle, TrailersModalProps>(
+function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
+  // Auto-save on blur — no staged dirty state.
+  useImperativeHandle(modalRef, () => ({
+    isDirty: () => false,
+    save:    () => Promise.resolve(),
+    discard: () => {},
+  }), []);
   const { trailers: allTrailers, addTrailer, removeTrailer, hardDeleteTrailer } = useCalendarStore();
   // The trailer_categories module gates the per-trailer Category
   // field. MVP orgs with uniform fleets (all dry vans) get a
@@ -126,21 +138,10 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
 
   const selectedTrailer = trailers.find(t => t.id === selected) ?? null;
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.32)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
-    >
-      <div
-        className="flex flex-col"
-        style={{
-          background: 'var(--gc-surface)',
-          width: '100%', maxWidth: 1020, height: '82vh',
-          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
+  const content = (
+    <>
+      {/* Header — hidden in embedded mode. */}
+      {!embedded && (
         <div className="shrink-0 flex items-center justify-between px-7 py-5"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-center gap-2.5">
@@ -156,6 +157,7 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
             <X size={16} />
           </button>
         </div>
+      )}
 
         {/* Body */}
         <div className="flex-1 overflow-hidden flex min-h-0">
@@ -232,7 +234,8 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
           </div>
         </div>
 
-        {/* Footer */}
+      {/* Footer — hidden in embedded mode. */}
+      {!embedded && (
         <div className="shrink-0 flex justify-end px-7 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button onClick={handleClose}
@@ -243,10 +246,31 @@ export default function TrailersModal({ onClose, initialTrailerId }: {
             Done
           </button>
         </div>
+      )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.32)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}>
+      <div
+        className="flex flex-col"
+        style={{
+          background: 'var(--gc-surface)',
+          width: '100%', maxWidth: 1020, height: '82vh',
+          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
+        }}>
+        {content}
       </div>
     </div>
   );
-}
+});
+
+export default TrailersModal;
 
 // ─── Nav Trailer Row ──────────────────────────────────────────────────────────
 

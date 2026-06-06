@@ -60,12 +60,17 @@ export default function DirectoryModal({ initial, onClose }: Props) {
   const { enabled: moduleEnabled } = useModules();
   const trailersOn = moduleEnabled('trailers');
 
-  // Only Trucks is embedded today; its detail handle is the source
-  // of truth for save/discard on tab-switch / close.
-  const trucksRef = useRef<DirectoryDetailHandle>(null);
+  // Embedded refs — Trucks tracks dirty state; Drivers + Trailers
+  // auto-save so their handles are no-ops but we still hold a ref
+  // for symmetry. Customers + Locations remain transitional.
+  const trucksRef   = useRef<DirectoryDetailHandle>(null);
+  const driversRef  = useRef<DirectoryDetailHandle>(null);
+  const trailersRef = useRef<DirectoryDetailHandle>(null);
 
   const currentRef = (): DirectoryDetailHandle | null => {
-    if (tab === 'trucks') return trucksRef.current;
+    if (tab === 'trucks')   return trucksRef.current;
+    if (tab === 'drivers')  return driversRef.current;
+    if (tab === 'trailers') return trailersRef.current;
     return null;
   };
 
@@ -196,9 +201,11 @@ export default function DirectoryModal({ initial, onClose }: Props) {
 
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === 'trucks'    && <AssetsModal ref={trucksRef} embedded onClose={onClose} />}
+          {tab === 'trucks'    && <AssetsModal   ref={trucksRef}   embedded onClose={onClose} />}
+          {tab === 'drivers'   && <DriversModal  ref={driversRef}  embedded onClose={onClose} />}
+          {tab === 'trailers'  && trailersOn && <TrailersModal ref={trailersRef} embedded onClose={onClose} />}
           {tab === 'locations' && <SavedLocationsDirectoryBody />}
-          {(tab === 'drivers' || tab === 'trailers' || tab === 'customers') && (
+          {tab === 'customers' && (
             <StandalonePlaceholder
               tab={tab}
               onOpen={() => setStandalone(tab)}
@@ -209,10 +216,8 @@ export default function DirectoryModal({ initial, onClose }: Props) {
     </div>
 
     {/* Standalone modal overlays — open ON TOP of the directory shell
-        for the not-yet-embedded directories. Closes itself when the
-        user is done; the directory shell stays open behind. */}
-    {standalone === 'drivers' && <DriversModal onClose={() => setStandalone(null)} />}
-    {standalone === 'trailers' && trailersOn && <TrailersModal onClose={() => setStandalone(null)} />}
+        for any not-yet-embedded directory (Customers today). Closes
+        itself when the user is done; the directory shell stays open. */}
     {standalone === 'customers' && <BrokerProfileModal onClose={() => setStandalone(null)} />}
     </>
   );
@@ -223,7 +228,7 @@ export default function DirectoryModal({ initial, onClose }: Props) {
  *  current standalone modal as an overlay. Will be replaced as each
  *  directory's content gets embedded inline. */
 function StandalonePlaceholder({ tab, onOpen }: {
-  tab: 'drivers' | 'trailers' | 'customers';
+  tab: 'customers';
   onOpen: () => void;
 }) {
   const meta = TAB_META[tab];

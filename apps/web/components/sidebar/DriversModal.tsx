@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { X, Check, Plus, Truck, Users, Phone, Clock, Trash2, DollarSign, Download, Loader2, Bell, MapPin } from 'lucide-react';
 import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -16,6 +16,7 @@ import LoadHistorySection from './LoadHistorySection';
 import LifecycleEditor from './LifecycleEditor';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
 import type { Driver, CalendarEvent, Asset } from '@/lib/types';
+import type { DirectoryDetailHandle } from './DirectoryModal';
 
 const ACCENT = '#1a73e8';
 
@@ -168,7 +169,25 @@ function permLabel(
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function DriversModal({ onClose, initialDriverId }: { onClose: () => void; initialDriverId?: number }) {
+interface DriversModalProps {
+  onClose: () => void;
+  initialDriverId?: number;
+  /** When mounted inside DirectoryModal, skip the outer chrome
+   *  (backdrop, container, header, footer) and render only the body.
+   *  Auto-saves on blur, so the forwarded handle's isDirty/save/
+   *  discard are no-ops — there's no staged dirty state to gate. */
+  embedded?: boolean;
+}
+
+const DriversModal = forwardRef<DirectoryDetailHandle, DriversModalProps>(
+function DriversModal({ onClose, initialDriverId, embedded }, modalRef) {
+  // Auto-save pattern — no staged dirty state to track. Expose a
+  // no-op handle so the shell's tryNavigate just runs the action.
+  useImperativeHandle(modalRef, () => ({
+    isDirty: () => false,
+    save:    () => Promise.resolve(),
+    discard: () => {},
+  }), []);
   const {
     assets, drivers: allDrivers, driverPrefs, driverPrefsSecondary,
     addDriver, removeDriver, hardDeleteDriver, updateDriver, setDriverPref, setDriverPrefSecondary,
@@ -268,21 +287,11 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
     ? drivers.find(d => d.id === selected) ?? null
     : null;
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.32)' }}
-      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}
-    >
-      <div
-        className="flex flex-col"
-        style={{
-          background: 'var(--gc-surface)',
-          width: '100%', maxWidth: 1020, height: '82vh',
-          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
-        }}
-      >
-        {/* Header */}
+  const content = (
+    <>
+      {/* Header — hidden in embedded mode (the DirectoryModal shell
+          provides its own tab strip + close button). */}
+      {!embedded && (
         <div className="shrink-0 flex items-center justify-between px-7 py-5"
           style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
           <div className="flex items-center gap-2.5">
@@ -298,8 +307,9 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
             <X size={16} />
           </button>
         </div>
+      )}
 
-        {/* Body */}
+      {/* Body */}
         <div className="flex-1 overflow-hidden flex min-h-0">
 
           {/* ── Left Sidebar ── */}
@@ -397,7 +407,8 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
           </div>
         </div>
 
-        {/* Footer */}
+      {/* Footer — hidden in embedded mode. */}
+      {!embedded && (
         <div className="shrink-0 flex justify-end px-7 py-4"
           style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
           <button onClick={handleClose}
@@ -408,10 +419,31 @@ export default function DriversModal({ onClose, initialDriverId }: { onClose: ()
             Done
           </button>
         </div>
+      )}
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.32)' }}
+      onMouseDown={e => { if (e.target === e.currentTarget) handleClose(); }}>
+      <div
+        className="flex flex-col"
+        style={{
+          background: 'var(--gc-surface)',
+          width: '100%', maxWidth: 1020, height: '82vh',
+          borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
+        }}>
+        {content}
       </div>
     </div>
   );
-}
+});
+
+export default DriversModal;
 
 // ─── Nav Driver Row ───────────────────────────────────────────────────────────
 
