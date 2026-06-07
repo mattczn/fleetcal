@@ -244,13 +244,7 @@ export default function RootLayout() {
     <RootErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          {/* DIAGNOSTIC: tokenCache temporarily disabled to test
-              whether SecureStore interaction is what's hanging the
-              SDK init. Without a tokenCache the user just gets
-              signed out on each app launch — fine for diagnosis,
-              not for production. If Clerk loads with this, we know
-              the bug is in tokenCache <-> Clerk SDK. */}
-          <ClerkProvider publishableKey={env.clerkPublishableKey}>
+          <ClerkProvider tokenCache={tokenCache} publishableKey={env.clerkPublishableKey}>
             <ClerkGate>
               <RailwayClientProvider>
                 <PersistQueryClientProvider
