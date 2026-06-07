@@ -2073,15 +2073,19 @@ export default function EventModal() {
   // get an error back. To genuinely walk one back: void the
   // invoice first, billing_status drops back to 'pending', then
   // cancel is offered again.
-  // Unified event lookup: searches the active events list first, then
-  // falls back to trash. Lets the modal render a deleted load with its
-  // metadata intact so the dispatcher can reinstate from the modal
-  // without a separate "trash detail" surface. Trash events are
-  // read-only — save handlers etc. early-return when the event is in
-  // deletedEvents (status='cancelled' + isInTrash gates that).
+  // Unified event lookup. Falls back to the deleted-events list so a
+  // load opened from search / Recently Deleted finds its metadata even
+  // when it was already removed from the active list. Wrapped in
+  // try/catch + optional-chaining defensively: a deleted-event payload
+  // may be missing fields the modal would normally read, and we don't
+  // want one bad row to crash the whole modal mount.
   const findEvent = (id: string | undefined): import('@/lib/types').CalendarEvent | undefined => {
     if (!id) return undefined;
-    return events.find(e => e.id === id) ?? deletedEvents.find(e => e.id === id);
+    try {
+      return events.find(e => e.id === id) ?? (deletedEvents ?? []).find(e => e.id === id);
+    } catch {
+      return undefined;
+    }
   };
   const cancelLockedEv = findEvent(modalEventId);
   const cancelLocked = !!cancelLockedEv?.billingStatus && cancelLockedEv.billingStatus !== 'pending';
@@ -3655,8 +3659,9 @@ export default function EventModal() {
   // (deletedEvents). Drives a different Reinstate path that calls
   // the store's restoreEvent (which routes through restoreLoad
   // server-side) rather than the audit-log replay used for cancelled-
-  // but-still-active loads.
-  const isInTrash = !!(modalEventId && deletedEvents.some(e => e.id === modalEventId));
+  // but-still-active loads. Optional-chain in case deletedEvents is
+  // undefined at startup (defensive — the store seeds it as []).
+  const isInTrash = !!(modalEventId && (deletedEvents ?? []).some(e => e.id === modalEventId));
   // The combined "this load is cancelled" gate: a 'status'-mode cancel
   // shows status='cancelled' on the row; a 'remove-event'-mode cancel
   // only shows up via the audit log; isInTrash covers the "Move to
@@ -5121,33 +5126,28 @@ export default function EventModal() {
                 {priority && <span style={{ fontSize: 12, fontWeight: 700, color: '#92400e' }}>Priority</span>}
               </button>
             </Tooltip>
-            {eventKind === 'revenue' && (() => {
-              // When the load is cancelled (any mode — status flag,
-              // remove-event, or in trash) the status pill should READ
-              // cancelled regardless of what the underlying event row
-              // says. A trash-mode delete preserves whatever status the
-              // row had when it was deleted (usually 'scheduled'), so
-              // without this override the pill would say "Scheduled"
-              // next to a CANCELLED kicker — confusing.
-              const displayStatus: EventStatus = isCancelled ? 'cancelled' : status;
-              const tone = STATUSES.find(s => s.value === displayStatus);
-              return (
-                <StyledSelect value={displayStatus}
-                  onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
-                  disabled={isCancelled}
-                  style={{
-                    border: `1px solid ${tone?.color ?? headerColor}50`,
-                    borderRadius: 8, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
-                    color: tone?.color ?? headerColor,
-                    background: tone?.bg ?? `${headerColor}12`,
-                    outline: 'none', cursor: isCancelled ? 'not-allowed' : 'pointer',
-                    width: 'auto', transition: 'border-color 150ms',
-                    opacity: isCancelled ? 0.85 : 1,
-                  }}>
-                  {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </StyledSelect>
-              );
-            })()}
+            {eventKind === 'revenue' && (
+              // When the load is cancelled (any mode), force the pill
+              // to read "Cancelled" regardless of the underlying row's
+              // status. Trash items preserve their pre-delete status
+              // (usually 'scheduled') — without the override the pill
+              // would say "Scheduled" next to the red CANCELLED kicker.
+              <StyledSelect
+                value={isCancelled ? 'cancelled' : status}
+                onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
+                disabled={isCancelled}
+                style={{
+                  border: `1px solid ${(STATUSES.find(s => s.value === (isCancelled ? 'cancelled' : status))?.color ?? headerColor)}50`,
+                  borderRadius: 8, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
+                  color: STATUSES.find(s => s.value === (isCancelled ? 'cancelled' : status))?.color ?? headerColor,
+                  background: STATUSES.find(s => s.value === (isCancelled ? 'cancelled' : status))?.bg ?? `${headerColor}12`,
+                  outline: 'none', cursor: isCancelled ? 'not-allowed' : 'pointer',
+                  width: 'auto', transition: 'border-color 150ms',
+                  opacity: isCancelled ? 0.85 : 1,
+                }}>
+                {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </StyledSelect>
+            )}
             {eventKind === 'revenue' && stops.length >= 2 && stops.some(s => s.geocodeStatus === 'success') && (
               <button type="button" onClick={() => { setShowMapPanel(v => !v); setShowPdfViewer(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap"
