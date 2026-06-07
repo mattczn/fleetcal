@@ -2000,7 +2000,21 @@ function SectionFields({ fields, fieldValues, onChange, headerColor, overrides, 
   );
 }
 
-export default function EventModal() {
+/**
+ * EventModal props.
+ *
+ * `embedded` strips the fixed-position overlay + the sized card chrome
+ * so the modal can render full-bleed inside a page-level container
+ * (e.g. the left card on /loads/[loadId]). Field rendering and all
+ * editing logic are unchanged — same date/time pickers, accessorials
+ * editor, stops editor with geocode validation, font-size scaling.
+ * Map and PDF side-panes are suppressed in embedded mode because the
+ * host page provides its own route map alongside the form.
+ */
+interface EventModalProps {
+  embedded?: boolean;
+}
+export default function EventModal({ embedded = false }: EventModalProps = {}) {
   const {
     assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
@@ -4605,11 +4619,23 @@ export default function EventModal() {
         ui-scale-scope opts the modal into the user's Settings →
         Appearance → "Calendar card text" preference; --ui-scale is
         consumed by the text utility overrides in globals.css. */}
-    <div className="ui-scale-scope fixed inset-0 z-[200] flex items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.36)', ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}
-      onMouseDown={e => { if (e.target === e.currentTarget) handleBackdropClick(); }}>
+    <div className={embedded
+        ? 'ui-scale-scope flex w-full h-full'
+        : 'ui-scale-scope fixed inset-0 z-[200] flex items-center justify-center p-4'}
+      style={{
+        background: embedded ? 'transparent' : 'rgba(0,0,0,0.36)',
+        ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1,
+      } as React.CSSProperties}
+      onMouseDown={embedded ? undefined : (e => { if (e.target === e.currentTarget) handleBackdropClick(); })}>
       <div className="flex"
-        style={{
+        style={embedded ? {
+          // Embedded — fill the host card. No max-width clamp, no
+          // border radius (page card provides it), no shadow.
+          width:    '100%',
+          height:   '100%',
+          overflow: 'hidden',
+          background: 'var(--gc-surface)',
+        } : {
           width: ((showPdfViewer && canViewRateCon) || showMapPanel || showDriverSummary) ? '96vw' : '100%',
           maxWidth: ((showPdfViewer && canViewRateCon) || showMapPanel)
             ? (showDriverSummary ? 2180 : 1800)
@@ -4622,8 +4648,10 @@ export default function EventModal() {
           transition: 'max-width 250ms ease, width 250ms ease',
         }}>
 
-        {/* ── Map pane (left, split mode only) ── */}
-        {showMapPanel && !showPdfViewer && (
+        {/* ── Map pane (left, split mode only) ──
+            Suppressed in embedded mode — the host page renders its own
+            RouteMapPanel beside the form so we don't double up. */}
+        {!embedded && showMapPanel && !showPdfViewer && (
           <RouteMapPanel
             stops={stops}
             onClose={() => setShowMapPanel(false)}
@@ -4631,8 +4659,10 @@ export default function EventModal() {
           />
         )}
 
-        {/* ── PDF pane (left, split mode only) ── */}
-        {showPdfViewer && canViewRateCon && (
+        {/* ── PDF pane (left, split mode only) ──
+            Suppressed in embedded mode for the same reason as the Map
+            pane — the host page can show docs separately if needed. */}
+        {!embedded && showPdfViewer && canViewRateCon && (
           <div className="flex flex-col shrink-0" style={{ width: '44%', borderRight: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
             <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 flex-nowrap" style={{ borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
               <div className="flex items-center gap-1 flex-nowrap min-w-0">
