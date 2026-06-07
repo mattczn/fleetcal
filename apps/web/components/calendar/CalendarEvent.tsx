@@ -336,9 +336,20 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             if (!value) return null;
             const minHeight = 20 + i * 14;
             if (height <= minHeight) return null;
+            const Icon = def.icon;
+            // Icon sized just below the text so it sits visually
+            // centered against the cap-height. 0.85 reads as "ambient
+            // metadata" on the dark card.
+            const iconSize = Math.max(8, Math.round(fsField * 0.85));
             return (
-              <div key={key} className="font-medium leading-tight truncate" style={{ color: 'rgba(255,255,255,0.85)', fontSize: fsField }}>
-                {value}
+              <div key={key} className="font-medium leading-tight truncate flex items-center gap-1" style={{ color: 'rgba(255,255,255,0.85)', fontSize: fsField }}>
+                {Icon && (
+                  <Icon
+                    size={iconSize}
+                    style={{ flexShrink: 0, opacity: 0.8 }}
+                  />
+                )}
+                <span className="truncate">{value}</span>
               </div>
             );
           })}
