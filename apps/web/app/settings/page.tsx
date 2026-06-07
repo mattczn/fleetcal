@@ -52,9 +52,7 @@ import {
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCalendarStore } from '@/store/useCalendarStore';
-import { useOnboardingStore } from '@/store/useOnboardingStore';
 import DataLoader from '@/components/DataLoader';
 import LifecycleEditor from '@/components/sidebar/LifecycleEditor';
 import { ALL_FIELDS, DEFAULT_SECTION_ORDER, FieldDef, FieldSection, SECTION_LABELS, getEnabledFieldsForSection } from '@/lib/fields';
@@ -4831,57 +4829,6 @@ const NAV_MODULE: Partial<Record<NavItem, OrgModule>> = {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-function ResetDemoButton() {
-  const router = useRouter();
-  const exitDemoMode = useCalendarStore(s => s.exitDemoMode);
-  const resetOnboarding = useOnboardingStore(s => s.resetOnboarding);
-  const [busy, setBusy] = useState(false);
-
-  // Admin-only — this action wipes every asset, driver, and event in
-  // the org. Dispatchers shouldn't be able to nuke prod data even by
-  // accident. The API endpoint also rechecks the role server-side
-  // (defense in depth) so a curl bypass still 403s.
-  const { role, isLoading: permsLoading } = usePermissions();
-  if (permsLoading) return null;
-  if (role !== 'admin') return null;
-
-  const handleReset = async () => {
-    if (!confirm('Delete all assets, events, and drivers for this org and re-enter demo mode?')) return;
-    setBusy(true);
-    try {
-      const res = await fetch('/api/dev/reset-org', { method: 'DELETE' });
-      if (!res.ok) { alert('Reset failed'); setBusy(false); return; }
-      exitDemoMode();
-      resetOnboarding();
-      // Full reload so DataLoader re-runs from scratch
-      window.location.href = '/calendar';
-    } catch {
-      alert('Reset failed');
-      setBusy(false);
-    }
-  };
-
-  return (
-    <button
-      onClick={handleReset}
-      disabled={busy}
-      className="w-full flex items-center gap-3 transition-colors"
-      style={{
-        padding: '9px 14px',
-        borderRadius: 999,
-        color: SETTINGS_COLORS.red,
-        background: 'transparent',
-        fontSize: 14, fontWeight: 500,
-      }}
-      onMouseEnter={e => (e.currentTarget.style.background = SETTINGS_COLORS.redLight)}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-    >
-      {busy ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-      Reset to Demo Mode
-    </button>
-  );
-}
-
 export default function SettingsPage() {
   const [active, setActive] = useState<NavItem>('appearance');
   const { can, isLoading: permsLoading } = usePermissions();
@@ -4986,13 +4933,6 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          {/* Dev tools */}
-          <div style={{ borderTop: `1px solid ${SETTINGS_COLORS.border}`, paddingTop: 14, marginTop: 12 }}>
-            <div className="px-3 pb-2 text-[12px] font-extrabold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.text }}>
-              Developer
-            </div>
-            <ResetDemoButton />
-          </div>
         </nav>
 
         {/* Main content — scrollable */}
