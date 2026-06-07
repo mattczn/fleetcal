@@ -29,63 +29,47 @@ interface PricingTier {
   features: string[];
 }
 
+// All three tiers ship the same feature set. The only knob that scales
+// with price is the truck cap. This list is the canonical feature list
+// shown identically on every card — edit here and all three update.
+const SHARED_FEATURES = [
+  'AI Rate-Con Parser',
+  'Truck Dispatch Calendar',
+  'Driver Payroll',
+  'Custom Reports',
+  'Paperwork Verification',
+  'Billing and Invoicing',
+  '… and more',
+] as const;
+
 const TIERS: PricingTier[] = [
   {
     key:    'owner_op',
     name:   'Owner Op',
     price:  99,
     trucks: '1–4 trucks',
-    blurb:  'Built for owner-operators and small carriers running a tight book.',
+    blurb:  'For the owner-op who is also the dispatcher.',
     accent: 'orange',
-    features: [
-      'Real dispatch calendar (day + week)',
-      'AI rate-con parser — drop a PDF, get a load',
-      'POD verification + release to billing',
-      'Auto-generated invoices + send-to-customer',
-      'Driver payroll (TONU / layover / deductions)',
-      'Trailer + asset directory',
-      'Customer + saved locations database',
-      'Audit log on every load',
-      'Unlimited dispatchers',
-      '14-day free trial — no card',
-    ],
+    features: [...SHARED_FEATURES],
   },
   {
     key:    'growth',
     name:   'Growth',
     price:  149,
     trucks: '5–9 trucks',
-    blurb:  'Adds live tracking + driver app as your team grows.',
+    blurb:  'When you have hired your first dispatcher.',
     accent: 'green',
     popular: true,
-    features: [
-      'Everything in Owner Op',
-      'Motive ELD integration (live truck location)',
-      'Driver mobile app (POD upload, check-calls)',
-      'Push notifications + driver evening sweeps',
-      'Performance dashboards (per-driver, per-asset)',
-      'Trailer fleet map with last-known location',
-      'Custom document types',
-      'Priority email support',
-    ],
+    features: [...SHARED_FEATURES],
   },
   {
     key:    'fleet',
     name:   'Fleet',
     price:  199,
     trucks: '10–14 trucks',
-    blurb:  'Full dispatch operations for established mid-size fleets.',
+    blurb:  'When dispatch is its own department.',
     accent: 'teal',
-    features: [
-      'Everything in Growth',
-      'Command Center dispatch board (real-time)',
-      'Multi-role team management',
-      'Per-role permission customization',
-      'Advanced invoicing (custom templates, remit-to)',
-      'Relay handoff documentation',
-      'Onboarding call + setup help',
-      'Dedicated support channel',
-    ],
+    features: [...SHARED_FEATURES],
   },
 ];
 
