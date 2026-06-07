@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { Clock, User, Hash, Building2, DollarSign, Tag, FileText } from 'lucide-react';
+import { Clock, User, Building2, Tag, FileText } from 'lucide-react';
 import type { CalendarEvent, Customer } from './types';
 import { displayBrokerName } from './customerMatch';
 
@@ -23,23 +23,27 @@ export interface CardFieldDef {
 }
 
 export const CARD_FIELD_DEFS: CardFieldDef[] = [
+  // Icons only on fields whose value doesn't already carry a glyph —
+  // load # / $ amounts speak for themselves; adding a # or $ icon next
+  // to them would be redundant AND eat horizontal space that's better
+  // spent on the actual driver name / customer / time range.
   { key: 'time',      label: 'Time',       icon: Clock,       render: (e) => { const s = e.start.split('T')[1]?.slice(0,5); const en = e.end.split('T')[1]?.slice(0,5); return s && en ? `${fmt(s)}–${fmt(en)}` : null; } },
   { key: 'driver',    label: 'Driver',     icon: User,        render: (e, ctx) => ctx?.driverLabel ?? e.driverName ?? null },
-  { key: 'loadNum',   label: 'Load #',     icon: Hash,        render: (e) => e.loadNum ? `#${e.loadNum}` : null },
+  { key: 'loadNum',   label: 'Load #',                         render: (e) => e.loadNum ? `#${e.loadNum}` : null },
   { key: 'broker',    label: 'Customer',   icon: Building2,   render: (e, ctx) => displayBrokerName(e.broker, ctx?.customers ?? []) || null },
-  { key: 'loadPrice', label: 'Linehaul',   icon: DollarSign,  render: (e) => e.loadPrice != null ? `$${e.loadPrice.toLocaleString()}` : null },
+  { key: 'loadPrice', label: 'Linehaul',                       render: (e) => e.loadPrice != null ? `$${e.loadPrice.toLocaleString()}` : null },
   // Total billable (linehaul + billable accessorials). Renders ONLY when
   // it differs from loadPrice — i.e., when there's at least one billable
   // accessorial with amount > 0. When equal, the row collapses out so
   // the chip isn't cluttered with redundant numbers.
-  { key: 'totalBillable', label: 'Total', icon: DollarSign, render: (e) => (
+  { key: 'totalBillable', label: 'Total', render: (e) => (
       e.totalBillable != null
         && e.loadPrice != null
         && Math.abs(e.totalBillable - e.loadPrice) >= 0.005
         ? `$${e.totalBillable.toLocaleString()}`
         : null
     ) },
-  { key: 'driverPay', label: 'Driver Pay', icon: DollarSign,  render: (e) => e.driverPay != null ? `$${e.driverPay.toLocaleString()}` : null },
+  { key: 'driverPay', label: 'Driver Pay',                     render: (e) => e.driverPay != null ? `$${e.driverPay.toLocaleString()}` : null },
   { key: 'refNums',   label: 'Ref #',      icon: Tag,         render: (e) => e.refNums?.length ? e.refNums.map(r => r.label ? `${r.label} ${r.value}` : r.value).filter(Boolean).join('  ·  ') : null },
   { key: 'notes',     label: 'Notes',      icon: FileText,    render: (e) => e.notes ?? null },
 ];
