@@ -96,6 +96,7 @@ export default function AppShell({ title, icon, rightSlot, children, noPageScrol
       {directoryReq && (
         <DirectoryModal
           initial={directoryReq.tab}
+          initialDriverId={directoryReq.initialDriverId}
           initialAssetId={directoryReq.initialAssetId}
           initialTrailerId={directoryReq.initialTrailerId}
           initialBrokerId={directoryReq.initialBrokerId}

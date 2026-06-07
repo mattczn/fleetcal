@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Truck, Container, Building2, MapPin, FileText, Search as SearchIcon, Loader2 } from 'lucide-react';
+import { Truck, Container, Building2, MapPin, FileText, Users, Search as SearchIcon, Loader2 } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { useGlobalDirectory } from '@/lib/useGlobalDirectory';
 import { railway } from '@/lib/railway';
@@ -45,7 +45,7 @@ interface Props {
 export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Props) {
   const router = useRouter();
   const directory = useGlobalDirectory();
-  const { customers, assets, trailers, savedLocations, unassignedAssetId } = useCalendarStore();
+  const { customers, drivers, assets, trailers, savedLocations, unassignedAssetId } = useCalendarStore();
 
   // ── Server-side load search ────────────────────────────────────────
   const [loads,        setLoads]        = useState<Load[]>([]);
@@ -119,6 +119,16 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
     c.mcNum ?? '',
   ]), [customers, q]);
 
+  const matchedDrivers = useMemo(() => rankAndCap(drivers, (d) => [
+    d.name,
+    d.firstName ?? '',
+    d.lastName ?? '',
+    d.phone ?? '',
+    d.email ?? '',
+    d.licenseNumber ?? '',
+    d.notes ?? '',
+  ]), [drivers, q]);
+
   const matchedTrucks = useMemo(() => rankAndCap(
     assets.filter(a => a.id !== unassignedAssetId),
     (a) => [
@@ -159,6 +169,10 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
     onClose();
     directory?.openDirectory({ tab: 'customers', initialBrokerId: id });
   };
+  const handleClickDriver = (id: number) => {
+    onClose();
+    directory?.openDirectory({ tab: 'drivers', initialDriverId: id });
+  };
   const handleClickTruck = (id: number) => {
     onClose();
     directory?.openDirectory({ tab: 'trucks', initialAssetId: id });
@@ -195,6 +209,7 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
   const totalHits =
     loads.length +
     matchedCustomers.length +
+    matchedDrivers.length +
     matchedTrucks.length +
     matchedTrailers.length +
     matchedLocations.length;
@@ -248,6 +263,15 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
               primary={c.name}
               secondary={c.mcNum ? `MC ${c.mcNum}` : (c.aliases?.[0] ?? '')}
               onClick={() => handleClickCustomer(c.id)} />
+          ))}
+        </Section>
+
+        <Section title="Drivers" icon={Users}>
+          {matchedDrivers.map(d => (
+            <ResultRow key={d.id}
+              primary={d.name}
+              secondary={[d.phone, d.licenseNumber && `CDL ${d.licenseNumber}`].filter(Boolean).join(' · ')}
+              onClick={() => handleClickDriver(d.id)} />
           ))}
         </Section>
 
