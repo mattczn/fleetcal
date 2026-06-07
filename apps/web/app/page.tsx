@@ -62,7 +62,7 @@ function Nav() {
             className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
             style={{ borderRadius: 0 }}
           >
-            Start trial
+            Try for free
           </Link>
         </div>
       </div>
@@ -98,7 +98,7 @@ function Hero() {
               className="inline-flex items-center bg-sys-blue text-white font-semibold text-[15px] px-8 py-4 hover:bg-sys-blue-hover transition-colors"
               style={{ borderRadius: 0 }}
             >
-              Start your free trial →
+              Try for free →
             </Link>
             <a href="#pricing" className="font-sys font-semibold text-[15px] text-sys-blue hover:underline">
               See pricing →
@@ -254,7 +254,7 @@ function FinalCta() {
           className="inline-flex items-center bg-white text-sys-blue font-semibold text-[15px] px-10 py-4 hover:bg-sys-blue-light transition-colors"
           style={{ borderRadius: 0 }}
         >
-          Start your free trial →
+          Try for free →
         </Link>
       </div>
     </section>

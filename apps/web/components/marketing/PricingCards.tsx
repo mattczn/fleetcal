@@ -141,7 +141,7 @@ function PricingCard({ tier }: { tier: PricingTier }) {
           className="inline-flex items-center justify-center bg-sys-blue text-white font-semibold text-[14px] px-6 py-3 hover:bg-sys-blue-hover transition-colors mb-10"
           style={{ borderRadius: 0 }}
         >
-          Start free trial →
+          Try for free →
         </Link>
 
         {/* Feature list — fills remaining space */}
