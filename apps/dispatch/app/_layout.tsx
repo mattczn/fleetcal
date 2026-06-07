@@ -60,9 +60,30 @@ function Splash({ status, detail, showProbe, onBypass }: { status: string; detai
   React.useEffect(() => {
     if (!showProbe) return;
     const start = Date.now();
-    const url = `https://clerk.fleetcal.app/v1/environment?_clerk_js_version=5`;
-    fetch(url, { method: "GET" })
-      .then(r => r.text().then(() => setProbe(`OK ${r.status} in ${Date.now() - start}ms`)))
+    // Probe /v1/client with the EXACT native-API markers the SDK
+    // uses (_is_native=1 + x-mobile: 1). If Clerk's prod backend
+    // rejects, the response body will tell us exactly which error
+    // code (native_api_disabled, origin_invalid, etc.) — that's
+    // the smoking gun the SDK is hiding behind retry/backoff.
+    const url = `https://clerk.fleetcal.app/v1/client?_clerk_js_version=5.125.10&_is_native=1`;
+    fetch(url, {
+      method: "GET",
+      headers: {
+        "x-mobile": "1",
+        "authorization": "",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+    })
+      .then(async r => {
+        const body = await r.text();
+        // Pull out the error code if it's a Clerk error response.
+        let code = "?";
+        try {
+          const j = JSON.parse(body);
+          code = j?.errors?.[0]?.code ?? "no-errors-key";
+        } catch { code = "parse-fail"; }
+        setProbe(`${r.status} ${code} ${Date.now() - start}ms | ${body.slice(0, 200)}`);
+      })
       .catch(e => setProbe(`FAIL ${(e as Error).message}`));
   }, [showProbe]);
 
@@ -109,7 +130,7 @@ function Splash({ status, detail, showProbe, onBypass }: { status: string; detai
         {(elapsed / 1000).toFixed(1)}s elapsed
       </Text>
       {showHelp ? (
-        <ScrollView style={{ marginTop: 20, maxHeight: 360, width: "100%" }} contentContainerStyle={{ paddingBottom: 24 }}>
+        <ScrollView style={{ marginTop: 20, maxHeight: 480, width: "100%" }} contentContainerStyle={{ paddingBottom: 24 }}>
           <Text style={{ color: "#ffffff", fontSize: 13, fontWeight: "700", marginBottom: 8 }}>
             Diagnostic
           </Text>
