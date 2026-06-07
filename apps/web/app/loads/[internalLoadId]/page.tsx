@@ -46,6 +46,7 @@ import {
 } from '@/components/forms/EventModalForm';
 import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
+import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
 import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 import {
   SECTION_LABELS, getEnabledFieldsForSection,
@@ -869,6 +870,17 @@ function LoadFormPane({
             onChange={e => commitField('driverPay', e.target.value)}
             style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
             onFocus={focusH} onBlur={blurColor} />
+          {/* Finalized banner — visible only when payroll for the
+              load's (driver, week) has already been recorded. Tells
+              the dispatcher the money's already out the door so any
+              further edit here won't affect what was paid. */}
+          <div className="mt-2">
+            <FinalizedPayBanner
+              driverName={primary.driverName}
+              pickupIso={primary.start}
+              driverPay={primary.driverPay}
+            />
+          </div>
         </Field>
       );
     }
@@ -1147,6 +1159,13 @@ function LoadFormPane({
                   }}
                   style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
                   onFocus={focusH} onBlur={blurColor} />
+                <div className="mt-2">
+                  <FinalizedPayBanner
+                    driverName={primary.driverName}
+                    pickupIso={primary.start}
+                    driverPay={primary.driverPay}
+                  />
+                </div>
               </Field>
               <Field label="Delivery Driver Pay" labelSuffix={pctChip(pctOf(deliveryNum))}>
                 <input type="number" value={deliveryNum === 0 ? '' : deliveryNum}
@@ -1162,6 +1181,13 @@ function LoadFormPane({
                   }}
                   style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
                   onFocus={focusH} onBlur={blurColor} />
+                <div className="mt-2">
+                  <FinalizedPayBanner
+                    driverName={partner.driverName}
+                    pickupIso={partner.start}
+                    driverPay={partner.driverPay}
+                  />
+                </div>
               </Field>
             </div>
           );

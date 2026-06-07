@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
+import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
 import DocViewer from '@/components/closeout/DocViewer';
 import LinkedWorkOrdersSection from './LinkedWorkOrdersSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -5969,14 +5970,62 @@ export default function EventModal() {
                         {fmtPct(p)}
                       </span>
                     );
+                    // Per-leg driver name + start to drive the
+                    // Finalized banner. `relayPartner` holds the OTHER
+                    // leg; combined with relayRole we can resolve which
+                    // is pickup vs delivery without re-doing the join.
+                    // The view-in-the-modal start is split across
+                    // startDate/startTime; payrollWeekStartFor only
+                    // needs the date portion so we pass that directly.
+                    const pickupDriverName   = isPickupLeg   ? driverName : relayPartner?.driverName ?? '';
+                    const deliveryDriverName = isDeliveryLeg ? driverName : relayPartner?.driverName ?? '';
+                    const pickupStart        = isPickupLeg   ? startDate : relayPartner?.start ?? '';
+                    const deliveryStart      = isDeliveryLeg ? startDate : relayPartner?.start ?? '';
+                    const pickupPayNum   = typeof pickupDriverPay   === 'number' ? pickupDriverPay   : null;
+                    const deliveryPayNum = typeof deliveryDriverPay === 'number' ? deliveryDriverPay : null;
                     return (
                       <div className="mt-3 grid grid-cols-2 gap-3">
                         <Field label="Pickup Driver Pay" labelSuffix={pctChip(pickupPct)}>
                           <NumberInputWithDollar value={pickupDriverPay} onChange={v => { setPickupDriverPay(v); markDirty(); }} headerColor={headerColor} />
+                          <div className="mt-1.5">
+                            <FinalizedPayBanner
+                              driverName={pickupDriverName}
+                              pickupIso={pickupStart}
+                              driverPay={pickupPayNum}
+                            />
+                          </div>
                         </Field>
                         <Field label="Delivery Driver Pay" labelSuffix={pctChip(deliveryPct)}>
                           <NumberInputWithDollar value={deliveryDriverPay} onChange={v => { setDeliveryDriverPay(v); markDirty(); }} headerColor={headerColor} />
+                          <div className="mt-1.5">
+                            <FinalizedPayBanner
+                              driverName={deliveryDriverName}
+                              pickupIso={deliveryStart}
+                              driverPay={deliveryPayNum}
+                            />
+                          </div>
                         </Field>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Non-relay finalized banner — sits below the
+                      financial section so the dispatcher sees it
+                      regardless of which row driverPay rendered in. */}
+                  {section === 'financial' && !isRelayContext && canViewDriverPay && (() => {
+                    const dpRaw = fieldValues['driverPay'];
+                    const dpNum = typeof dpRaw === 'number'
+                      ? dpRaw
+                      : typeof dpRaw === 'string' && dpRaw.trim() !== ''
+                        ? parseFloat(dpRaw)
+                        : null;
+                    return (
+                      <div className="mt-3">
+                        <FinalizedPayBanner
+                          driverName={driverName}
+                          pickupIso={startDate}
+                          driverPay={Number.isFinite(dpNum) ? (dpNum as number) : null}
+                        />
                       </div>
                     );
                   })()}
