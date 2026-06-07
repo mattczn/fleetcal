@@ -3624,12 +3624,49 @@ export default function EventModal() {
   };
 
   // ── Reinstate ───────────────────────────────────────────────────────
+  // Cancelled-state detection from the audit log. Picks up both
+  // cancel modes (status / remove-event) and verifies no subsequent
+  // reinstate has cleared it. mode='status' is also covered by the
+  // simpler `status === 'cancelled'` check on the event row, but
+  // mode='remove-event' has no event-row signal — the row gets
+  // soft-deleted and the only durable marker lives in the load's
+  // audit log.
+  const lastCancelEntry = useMemo(() => {
+    const entries = auditLog ?? [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e.loadReinstated)   return null;
+      if (e.loadCancelled?.mode) return { entry: e, mode: e.loadCancelled.mode };
+    }
+    return null;
+  }, [auditLog]);
+  const isRemovedEventCancelled = lastCancelEntry?.mode === 'remove-event';
+  // The combined "this load is cancelled" gate: a 'status'-mode cancel
+  // shows status='cancelled' on the row; a 'remove-event'-mode cancel
+  // only shows up via the audit log.
+  const isCancelled = status === 'cancelled' || isRemovedEventCancelled;
+
   // Flip a cancelled load back to its previous status. Pulls prev rate
   // + miles from the most recent loadCancelled audit entry so a misclick
-  // is fully recoverable.
-  const handleReinstate = () => {
+  // is fully recoverable. When the cancel mode was 'remove-event' the
+  // event row itself was soft-deleted; we restore it via POST
+  // /v1/events/:id/restore before updating client state.
+  const handleReinstate = async () => {
     if (!modalEventId) return;
-    const lastCancel = [...(auditLog ?? [])].reverse().find(e => e.loadCancelled?.mode === 'status');
+    // remove-event mode needs the server-side un-delete first; without
+    // this the event row stays soft-deleted in the DB even though the
+    // local store thinks it's active again.
+    if (isRemovedEventCancelled) {
+      try {
+        const { railway } = await import('@/lib/railway');
+        await railway.restoreEvent(modalEventId);
+      } catch (err) {
+        console.error('[handleReinstate] event restore failed:', err);
+        alert(`Reinstate failed: ${(err as Error).message ?? 'unknown'}`);
+        return;
+      }
+    }
+    const lastCancel = [...(auditLog ?? [])].reverse().find(e => e.loadCancelled?.mode);
     const prevStatus = (lastCancel?.prevStatus as EventStatus | undefined) ?? 'scheduled';
     const prevLP = lastCancel?.loadCancelled?.prevLoadPrice;
     const prevLM = lastCancel?.loadCancelled?.prevLoadedMiles;
@@ -4944,6 +4981,24 @@ export default function EventModal() {
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg"
                     style={{ background: RELAY_COLOR, color: 'white' }}>
                     ⇄ {isPickupLeg ? 'Pickup Leg' : 'Delivery Leg'}
+                  </span>
+                )}
+                {/* Cancelled-state pill. Picks up both cancel modes
+                    so a 'remove-event' cancel reopened from accounting
+                    no longer looks like an active load. The wording
+                    differs slightly so the dispatcher can tell at a
+                    glance which mode they're in. */}
+                {isCancelled && (
+                  <span className="flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5"
+                    style={{
+                      background: '#fee2e2', color: '#991b1b',
+                      border: '1px solid #fca5a5', borderRadius: 999,
+                    }}
+                    title={isRemovedEventCancelled
+                      ? 'Removed from calendar — load kept for accounting. Reinstate to restore.'
+                      : 'Marked cancelled on the calendar. Reinstate to restore.'}>
+                    <AlertTriangle size={10} />
+                    {isRemovedEventCancelled ? 'Removed from Calendar' : 'Cancelled'}
                   </span>
                 )}
                 {/* Confirmation visibility lives in the driver row
@@ -6521,9 +6576,9 @@ export default function EventModal() {
               <div className="flex items-center gap-1">
                 {isEdit && (
                   <>
-                    {eventKind === 'revenue' && status === 'cancelled' ? (
+                    {eventKind === 'revenue' && isCancelled ? (
                       <>
-                        <button type="button" onClick={handleReinstate}
+                        <button type="button" onClick={() => void handleReinstate()}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
                           style={{ color: 'var(--gc-blue)', background: 'transparent' }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
@@ -6687,22 +6742,25 @@ export default function EventModal() {
             </div>
           </div>
 
-          {/* Three action rows */}
+          {/* Three action rows. Icons sit in saturated brand-tint
+              squares with white glyphs — same pattern the rest of the
+              app uses for callout chips. Body text bumped to gc-text-2
+              so it doesn't read as a muted afterthought. */}
           <div className="flex flex-col gap-2 px-5 pb-2">
             <button type="button" onClick={handleCancelMarkStatus}
               className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
-                style={{ width: 28, height: 28, background: 'var(--gc-border-light)', color: 'var(--gc-text-2)' }}>
-                <Calendar size={14} />
+              <div className="flex items-center justify-center flex-shrink-0 rounded-lg mt-0.5"
+                style={{ width: 32, height: 32, background: 'var(--gc-blue)', color: '#fff' }}>
+                <Calendar size={15} />
               </div>
               <div className="flex-1">
                 <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Mark cancelled (keep on calendar)
                 </div>
-                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
                   Event stays greyed out. Rate, miles, and driver pay zero out — still shows in payroll so you can add TONU/layover pay.
                 </div>
               </div>
@@ -6713,34 +6771,34 @@ export default function EventModal() {
               style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
-                style={{ width: 28, height: 28, background: '#fef3c7', color: '#92400e' }}>
-                <Trash2 size={14} />
+              <div className="flex items-center justify-center flex-shrink-0 rounded-lg mt-0.5"
+                style={{ width: 32, height: 32, background: '#d97706', color: '#fff' }}>
+                <Trash2 size={15} />
               </div>
               <div className="flex-1">
                 <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Remove from calendar (keep load record)
                 </div>
-                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                  Event disappears, but the load stays searchable in accounting / history.
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
+                  Event disappears, but the load stays searchable in accounting / history. Marked as "Removed from Calendar" so you can reinstate later.
                 </div>
               </div>
             </button>
 
             <button type="button" onClick={handleCancelPermanent}
               className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
-              style={{ border: '1px solid #f4c7c3', background: '#fdecea' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#fadcd9')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#fdecea')}>
-              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
-                style={{ width: 28, height: 28, background: '#fce8e6', color: '#d93025' }}>
-                <AlertCircle size={14} />
+              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
+              <div className="flex items-center justify-center flex-shrink-0 rounded-lg mt-0.5"
+                style={{ width: 32, height: 32, background: '#d93025', color: '#fff' }}>
+                <AlertCircle size={15} />
               </div>
               <div className="flex-1">
                 <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
                   Move to Recently Deleted
                 </div>
-                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
                   Removes the event and the load record. Restorable from Trash for 30 days.
                 </div>
               </div>

@@ -479,6 +479,47 @@ events.delete("/:id", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// POST /v1/events/:id/restore — un-soft-delete an event
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Reverses the keepLoad-style soft delete done via
+// DELETE /v1/events/:id?keepLoad=true. Used by the load modal's
+// Reinstate flow when the user opens a "Remove from calendar"-mode
+// load via accounting + flips it back to active.
+//
+// Doesn't touch loads.deleted_at — that path was never set in this
+// cancel mode. Doesn't restore the load's loadPrice / loadedMiles
+// either; the caller PATCHes those back from the audit-log snapshot
+// once we return, same as the existing handleReinstate flow.
+
+events.post("/:id/restore", requireCapability("loads.edit"), async (c) => {
+  const orgId = c.get("orgId");
+  const eventId = c.req.param("id");
+
+  const { data: ev, error: readErr } = await supabase
+    .from("events")
+    .select("id,deleted_at")
+    .eq("id", eventId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (readErr) {
+    return c.json({ error: "fetch_failed", detail: readErr.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!ev) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const { error: updErr } = await supabase
+    .from("events")
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .update({ deleted_at: null } as any)
+    .eq("id", eventId)
+    .eq("org_id", orgId);
+  if (updErr) {
+    return c.json({ error: "restore_failed", detail: updErr.message } satisfies ApiErrorResponse, 500);
+  }
+  return c.json({ ok: true } as { ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // PUT /v1/events/:id/stops — replace stops for an event
 // ─────────────────────────────────────────────────────────────────────────
 

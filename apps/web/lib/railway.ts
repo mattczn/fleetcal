@@ -595,6 +595,11 @@ class RailwayClient {
   /** Soft-delete a revenue event row but leave the parent load
    *  intact. Used by the "Cancel & Remove from Calendar" flow. */
   cancelEventKeepLoad(id: string)                 { return this.req<DeleteEventResponse>('DELETE',   `/v1/events/${id}?keepLoad=true`); }
+  /** Un-soft-delete an event — reverses cancelEventKeepLoad. Used by
+   *  the modal's Reinstate flow when the dispatcher reopens a load
+   *  that was cancelled via "Remove from calendar". Doesn't touch
+   *  the load row (the load was never deleted in that cancel mode). */
+  restoreEvent(id: string) { return this.req<{ ok: true }>('POST', `/v1/events/${id}/restore`); }
   replaceStops(eventId: string, body: ReplaceStopsRequest) {
     return this.req<ReplaceStopsResponse>('PUT',  `/v1/events/${eventId}/stops`, body);
   }
