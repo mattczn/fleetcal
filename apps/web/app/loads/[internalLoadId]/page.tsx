@@ -461,13 +461,16 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const isRelay = !!partnerLeg;
 
   return (
-    <AppShell title={headerTitle} icon={Truck} noPageScroll>
-      <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-2 gap-3 overflow-hidden">
+    <AppShell title={headerTitle} icon={Truck}>
+      <div className="flex flex-col px-6 pt-5 pb-6 gap-3">
         {/* Top toolbar. Save / Discard surface only when there are
             pending edits — same dirty-detection rhythm EventModal
             uses, just lifted to the page header instead of the modal
-            footer. */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+            footer. Stays sticky at the top of the scroll viewport so
+            the leg + state controls and the Save / Discard buttons
+            remain reachable as the page scrolls. */}
+        <div className="sticky top-0 z-10 -mx-6 px-6 py-2 flex items-center gap-2 flex-wrap"
+          style={{ background: 'var(--gc-bg)' }}>
           <button onClick={() => router.back()}
             className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
@@ -564,15 +567,23 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           )}
         </div>
 
-        <div className="flex-1 min-h-0 grid gap-3"
-          style={{ gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1.4fr) minmax(0, 1fr)' }}>
+        {/* Cards grow with their natural content now — the page itself
+            scrolls instead of every container clamping to the viewport.
+            That gives the route map and billing card the room they
+            need to breathe (line items, doc badges, large maps) without
+            cramming everything into a single screenful. The form pane
+            still sets the left column's height via the grid-row span
+            so the right column's two cards (map on top, billing below)
+            share its total. */}
+        <div className="grid gap-3"
+          style={{ gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)' }}>
 
           {/* Left — load fields, modal-styled */}
-          <div className="rounded-xl flex flex-col min-h-0 overflow-hidden"
+          <div className="rounded-xl flex flex-col overflow-hidden"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', gridRow: '1 / 3' }}>
             {/* ui-scale-scope: inherits Settings → Appearance → "Calendar
                 card text" sizing, exactly like EventModal does. */}
-            <div className="ui-scale-scope flex-1 min-h-0 overflow-y-auto"
+            <div className="ui-scale-scope"
               style={{ ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}>
               <LoadFormPane
                 primary={effective ?? primaryLeg}
@@ -597,9 +608,11 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             </div>
           </div>
 
-          {/* Top-right — route map */}
-          <div className="rounded-xl flex flex-col min-h-0 overflow-hidden"
-            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
+          {/* Top-right — route map. min-height gives the map room to
+              render its tiles + the stops sidebar even when the form
+              pane on the left is shorter than usual. */}
+          <div className="rounded-xl flex flex-col overflow-hidden"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', minHeight: 480 }}>
             {primaryLeg.stops.length > 0 ? (
               <RouteMapPanel
                 stops={primaryLeg.stops}
@@ -616,9 +629,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             )}
           </div>
 
-          {/* Bottom-right — billing */}
-          <div className="rounded-xl flex flex-col min-h-0 overflow-hidden"
-            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
+          {/* Bottom-right — billing. min-height keeps the customer +
+              line items + actions section visible at first paint
+              instead of collapsing to a tiny strip on tall form
+              panes. */}
+          <div className="rounded-xl flex flex-col overflow-hidden"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', minHeight: 360 }}>
             <BillingCard
               load={primaryLeg}
               onOpenReview={() => setReviewQueueOpen(true)}
@@ -1935,7 +1951,7 @@ function BillingCard({
           </span>
         )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
+      <div className="p-5 space-y-4">
         {/* Customer + billing method */}
         <div>
           <div className="text-[10px] uppercase tracking-wider font-bold mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
