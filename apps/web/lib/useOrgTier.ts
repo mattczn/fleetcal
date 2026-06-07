@@ -35,13 +35,14 @@
 import { useMemo } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { useCalendarStore } from "@/store/useCalendarStore";
+import { isInternalOrg } from "@/lib/internalOrg";
 
-export type OrgTier = "owner_op" | "growth" | "fleet" | "unrestricted";
+export type OrgTier = "owner_op" | "growth" | "fleet" | "unrestricted" | "none";
 
 /** Truck cap per tier. Bump these here if you renegotiate pricing — every
  *  consumer (UI banners, "+ Add" dialog) reads from the hook's return so
  *  no other file references the numbers. */
-const TIER_TRUCK_CAP: Record<Exclude<OrgTier, "unrestricted">, number> = {
+const TIER_TRUCK_CAP: Record<"owner_op" | "growth" | "fleet", number> = {
   owner_op: 4,
   growth:   9,
   fleet:    14,
@@ -53,12 +54,13 @@ const TIER_LABEL: Record<OrgTier, string> = {
   growth:       "Growth",
   fleet:        "Fleet",
   unrestricted: "Unrestricted",
+  none:         "No active plan",
 };
 
 /** The Clerk feature key for each tier — matches what was created in the
  *  Clerk dashboard. Resolution order is highest → lowest tier so that an
  *  org which somehow has multiple features lands on the most permissive. */
-const TIER_FEATURE_KEY: Record<Exclude<OrgTier, "unrestricted">, string> = {
+const TIER_FEATURE_KEY: Record<"fleet" | "growth" | "owner_op", string> = {
   fleet:    "fleet_tier",
   growth:   "growth_tier",
   owner_op: "owner_op_tier",
@@ -82,17 +84,18 @@ export interface OrgTierApi {
 
 export function useOrgTier(): OrgTierApi {
   const { has, isLoaded: authLoaded } = useAuth();
-  const { isLoaded: orgLoaded } = useOrganization();
+  const { organization, isLoaded: orgLoaded } = useOrganization();
   const assets = useCalendarStore((s) => s.assets);
 
   return useMemo<OrgTierApi>(() => {
     const isLoading = !authLoaded || !orgLoaded;
+    const internal = isInternalOrg(organization?.id);
 
     // Resolve the tier — check fleet → growth → owner_op (highest first
     // so partial / overlapping feature grants degrade to the most
-    // permissive). Default to `unrestricted` when none is present.
-    let tier: OrgTier = "unrestricted";
-    let maxTrucks = Infinity;
+    // permissive).
+    let tier: OrgTier = "none";
+    let maxTrucks = 0;
     if (has) {
       if (has({ feature: TIER_FEATURE_KEY.fleet })) {
         tier = "fleet";
@@ -105,6 +108,17 @@ export function useOrgTier(): OrgTierApi {
         maxTrucks = TIER_TRUCK_CAP.owner_op;
       }
     }
+
+    // Internal orgs (Curzon) without a paid tier are treated as
+    // unrestricted — they're dogfooding orgs and shouldn't be forced
+    // through a paywall during development.
+    if (tier === "none" && internal) {
+      tier = "unrestricted";
+      maxTrucks = Infinity;
+    }
+    // Non-internal orgs with tier === "none" are BLOCKED by middleware
+    // (redirected to /onboarding/pick-plan). The UI consumers still
+    // need to know about this state to render upgrade banners cleanly.
 
     // Count active trucks — anything with no activeTo, or activeTo
     // strictly after today. Retired trucks (activeTo in the past) don't
@@ -124,7 +138,7 @@ export function useOrgTier(): OrgTierApi {
       overLimit:     currentTrucks >  maxTrucks,
       isLoading,
     };
-  }, [authLoaded, orgLoaded, has, assets]);
+  }, [authLoaded, orgLoaded, has, organization?.id, assets]);
 }
 
 /** Exposed for places (e.g. an UpgradeBanner component) that want to
