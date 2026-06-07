@@ -772,24 +772,27 @@ loads.post("/:id/documents", requireCapability("loads.edit"), async (c) => {
   const storagePath = `${orgId}/${eventId}/${Date.now()}_${random}.${ext}`;
 
   // ─── Idempotency: collapse rapid-fire duplicate uploads ───────────
-  // The user has reported single uploads producing 3 audit entries
-  // ("BOL document uploaded" × 3 within the same second). The
+  // The user has reported single uploads producing 6 audit entries
+  // ("BOL document uploaded" × 6 within the same minute). The
   // handler itself only writes once per request, so the root cause
   // is upstream — likely a rapid double-click before the button
   // disables, a browser/proxy retry on a slow response, or a
   // file-input onChange firing multiple times. Each retry generates
   // a unique storage path (Date.now() + random) so nothing collides
-  // at the storage or row level; 3 distinct rows survive.
+  // at the storage or row level; 6 distinct rows survive without a
+  // dedup check.
   //
-  // Defend with a 5-second window dedup keyed on (load_id, kind,
-  // size_bytes). Two requests within 5s with identical kind +
+  // Defend with a 60-second window dedup keyed on (load_id, kind,
+  // size_bytes). Two requests within 60s with identical kind +
   // byte count are overwhelmingly the same upload being retried.
   // A legitimate re-upload of a corrected file takes longer than
-  // 5 s in practice (file picker, navigation) and would differ in
-  // bytes anyway. On match, return the existing row instead of
-  // writing a second one — no storage upload, no audit append.
+  // 60s in practice (file picker → review → click) and would differ
+  // in bytes anyway. Previously this window was 5s but production
+  // showed bursts spanning ~30-50s slipping past it. On match,
+  // return the existing row instead of writing a second one — no
+  // storage upload, no audit append.
   {
-    const sinceIso = new Date(Date.now() - 5_000).toISOString();
+    const sinceIso = new Date(Date.now() - 60_000).toISOString();
     const { data: dupRow } = await supabase
       .from("load_documents")
       .select("id, load_id, storage_path, file_name, mime_type, size_bytes, kind, uploaded_at")

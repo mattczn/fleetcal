@@ -676,7 +676,42 @@ events.get("/:id/audit-log", async (c) => {
   const merged = [...loadEntries, ...eventEntries].sort((a, b) =>
     (a.changedAt ?? "").localeCompare(b.changedAt ?? ""),
   );
-  const res: GetAuditLogResponse = { entries: merged };
+
+  // Dedup runs of identical document-level entries within a 60-second
+  // window. Race conditions in the upload route used to let 3-6
+  // identical "BOL document uploaded" entries land within the same
+  // minute when the button was hammered (or a browser/proxy retried
+  // a slow response). Tightening write-side dedup helps going
+  // forward; this read-side pass cleans up the existing rows so the
+  // History panel doesn't keep displaying the historical noise.
+  //
+  // Fingerprint = entry type + payload + actor. Two entries with
+  // matching fingerprints inside the window collapse to the first one
+  // (keeps the original timestamp + author). Entries OUTSIDE the
+  // window stay distinct so a legit re-upload an hour later still
+  // shows up separately.
+  const DEDUP_WINDOW_MS = 60_000;
+  const fingerprint = (e: LoadAuditEntry): string | null => {
+    if (e.documentUploaded) return `docUp:${e.documentUploaded.kind}|${e.documentUploaded.fileName}|${e.changedByName ?? ""}`;
+    if (e.documentDeleted)  return `docDel:${e.documentDeleted.kind}|${e.documentDeleted.fileName}|${e.changedByName ?? ""}`;
+    return null;
+  };
+  const lastSeen = new Map<string, number>();
+  const deduped: LoadAuditEntry[] = [];
+  for (const entry of merged) {
+    const fp = fingerprint(entry);
+    if (fp) {
+      const ts = new Date(entry.changedAt ?? "").getTime();
+      const prev = lastSeen.get(fp);
+      if (prev != null && Number.isFinite(ts) && ts - prev < DEDUP_WINDOW_MS) {
+        continue; // duplicate inside window — skip
+      }
+      if (Number.isFinite(ts)) lastSeen.set(fp, ts);
+    }
+    deduped.push(entry);
+  }
+
+  const res: GetAuditLogResponse = { entries: deduped };
   return c.json(res);
 });
 
