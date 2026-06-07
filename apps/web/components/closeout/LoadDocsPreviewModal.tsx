@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, AlertCircle, Eye, X, Check } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 
@@ -347,12 +348,24 @@ export function LoadDocsPreviewModal({ load, onClose, onSaved }: {
                             background: active ? 'rgba(26,115,232,0.10)' : 'transparent',
                             border: active ? '1px solid var(--gc-blue)' : '1px solid transparent',
                           }}>
-                          <input type="checkbox" checked={isIncluded}
-                            onChange={() => toggle(d.id)}
-                            disabled={!docs}
-                            style={{ width: 14, height: 14, accentColor: 'var(--gc-blue)', cursor: 'pointer' }}
-                            title={isIncluded ? 'Included in invoice packet' : 'Skipped'}
-                            onClick={e => e.stopPropagation()} />
+                          <Tooltip
+                            content={
+                              isIncluded ? (
+                                <>
+                                  <strong>Included in the invoice packet.</strong> This PDF will be bundled into the packet sent to the customer when the invoice is generated. Uncheck to <strong>skip</strong>.
+                                </>
+                              ) : (
+                                <>
+                                  <strong>Not included in the invoice packet.</strong> This PDF will <strong>not</strong> be bundled into the packet sent to the customer. Check to <strong>include</strong>.
+                                </>
+                              )
+                            }>
+                            <input type="checkbox" checked={isIncluded}
+                              onChange={() => toggle(d.id)}
+                              disabled={!docs}
+                              style={{ width: 14, height: 14, accentColor: 'var(--gc-blue)', cursor: 'pointer' }}
+                              onClick={e => e.stopPropagation()} />
+                          </Tooltip>
                           <button type="button" onClick={() => setActiveId(d.id)}
                             className="flex-1 flex items-center gap-2 min-w-0 text-left">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"

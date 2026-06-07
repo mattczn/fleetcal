@@ -32,6 +32,7 @@ import { useUser } from '@clerk/nextjs';
 import { X, ChevronLeft, ChevronRight, CheckCircle2, Circle, Flag, FileText, AlertCircle, Pin, FastForward, Copy, Check, Upload, Loader2, MessageSquare, Plus, Pencil, Trash2, Layers, MapPin, Receipt, RefreshCw, Download } from 'lucide-react';
 import type { Load, CalendarEvent, Stop } from '@/lib/types';
 import type { LoadDocument } from '@/lib/db';
+import Tooltip from '@/components/ui/Tooltip';
 import { fetchLoadDocuments, getLoadDocumentSignedUrl } from '@/lib/db';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -2240,22 +2241,34 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                           + softer green to fit the new row recipe.
                           Stages a pending change; the Save bar at the
                           bottom of the sidebar is the commit point. */}
-                      <button type="button"
-                        onClick={e => {
-                          e.stopPropagation();
-                          setInvoiceInclude(d.id, !included);
-                        }}
-                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
-                        style={{
-                          background: included ? '#dcfce7' : 'transparent',
-                          color:      included ? '#166534' : 'var(--gc-text-3)',
-                          border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
-                          borderRadius: 999,
-                        }}
-                        title={included ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
-                        {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
-                        Invoice
-                      </button>
+                      <Tooltip
+                        content={
+                          included ? (
+                            <>
+                              <strong>Included in the invoice packet.</strong> When you generate this load&rsquo;s invoice, this PDF gets bundled into the packet sent to the customer. Click to <strong>exclude</strong>.
+                            </>
+                          ) : (
+                            <>
+                              <strong>Not included in the invoice packet.</strong> When you generate this load&rsquo;s invoice, this PDF will <strong>not</strong> be bundled into the packet sent to the customer. Click to <strong>include</strong>.
+                            </>
+                          )
+                        }>
+                        <button type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setInvoiceInclude(d.id, !included);
+                          }}
+                          className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                          style={{
+                            background: included ? '#dcfce7' : 'transparent',
+                            color:      included ? '#166534' : 'var(--gc-text-3)',
+                            border:     `1px solid ${included ? '#86efac' : 'var(--gc-border)'}`,
+                            borderRadius: 999,
+                          }}>
+                          {included ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                          Invoice
+                        </button>
+                      </Tooltip>
                     </div>
                   );
                 };
@@ -3533,19 +3546,31 @@ function DocSelectionDialog({
                           {includedIds && onToggleIncluded && d.kind !== 'rate_con' && (() => {
                             const isOn = includedIds.has(d.id);
                             return (
-                              <button type="button"
-                                onClick={e => { e.stopPropagation(); onToggleIncluded(d.id); }}
-                                className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
-                                style={{
-                                  background: isOn ? '#dcfce7' : 'transparent',
-                                  color:      isOn ? '#166534' : 'var(--gc-text-3)',
-                                  border:     `1px solid ${isOn ? '#86efac' : 'var(--gc-border)'}`,
-                                  borderRadius: 999,
-                                }}
-                                title={isOn ? 'Included in invoice — click to exclude' : 'Click to include in invoice'}>
-                                {isOn ? <CheckCircle2 size={11} /> : <Circle size={11} />}
-                                Invoice
-                              </button>
+                              <Tooltip
+                                content={
+                                  isOn ? (
+                                    <>
+                                      <strong>Included in the invoice packet.</strong> When you generate this load&rsquo;s invoice, this PDF gets bundled into the packet sent to the customer. Click to <strong>exclude</strong>.
+                                    </>
+                                  ) : (
+                                    <>
+                                      <strong>Not included in the invoice packet.</strong> When you generate this load&rsquo;s invoice, this PDF will <strong>not</strong> be bundled into the packet sent to the customer. Click to <strong>include</strong>.
+                                    </>
+                                  )
+                                }>
+                                <button type="button"
+                                  onClick={e => { e.stopPropagation(); onToggleIncluded(d.id); }}
+                                  className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors shrink-0"
+                                  style={{
+                                    background: isOn ? '#dcfce7' : 'transparent',
+                                    color:      isOn ? '#166534' : 'var(--gc-text-3)',
+                                    border:     `1px solid ${isOn ? '#86efac' : 'var(--gc-border)'}`,
+                                    borderRadius: 999,
+                                  }}>
+                                  {isOn ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                                  Invoice
+                                </button>
+                              </Tooltip>
                             );
                           })()}
                           {isPending && (
