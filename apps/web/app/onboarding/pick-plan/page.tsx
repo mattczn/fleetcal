@@ -72,27 +72,16 @@ export default async function PickPlanPage({
         </h1>
 
         <p className="font-sys text-[16px] md:text-[17px] leading-[1.6] text-sys-muted mb-12 max-w-2xl">
-          14-day free trial on every plan. You won&apos;t be charged until day 15 and
-          you can cancel any time before then. Adding a card now means no interruption
-          when your trial ends.
+          14-day free trial on every plan. You won&apos;t be charged until day 15
+          and you can cancel any time before then. We require a card up front
+          to ensure uninterrupted service when your trial ends.
         </p>
 
-        {/* Clerk's PricingTable handles the actual checkout. Now that
-            the user is signed in + has an org, the Subscribe buttons
-            surface and route to Stripe. */}
+        {/* Clerk's PricingTable handles the actual checkout. Now that the
+            user is signed in + has an org, the Subscribe buttons surface
+            and route to Stripe. Appearance comes from global
+            clerkAppearance config via <ClerkProvider>. */}
         <PricingTable for="organization" />
-
-        <div className="mt-12 pt-8 border-t border-sys-line flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="font-sys text-[14px] text-sys-muted">
-            Not ready to pick yet?
-          </p>
-          <Link
-            href="/calendar"
-            className="font-sys font-medium text-[14px] text-sys-muted hover:text-sys-primary transition-colors"
-          >
-            Skip — try free without a card →
-          </Link>
-        </div>
       </main>
     </div>
   );

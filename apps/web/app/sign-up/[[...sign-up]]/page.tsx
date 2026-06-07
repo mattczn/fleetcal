@@ -119,34 +119,12 @@ export default async function SignUpPage({
 
           {/* RIGHT — Clerk's SignUp form, restyled */}
           <div>
+            {/* Appearance comes from the global clerkAppearance via
+                <ClerkProvider> in layout.tsx — applies FleetCal/Google-
+                style tokens to every Clerk component including this one. */}
             <SignUp
               forceRedirectUrl={afterSignUpUrl}
               fallbackRedirectUrl={afterSignUpUrl}
-              appearance={{
-                variables: {
-                  colorPrimary:    '#1B5EE4',
-                  colorText:       '#111827',
-                  colorTextSecondary: '#6B7280',
-                  colorBackground: '#FFFFFF',
-                  colorInputBackground: '#FFFFFF',
-                  colorInputText:  '#111827',
-                  borderRadius:    '0',
-                  fontFamily:      'var(--font-dm-sans), system-ui, sans-serif',
-                  fontSize:        '14px',
-                },
-                elements: {
-                  // Strip Clerk's default card shadow/rounded chrome —
-                  // we provide our own hairline border via inline style.
-                  rootBox:        'w-full',
-                  cardBox:        'w-full shadow-none',
-                  card:           'shadow-none p-8',
-                  headerTitle:    'font-display text-[24px] tracking-tight',
-                  headerSubtitle: 'text-sys-muted',
-                  socialButtonsBlockButton: 'border border-sys-line',
-                  formButtonPrimary: 'bg-sys-blue hover:bg-sys-blue-hover font-semibold',
-                  footerActionLink: 'text-sys-blue font-semibold',
-                },
-              }}
             />
           </div>
         </div>

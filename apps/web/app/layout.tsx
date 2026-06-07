@@ -4,6 +4,7 @@ import { ClerkProvider } from '@clerk/nextjs';
 import { Plus_Jakarta_Sans, DM_Serif_Display, DM_Sans, IBM_Plex_Mono } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
 import { RailwayClientProvider } from '@/components/RailwayClientProvider';
+import { clerkAppearance } from '@/lib/clerkAppearance';
 import './globals.css';
 
 const font = Plus_Jakarta_Sans({
@@ -88,7 +89,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const theme = readThemeCookie(cookieStore.get('fleetcal-theme')?.value);
 
   return (
-    <ClerkProvider>
+    <ClerkProvider appearance={clerkAppearance}>
       <html
         lang="en"
         data-theme={theme}
