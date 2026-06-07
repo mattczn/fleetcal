@@ -215,36 +215,19 @@ UPDATE org_api_keys SET created_by = m.prod_user_id
   FROM clerk_user_map m WHERE org_api_keys.created_by = m.dev_user_id;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- JSONB AUDIT LOGS — nested user_id remapping
+-- JSONB NESTED user_id REMAPPING — loads.internal_notes only
 -- ─────────────────────────────────────────────────────────────────────────
--- loads.audit_log, events.audit_log, events.driver_history all share the
--- shape: jsonb array of entries, each with possible userId / changedById
--- keys. loads.internal_notes uses 'author'.
+-- Preflight discovered that this app's audit_log columns (loads + events)
+-- store ONLY display names (changedByName) and NEVER user_ids. So the
+-- audit_log columns don't need any remap — display names like "Matt
+-- Curzon" don't change between Clerk dev and prod, only the user_id
+-- does. Audit log UI rendering uses changedByName directly.
 --
--- Approach: jsonb_array_elements → coalesce-and-replace via the map →
--- jsonb_agg back to an array. Faster than client-side iteration and
--- preserves entry ordering.
-
-UPDATE loads l
-SET audit_log = (
-  SELECT jsonb_agg(
-    CASE
-      WHEN m.prod_user_id IS NOT NULL
-        THEN entry || jsonb_build_object(
-          'userId',     m.prod_user_id,
-          'changedById', m.prod_user_id
-        )
-      ELSE entry
-    END
-    ORDER BY ord
-  )
-  FROM jsonb_array_elements(l.audit_log) WITH ORDINALITY AS t(entry, ord)
-  LEFT JOIN clerk_user_map m
-    ON  m.dev_user_id = COALESCE(entry->>'userId', entry->>'changedById')
-)
-WHERE l.audit_log IS NOT NULL
-  AND jsonb_typeof(l.audit_log) = 'array'
-  AND l.audit_log @? '$[*] ? (@.userId != null || @.changedById != null)';
+-- The only JSONB column with nested Clerk user_ids is
+-- loads.internal_notes — each note carries an `author` key with the
+-- user_xxx of whoever wrote it. That's the single block below.
+--
+-- Approach: jsonb_array_elements → replace via map → jsonb_agg back.
 
 UPDATE loads l
 SET internal_notes = (
@@ -263,32 +246,6 @@ WHERE l.internal_notes IS NOT NULL
   AND jsonb_typeof(l.internal_notes) = 'array'
   AND l.internal_notes @? '$[*] ? (@.author != null)';
 
-UPDATE events e
-SET audit_log = (
-  SELECT jsonb_agg(
-    CASE
-      WHEN m.prod_user_id IS NOT NULL
-        THEN entry || jsonb_build_object(
-          'userId',     m.prod_user_id,
-          'changedById', m.prod_user_id
-        )
-      ELSE entry
-    END
-    ORDER BY ord
-  )
-  FROM jsonb_array_elements(e.audit_log) WITH ORDINALITY AS t(entry, ord)
-  LEFT JOIN clerk_user_map m
-    ON  m.dev_user_id = COALESCE(entry->>'userId', entry->>'changedById')
-)
-WHERE e.audit_log IS NOT NULL
-  AND jsonb_typeof(e.audit_log) = 'array'
-  AND e.audit_log @? '$[*] ? (@.userId != null || @.changedById != null)';
-
--- events.driver_history removed — column doesn't exist in live schema
--- (preflight confirmed). The audit-of-migrations had it as a planned
--- column that never landed. Skip silently — events.audit_log above
--- already captures every driver assignment change.
-
 -- ─────────────────────────────────────────────────────────────────────────
 -- VERIFICATION
 -- ─────────────────────────────────────────────────────────────────────────
@@ -300,9 +257,8 @@ DECLARE
   v_old text := current_setting('app.old_org_id');
   v_n   bigint;
 
-  -- Count Clerk dev user_ids still present in audit JSONB
+  -- Count Clerk dev user_ids still present in loads.internal_notes
   v_dev_user_count_in_loads bigint;
-  v_dev_user_count_in_events bigint;
 BEGIN
   -- Any tenant row still referencing old org_id?
   SELECT count(*) INTO v_n FROM org_settings WHERE org_id = v_old;
@@ -320,28 +276,19 @@ BEGIN
     RAISE EXCEPTION 'events still has % rows with old org_id', v_n;
   END IF;
 
-  -- Any user_id in audit_log we forgot to map?
+  -- Any user_id in internal_notes we forgot to map?
+  -- (audit_log columns store only display names — no user_ids — so
+  --  there's nothing to verify there. See JSONB remap block comment.)
   SELECT count(*)
     INTO v_dev_user_count_in_loads
-    FROM loads l, jsonb_array_elements(coalesce(l.audit_log, '[]'::jsonb)) e
-    LEFT JOIN clerk_user_map m ON m.prod_user_id = COALESCE(e->>'userId', e->>'changedById')
-    WHERE COALESCE(e->>'userId', e->>'changedById') LIKE 'user_%'
+    FROM loads l, jsonb_array_elements(coalesce(l.internal_notes, '[]'::jsonb)) e
+    LEFT JOIN clerk_user_map m ON m.prod_user_id = e->>'author'
+    WHERE e->>'author' LIKE 'user_%'
       AND m.prod_user_id IS NULL;
 
   IF v_dev_user_count_in_loads > 0 THEN
-    RAISE WARNING 'loads.audit_log: % entries reference user_ids that are NOT in the prod side of clerk_user_map (likely unmapped dev IDs)', v_dev_user_count_in_loads;
-    RAISE WARNING 'review with: SELECT DISTINCT e->>''userId'', e->>''changedById'' FROM loads, jsonb_array_elements(audit_log) e WHERE e->>''userId'' LIKE ''user_%%'' OR e->>''changedById'' LIKE ''user_%%'';';
-  END IF;
-
-  SELECT count(*)
-    INTO v_dev_user_count_in_events
-    FROM events ev, jsonb_array_elements(coalesce(ev.audit_log, '[]'::jsonb)) e
-    LEFT JOIN clerk_user_map m ON m.prod_user_id = COALESCE(e->>'userId', e->>'changedById')
-    WHERE COALESCE(e->>'userId', e->>'changedById') LIKE 'user_%'
-      AND m.prod_user_id IS NULL;
-
-  IF v_dev_user_count_in_events > 0 THEN
-    RAISE WARNING 'events.audit_log: % entries reference user_ids that are NOT in the prod side of clerk_user_map', v_dev_user_count_in_events;
+    RAISE WARNING 'loads.internal_notes: % notes have author user_ids NOT in the prod side of clerk_user_map (likely unmapped dev IDs)', v_dev_user_count_in_loads;
+    RAISE WARNING 'review with: SELECT DISTINCT e->>''author'' FROM loads, jsonb_array_elements(internal_notes) e WHERE e->>''author'' LIKE ''user_%%'';';
   END IF;
 
   RAISE NOTICE '═══════════════════════════════════════════════════════════════';
