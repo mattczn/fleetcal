@@ -203,6 +203,11 @@ export interface OpsTableProps<T> {
    *  the active-row highlight. */
   rowKey: (row: T) => string;
   onRowClick?: (row: T) => void;
+  /** Fired on a double-click anywhere on the row. Common use: jump to
+   *  the entity's detail page while the single-click row interaction
+   *  stays as "open inline preview / toggle". Same interactive-child
+   *  guard as onRowClick. */
+  onRowDoubleClick?: (row: T) => void;
   /** Highlights the row whose rowKey === activeRowId. */
   activeRowId?: string | null;
   emptyLabel?: string;
@@ -279,6 +284,7 @@ export function OpsTable<T>({
   filters = [],
   rowKey,
   onRowClick,
+  onRowDoubleClick,
   activeRowId,
   emptyLabel = 'No records match the current filters.',
   density = 'comfortable',
@@ -1055,6 +1061,19 @@ export function OpsTable<T>({
                   const target = e.target as HTMLElement;
                   if (target.closest('button, a, input, [data-row-click-ignore]')) return;
                   onRowClick(original);
+                } : undefined}
+                onDoubleClick={onRowDoubleClick ? (e) => {
+                  // Same interactive-child guard as single-click — a
+                  // dbl-click on a button shouldn't navigate the row.
+                  const target = e.target as HTMLElement;
+                  if (target.closest('button, a, input, [data-row-click-ignore]')) return;
+                  // Suppress the OS-level word selection that
+                  // double-clicking a text cell normally triggers —
+                  // navigating + leaving text highlighted underneath
+                  // is jarring. Clears any selection the first click
+                  // already started.
+                  window.getSelection?.()?.removeAllRanges?.();
+                  onRowDoubleClick(original);
                 } : undefined}
                 className="grid items-stretch transition-colors"
                 style={{

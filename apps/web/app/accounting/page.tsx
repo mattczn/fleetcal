@@ -26,6 +26,7 @@ import {
   AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw, Info,
 } from 'lucide-react';
 import Tooltip from '@/components/ui/Tooltip';
+import { useRouter } from 'next/navigation';
 import { useAuth, useUser } from '@clerk/nextjs';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -191,6 +192,7 @@ export default function AccountingPage() {
 }
 
 function AccountingPageInner() {
+  const router = useRouter();
   const { isLoaded: authLoaded, isSignedIn, orgId } = useAuth();
   const { user } = useUser();
   const customers = useCalendarStore(s => s.customers);
@@ -1387,6 +1389,11 @@ function AccountingPageInner() {
                 columns={tableColumns}
                 filters={tableFilters}
                 rowKey={rowKey}
+                onRowDoubleClick={r => {
+                  // Jump to the full load page. LoadSummary always has
+                  // internalLoadId — guard belt-and-braces.
+                  if (r.load.internalLoadId != null) router.push(`/loads/${r.load.internalLoadId}`);
+                }}
                 /* loading is gated on "table is empty" — once any row
                    has rendered, never paint the skeleton again. Prevents
                    the table-blank flash on View / Refresh / mutations. */

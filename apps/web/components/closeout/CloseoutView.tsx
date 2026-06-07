@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { FileCheck2, Loader2, Flag, CheckCircle2, Clock, Play, Check, Star, X, MessageSquare, Search, Info } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { naiveNowInTz } from '@/lib/time-utils';
@@ -140,6 +141,7 @@ function fmtDate(iso: string): string {
 interface QueueRow extends CalendarEvent { /* alias for clarity */ }
 
 export default function CloseoutView() {
+  const router = useRouter();
   const customers = useCalendarStore(s => s.customers);
   const mergeEvents = useCalendarStore(s => s.mergeEvents);
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
@@ -1238,6 +1240,11 @@ export default function CloseoutView() {
                 filters={tableFilters}
                 rowKey={rowKey}
                 loading={loading}
+                onRowDoubleClick={r => {
+                  // Jump to the full load page — every revenue load in
+                  // closeout has an internalLoadId, but guard anyway.
+                  if (r.internalLoadId != null) router.push(`/loads/${r.internalLoadId}`);
+                }}
                 defaultSort={{ key: 'age', dir: 'desc' }}
                 priorityKey={r => !!r.priority}
                 columnPicker
