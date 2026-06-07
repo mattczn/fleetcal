@@ -3643,7 +3643,7 @@ function DebugProbeBlock({ title, probe, vehicleId, days }: { title: string; pro
 // ─── Card Layout Panel ────────────────────────────────────────────────────────
 
 function CardLayoutPanel() {
-  const { cardFields, setCardFields } = useCalendarStore();
+  const { cardFields, setCardFields, cardFieldIcons, setCardFieldIcon } = useCalendarStore();
   const [dragKey, setDragKey] = useState<CardFieldKey | null>(null);
   const [overKey, setOverKey] = useState<CardFieldKey | null>(null);
 
@@ -3670,7 +3670,7 @@ function CardLayoutPanel() {
     <div style={{ maxWidth: 560 }}>
       <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>Card Layout</h2>
       <p className="text-sm mb-6" style={{ color: 'var(--gc-text-3)' }}>
-        Choose which fields appear on event cards in the day view. Drag to reorder. Title is always shown.
+        Choose which fields appear on event cards in the day view. Drag to reorder. Title is always shown. The icon toggle next to each field hides its inline glyph — useful for # and $ since the value already shows that. Icon settings are org-wide.
       </p>
 
       {/* Active fields */}
@@ -3708,6 +3708,25 @@ function CardLayoutPanel() {
               >
                 <GripVertical size={15} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
                 <span className="text-sm font-medium flex-1" style={{ color: 'var(--gc-text-1)' }}>{def.label}</span>
+                {def.icon && (() => {
+                  const Icon = def.icon;
+                  const iconOn = cardFieldIcons[key] !== false;
+                  return (
+                    <button
+                      onClick={() => setCardFieldIcon(key, !iconOn)}
+                      title={iconOn ? 'Hide icon on cards' : 'Show icon on cards'}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
+                      style={{
+                        background: iconOn ? 'var(--gc-blue-light)' : 'transparent',
+                        color:      iconOn ? 'var(--gc-blue-text)' : 'var(--gc-text-3)',
+                        border:     `1px solid ${iconOn ? 'var(--gc-blue)' : 'var(--gc-border)'}`,
+                        cursor: 'pointer',
+                      }}>
+                      <Icon size={11} />
+                      {iconOn ? 'Icon on' : 'Icon off'}
+                    </button>
+                  );
+                })()}
                 <button
                   onClick={() => remove(key)}
                   className="rounded-full p-1 transition-colors"

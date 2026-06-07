@@ -374,6 +374,11 @@ export interface RateConSettings {
    *  the auto-calc. Stored server-side so it survives clearing
    *  browser data + applies across every dispatcher's device. */
   driverPayPct?:       number | null;
+  /** Per-CardFieldKey override for whether the inline icon renders on
+   *  calendar event cards. Default for every key is true — so an
+   *  absent entry means the icon shows. Org-wide so the team sees the
+   *  same card layout. */
+  cardFieldIcons?:     Record<string, boolean>;
 }
 
 /**

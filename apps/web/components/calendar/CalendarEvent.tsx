@@ -41,7 +41,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
   const {
     events, currentDate, dragState, setDragState, rowHeight,
     showStatusOverlay, showConfirmedOverlay, showPodOverlay, showBillingOverlay,
-    drivers, openEditModal, cardFields, customers, calendarTimezone,
+    drivers, openEditModal, cardFields, cardFieldIcons, customers, calendarTimezone,
     cardFontScale,
   } = useCalendarStore();
 
@@ -337,6 +337,9 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             const minHeight = 20 + i * 14;
             if (height <= minHeight) return null;
             const Icon = def.icon;
+            // Per-field icon visibility — empty / true = on (default),
+            // explicit false from the org setting hides this glyph.
+            const showIcon = cardFieldIcons[key] !== false;
             // Icon sized just below the text so it sits visually
             // centered against the cap-height. Tighter gap (3px) +
             // smaller icon ratio (0.75) so the icon reads as a label
@@ -345,7 +348,7 @@ export default function CalendarEvent({ event, asset, colIdx, totalCols, compact
             const iconSize = Math.max(8, Math.round(fsField * 0.75));
             return (
               <div key={key} className="font-medium leading-tight truncate flex items-center" style={{ color: 'rgba(255,255,255,0.85)', fontSize: fsField }}>
-                {Icon && (
+                {Icon && showIcon && (
                   <Icon
                     size={iconSize}
                     style={{ flexShrink: 0, opacity: 0.75, marginRight: 3 }}

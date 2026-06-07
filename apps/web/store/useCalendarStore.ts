@@ -412,6 +412,13 @@ interface CalendarStore extends ModalState {
   cardFields: CardFieldKey[];
   setCardFields: (fields: CardFieldKey[]) => void;
 
+  /** Org-wide map of CardFieldKey → whether the field's inline icon
+   *  renders on calendar event cards. Absent entries default to ON.
+   *  Persisted via rateConSettings.cardFieldIcons so every dispatcher
+   *  on the org sees the same card layout. */
+  cardFieldIcons: Record<string, boolean>;
+  setCardFieldIcon: (key: CardFieldKey, enabled: boolean) => void;
+
   showUnassigned: boolean;
   unassignedAssetId: number | null;
   setShowUnassigned: (v: boolean) => void;
@@ -665,6 +672,9 @@ export const useCalendarStore = create<CalendarStore>()(
       // state (which may have come from localStorage, see legacy
       // persistence note at line ~1760).
       driverPayPct: settings?.driverPayPct ?? state.driverPayPct,
+      // cardFieldIcons is sparse — absent keys mean "icon on", so we
+      // just take the server's map directly without merging defaults.
+      cardFieldIcons: settings?.cardFieldIcons ?? {},
       hasHydratedOrgSettings: true,
     })),
 
@@ -831,6 +841,19 @@ export const useCalendarStore = create<CalendarStore>()(
 
   cardFields: DEFAULT_CARD_FIELDS,
   setCardFields: (fields) => set({ cardFields: fields }),
+
+  // ── Card-field icon visibility ─────────────────────────────────────
+  // Empty default = every icon on. Setter writes through the org
+  // settings endpoint so the change propagates to every member.
+  cardFieldIcons: {},
+  setCardFieldIcon: (key, enabled) => {
+    const next = { ...get().cardFieldIcons, [key]: enabled };
+    set({ cardFieldIcons: next });
+    if (get().isDemo) return;
+    railway.updateOrgSettings({
+      rateConSettings: { cardFieldIcons: next },
+    }).catch((err) => console.error('setCardFieldIcon sync:', err));
+  },
 
   showUnassigned: true,
   unassignedAssetId: null,
