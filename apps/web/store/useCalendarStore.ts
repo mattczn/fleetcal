@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { MVP_LAUNCH_DEFAULTS } from '@fleetcal/types';
+import { MVP_LAUNCH_DEFAULTS, TRAILER_CATEGORIES } from '@fleetcal/types';
 import { Asset, CalendarEvent, Driver, Dispatcher, Customer, SavedLocation, Trailer } from '@/lib/types';
 import { buildDefaultFieldSettings, DEFAULT_SECTION_ORDER, FieldSection } from '@/lib/fields';
 import { CardFieldKey, DEFAULT_CARD_FIELDS } from '@/lib/cardFields';
@@ -236,6 +236,16 @@ interface CalendarStore extends ModalState {
   updateAssetCategory: (oldName: string, newName: string) => void;
   removeAssetCategory: (name: string) => void;
   reorderAssetCategories: (fromIdx: number, toIdx: number) => void;
+
+  /** Trailer category dropdown values. Mirrors assetCategories — set
+   *  per-org (localStorage-persisted), seeded from TRAILER_CATEGORIES.
+   *  Renaming cascades through trailers.category so existing rows
+   *  follow the new label. */
+  trailerCategories: string[];
+  addTrailerCategory: (name: string) => void;
+  updateTrailerCategory: (oldName: string, newName: string) => void;
+  removeTrailerCategory: (name: string) => void;
+  reorderTrailerCategories: (fromIdx: number, toIdx: number) => void;
 
   addAsset: (asset: Omit<Asset, 'id'>) => Promise<number>;
   updateAsset: (id: number, updates: Partial<Omit<Asset, 'id'>>) => void;
@@ -596,6 +606,10 @@ export const useCalendarStore = create<CalendarStore>()(
   // category chips for a 1-4 truck operation that may only run one
   // type of freight.
   assetCategories: ['Local', 'OTR'],
+  // Seeded from the canonical TRAILER_CATEGORIES list. Custom labels
+  // dispatchers add via the Trailer Directory's "Categories" dialog
+  // get persisted to localStorage alongside this seed.
+  trailerCategories: [...TRAILER_CATEGORIES],
   assets:        [],
   events:        [],
   deletedEvents: [],
@@ -1070,6 +1084,36 @@ export const useCalendarStore = create<CalendarStore>()(
       const [moved] = arr.splice(fromIdx, 1);
       arr.splice(toIdx, 0, moved);
       return { assetCategories: arr };
+    }),
+
+  // ── Trailer categories ────────────────────────────────────────────────────
+  // Mirror of assetCategories. Rename cascades through trailers.category
+  // so existing rows follow the new label; remove is list-only (does not
+  // touch trailers — orphaned categories on trailer rows just continue
+  // to display until the dispatcher reassigns them).
+  addTrailerCategory: (name) =>
+    set((state) => ({ trailerCategories: [...state.trailerCategories, name] })),
+
+  updateTrailerCategory: (oldName, newName) => {
+    const affected = get().trailers.filter((t) => t.category === oldName).map((t) => t.id).filter((id) => id > 0);
+    set((state) => ({
+      trailerCategories: state.trailerCategories.map((c) => (c === oldName ? newName : c)),
+      trailers: state.trailers.map((t) => (t.category === oldName ? { ...t, category: newName } : t)),
+    }));
+    affected.forEach((id) => {
+      railway.updateTrailer(id, { category: newName }).catch((err) => console.error('updateTrailerCategory:', err));
+    });
+  },
+
+  removeTrailerCategory: (name) =>
+    set((state) => ({ trailerCategories: state.trailerCategories.filter((c) => c !== name) })),
+
+  reorderTrailerCategories: (fromIdx, toIdx) =>
+    set((state) => {
+      const arr = [...state.trailerCategories];
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      return { trailerCategories: arr };
     }),
 
   // ── Assets ────────────────────────────────────────────────────────────────
@@ -2305,6 +2349,7 @@ export const useCalendarStore = create<CalendarStore>()(
         theme:              state.theme,
         cardFontScale:      state.cardFontScale,
         assetCategories:    state.assetCategories,
+        trailerCategories:  state.trailerCategories,
         showStatusOverlay:   state.showStatusOverlay,
         showConfirmedOverlay: state.showConfirmedOverlay,
         showPodOverlay:      state.showPodOverlay,

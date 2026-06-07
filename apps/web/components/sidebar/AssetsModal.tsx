@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink, Loader2 } from 'lucide-react';
+import { X, Truck, Clock, Plus, Check, Trash2, Fuel, Wrench, ExternalLink, Loader2, Tag } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import type { AssetDocument, AssetDocumentKind } from '@fleetcal/types';
+import CategoryEditorDialog from './CategoryEditorDialog';
 
 // Imperative handle the parent uses to query / drive the panel's
 // unsaved-changes state. Mirrors the BrokerProfileModal /
@@ -70,7 +71,13 @@ interface AssetsModalProps {
 
 const AssetsModal = forwardRef<DirectoryDetailHandle, AssetsModalProps>(
 function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
-  const { assets: allAssets, assetCategories, drivers, events, openEditModal, addAsset, removeAsset, hardDeleteAsset, unassignedAssetId } = useCalendarStore();
+  const {
+    assets: allAssets, assetCategories, drivers, events, openEditModal,
+    addAsset, removeAsset, hardDeleteAsset, unassignedAssetId,
+    addAssetCategory, updateAssetCategory, removeAssetCategory, reorderAssetCategories,
+  } = useCalendarStore();
+  // Whether the "Categories" overlay is open above the modal.
+  const [catEditOpen, setCatEditOpen] = useState(false);
   // Drop the 'Unassigned' bucket, then sort retired trucks to the
   // bottom so the directory leads with everything currently in service.
   const today = dateKeyOf(new Date());
@@ -269,6 +276,19 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
           </div>
         )}
 
+        {catEditOpen && (
+          <CategoryEditorDialog
+            title="Truck Categories"
+            hint="Used for the Category dropdown on every truck and the filter chips on the fleet panel. Renaming updates all assigned trucks; the seed list is Local and OTR."
+            items={assetCategories}
+            onAdd={addAssetCategory}
+            onUpdate={updateAssetCategory}
+            onRemove={removeAssetCategory}
+            onReorder={reorderAssetCategories}
+            onClose={() => setCatEditOpen(false)}
+          />
+        )}
+
       {/* Header — hidden in embedded mode (DirectoryModal provides
           its own tab strip + close button). */}
       {!embedded && (
@@ -305,17 +325,33 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                 style={{ color: 'var(--gc-text-3)' }}>
                 Assets
               </span>
-              <button
-                onClick={() => void handleAdd()}
-                disabled={adding}
-                title="Add truck"
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
-                style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
-                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <Plus size={12} />
-                {adding ? 'Adding…' : 'Truck'}
-              </button>
+              <div className="flex items-center gap-1">
+                {/* Manage truck categories — opens an overlay where
+                    the dispatcher edits the buckets used by the
+                    Category select on every truck and by the
+                    truck-fleet panel's filter chips. */}
+                <button
+                  onClick={() => setCatEditOpen(true)}
+                  title="Manage categories"
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
+                  style={{ color: 'var(--gc-text-2)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <Tag size={12} />
+                  Categories
+                </button>
+                <button
+                  onClick={() => void handleAdd()}
+                  disabled={adding}
+                  title="Add truck"
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
+                  style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
+                  onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <Plus size={12} />
+                  {adding ? 'Adding…' : 'Truck'}
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">

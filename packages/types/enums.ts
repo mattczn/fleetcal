@@ -52,7 +52,11 @@ export const SCHEDULE_TYPES = ["appointment", "window", "fcfs"] as const;
 export type ScheduleType = (typeof SCHEDULE_TYPES)[number];
 
 // ── Trailer category ────────────────────────────────────────────────────
-// trailers.category column.
+// trailers.category column. The constant below is the SEED list — what
+// new orgs start with. Dispatchers can add, rename, or remove entries
+// per-org from the Trailer Directory's Categories dialog, so the
+// runtime type is plain `string`. The DB column is `text` (no CHECK
+// constraint) for the same reason.
 
 export const TRAILER_CATEGORIES = [
   "Swing",
@@ -62,7 +66,7 @@ export const TRAILER_CATEGORIES = [
   "Other",
 ] as const;
 
-export type TrailerCategory = (typeof TRAILER_CATEGORIES)[number];
+export type TrailerCategory = string;
 
 // ── Non-revenue event type ──────────────────────────────────────────────
 // events.non_revenue_type column. Only meaningful when event_kind = 'non_revenue'.

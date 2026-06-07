@@ -10,7 +10,9 @@ import { railway } from '@/lib/railway';
 import LifecycleEditor from './LifecycleEditor';
 import LoadHistorySection from './LoadHistorySection';
 import { isActiveOn, dateKeyOf } from '@/lib/lifecycle';
-import { TRAILER_CATEGORIES, type TrailerCategory, type TrailerDocument, type TrailerDocumentKind } from '@fleetcal/types';
+import { type TrailerCategory, type TrailerDocument, type TrailerDocumentKind } from '@fleetcal/types';
+import CategoryEditorDialog from './CategoryEditorDialog';
+import { Tag } from 'lucide-react';
 import type { Trailer } from '@/lib/types';
 import type { DirectoryDetailHandle } from './DirectoryModal';
 
@@ -70,7 +72,14 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
     discard: () => { detailRef.current?.discard(); },
   }), []);
 
-  const { trailers: allTrailers, addTrailer, removeTrailer, hardDeleteTrailer } = useCalendarStore();
+  const {
+    trailers: allTrailers,
+    addTrailer, removeTrailer, hardDeleteTrailer,
+    trailerCategories,
+    addTrailerCategory, updateTrailerCategory, removeTrailerCategory, reorderTrailerCategories,
+  } = useCalendarStore();
+  // Whether the small "Categories" dialog is open over the modal.
+  const [catEditOpen, setCatEditOpen] = useState(false);
   // The trailer_categories module gates the per-trailer Category
   // field. MVP orgs with uniform fleets (all dry vans) get a
   // simpler form without the dropdown; Curzon-style mixed fleets
@@ -173,7 +182,7 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
         // current Curzon use). When off, pick 'Other' — the form
         // hides the field entirely and 'Other' reads as
         // "uncategorized" if categories ever get turned back on.
-        category: showCategory ? TRAILER_CATEGORIES[0] : 'Other',
+        category: showCategory ? (trailerCategories[0] ?? 'Other') : 'Other',
         // Match AssetsModal default — historical reports stay clean.
         activeFrom: '2026-01-01',
       });
@@ -251,17 +260,34 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
                 style={{ color: 'var(--gc-text-3)' }}>
                 Trailers
               </span>
-              <button
-                onClick={() => void handleAdd()}
-                disabled={adding}
-                title="Add trailer"
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
-                style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
-                onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <Plus size={12} />
-                {adding ? 'Adding…' : 'Trailer'}
-              </button>
+              <div className="flex items-center gap-1">
+                {/* Manage trailer categories — opens an overlay where
+                    the dispatcher edits the dropdown values used by
+                    the Category select on every trailer. */}
+                {showCategory && (
+                  <button
+                    onClick={() => setCatEditOpen(true)}
+                    title="Manage categories"
+                    className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
+                    style={{ color: 'var(--gc-text-2)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                    <Tag size={12} />
+                    Categories
+                  </button>
+                )}
+                <button
+                  onClick={() => void handleAdd()}
+                  disabled={adding}
+                  title="Add trailer"
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-50"
+                  style={{ color: 'var(--gc-blue)', background: 'transparent', border: 'none', cursor: adding ? 'default' : 'pointer' }}
+                  onMouseEnter={e => { if (!adding) e.currentTarget.style.background = 'var(--gc-blue-light)'; }}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <Plus size={12} />
+                  {adding ? 'Adding…' : 'Trailer'}
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-2 pb-2">
@@ -332,7 +358,20 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
     </>
   );
 
-  if (embedded) return (<>{unsavedDialog}{content}</>);
+  const categoryDialog = catEditOpen && (
+    <CategoryEditorDialog
+      title="Trailer Categories"
+      hint="Used for the Category dropdown on every trailer. Renaming updates all assigned trailers; the seed list is Swing, Roll Up, Reefer, Flat Bed, Other."
+      items={trailerCategories}
+      onAdd={addTrailerCategory}
+      onUpdate={updateTrailerCategory}
+      onRemove={removeTrailerCategory}
+      onReorder={reorderTrailerCategories}
+      onClose={() => setCatEditOpen(false)}
+    />
+  );
+
+  if (embedded) return (<>{unsavedDialog}{categoryDialog}{content}</>);
 
   return (
     <div
@@ -347,6 +386,7 @@ function TrailersModal({ onClose, initialTrailerId, embedded }, modalRef) {
           borderRadius: 14, boxShadow: 'var(--shadow-3)', overflow: 'hidden',
         }}>
         {unsavedDialog}
+        {categoryDialog}
         {content}
       </div>
     </div>
@@ -428,7 +468,7 @@ export type TrailerDetailHandle = {
 
 const TrailerProfilePanel = forwardRef<TrailerDetailHandle, TrailerProfilePanelProps>(
 function TrailerProfilePanel({ trailer, onRemove, onHardDelete, onDirtyChange }, ref) {
-  const { updateTrailer, events, assets, openEditModal } = useCalendarStore();
+  const { updateTrailer, events, assets, openEditModal, trailerCategories } = useCalendarStore();
 
   // Details / History split — matches Trucks / Drivers / Customers.
   // Trailer history is the set of events (loads) where this trailer
@@ -627,7 +667,13 @@ function TrailerProfilePanel({ trailer, onRemove, onHardDelete, onDirtyChange },
                 }}
                 style={{ ...P_INPUT, cursor: 'pointer', height: 42, padding: '0 12px' }}
                 onFocus={focusBorder} onBlur={blurBorder}>
-                {TRAILER_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                {/* If the trailer's current category was removed from the
+                    org's list (orphaned), surface it at the top so the
+                    select still displays the actual value. */}
+                {category && !trailerCategories.includes(category) && (
+                  <option value={category}>{category}</option>
+                )}
+                {trailerCategories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </PField>
           </div>
