@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Trash2, Calendar, ArrowLeftRight, FileText, Loader2, CheckCircle2, AlertCircle, AlertTriangle, Copy, Eye, Paperclip, Download, Plus, Phone, MapPin, RefreshCw, Star, Clock, ExternalLink, Pin, Play, Pencil } from 'lucide-react';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
+import { useLoadPayFinalized } from '@/lib/useLoadPayFinalized';
 import DocViewer from '@/components/closeout/DocViewer';
 import LinkedWorkOrdersSection from './LinkedWorkOrdersSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -313,10 +314,12 @@ function SuggestionChip({ label, onApply, onDismiss }: { label: string; onApply:
 }
 
 /** Number input prefixed with $. Empty string = unset (omitted on save). */
-function NumberInputWithDollar({ value, onChange, headerColor }: {
+function NumberInputWithDollar({ value, onChange, headerColor, disabled, disabledTitle }: {
   value: number | '';
   onChange: (v: number | '') => void;
   headerColor: string;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   return (
     <div style={{ position: 'relative' }}>
@@ -326,6 +329,8 @@ function NumberInputWithDollar({ value, onChange, headerColor }: {
         inputMode="decimal"
         step="0.01"
         value={value}
+        disabled={disabled}
+        title={disabled ? disabledTitle : undefined}
         onChange={e => {
           const raw = e.target.value;
           if (raw === '') onChange('');
@@ -336,9 +341,15 @@ function NumberInputWithDollar({ value, onChange, headerColor }: {
         }}
         placeholder="0.00"
         className="w-full rounded-lg outline-none text-sm"
-        style={{ border: '1px solid var(--gc-border)', padding: '8px 10px 8px 22px', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' }}
-        onFocus={e => (e.currentTarget.style.borderColor = headerColor)}
-        onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
+        style={{
+          border: '1px solid var(--gc-border)',
+          padding: '8px 10px 8px 22px',
+          color: disabled ? 'var(--gc-text-3)' : 'var(--gc-text-1)',
+          background: disabled ? '#f1f5f9' : 'var(--gc-surface)',
+          cursor: disabled ? 'not-allowed' : 'text',
+        }}
+        onFocus={e => { if (!disabled) e.currentTarget.style.borderColor = headerColor; }}
+        onBlur={e => { if (!disabled) e.currentTarget.style.borderColor = 'var(--gc-border)'; }}
       />
     </div>
   );
@@ -2201,6 +2212,18 @@ export default function EventModal() {
   const isDeliveryLeg = isEdit && relayRole === 'delivery';
   const isRelayContext = relayActive || isPickupLeg || isDeliveryLeg;
 
+  // ── Finalized-pay gates ────────────────────────────────────────────
+  // Hook results drive both the Finalized banner display AND the
+  // disabled state on the driver-pay input — same rule, lifted here
+  // so the input + banner stay in lockstep.
+  const pickupFinalizedDriverName   = isPickupLeg   ? driverName : (relayPartner?.driverName ?? '');
+  const deliveryFinalizedDriverName = isDeliveryLeg ? driverName : (relayPartner?.driverName ?? '');
+  const pickupFinalizedStart   = isPickupLeg   ? startDate : (relayPartner?.start ?? '');
+  const deliveryFinalizedStart = isDeliveryLeg ? startDate : (relayPartner?.start ?? '');
+  const pickupFinalized   = useLoadPayFinalized(pickupFinalizedDriverName,   pickupFinalizedStart);
+  const deliveryFinalized = useLoadPayFinalized(deliveryFinalizedDriverName, deliveryFinalizedStart);
+  const soloFinalized     = useLoadPayFinalized(driverName, startDate);
+
   // Compute loaded mileage from geocoded stops via Mapbox Directions.
   // For relay legs, only count stops up to (pickup) or from (delivery) the relay handoff.
   // Skipped when status is 'tonu' or 'cancelled' (load didn't move → 0 miles).
@@ -3967,8 +3990,32 @@ export default function EventModal() {
     loadNum: fieldValues['loadNum'] ? <CopyLabelBtn value={String(fieldValues['loadNum'])} /> : null,
   };
 
+  // Non-relay driverPay override — when the driver's pay for this
+  // week has been finalized, replace the generic input with a
+  // disabled NumberInputWithDollar so the value can't drift from
+  // what was paid out. The Finalized banner renders below.
+  const soloDriverPayDisabled = !isRelayContext && soloFinalized.finalized;
+  const soloDriverPayNumValue: number | '' = (() => {
+    const raw = fieldValues['driverPay'];
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      const n = parseFloat(raw);
+      return Number.isFinite(n) ? n : '';
+    }
+    return '';
+  })();
+  const soloDriverPayOverride = soloDriverPayDisabled ? (
+    <NumberInputWithDollar
+      value={soloDriverPayNumValue}
+      onChange={(v) => setField('driverPay', typeof v === 'number' ? v : '')}
+      headerColor={headerColor}
+      disabled
+      disabledTitle="Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit."
+    />
+  ) : null;
+
   const dispatcherFieldOverride: Record<string, React.ReactNode> = {
-    ...(isRelayContext ? { driverPay: relayTotalDisplay } : {}),
+    ...(isRelayContext ? { driverPay: relayTotalDisplay } : (soloDriverPayOverride ? { driverPay: soloDriverPayOverride } : {})),
     refNums: (
       <RefNumsField
         value={Array.isArray(fieldValues['refNums']) ? fieldValues['refNums'] as RefNum[] : []}
@@ -5983,10 +6030,17 @@ export default function EventModal() {
                     const deliveryStart      = isDeliveryLeg ? startDate : relayPartner?.start ?? '';
                     const pickupPayNum   = typeof pickupDriverPay   === 'number' ? pickupDriverPay   : null;
                     const deliveryPayNum = typeof deliveryDriverPay === 'number' ? deliveryDriverPay : null;
+                    const finalizedHint = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
                     return (
                       <div className="mt-3 grid grid-cols-2 gap-3">
                         <Field label="Pickup Driver Pay" labelSuffix={pctChip(pickupPct)}>
-                          <NumberInputWithDollar value={pickupDriverPay} onChange={v => { setPickupDriverPay(v); markDirty(); }} headerColor={headerColor} />
+                          <NumberInputWithDollar
+                            value={pickupDriverPay}
+                            onChange={v => { setPickupDriverPay(v); markDirty(); }}
+                            headerColor={headerColor}
+                            disabled={pickupFinalized.finalized}
+                            disabledTitle={finalizedHint}
+                          />
                           <div className="mt-1.5">
                             <FinalizedPayBanner
                               driverName={pickupDriverName}
@@ -5996,7 +6050,13 @@ export default function EventModal() {
                           </div>
                         </Field>
                         <Field label="Delivery Driver Pay" labelSuffix={pctChip(deliveryPct)}>
-                          <NumberInputWithDollar value={deliveryDriverPay} onChange={v => { setDeliveryDriverPay(v); markDirty(); }} headerColor={headerColor} />
+                          <NumberInputWithDollar
+                            value={deliveryDriverPay}
+                            onChange={v => { setDeliveryDriverPay(v); markDirty(); }}
+                            headerColor={headerColor}
+                            disabled={deliveryFinalized.finalized}
+                            disabledTitle={finalizedHint}
+                          />
                           <div className="mt-1.5">
                             <FinalizedPayBanner
                               driverName={deliveryDriverName}

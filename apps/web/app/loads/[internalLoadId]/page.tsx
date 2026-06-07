@@ -49,6 +49,7 @@ import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import { LoadDocsPreviewModal } from '@/components/closeout/LoadDocsPreviewModal';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
+import { useLoadPayFinalized } from '@/lib/useLoadPayFinalized';
 import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 import {
   SECTION_LABELS, getEnabledFieldsForSection,
@@ -685,6 +686,17 @@ function LoadFormPane({
   const iStyle = inputStyle();
   const focusH = focusColor(LOAD_ACCENT);
 
+  // ── Finalized-pay gating ────────────────────────────────────────────
+  // If the driver's payroll for the load's week has been finalized,
+  // we lock the per-leg driverPay input so an edit can't drift from
+  // what was actually paid out. The banner under the input shows the
+  // locked amount. Per-leg on relays because each leg has its own
+  // driver and may be independently finalized.
+  const primaryFinalized = useLoadPayFinalized(primary.driverName, primary.start);
+  const partnerFinalized = useLoadPayFinalized(partner?.driverName, partner?.start);
+  const isPrimaryFinalized = primaryFinalized.finalized;
+  const isPartnerFinalized = partnerFinalized.finalized;
+
   // ── Derived values ──────────────────────────────────────────────────
   // Linked customer — first try the FK (canonical source). If the load
   // pre-dates customerId being written, fall back to a case-insensitive
@@ -898,12 +910,20 @@ function LoadFormPane({
           <input type="number" value={fieldValue('driverPay')}
             placeholder={field.placeholder}
             onChange={e => commitField('driverPay', e.target.value)}
-            style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+            disabled={isPrimaryFinalized}
+            title={isPrimaryFinalized
+              ? 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.'
+              : undefined}
+            style={{
+              ...iStyle,
+              fontVariantNumeric: 'tabular-nums',
+              ...(isPrimaryFinalized ? { background: '#f1f5f9', color: 'var(--gc-text-3)', cursor: 'not-allowed' } : null),
+            }}
             onFocus={focusH} onBlur={blurColor} />
           {/* Finalized banner — visible only when payroll for the
-              load's (driver, week) has already been recorded. Tells
-              the dispatcher the money's already out the door so any
-              further edit here won't affect what was paid. */}
+              load's (driver, week) has already been recorded. The
+              input above is also disabled so the amount stays
+              honest. */}
           <div className="mt-2">
             <FinalizedPayBanner
               driverName={primary.driverName}
@@ -1172,6 +1192,7 @@ function LoadFormPane({
               {fmtPct(p)}
             </span>
           );
+          const finalizedHint = 'Locked — driver pay has been finalized for this week. Reopen the payroll record on the Payroll page to edit.';
           return (
             <div className="mt-4 grid grid-cols-2 gap-4">
               <Field label="Pickup Driver Pay" labelSuffix={pctChip(pctOf(pickupNum))}>
@@ -1183,7 +1204,13 @@ function LoadFormPane({
                     if (raw !== '' && (parsed == null || isNaN(parsed))) return;
                     onChange({ driverPay: parsed } as Partial<Load>);
                   }}
-                  style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                  disabled={isPrimaryFinalized}
+                  title={isPrimaryFinalized ? finalizedHint : undefined}
+                  style={{
+                    ...iStyle,
+                    fontVariantNumeric: 'tabular-nums',
+                    ...(isPrimaryFinalized ? { background: '#f1f5f9', color: 'var(--gc-text-3)', cursor: 'not-allowed' } : null),
+                  }}
                   onFocus={focusH} onBlur={blurColor} />
                 <div className="mt-2">
                   <FinalizedPayBanner
@@ -1205,7 +1232,13 @@ function LoadFormPane({
                     // The converter (loads.ts) coerces null → DB NULL.
                     onChangePartner({ driverPay: parsed as unknown as number });
                   }}
-                  style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                  disabled={isPartnerFinalized}
+                  title={isPartnerFinalized ? finalizedHint : undefined}
+                  style={{
+                    ...iStyle,
+                    fontVariantNumeric: 'tabular-nums',
+                    ...(isPartnerFinalized ? { background: '#f1f5f9', color: 'var(--gc-text-3)', cursor: 'not-allowed' } : null),
+                  }}
                   onFocus={focusH} onBlur={blurColor} />
                 <div className="mt-2">
                   <FinalizedPayBanner
