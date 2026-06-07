@@ -21,6 +21,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { OrganizationSwitcher, UserButton } from '@clerk/nextjs';
 import GlobalSearchDropdown from './GlobalSearchDropdown';
@@ -38,10 +39,21 @@ interface Props {
 }
 
 export default function AppTopBar({ title, icon: Icon, rightSlot }: Props) {
+  const router = useRouter();
   const [searchValue, setSearchValue] = useState('');
   const [open, setOpen]               = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const formRef   = useRef<HTMLFormElement>(null);
+
+  /** Navigate to the full /search results page with the current
+   *  query. Used by Enter, the dropdown footer, and any future
+   *  "see all" affordance. */
+  const goFullSearch = (q: string) => {
+    const trimmed = q.trim();
+    if (trimmed.length < 2) return;
+    setOpen(false);
+    router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+  };
 
   // ⌘K / Ctrl-K focuses the search input. Standard SaaS shortcut so
   // power users land here without reaching for the mouse. We avoid
@@ -61,11 +73,11 @@ export default function AppTopBar({ title, icon: Icon, rightSlot }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Enter just keeps the dropdown open — there's no separate "search
-  // page" to jump to. The dropdown itself is the result surface;
-  // picking a row navigates.
+  // Enter → jump to the full /search results page so the user can see
+  // every match, not just the top 5 per category in the dropdown.
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    goFullSearch(searchValue);
   };
 
   return (
@@ -169,6 +181,7 @@ export default function AppTopBar({ title, icon: Icon, rightSlot }: Props) {
             query={searchValue}
             anchorRef={formRef}
             onClose={() => setOpen(false)}
+            onSeeAll={() => goFullSearch(searchValue)}
           />
         )}
       </form>

@@ -40,9 +40,11 @@ interface Props {
    *  width — height + offset are CSS-driven. */
   anchorRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
+  /** "See all results" — routes to the full /search page. */
+  onSeeAll?: () => void;
 }
 
-export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Props) {
+export default function GlobalSearchDropdown({ query, anchorRef, onClose, onSeeAll }: Props) {
   const router = useRouter();
   const directory = useGlobalDirectory();
   const { customers, drivers, assets, trailers, savedLocations, unassignedAssetId } = useCalendarStore();
@@ -316,12 +318,36 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
         </Section>
       </div>
 
-      {!showLoading && !showEmpty && q.length >= MIN_QUERY && (
-        <div className="shrink-0 px-3 py-2 flex items-center gap-1.5 text-[11px]"
-          style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)', color: 'var(--gc-text-3)' }}>
-          <SearchIcon size={11} />
-          Showing top {PER_CATEGORY_LIMIT} per category. Refine to narrow.
-        </div>
+      {!showLoading && q.length >= MIN_QUERY && onSeeAll && (
+        <button
+          type="button"
+          onClick={onSeeAll}
+          className="shrink-0 w-full px-3 py-2 flex items-center justify-between gap-1.5 text-[11.5px] font-semibold transition-colors"
+          style={{
+            borderTop: '1px solid var(--gc-border-light)',
+            background: 'var(--gc-bg)',
+            color: 'var(--gc-blue)',
+            border: 'none',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-bg)')}>
+          <span className="flex items-center gap-1.5">
+            <SearchIcon size={11} />
+            See all results for &ldquo;{q}&rdquo;
+          </span>
+          <kbd className="font-mono text-[10px] tabular-nums"
+            style={{
+              padding: '1px 6px',
+              border: '1px solid var(--gc-border-light)',
+              borderRadius: 4,
+              color: 'var(--gc-text-3)',
+              background: 'var(--gc-surface)',
+            }}>
+            ↵
+          </kbd>
+        </button>
       )}
     </div>
   );
