@@ -91,6 +91,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const loadEditTick = useCalendarStore(s => s.loadEditTick);
+  const bumpLoadEditTick = useCalendarStore(s => s.bumpLoadEditTick);
   // sectionOrder + fieldSettings live in Settings → Appearance →
   // Calendar form fields. Mirroring them here keeps the load page in
   // sync with whatever the operator has configured for EventModal —
@@ -106,6 +107,24 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+
+  // Editable draft. Only fields the user has touched land here — we
+  // overlay it on top of the canonical fetched load when rendering,
+  // and turn it into a PATCH payload on save. Cleared after a
+  // successful save / on Discard / when a different load loads.
+  type LoadDraft = Partial<Pick<Load,
+    'loadNum' | 'broker' | 'customerId' | 'dispatcher' |
+    'trailerType' | 'commodity' | 'weight' |
+    'loadPrice' | 'driverPay' |
+    'notes' | 'specialInstructions' |
+    'accessorials' | 'refNums' | 'stops'>>;
+  const [draft, setDraft] = useState<LoadDraft>({});
+  const [saving, setSaving] = useState(false);
+
+  function patchDraft(patch: LoadDraft) {
+    setDraft(d => ({ ...d, ...patch }));
+  }
+  function discardDraft() { setDraft({}); }
 
   const internalIdNum = useMemo(() => {
     const n = Number.parseInt(internalLoadId, 10);
@@ -169,6 +188,47 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 
   const customerById = useMemo(() => new Map(customers.map(c => [c.id, c])), [customers]);
 
+  // Drop any pending edits whenever a fresh load lands so the form
+  // resets to the persisted state. Without this, refresh-after-save
+  // would visibly leave the user's input on top of the saved row.
+  const primaryLoadId = primaryLeg?.loadId;
+  useEffect(() => { setDraft({}); }, [primaryLoadId]);
+
+  // Effective load = persisted row + any pending edits on top.
+  const effective: Load | undefined = useMemo(
+    () => primaryLeg ? { ...primaryLeg, ...draft } : undefined,
+    [primaryLeg, draft],
+  );
+  const isDirty = Object.keys(draft).length > 0;
+
+  // Save flow. Routes load-level fields through PATCH /v1/loads/:id and
+  // stops through replaceStops on the primary event. Stops live event-
+  // side because each event owns its leg's route; we only patch them
+  // when the user actually edited them, otherwise the API would
+  // overwrite the canonical row with a stale copy on every save.
+  async function handleSave() {
+    if (!primaryLeg?.loadId || saving) return;
+    setSaving(true);
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
+      const { stops: nextStops, ...loadPatch } = draft;
+      if (Object.keys(loadPatch).length > 0) {
+        await railway.updateLoad(primaryLeg.loadId, loadPatch);
+      }
+      if (nextStops !== undefined) {
+        await railway.replaceStops(primaryLeg.id, { stops: nextStops });
+      }
+      setDraft({});
+      bumpLoadEditTick();
+      await refresh({ silent: true });
+    } catch (e) {
+      console.error('[load detail] save failed:', e);
+      window.alert(`Save failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!authLoaded || !isSignedIn || (loading && !legs)) {
     return (
       <AppShell title="Load" icon={Truck} noPageScroll>
@@ -199,7 +259,10 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   return (
     <AppShell title={headerTitle} icon={Truck} noPageScroll>
       <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-2 gap-3 overflow-hidden">
-        {/* Top toolbar */}
+        {/* Top toolbar. Save / Discard surface only when there are
+            pending edits — same dirty-detection rhythm EventModal
+            uses, just lifted to the page header instead of the modal
+            footer. */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <button onClick={() => router.back()}
             className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
@@ -207,6 +270,21 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             <ArrowLeft size={12} /> Back
           </button>
           <div className="flex-1" />
+          {isDirty && (
+            <>
+              <button onClick={discardDraft} disabled={saving}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
+                Discard changes
+              </button>
+              <button onClick={() => void handleSave()} disabled={saving}
+                className="text-[12px] font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                style={{ background: LOAD_ACCENT, color: '#fff' }}>
+                {saving ? <Loader2 size={12} className="animate-spin" /> : null}
+                Save changes
+              </button>
+            </>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 grid gap-3"
@@ -219,21 +297,20 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 card text" sizing, exactly like EventModal does. */}
             <div className="ui-scale-scope flex-1 min-h-0 overflow-y-auto"
               style={{ ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}>
-              <fieldset disabled style={{ border: 'none', padding: 0, margin: 0, minWidth: 0 }}>
-                <LoadFormPane
-                  primary={primaryLeg}
-                  partner={partnerLeg}
-                  customerById={customerById}
-                  assets={assets}
-                  drivers={drivers}
-                  customers={customers}
-                  sectionOrder={sectionOrder}
-                  fieldSettings={fieldSettings}
-                  onOpenCustomerProfile={setCustomerProfileId}
-                  currentUserName={currentUserName}
-                  calendarTimezone={calendarTimezone}
-                />
-              </fieldset>
+              <LoadFormPane
+                primary={effective ?? primaryLeg}
+                partner={partnerLeg}
+                customerById={customerById}
+                assets={assets}
+                drivers={drivers}
+                customers={customers}
+                sectionOrder={sectionOrder}
+                fieldSettings={fieldSettings}
+                onOpenCustomerProfile={setCustomerProfileId}
+                currentUserName={currentUserName}
+                calendarTimezone={calendarTimezone}
+                onChange={patchDraft}
+              />
             </div>
           </div>
 
@@ -285,7 +362,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 
 function LoadFormPane({
   primary, partner, customerById, assets, drivers, customers, sectionOrder, fieldSettings,
-  onOpenCustomerProfile, currentUserName, calendarTimezone,
+  onOpenCustomerProfile, currentUserName, calendarTimezone, onChange,
 }: {
   primary: Load;
   partner: Load | undefined;
@@ -298,6 +375,10 @@ function LoadFormPane({
   onOpenCustomerProfile: (customerId: string) => void;
   currentUserName: string;
   calendarTimezone: string;
+  /** Patch into the draft. Each call merges into the page-level draft;
+   *  the page diffs against the persisted load + builds the save
+   *  payload. Pass `{ broker: 'X' }` to set, `{ broker: null }` to clear. */
+  onChange: (patch: Partial<Load>) => void;
 }) {
   const iStyle = inputStyle();
   const focusH = focusColor(LOAD_ACCENT);
@@ -337,64 +418,136 @@ function LoadFormPane({
   // Returns a string (or empty string) for rendering inside an
   // <input>. Special-case fields (refNums, accessorials) render their
   // own UI outside the generic field loop.
-  function loadFieldValue(id: string): string {
+  // Pull the editable raw value for a given field id. Numbers come
+  // through as plain strings so the caret behaves; commitField parses
+  // back on write. Trailer (event-level) stays read-only here.
+  function fieldValue(id: string): string {
     switch (id) {
       case 'loadNum':     return primary.loadNum ?? '';
-      case 'broker':      return brokerDisplay ?? '';
+      case 'broker':      return primary.broker ?? '';
       case 'dispatcher':  return primary.dispatcher ?? '';
       case 'trailerType': return primary.trailerType ?? '';
       case 'trailer':     return primary.trailerName ?? primary.trailerNum ?? '';
       case 'commodity':   return primary.commodity ?? '';
-      case 'weight':      return primary.weight != null ? primary.weight.toLocaleString() : '';
-      case 'loadPrice':   return primary.loadPrice != null ? moneyFmt.format(primary.loadPrice) : '';
-      case 'driverPay':   return primary.driverPay != null ? moneyFmt.format(primary.driverPay) : '';
+      case 'weight':      return primary.weight != null ? String(primary.weight) : '';
+      case 'loadPrice':   return primary.loadPrice != null ? String(primary.loadPrice) : '';
+      case 'driverPay':   return primary.driverPay != null ? String(primary.driverPay) : '';
+      case 'notes':       return primary.notes ?? '';
       case 'specialInstructions': return primary.specialInstructions ?? '';
       default:            return '';
     }
   }
 
-  // Render one field row by id. RefNums get a dedicated list shape;
-  // textareas (specialInstructions) get rows=3.
+  // Commit a single field. Empty string clears (null on the wire);
+  // numbers parse from the typed string and silently ignore garbage.
+  function commitField(id: string, raw: string) {
+    const isNumber = id === 'weight' || id === 'loadPrice' || id === 'driverPay';
+    if (isNumber) {
+      const trimmed = raw.trim();
+      const parsed = trimmed === '' ? null : Number(trimmed);
+      if (trimmed !== '' && (parsed == null || isNaN(parsed))) return;
+      onChange({ [id]: parsed } as Partial<Load>);
+      return;
+    }
+    onChange({ [id]: raw === '' ? null : raw } as Partial<Load>);
+  }
+
+  // Render one field row by id. Broker, refNums, and textareas get
+  // dedicated treatments; everything else is a single text/number
+  // input wired through commitField.
   function renderField(field: FieldDef) {
-    if (field.id === 'refNums') {
+    // Broker — editable input + the green "Linked to" tag and "View
+    // customer profile" button when the FK is set. Editing the text
+    // doesn't break the FK link (separate columns).
+    if (field.id === 'broker') {
       return (
         <Field label={field.label}>
-          {primary.refNums && primary.refNums.length > 0 ? (
-            <div className="space-y-1.5">
-              {primary.refNums.map((r, i) => (
-                <div key={i} className="grid grid-cols-2 gap-2 items-center">
-                  <input type="text" value={r.label || `Ref ${i + 1}`} readOnly
-                    style={{ ...iStyle, fontSize: 'calc(12px * var(--ui-scale, 1))' }}
-                    onFocus={focusH} onBlur={blurColor} />
-                  <input type="text" value={r.value} readOnly
-                    style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
-                    onFocus={focusH} onBlur={blurColor} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <input type="text" value="" readOnly placeholder="None"
+          <div className="space-y-2">
+            <input type="text" value={fieldValue('broker')}
+              placeholder={field.placeholder}
+              onChange={e => commitField('broker', e.target.value)}
               style={iStyle} onFocus={focusH} onBlur={blurColor} />
-          )}
+            {linkedCustomer && (
+              <>
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                  style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                  <CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: '#15803d' }}>
+                    Linked to <strong>{linkedCustomer.name}</strong>
+                  </span>
+                </div>
+                <button type="button"
+                  onClick={() => onOpenCustomerProfile(linkedCustomer.id)}
+                  className="flex items-center gap-1.5 text-xs font-medium"
+                  style={{ color: LOAD_ACCENT, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                  <ExternalLinkIcon size={12} /> View customer profile
+                </button>
+              </>
+            )}
+          </div>
+        </Field>
+      );
+    }
+    // Ref numbers — list editor: label + value inputs per row plus a
+    // remove button. The "+ Reference" button below appends an empty
+    // row that the user fills in.
+    if (field.id === 'refNums') {
+      const refs = primary.refNums ?? [];
+      const update = (idx: number, patch: Partial<typeof refs[number]>) =>
+        onChange({ refNums: refs.map((r, i) => i === idx ? { ...r, ...patch } : r) });
+      const add = () => onChange({ refNums: [...refs, { label: '', value: '' }] });
+      const remove = (idx: number) =>
+        onChange({ refNums: refs.filter((_, i) => i !== idx) });
+      return (
+        <Field label={field.label}>
+          <div className="space-y-1.5">
+            {refs.map((r, i) => (
+              <div key={i} className="grid items-center gap-2"
+                style={{ gridTemplateColumns: '1fr 1fr auto' }}>
+                <input type="text" value={r.label}
+                  placeholder="Label (PO #, BOL…)"
+                  onChange={e => update(i, { label: e.target.value })}
+                  style={{ ...iStyle, fontSize: 'calc(12px * var(--ui-scale, 1))' }}
+                  onFocus={focusH} onBlur={blurColor} />
+                <input type="text" value={r.value}
+                  placeholder="Value"
+                  onChange={e => update(i, { value: e.target.value })}
+                  style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                  onFocus={focusH} onBlur={blurColor} />
+                <button type="button" onClick={() => remove(i)} title="Remove reference"
+                  style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 16, lineHeight: 1 }}>
+                  ×
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={add}
+              className="flex items-center gap-1 text-xs font-semibold transition-opacity"
+              style={{ color: LOAD_ACCENT, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+              <Plus size={12} /> Reference
+            </button>
+          </div>
         </Field>
       );
     }
     if (field.type === 'textarea') {
       return (
         <Field label={field.label}>
-          <textarea value={loadFieldValue(field.id)} readOnly
+          <textarea value={fieldValue(field.id)}
             placeholder={field.placeholder}
             rows={3}
-            style={{ ...iStyle, resize: 'none', fontFamily: 'inherit', minHeight: 72 }}
+            onChange={e => commitField(field.id, e.target.value)}
+            style={{ ...iStyle, resize: 'vertical', fontFamily: 'inherit', minHeight: 72 }}
             onFocus={focusH} onBlur={blurColor} />
         </Field>
       );
     }
+    const isNumber = field.type === 'number';
     return (
       <Field label={field.label}>
-        <input type="text" value={loadFieldValue(field.id)} readOnly
+        <input type={isNumber ? 'number' : 'text'} value={fieldValue(field.id)}
           placeholder={field.placeholder}
-          style={{ ...iStyle, fontVariantNumeric: field.type === 'number' ? 'tabular-nums' : undefined }}
+          onChange={e => commitField(field.id, e.target.value)}
+          style={{ ...iStyle, fontVariantNumeric: isNumber ? 'tabular-nums' : undefined }}
           onFocus={focusH} onBlur={blurColor} />
       </Field>
     );
@@ -458,7 +611,7 @@ function LoadFormPane({
           style={first ? {} : { borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
           <StopsSection
             stops={primary.stops}
-            onChange={() => { /* read-only on the detail page */ }}
+            onChange={(stops) => onChange({ stops })}
             headerColor={LOAD_ACCENT}
             onMapRoute={() => { /* page already shows the map on the right */ }}
             loadedMiles={loadedMiles}
@@ -477,19 +630,19 @@ function LoadFormPane({
       <ModalSection key={section} title={SECTION_LABELS[section]} first={first}>
         {renderSectionFields(fields)}
 
-        {/* Accessorials — mirrors the modal's "+ Accessorial" button
-            (green plus, just sits inline). The full accessorial list
-            editor (category select, description, amount, billable
-            toggle, drag handles) lands in a follow-up. */}
+        {/* Accessorials editor — same data model as the modal:
+            category select, description, amount, billable toggle.
+            "+ Accessorial" appends a new detention row at $0 which the
+            user fills in. Remove via the × button on each row. */}
         {section === 'financial' && (
-          <div className="mt-4 flex items-center justify-between">
-            <button type="button"
-              className="flex items-center gap-1 text-xs font-semibold transition-opacity"
-              style={{ color: '#16a34a', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-              <Plus size={12} /> Accessorial
-            </button>
+          <div className="mt-4">
+            <AccessorialsEditor
+              value={primary.accessorials ?? []}
+              onChange={(next) => onChange({ accessorials: next })}
+              iStyle={iStyle}
+            />
             {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice && (
-              <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+              <div className="mt-2 text-right text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
                 Total billable{' '}
                 <strong className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
                   {moneyFmt.format(primary.totalBillable)}
@@ -625,6 +778,108 @@ function LoadFormPane({
           modal's footer history block. Compact: "Created by ..." and
           an expandable "View full history (N)" link. */}
       <LoadHistorySection load={primary} calendarTimezone={calendarTimezone} />
+    </div>
+  );
+}
+
+// ─── Accessorials editor ────────────────────────────────────────────────
+//
+// Same data model EventModal uses: id (uuid), category (one of the
+// 6 enum values), description, amount, billable flag. "+ Accessorial"
+// appends a new $0 detention row that the user fills in. Remove via
+// the × button on each row.
+
+const ACCESSORIAL_CATEGORIES = [
+  { value: 'detention',    label: 'Detention' },
+  { value: 'lumper',       label: 'Lumper' },
+  { value: 'layover',      label: 'Layover' },
+  { value: 'scale_ticket', label: 'Scale ticket' },
+  { value: 'extra_stop',   label: 'Extra stop' },
+  { value: 'other',        label: 'Other' },
+] as const;
+
+function AccessorialsEditor({
+  value, onChange, iStyle,
+}: {
+  value: import('@fleetcal/types').Accessorial[];
+  onChange: (next: import('@fleetcal/types').Accessorial[]) => void;
+  iStyle: React.CSSProperties;
+}) {
+  const focusH = focusColor('#16a34a');
+  const ACC_COLOR = '#16a34a';
+
+  function update(idx: number, patch: Partial<import('@fleetcal/types').Accessorial>) {
+    onChange(value.map((a, i) => i === idx ? { ...a, ...patch } : a));
+  }
+  function add() {
+    const next = [...value, {
+      id: crypto.randomUUID(),
+      category: 'detention' as const,
+      description: '',
+      amount: 0,
+      billable: true,
+    }];
+    onChange(next);
+  }
+  function remove(idx: number) {
+    onChange(value.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-[11px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--gc-text-3)' }}>
+          Accessorials
+        </label>
+        <button type="button" onClick={add}
+          className="flex items-center gap-1 text-xs font-semibold transition-opacity"
+          style={{ color: ACC_COLOR, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+          onMouseEnter={e => (e.currentTarget.style.opacity = '0.7')}
+          onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+          <Plus size={12} /> Accessorial
+        </button>
+      </div>
+      {value.length === 0 ? (
+        <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
+          None.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {value.map((a, i) => (
+            <div key={a.id} className="grid items-center gap-2"
+              style={{ gridTemplateColumns: '140px 1fr 110px auto auto' }}>
+              <StyledSelect value={a.category}
+                onChange={e => update(i, { category: e.target.value as typeof a.category })}
+                style={{ ...iStyle, cursor: 'pointer' }}
+                onFocus={focusH} onBlur={blurColor}>
+                {ACCESSORIAL_CATEGORIES.map(c => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </StyledSelect>
+              <input type="text" value={a.description ?? ''}
+                placeholder="Description"
+                onChange={e => update(i, { description: e.target.value })}
+                style={iStyle} onFocus={focusH} onBlur={blurColor} />
+              <input type="number" value={a.amount ?? 0}
+                placeholder="0.00"
+                onChange={e => update(i, { amount: Number(e.target.value) || 0 })}
+                style={{ ...iStyle, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}
+                onFocus={focusH} onBlur={blurColor} />
+              <label className="flex items-center gap-1 text-[11px]"
+                style={{ color: 'var(--gc-text-2)' }}>
+                <input type="checkbox" checked={a.billable}
+                  onChange={e => update(i, { billable: e.target.checked })} />
+                Billable
+              </label>
+              <button type="button" onClick={() => remove(i)} title="Remove accessorial"
+                style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 16, lineHeight: 1 }}>
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
