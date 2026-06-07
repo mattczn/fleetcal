@@ -67,22 +67,19 @@ CREATE TEMP TABLE clerk_user_map (
   display_name text  -- optional, for sanity checking the CSV
 ) ON COMMIT DROP;
 
--- The 8 dev user_ids below were enumerated from the FleetCal DB on
--- 2026-06-07. Replace each REPLACE_WITH_PROD_… with the new
--- user_xxx value Clerk hands out after that user accepts the invite
--- to the prod Curzon org. The display_name column is for your
--- sanity check during review — pull each user's name/email from
--- the dev Clerk dashboard's Users list and fill it in so the
--- script's history is self-documenting.
+-- Preflight discovery (queries 4 + 5) confirmed only 3 dev user_ids
+-- appear anywhere in the data, and of those, only 1 (Matt) is
+-- getting a prod account immediately. Mike + Melanie touched a
+-- combined 25 rows of low-value attribution data
+-- (maintenance_action_items + fuel_transactions), all of which
+-- carry display names elsewhere or don't surface user_id in any
+-- UI. We NULL out their references at the bottom instead of
+-- requiring their prod_user_ids.
+--
+-- TODO: replace REPLACE_WITH_PROD_USER_ID below with Matt's actual
+-- prod_user_id once he accepts the prod Curzon Clerk invite.
 INSERT INTO clerk_user_map (dev_user_id, prod_user_id, display_name) VALUES
-  ('user_3EYE29KB5QhqA5OX6ZiyBR9CGHG', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3E7J1RpHh0COQxFhSd9iqCNmeRc', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3E698Z2KQzAR2xB2ZjTGCxMs5a8', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3E5cc7nMDWD0E0PzvtynusA7PKI', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3DyGOVbIH5cyfNCdPwy8nsWs9Xc', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3CjyUDl0dR0Wi9Pq1HbFaSZGLsg', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3Dn7dfW8FTZnTLyDQFQg4IlQ6oe', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
-  ('user_3Cgz7uSjL0IX359kSOh0PRIHq3b', 'REPLACE_WITH_PROD_USER_ID', 'Matt Curzon');  -- adjust display name
+  ('user_3Cgz7uSjL0IX359kSOh0PRIHq3b', 'REPLACE_WITH_PROD_USER_ID', 'Matt Curzon');
 
 -- Bail out if any prod_user_id placeholder is still present — protects
 -- against accidentally running a half-finished mapping where some
@@ -190,6 +187,12 @@ END $$;
 --   - Synthetic prefix values like 'driver:123' or 'motive_sync' don't
 --     start with 'user_' so they wouldn't match the JOIN anyway.
 
+-- The 4 UPDATEs below cover the only columns the preflight discovery
+-- query found Clerk user_ids in. The 'movements' + 'org_api_keys'
+-- entries that lived here previously were leftover from the initial
+-- audit guess — neither column actually holds user_xxx values in
+-- this DB, so the UPDATEs would have no-op'd.
+
 UPDATE fuel_transactions SET matched_by = m.prod_user_id
   FROM clerk_user_map m WHERE fuel_transactions.matched_by = m.dev_user_id;
 
@@ -202,17 +205,30 @@ UPDATE cost_analysis_reports SET created_by = m.prod_user_id
 UPDATE movement_links SET source_user = m.prod_user_id
   FROM clerk_user_map m WHERE movement_links.source_user = m.dev_user_id;
 
-UPDATE cost_analysis_reports SET created_by = m.prod_user_id
-  FROM clerk_user_map m WHERE cost_analysis_reports.created_by = m.dev_user_id;
+-- ─────────────────────────────────────────────────────────────────────────
+-- NULL-OUT for users not getting prod accounts at migration time
+-- ─────────────────────────────────────────────────────────────────────────
+-- Mike (user_3Dn7…) and Melanie (user_3E5c…) touched a combined 25 rows
+-- of attribution metadata that has no UI consequence:
+--   - maintenance_action_items.created_by has a paired created_by_name
+--     column ('Michael C') the UI uses for display — wiping the
+--     user_id reference is invisible to the user.
+--   - fuel_transactions.matched_by is an internal "who reconciled this
+--     match" audit field that doesn't surface in the UI.
+--
+-- We NULL them out instead of remapping. If either user ever gets a
+-- prod Clerk account later, the references can be re-attributed via a
+-- one-row UPDATE then.
+--
+-- Run AFTER the user_id remap above so any successful map hits go to
+-- prod ids first; the WHERE clause matches only what remains tagged
+-- with the original dev user_id.
 
-UPDATE movements SET created_by = m.prod_user_id
-  FROM clerk_user_map m WHERE movements.created_by = m.dev_user_id;
+UPDATE maintenance_action_items SET created_by = NULL
+  WHERE created_by = 'user_3Dn7dfW8FTZnTLyDQFQg4IlQ6oe';  -- Mike
 
-UPDATE movement_links SET source_user = m.prod_user_id
-  FROM clerk_user_map m WHERE movement_links.source_user = m.dev_user_id;
-
-UPDATE org_api_keys SET created_by = m.prod_user_id
-  FROM clerk_user_map m WHERE org_api_keys.created_by = m.dev_user_id;
+UPDATE fuel_transactions SET matched_by = NULL
+  WHERE matched_by = 'user_3E5cc7nMDWD0E0PzvtynusA7PKI';  -- Melanie
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- JSONB NESTED user_id REMAPPING — loads.internal_notes only
