@@ -23,16 +23,18 @@
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth } from '@clerk/nextjs';
+import { useAuth, useUser } from '@clerk/nextjs';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
+  CheckCircle2, Plus, Clock,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
 import RealtimeSync from '@/components/RealtimeSync';
 import RouteMapPanel from '@/components/calendar/RouteMapPanel';
 import StopsSection from '@/components/calendar/StopsSection';
+import CheckCallsSection from '@/components/calendar/CheckCallsSection';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import RequireCap from '@/components/auth/RequireCap';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
@@ -81,10 +83,13 @@ export default function LoadDetailPageRoute({ params }: PageProps) {
 function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const router = useRouter();
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
+  const currentUserName = user?.fullName ?? user?.firstName ?? 'Unknown';
   const customers = useCalendarStore(s => s.customers);
   const assets = useCalendarStore(s => s.assets);
   const drivers = useCalendarStore(s => s.drivers);
   const cardFontScale = useCalendarStore(s => s.cardFontScale);
+  const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const loadEditTick = useCalendarStore(s => s.loadEditTick);
   // sectionOrder + fieldSettings live in Settings → Appearance →
   // Calendar form fields. Mirroring them here keeps the load page in
@@ -225,6 +230,8 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                   sectionOrder={sectionOrder}
                   fieldSettings={fieldSettings}
                   onOpenCustomerProfile={setCustomerProfileId}
+                  currentUserName={currentUserName}
+                  calendarTimezone={calendarTimezone}
                 />
               </fieldset>
             </div>
@@ -278,7 +285,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 
 function LoadFormPane({
   primary, partner, customerById, assets, drivers, customers, sectionOrder, fieldSettings,
-  onOpenCustomerProfile,
+  onOpenCustomerProfile, currentUserName, calendarTimezone,
 }: {
   primary: Load;
   partner: Load | undefined;
@@ -289,6 +296,8 @@ function LoadFormPane({
   sectionOrder: FieldSection[];
   fieldSettings: Record<string, boolean>;
   onOpenCustomerProfile: (customerId: string) => void;
+  currentUserName: string;
+  calendarTimezone: string;
 }) {
   const iStyle = inputStyle();
   const focusH = focusColor(LOAD_ACCENT);
@@ -393,13 +402,15 @@ function LoadFormPane({
 
   // Pair adjacent fields into two-column rows the same way the modal
   // does: every two fields share a `grid grid-cols-2 gap-4`. Fields
-  // flagged `span` (none today, but future-proof) force a full-width
-  // row and skip pairing.
+  // flagged `span` OR textareas (Special Instructions et al.) take a
+  // full-width row and skip pairing — matching EventModal's layout
+  // where the long-form textarea spans the container.
   function renderSectionFields(fields: FieldDef[]) {
+    const isFull = (f: FieldDef) => f.span || f.type === 'textarea';
     const rows: FieldDef[][] = [];
     let bucket: FieldDef[] = [];
     for (const f of fields) {
-      if (f.span) {
+      if (isFull(f)) {
         if (bucket.length) { rows.push(bucket); bucket = []; }
         rows.push([f]);
         continue;
@@ -410,12 +421,20 @@ function LoadFormPane({
     if (bucket.length) rows.push(bucket);
     return (
       <div className="space-y-4">
-        {rows.map((row, i) => (
-          <div key={i} className="grid grid-cols-2 gap-4">
-            {row.map(f => <div key={f.id}>{renderField(f)}</div>)}
-            {row.length === 1 && <div />}
-          </div>
-        ))}
+        {rows.map((row, i) => {
+          // Full-width rows render without the 2-col grid so the
+          // textarea actually spans the container instead of sitting
+          // in the left column with a phantom right gutter.
+          if (row.length === 1 && isFull(row[0])) {
+            return <div key={i}>{renderField(row[0])}</div>;
+          }
+          return (
+            <div key={i} className="grid grid-cols-2 gap-4">
+              {row.map(f => <div key={f.id}>{renderField(f)}</div>)}
+              {row.length === 1 && <div />}
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -458,46 +477,23 @@ function LoadFormPane({
       <ModalSection key={section} title={SECTION_LABELS[section]} first={first}>
         {renderSectionFields(fields)}
 
-        {/* Accessorials only live inside the Financial section.
-            Hand-rendered (not a normal field) because EventModal also
-            renders a custom list editor here. */}
+        {/* Accessorials — mirrors the modal's "+ Accessorial" button
+            (green plus, just sits inline). The full accessorial list
+            editor (category select, description, amount, billable
+            toggle, drag handles) lands in a follow-up. */}
         {section === 'financial' && (
-          <div className="mt-4">
-            <Field label="Accessorials">
-              {primary.accessorials && primary.accessorials.length > 0 ? (
-                <div className="space-y-1.5">
-                  {primary.accessorials.map((a, i) => (
-                    <div key={i}
-                      className="flex items-center justify-between px-3 py-2 rounded-lg"
-                      style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[12.5px] font-semibold capitalize" style={{ color: 'var(--gc-text-1)' }}>
-                          {a.category}
-                        </div>
-                        {a.description && (
-                          <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-                            {a.description}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-                        {moneyFmt.format(a.amount ?? 0)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <input type="text" value="" readOnly placeholder="None"
-                  style={iStyle} onFocus={focusH} onBlur={blurColor} />
-              )}
-            </Field>
+          <div className="mt-4 flex items-center justify-between">
+            <button type="button"
+              className="flex items-center gap-1 text-xs font-semibold transition-opacity"
+              style={{ color: '#16a34a', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+              <Plus size={12} /> Accessorial
+            </button>
             {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice && (
-              <div className="mt-3">
-                <Field label="Total billable">
-                  <input type="text" value={moneyFmt.format(primary.totalBillable)} readOnly
-                    style={{ ...iStyle, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}
-                    onFocus={focusH} onBlur={blurColor} />
-                </Field>
+              <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
+                Total billable{' '}
+                <strong className="tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                  {moneyFmt.format(primary.totalBillable)}
+                </strong>
               </div>
             )}
           </div>
@@ -610,6 +606,141 @@ function LoadFormPane({
           above (already rendered with first=true), so none of these
           take the `first` flag — they all draw the upper divider. */}
       {finalOrder.map(section => renderSection(section, false))}
+
+      {/* Check Calls — mirrors the modal placement (below the user-
+          defined sections). Wraps the exact CheckCallsSection
+          component the modal uses, so the styling, log button, and
+          channel list match 1:1. */}
+      {primary.loadId && (
+        <div style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
+          <CheckCallsSection
+            loadId={primary.loadId}
+            currentUserName={currentUserName}
+            accentColor={LOAD_ACCENT}
+          />
+        </div>
+      )}
+
+      {/* Load history — created-by line + audit log. Mirrors the
+          modal's footer history block. Compact: "Created by ..." and
+          an expandable "View full history (N)" link. */}
+      <LoadHistorySection load={primary} calendarTimezone={calendarTimezone} />
+    </div>
+  );
+}
+
+// ─── Load history (audit log) ───────────────────────────────────────────
+//
+// Mirrors EventModal's history footer. Created-by line on top, plus an
+// expandable list of audit entries when there are any. Renders in the
+// org timezone so dispatchers across regions see the same timestamps.
+
+function LoadHistorySection({ load, calendarTimezone }: {
+  load: Load;
+  calendarTimezone: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const auditLog = load.auditLog ?? [];
+  const hasHistory = auditLog.length > 0;
+  if (!load.createdByName && !hasHistory) return null;
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+      timeZone: calendarTimezone,
+    });
+
+  // prevStart/newStart etc. are stored as NAIVE ISO ("YYYY-MM-DDTHH:mm")
+  // — they already represent a wall-clock time in the org's tz. Parse
+  // manually so the display doesn't double-shift.
+  const fmtAuditTime = (iso?: string) => {
+    if (!iso) return '—';
+    const s = iso.includes(' ') ? iso.replace(' ', 'T') : iso;
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s);
+    if (!m) return iso;
+    const [, y, mo, d, hh, mm] = m;
+    const dt = new Date(Date.UTC(+y, +mo - 1, +d, +hh, +mm));
+    return dt.toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+      timeZone: 'UTC',
+    });
+  };
+  const fmt$ = (n?: number) => n != null ? `$${n.toLocaleString()}` : '—';
+
+  return (
+    <div style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+        <Clock size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+        {load.createdByName && (
+          <>
+            <span style={{ color: 'var(--gc-text-3)' }}>Created by</span>
+            <span style={{ color: 'var(--gc-text-1)', fontWeight: 600 }}>{load.createdByName}</span>
+            {load.createdAt && (
+              <>
+                <span style={{ color: 'var(--gc-text-3)' }}>·</span>
+                <span style={{ color: 'var(--gc-text-3)' }}>{fmtDate(load.createdAt)}</span>
+              </>
+            )}
+          </>
+        )}
+        {hasHistory && (
+          <button
+            type="button"
+            onClick={() => setExpanded(x => !x)}
+            style={{ marginLeft: 6, fontSize: 11, color: 'var(--gc-blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600 }}
+          >
+            {expanded ? 'Hide history' : `View full history (${auditLog.length})`}
+          </button>
+        )}
+      </div>
+      {expanded && hasHistory && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10 }}>
+          {auditLog.map((entry, i) => {
+            const b = (txt: string) => <strong style={{ fontWeight: 700 }}>{txt}</strong>;
+            type Part = { key: string; node: React.ReactNode };
+            const parts: Part[] = [];
+            if (entry.prevDriverName !== undefined || entry.newDriverName !== undefined)
+              parts.push({ key: 'driver', node: <>{b('Driver')} changed from {b(entry.prevDriverName || '—')} to {b(entry.newDriverName || '—')}</> });
+            if (entry.prevLoadPrice !== undefined)
+              parts.push({ key: 'lprice', node: <>{b('Load price')} changed from {b(fmt$(entry.prevLoadPrice))} to {b(fmt$(entry.newLoadPrice))}</> });
+            if (entry.prevDriverPay !== undefined)
+              parts.push({ key: 'dpay', node: <>{b('Driver pay')} changed from {b(fmt$(entry.prevDriverPay))} to {b(fmt$(entry.newDriverPay))}</> });
+            if (entry.prevCustomerId !== undefined || entry.newCustomerId !== undefined)
+              parts.push({ key: 'customer', node: <>{b('Customer')} changed from {b(entry.prevCustomerName || entry.prevBroker || '—')} to {b(entry.newCustomerName || entry.newBroker || '—')}</> });
+            else if (entry.prevBroker !== undefined || entry.newBroker !== undefined)
+              parts.push({ key: 'broker', node: <>{b('Customer')} changed from {b(entry.prevBroker || '—')} to {b(entry.newBroker || '—')}</> });
+            if (entry.prevDispatcher !== undefined || entry.newDispatcher !== undefined)
+              parts.push({ key: 'disp', node: <>{b('Dispatcher')} changed from {b(entry.prevDispatcher || '—')} to {b(entry.newDispatcher || '—')}</> });
+            if (entry.prevPriority !== undefined || entry.newPriority !== undefined)
+              parts.push({ key: 'priority', node: <>{b('Priority')} {entry.newPriority ? <>flagged {b('on')}</> : <>flag {b('removed')}</>}</> });
+            if (entry.prevStart !== undefined || entry.newStart !== undefined)
+              parts.push({ key: 'start', node: <>{b('Start')} changed from {b(fmtAuditTime(entry.prevStart))} to {b(fmtAuditTime(entry.newStart))}</> });
+            if (entry.prevEnd !== undefined || entry.newEnd !== undefined)
+              parts.push({ key: 'end', node: <>{b('End')} changed from {b(fmtAuditTime(entry.prevEnd))} to {b(fmtAuditTime(entry.newEnd))}</> });
+            if (entry.prevBillingStatus !== undefined || entry.newBillingStatus !== undefined)
+              parts.push({ key: 'billing', node: <>{b('Billing')} changed from {b(entry.prevBillingStatus || '—')} to {b(entry.newBillingStatus || '—')}</> });
+            if (parts.length === 0) return null;
+            return (
+              <div key={i} style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--gc-text-2)' }}>
+                <span style={{ color: 'var(--gc-text-3)' }}>
+                  {entry.changedByName ?? 'Unknown'}
+                  {entry.changedAt && <> · {fmtDate(entry.changedAt)}</>}
+                </span>
+                <div style={{ marginTop: 2 }}>
+                  {parts.map((p, j) => (
+                    <span key={p.key}>
+                      {j > 0 && <span style={{ color: 'var(--gc-text-3)' }}> · </span>}
+                      {p.node}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
