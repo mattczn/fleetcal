@@ -295,157 +295,307 @@ function LoadDetailsCard({
   const drivers = [primary.driverName, partner?.driverName].filter(Boolean) as string[];
   const trucks = [primaryTruck, partnerTruck].filter(Boolean);
 
+  // Accent color used for the title underline + section accents.
+  // EventModal pulls this from the assigned truck. Loads can have
+  // multiple legs with different trucks; the accent is purely visual,
+  // so we stick to a stable load-themed blue rather than chasing the
+  // pickup leg's truck colour.
+  const LOAD_ACCENT = 'var(--gc-blue)';
+
   return (
-    <>
-      <div className="px-5 py-3 flex items-center gap-3 flex-shrink-0"
-        style={{ borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
-        <div className="flex-1 min-w-0">
-          <div className="text-[15px] font-extrabold truncate" style={{ color: 'var(--gc-text-1)' }}>
-            {brokerDisplay || '(no broker)'}
-          </div>
-          <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-            {primary.loadNum ? `Broker load #${primary.loadNum}` : 'No broker load #'}
+    <div className="flex-1 min-h-0 overflow-y-auto">
+      {/* Form pane padding mirrors EventModal: px-8 py-6 with vertical
+          rhythm at space-y-5. Don't change these without lining them
+          up against EventModal — the visual parity is the whole point. */}
+      <div className="px-8 py-6 space-y-5">
+
+        {/* Title row — same look as EventModal's title input:
+            22px, headerColor underline, mb spacing. We use a static
+            <div> instead of an <input> because there's no event title
+            to edit on a load page. Falls back gracefully when the load
+            has no broker. */}
+        <div>
+          <div
+            className="w-full bg-transparent font-medium"
+            style={{
+              fontSize: 22,
+              borderBottom: `2px solid ${LOAD_ACCENT}`,
+              paddingBottom: 8,
+              color: brokerDisplay ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+            }}
+          >
+            {brokerDisplay || 'No broker'}
           </div>
         </div>
-      </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-5">
-        <Section title="Assignment">
-          <Row label="Driver(s)"   value={drivers.length ? drivers.join(' / ') : <Muted>Unassigned</Muted>} />
-          <Row label="Truck(s)"    value={trucks.length ? trucks.join(' / ') : <Muted>—</Muted>} />
-          <Row label="Trailer"     value={primary.trailerType ?? <Muted>—</Muted>} />
-          <Row label="Dispatcher"  value={primary.dispatcher ?? <Muted>—</Muted>} />
-        </Section>
+        {/* ── Assignment ── */}
+        <ModalSection title="Assignment" first>
+          <div className="grid grid-cols-2 gap-4">
+            <ModalField label="Driver(s)">
+              <ReadValue placeholder="Unassigned">
+                {drivers.length ? drivers.join(' / ') : ''}
+              </ReadValue>
+            </ModalField>
+            <ModalField label="Truck(s)">
+              <ReadValue placeholder="—">
+                {trucks.length ? trucks.join(' / ') : ''}
+              </ReadValue>
+            </ModalField>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <ModalField label="Trailer">
+              <ReadValue placeholder="—">{primary.trailerType ?? ''}</ReadValue>
+            </ModalField>
+            <ModalField label="Dispatcher">
+              <ReadValue placeholder="—">{primary.dispatcher ?? ''}</ReadValue>
+            </ModalField>
+          </div>
+        </ModalSection>
 
-        <Section title="Stops">
-          {primary.stops.length === 0 ? (
-            <Muted>No stops added.</Muted>
-          ) : (
-            <div className="space-y-2">
-              {primary.stops.map((s, i) => (
-                <StopRow key={s.id} stop={s} index={i + 1} />
-              ))}
-            </div>
-          )}
-        </Section>
+        {/* ── Load (broker # + cargo) ── */}
+        <ModalSection title="Load">
+          <div className="grid grid-cols-2 gap-4">
+            <ModalField label="Broker load #">
+              <ReadValue placeholder="None">{primary.loadNum ?? ''}</ReadValue>
+            </ModalField>
+            <ModalField label="Commodity">
+              <ReadValue placeholder="—">{primary.commodity ?? ''}</ReadValue>
+            </ModalField>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <ModalField label="Weight">
+              <ReadValue placeholder="—">
+                {primary.weight != null ? `${primary.weight.toLocaleString()} lb` : ''}
+              </ReadValue>
+            </ModalField>
+            <div />
+          </div>
+        </ModalSection>
 
-        <Section title="Reference numbers">
+        {/* ── Reference numbers ── */}
+        <ModalSection title="Reference numbers">
           {primary.refNums && primary.refNums.length > 0 ? (
-            <div className="space-y-1">
+            <div className="space-y-2">
               {primary.refNums.map((r, i) => (
-                <div key={i} className="flex items-center justify-between text-[12.5px]">
-                  <span style={{ color: 'var(--gc-text-3)' }}>{r.label}</span>
-                  <span className="font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{r.value}</span>
+                <div key={i} className="grid grid-cols-2 gap-4">
+                  <ModalField label={r.label || 'Ref'}>
+                    <ReadValue placeholder="—">{r.value}</ReadValue>
+                  </ModalField>
+                  <div />
                 </div>
               ))}
             </div>
-          ) : <Muted>None.</Muted>}
-        </Section>
-
-        <Section title="Cargo">
-          <Row label="Commodity" value={primary.commodity ?? <Muted>—</Muted>} />
-          <Row label="Weight"
-            value={primary.weight != null
-              ? <span className="tabular-nums">{primary.weight.toLocaleString()} lb</span>
-              : <Muted>—</Muted>} />
-        </Section>
-
-        <Section title="Financial">
-          <Row label="Linehaul"
-            value={primary.loadPrice != null
-              ? <span className="font-semibold tabular-nums">{moneyFmt.format(primary.loadPrice)}</span>
-              : <Muted>—</Muted>} />
-          <Row label="Accessorials"
-            value={
-              primary.accessorials && primary.accessorials.length > 0 ? (
-                <div className="space-y-1 text-right">
-                  {primary.accessorials.map((a, i) => (
-                    <div key={i} className="text-[12px] tabular-nums">
-                      {a.category}{a.description ? ` (${a.description})` : ''} —{' '}
-                      <span className="font-semibold">{moneyFmt.format(a.amount ?? 0)}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : <Muted>None</Muted>
-            } />
-          {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice && (
-            <Row label="Total billable"
-              value={<span className="font-extrabold tabular-nums">{moneyFmt.format(primary.totalBillable)}</span>} />
+          ) : (
+            <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>None.</div>
           )}
-        </Section>
+        </ModalSection>
 
-        <Section title="Notes">
-          <div className="text-[12.5px] whitespace-pre-wrap break-words p-2 rounded"
+        {/* ── Stops ── */}
+        <ModalSection title="Stops">
+          {primary.stops.length === 0 ? (
+            <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>No stops added.</div>
+          ) : (
+            <div className="space-y-3">
+              {primary.stops.map((s, i) => (
+                <ModalStopCard key={s.id} stop={s} index={i + 1} accent={LOAD_ACCENT} />
+              ))}
+            </div>
+          )}
+        </ModalSection>
+
+        {/* ── Financial ── */}
+        <ModalSection title="Financial">
+          <div className="grid grid-cols-2 gap-4">
+            <ModalField label="Linehaul">
+              <ReadValue placeholder="—">
+                {primary.loadPrice != null ? moneyFmt.format(primary.loadPrice) : ''}
+              </ReadValue>
+            </ModalField>
+            {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice ? (
+              <ModalField label="Total billable">
+                <ReadValue placeholder="—" emphasize>
+                  {moneyFmt.format(primary.totalBillable)}
+                </ReadValue>
+              </ModalField>
+            ) : <div />}
+          </div>
+
+          {/* Accessorials block — mirrors EventModal's accessorial list
+              styling: each line is its own row with category + amount. */}
+          <div className="mt-4">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <label className="text-[11px] font-semibold uppercase tracking-wider"
+                style={{ color: 'var(--gc-text-3)' }}>
+                Accessorials
+              </label>
+            </div>
+            {primary.accessorials && primary.accessorials.length > 0 ? (
+              <div className="space-y-1.5">
+                {primary.accessorials.map((a, i) => (
+                  <div key={i}
+                    className="flex items-center justify-between px-3 py-2 rounded-lg"
+                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12.5px] font-semibold capitalize" style={{ color: 'var(--gc-text-1)' }}>
+                        {a.category}
+                      </div>
+                      {a.description && (
+                        <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                          {a.description}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                      {moneyFmt.format(a.amount ?? 0)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>None.</div>
+            )}
+          </div>
+        </ModalSection>
+
+        {/* ── Notes ── */}
+        <ModalSection title="Notes">
+          <div
+            className="text-[13px] whitespace-pre-wrap break-words rounded-lg px-3 py-2.5"
             style={{
               background: 'var(--gc-bg)',
               border: '1px solid var(--gc-border)',
               color: primary.notes ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-              minHeight: 60,
+              minHeight: 72,
             }}>
             {primary.notes || 'No notes.'}
           </div>
-        </Section>
+        </ModalSection>
       </div>
-    </>
+    </div>
   );
 }
 
-function StopRow({ stop, index }: { stop: Stop; index: number }) {
+// ─── EventModal-styled primitives ───────────────────────────────────────
+//
+// Visual parity with components/calendar/EventModal.tsx. Don't drift
+// these typography choices independently — if the modal changes, mirror
+// it here so the two surfaces keep feeling like the same surface.
+
+function ModalSection({ title, first, children }: {
+  title: string;
+  first?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={first ? {} : { borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
+      <div className="text-[11px] font-bold uppercase tracking-wider mb-4"
+        style={{ color: 'var(--gc-text-3)' }}>
+        {title}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function ModalField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <label className="text-[11px] font-semibold uppercase tracking-wider"
+          style={{ color: 'var(--gc-text-3)' }}>
+          {label}
+        </label>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Input-shaped read-only value, styled to match EventModal's text
+ *  inputs: bottom border that turns accent on focus (we leave it neutral
+ *  here since it's read-only for now). Placeholder shows when empty. */
+function ReadValue({
+  children, placeholder, emphasize,
+}: {
+  children: React.ReactNode;
+  placeholder?: string;
+  emphasize?: boolean;
+}) {
+  const display = (typeof children === 'string' && children.trim() === '') ? null : children;
+  return (
+    <div
+      className="w-full bg-transparent"
+      style={{
+        fontSize: emphasize ? 15 : 14,
+        fontWeight: emphasize ? 700 : 500,
+        borderBottom: '1px solid var(--gc-border)',
+        paddingBottom: 6,
+        paddingTop: 2,
+        color: display != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
+        minHeight: 24,
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      {display ?? placeholder ?? '—'}
+    </div>
+  );
+}
+
+/** Stop card — mimics the per-stop block style in EventModal's stops
+ *  section: rounded card, accent-tinted left border, stop number, name,
+ *  address, appt window, and a Geocoded badge when lat/lng land. */
+function ModalStopCard({ stop, index, accent }: {
+  stop: Stop;
+  index: number;
+  accent: string;
+}) {
   const hasGeo = stop.lat != null && stop.lng != null;
   return (
-    <div className="flex items-start gap-2 text-[12.5px]">
-      <span className="font-bold tabular-nums" style={{ color: 'var(--gc-text-3)', minWidth: 18 }}>{index}.</span>
+    <div
+      className="rounded-lg px-3 py-2.5 flex items-start gap-3"
+      style={{
+        background: 'var(--gc-bg)',
+        border: '1px solid var(--gc-border)',
+        borderLeft: `3px solid ${accent}`,
+      }}>
+      <div
+        className="flex items-center justify-center rounded-full text-[11px] font-extrabold tabular-nums shrink-0"
+        style={{
+          width: 22, height: 22,
+          background: accent, color: '#fff',
+        }}>
+        {index}
+      </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className="font-semibold truncate" style={{ color: 'var(--gc-text-1)' }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-semibold truncate" style={{ color: 'var(--gc-text-1)', fontSize: 13 }}>
             {stop.facilityName ?? stop.address ?? '(no address)'}
           </span>
-          {hasGeo && (
-            <span className="text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-              style={{ background: '#dcfce7', color: '#166534', border: '1px solid #86efac' }}
-              title={`Lat ${stop.lat?.toFixed(4)}, Lng ${stop.lng?.toFixed(4)}`}>
-              Geocoded
-            </span>
-          )}
+          <span className="text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+            style={{
+              background: hasGeo ? '#dcfce7' : '#fef2f2',
+              color:      hasGeo ? '#166534' : '#991b1b',
+              border:     `1px solid ${hasGeo ? '#86efac' : '#fecaca'}`,
+            }}
+            title={hasGeo
+              ? `Lat ${stop.lat?.toFixed(4)}, Lng ${stop.lng?.toFixed(4)}`
+              : 'No coordinates — geocode pending'}>
+            {hasGeo ? 'Geocoded' : 'No geo'}
+          </span>
         </div>
         {stop.address && stop.facilityName && (
-          <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>{stop.address}</div>
+          <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)', marginTop: 2 }}>
+            {stop.address}
+          </div>
         )}
         {stop.apptStart && (
-          <div className="text-[11px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+          <div className="text-[11.5px] tabular-nums" style={{ color: 'var(--gc-text-3)', marginTop: 2 }}>
             {fmtStopWindow(stop)}
           </div>
         )}
       </div>
     </div>
   );
-}
-
-// ─── Layout primitives ──────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[10.5px] font-bold uppercase tracking-wider mb-2"
-        style={{ color: 'var(--gc-text-3)' }}>{title}</div>
-      <div className="space-y-1.5">{children}</div>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-[12.5px] py-0.5">
-      <span style={{ color: 'var(--gc-text-3)' }}>{label}</span>
-      <div className="text-right font-semibold flex-1 min-w-0" style={{ color: 'var(--gc-text-1)' }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function Muted({ children }: { children: React.ReactNode }) {
-  return <span style={{ color: 'var(--gc-text-3)', fontWeight: 400 }}>{children}</span>;
 }
 
 // ─── Billing card (bottom right) ────────────────────────────────────────
