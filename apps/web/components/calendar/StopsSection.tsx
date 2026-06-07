@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { GripVertical, Plus, Trash2, MapPin, CheckCircle2, AlertCircle, Clock, LocateFixed, ArrowLeftRight, Bookmark } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import type { Stop, StopType } from '@/lib/types';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import DatePicker from './DatePicker';
@@ -152,9 +153,40 @@ const TYPE_LABELS: Record<StopType, string> = {
 };
 
 function GeocodeIndicator({ status }: { status: Stop['geocodeStatus'] }) {
-  if (status === 'success') return <span title="Geocoded"><CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} /></span>;
-  if (status === 'failed')  return <span title="Geocoding failed"><AlertCircle  size={13} style={{ color: '#dc2626', flexShrink: 0 }} /></span>;
-  return <span title="Not yet geocoded"><Clock size={13} style={{ color: '#9ca3af', flexShrink: 0 }} /></span>;
+  // The green check is the ONLY signal that an address was actually
+  // accepted by Google Places — anything else means the stop won't
+  // route, won't surface on the map, and won't auto-fill the timezone.
+  // Make that consequence explicit on hover so dispatchers don't
+  // ship loads with raw text addresses by accident.
+  const tip = status === 'success' ? (
+    <>
+      <strong>Address verified.</strong> Stop is geocoded — it&rsquo;ll route on the map, save lat/lng, and pick up the correct timezone.
+    </>
+  ) : status === 'failed' ? (
+    <>
+      <strong>Geocoding failed.</strong> Google couldn&rsquo;t resolve this address — the stop is <strong>not saved</strong> as a real location.
+      <div style={{ marginTop: 6 }}>
+        Fix: clear the field and start typing the address again, then pick one of the <strong>Google suggestions</strong> from the dropdown. The check turns green once Google accepts it.
+      </div>
+    </>
+  ) : (
+    <>
+      <strong>Not yet geocoded.</strong> This address isn&rsquo;t saved as a real location yet — no lat/lng, no map route, no auto timezone.
+      <div style={{ marginTop: 6 }}>
+        Fix: type the address into the field and pick one of the <strong>Google suggestions</strong> that appears in the dropdown below. The check turns green once Google accepts it.
+      </div>
+    </>
+  );
+  const icon = status === 'success'
+    ? <CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} />
+    : status === 'failed'
+      ? <AlertCircle  size={13} style={{ color: '#dc2626', flexShrink: 0 }} />
+      : <Clock        size={13} style={{ color: '#9ca3af', flexShrink: 0 }} />;
+  return (
+    <Tooltip content={tip}>
+      <span style={{ cursor: 'help' }}>{icon}</span>
+    </Tooltip>
+  );
 }
 
 interface StopSuggestion {
