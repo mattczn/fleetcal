@@ -50,6 +50,7 @@ import {
   SETTINGS_SHADOW,
 } from '@/components/settings/primitives';
 import { CARD_FIELD_DEFS, CardFieldKey } from '@/lib/cardFields';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -519,7 +520,6 @@ const CARD_FONT_SIZES: { value: number; label: string }[] = [
 function AppearancePanel() {
   const {
     theme, setTheme,
-    showStatusOverlay, setShowStatusOverlay,
     showUnassigned, setShowUnassigned,
     cardFontScale, setCardFontScale,
   } = useCalendarStore();
@@ -590,13 +590,8 @@ function AppearancePanel() {
             })}
           </div>
         </SettingsField>
-        <SettingsField
-          inline
-          label="Status overlay"
-          hint="Show a status badge on each load card (Scheduled, En Route, Delivered…)"
-        >
-          <SettingsToggle checked={showStatusOverlay} onChange={setShowStatusOverlay} />
-        </SettingsField>
+        {/* Status overlay toggle lives on the calendar's Layers menu —
+            don't duplicate it here. */}
         <SettingsField
           inline
           label="Unassigned column"
@@ -1684,6 +1679,42 @@ function TimezonePanel() {
       railway.updateOrgSettings({ rateConSettings: { promptVariables: { ...promptVariables, timezone: value } } }),
     ).catch((err) => console.error('[settings] timezone sync failed:', err));
   };
+
+  // ── Confirm-before-change ──────────────────────────────────────────
+  // Timezone changes ripple into every load's appointment display, the
+  // current-time indicator, AND the rate-con AI parser — a misclick
+  // shifts every load's times by hours. Surface a confirm so the user
+  // ACKs the impact before the change applies.
+  //
+  // pendingTz holds the candidate IANA + label until the user clicks
+  // Confirm in the dialog; the local custom-input value is staged in
+  // customDraft so the field reflects what the user typed without
+  // commiting it to the store.
+  const [pendingTz,   setPendingTz]   = useState<{ iana: string; promptValue: string } | null>(null);
+  const [customDraft, setCustomDraft] = useState<string>(calendarTimezone);
+  useEffect(() => {
+    // Re-sync the custom field when the store changes (e.g. another
+    // member edits it, or the user confirms a preset that lands a new
+    // value into the store).
+    setCustomDraft(calendarTimezone);
+  }, [calendarTimezone]);
+
+  const requestTz = (iana: string, promptValue: string) => {
+    if (iana === calendarTimezone) return; // no-op
+    setPendingTz({ iana, promptValue });
+  };
+  const applyPending = () => {
+    if (!pendingTz) return;
+    setCalendarTimezone(pendingTz.iana);
+    setPromptVariable('timezone', pendingTz.promptValue);
+    syncTimezone(pendingTz.promptValue);
+    setPendingTz(null);
+  };
+  const cancelPending = () => {
+    setPendingTz(null);
+    setCustomDraft(calendarTimezone);
+  };
+
   return (
     <SettingsPanel
       title="Timezone"
@@ -1697,11 +1728,7 @@ function TimezonePanel() {
             {TIMEZONES.map(tz => {
               const active = calendarTimezone === tz.iana;
               return (
-                <button key={tz.value} onClick={() => {
-                  setCalendarTimezone(tz.iana);
-                  setPromptVariable('timezone', tz.value);
-                  syncTimezone(tz.value);
-                }}
+                <button key={tz.value} onClick={() => requestTz(tz.iana, tz.value)}
                   className="text-[14px] font-semibold text-left transition-all"
                   style={{
                     padding: '10px 14px',
@@ -1718,20 +1745,47 @@ function TimezonePanel() {
           </div>
           <SettingsField
             label="Custom IANA timezone"
-            hint="e.g. America/Phoenix"
+            hint="e.g. America/Phoenix — press Enter or click Apply to confirm."
           >
-            <SettingsInput
-              type="text"
-              value={calendarTimezone}
-              onChange={e => {
-                setCalendarTimezone(e.target.value);
-                setPromptVariable('timezone', e.target.value);
-                syncTimezone(e.target.value);
-              }}
-            />
+            <div className="flex items-center gap-2">
+              <SettingsInput
+                type="text"
+                value={customDraft}
+                onChange={e => setCustomDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && customDraft.trim() && customDraft.trim() !== calendarTimezone) {
+                    requestTz(customDraft.trim(), customDraft.trim());
+                  }
+                }}
+              />
+              <button type="button"
+                onClick={() => {
+                  const v = customDraft.trim();
+                  if (v && v !== calendarTimezone) requestTz(v, v);
+                }}
+                disabled={!customDraft.trim() || customDraft.trim() === calendarTimezone}
+                className="text-[13px] font-semibold px-3 py-2 rounded-lg transition-colors disabled:opacity-40"
+                style={{ background: SETTINGS_COLORS.blue, color: '#fff', border: 'none', cursor: 'pointer' }}>
+                Apply
+              </button>
+            </div>
           </SettingsField>
         </SettingsSection>
       </ReadOnlyWrap>
+
+      {pendingTz && (
+        <ConfirmDialog
+          title="Change timezone?"
+          message={
+            `This will switch the calendar display, the current-time indicator, and rate-con AI parsing to ${pendingTz.iana}. ` +
+            `All existing loads' appointment times will re-render in the new timezone for every member of the org.`
+          }
+          confirmLabel={`Switch to ${pendingTz.iana}`}
+          cancelLabel="Keep current"
+          onConfirm={applyPending}
+          onCancel={cancelPending}
+        />
+      )}
     </SettingsPanel>
   );
 }
@@ -4627,9 +4681,12 @@ const NAV: { section: string; items: { id: NavItem; label: string; icon: React.R
       { id: 'members',          label: 'Members',          icon: <UserCog size={15} /> },
       { id: 'role-permissions', label: 'Role Permissions', icon: <Shield size={15} /> },
       { id: 'modules',          label: 'Modules',          icon: <Layers size={15} /> },
-      { id: 'assets',           label: 'Trucks',           icon: <Truck size={15} /> },
+      // Trucks + Customers used to live here but moved to their own
+      // directory modals (Truck Directory / Customer Directory). The
+      // panel functions are kept below in case a follow-up wants to
+      // re-mount them anywhere, but they're not navigable from this
+      // sidebar anymore.
       { id: 'dispatchers',      label: 'Dispatchers',      icon: <Users size={15} /> },
-      { id: 'customers',        label: 'Customers',        icon: <Truck size={15} /> },
       { id: 'load-fields',      label: 'Load Fields',      icon: <LayoutList size={15} /> },
       { id: 'card-layout',      label: 'Card Layout',      icon: <Layers size={15} /> },
       { id: 'ratecon-ai',       label: 'Rate Con AI',      icon: <Bot size={15} /> },
@@ -4847,7 +4904,6 @@ export default function SettingsPage() {
         <main className="flex-1 overflow-y-auto" style={{ padding: '40px 48px' }}>
           {active === 'appearance'   && <AppearancePanel />}
           {active === 'timezone'     && <TimezonePanel />}
-          {active === 'assets'       && <AssetsPanel />}
           {active === 'load-fields'  && <LoadFieldsPanel />}
           {active === 'card-layout'  && <CardLayoutPanel />}
           {active === 'ratecon-ai'   && <RateConAIPanel setActive={setActive} />}
@@ -4856,7 +4912,7 @@ export default function SettingsPage() {
           {active === 'documents'       && <DocumentsPanel />}
           {active === 'saved-locations' && <SavedLocationsPanel />}
           {active === 'dispatchers'     && <DispatchersPanel />}
-          {active === 'customers'       && <CustomersPanel />}
+          {/* Trucks + Customers moved to their own Directory modals. */}
           {active === 'driver-app'        && <DriverAppPanel setActive={setActive} />}
           {active === 'members'           && <MembersPanel />}
           {active === 'role-permissions'  && <RolePermissionsPanel />}
