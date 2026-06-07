@@ -707,7 +707,7 @@ function RolePermissionsPanel() {
   return (
     <SettingsPanel
       title="Role Permissions"
-      description="Override the default capability set per role. Owner and Admin start with everything; Dispatcher and Maintenance ship with sensible defaults you can tune for your team. Changes apply within ~60s of save."
+      description="Override the default capability set for Dispatchers. Admin always has everything (read-only). Changes apply within ~60s of save."
       maxWidth={1100}
       bare
       actions={
@@ -856,7 +856,7 @@ function RolePermissionsPanel() {
           <span className="inline-block rounded-full" style={{ width: 9, height: 9, background: '#1d4ed8', border: '1.5px solid #fff', boxShadow: '0 0 0 1px #1d4ed8' }} />
           Overridden from default
         </span>
-        <span style={{ color: SETTINGS_COLORS.textBody }}>Owner is read-only.</span>
+        <span style={{ color: SETTINGS_COLORS.textBody }}>Admin is read-only.</span>
       </div>
     </SettingsPanel>
   );
@@ -990,7 +990,7 @@ function MembersPanel() {
   return (
     <SettingsPanel
       title="Members & Roles"
-      description="Invite teammates, set their role (Owner / Admin / Dispatcher / Maintenance), and remove access. Role changes take effect on the user's next page load."
+      description="Invite teammates, set their role (Admin / Dispatcher), and remove access. Role changes take effect on the user's next page load."
       maxWidth={1100}
       bare
     >
