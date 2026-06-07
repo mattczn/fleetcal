@@ -61,6 +61,12 @@ interface Props {
    *  Pass a higher value (e.g. 250) when launched from inside the
    *  EventModal (z-200) so the review queue stacks on top. */
   zIndex?: number;
+  /** Open the Manage Documents dialog as soon as the queue mounts.
+   *  Used by the load detail page so its "Manage Documents" toolbar
+   *  pill drops the dispatcher straight into the doc manager instead
+   *  of the review chrome — the chrome stays mounted underneath in
+   *  case they close the dialog and want to see the full panel. */
+  autoOpenManageDocs?: boolean;
 }
 
 // Color tokens per document kind. Pulled from the same Google Material
@@ -160,7 +166,7 @@ function ageDays(iso: string): number {
   return Math.floor((Date.now() - t) / 86_400_000);
 }
 
-export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved, onOpenLoadModal, zIndex = 180 }: Props) {
+export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadResolved, onOpenLoadModal, zIndex = 180, autoOpenManageDocs = false }: Props) {
   const customers = useCalendarStore(s => s.customers);
   // Used to look up the delivery partner of a relay so the meta line
   // can show the actual delivery date, not the pickup-leg's end (which
@@ -804,7 +810,7 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
   // appended to the docs list as a new entry. Originals stay — the
   // user can delete them after if they want to, but losing them
   // implicitly would be too aggressive.
-  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(autoOpenManageDocs);
   const [mergeSelection,  setMergeSelection]  = useState<Set<string>>(new Set());
   const [merging,         setMerging]         = useState(false);
 

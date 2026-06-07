@@ -47,7 +47,6 @@ import {
 import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
-import { LoadDocsPreviewModal } from '@/components/closeout/LoadDocsPreviewModal';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
 import { useLoadPayFinalized } from '@/lib/useLoadPayFinalized';
 import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
@@ -583,35 +582,23 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           initialBrokerId={customerProfileId}
           onClose={() => setCustomerProfileId(null)} />
       )}
-      {/* Closeout review panel. Loads is just our primary leg — same
-          pattern EventModal uses. Resolves to the pickup leg implicitly
-          since `primaryLeg` is already that one. */}
-      {reviewQueueOpen && (
+      {/* Closeout review panel. Mounts for either "Review" or "Manage
+          Documents" — when the dispatcher clicked Manage Documents we
+          autoOpenManageDocs so the DocSelectionDialog pops on mount
+          and they land inside the doc manager directly; the review
+          chrome stays underneath in case they close the dialog. */}
+      {(reviewQueueOpen || docsModalOpen) && (
         <ReviewQueue
           loads={[primaryLeg]}
           zIndex={250}
-          onClose={() => setReviewQueueOpen(false)}
+          autoOpenManageDocs={docsModalOpen}
+          onClose={() => {
+            setReviewQueueOpen(false);
+            setDocsModalOpen(false);
+          }}
           onLoadResolved={async () => {
             await refresh({ silent: true });
             bumpLoadEditTick();
-          }}
-        />
-      )}
-      {/* Manage Documents — the LoadDocsPreviewModal shared with the
-          accounting page. Only mount when there's a real load id since
-          the modal's first action is fetching docs by load id. */}
-      {docsModalOpen && primaryLeg.loadId && (
-        <LoadDocsPreviewModal
-          load={{
-            loadId: primaryLeg.loadId,
-            loadNum: primaryLeg.loadNum,
-            rateConPdf: primaryLeg.rateConPdf,
-          }}
-          onClose={() => setDocsModalOpen(false)}
-          onSaved={async () => {
-            await refresh({ silent: true });
-            bumpLoadEditTick();
-            setDocsModalOpen(false);
           }}
         />
       )}
