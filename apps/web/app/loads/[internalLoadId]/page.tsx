@@ -49,6 +49,7 @@ import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
 import { LoadDocsPreviewModal } from '@/components/closeout/LoadDocsPreviewModal';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { InvoiceSummaryModal, BatchSendDialog } from '@/components/invoicing/BatchInvoiceModals';
 import type { LoadSummary } from '@fleetcal/types/api';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
@@ -197,6 +198,11 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // BatchSendDialog. null = closed.
   const [summaryAction, setSummaryAction] = useState<'generate' | 'generateSend' | null>(null);
   const [sendDialogMode, setSendDialogMode] = useState<'send' | 'resend' | null>(null);
+  // Confirm step for the Revert to Pending action. The action moves
+  // the load between billing buckets (Released / Invoiced / Paid →
+  // back to Paperwork) and on already-sent / paid loads is unusual
+  // enough to warrant a quick "are you sure" guard.
+  const [revertConfirmOpen, setRevertConfirmOpen] = useState(false);
 
   // Editable draft. Only fields the user has touched land here — we
   // overlay it on top of the canonical fetched load when rendering,
@@ -721,7 +727,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               onGenerate={handleGenerateClick}
               onSendOrResend={handleSendOrResendClick}
               onMarkPaid={() => void handleMarkPaid()}
-              onRevertToPending={() => void handleRevertToPending()}
+              onRevertToPending={() => setRevertConfirmOpen(true)}
               onViewInvoice={() => setInvoiceModalOpen(true)}
               onViewDocs={() => setDocsModalOpen(true)}
             />
@@ -821,6 +827,27 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             bumpLoadEditTick();
             void refresh({ silent: true });
           }}
+        />
+      )}
+      {/* Confirm before reverting billing status. The action moves the
+          load between billing buckets and on already-sent / paid
+          invoices is rare enough that a guard prevents fat-finger
+          mistakes. */}
+      {revertConfirmOpen && (
+        <ConfirmDialog
+          title="Revert to Pending?"
+          message={
+            primaryLeg.billingStatus === 'paid'    ? 'This load is marked paid. Reverting moves it back to the Paperwork queue — the existing invoice stays sent so the customer record won\'t change, but it drops off the Paid bucket.' :
+            primaryLeg.billingStatus === 'invoiced' ? 'This load has been invoiced. Reverting moves it back to the Paperwork queue. The existing draft / sent invoice stays as-is until you regenerate.' :
+            'This moves the load back to the Paperwork queue (billing_status = pending). Use when something downstream needs fixing — a forgotten detention, a missing scale ticket, the wrong rate.'
+          }
+          confirmLabel="Revert to Pending"
+          cancelLabel="Cancel"
+          onConfirm={() => {
+            setRevertConfirmOpen(false);
+            void handleRevertToPending();
+          }}
+          onCancel={() => setRevertConfirmOpen(false)}
         />
       )}
       {pendingNewBroker !== null && (
@@ -2085,11 +2112,36 @@ function BillingCard({
         <Receipt size={14} style={{ color: 'var(--gc-text-3)' }} />
         <span className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>Billing</span>
         <BillingPill billingStatus={status} />
-        {hasInvoice && (
-          <span className="ml-auto text-[11px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
-            Invoice <strong style={{ color: 'var(--gc-text-2)' }}>#{activeInvoice.invoiceNumber}</strong>
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {hasInvoice && (
+            <span className="text-[11px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+              Invoice <strong style={{ color: 'var(--gc-text-2)' }}>#{activeInvoice.invoiceNumber}</strong>
+            </span>
+          )}
+          {/* Revert to Pending — surfaces whenever billing isn't
+              already pending, so a load can be pulled back to the
+              Paperwork queue from Released, Invoiced, Paid, or
+              Flagged when something downstream needs fixing (a
+              forgotten detention, a wrong rate). Confirm dialog
+              gates the action since on already-sent / paid loads
+              this is unusual. */}
+          {status !== 'pending' && (
+            <button
+              type="button"
+              onClick={onRevertToPending}
+              disabled={!!busy}
+              title="Move this load back to Paperwork (billing_status = pending). Use when a load was released/invoiced/paid before all accessorials were ready."
+              className="text-[10.5px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-lg inline-flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'transparent', color: 'var(--gc-text-3)', border: '1px dashed var(--gc-border)' }}
+              onMouseEnter={e => { if (!busy) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+              {busy === 'revert'
+                ? <Loader2 size={10} className="animate-spin" />
+                : <ArrowLeft size={10} />}
+              Revert to Pending
+            </button>
+          )}
+        </div>
       </div>
       <div className="p-5 space-y-4">
         {/* Customer + billing method */}
@@ -2244,22 +2296,6 @@ function BillingCard({
                 className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
                 style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
                 <FolderOpen size={12} /> View Docs
-              </button>
-            )}
-            {/* Revert to Pending — only on Released. Moves the load
-                back to Paperwork (billing_status='pending'); used when
-                a load is accidentally released while detention or
-                lumper is still pending. */}
-            {status === 'verified' && (
-              <button onClick={onRevertToPending}
-                disabled={!!busy}
-                title="Move this load back to Paperwork (billing_status = pending). Use when a load was released before all accessorials were ready."
-                className="w-full text-[11.5px] font-medium px-3 py-1.5 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: 'transparent', color: 'var(--gc-text-3)', border: '1px dashed var(--gc-border)' }}>
-                {busy === 'revert'
-                  ? <Loader2 size={11} className="animate-spin" />
-                  : <ArrowLeft size={11} />}
-                Revert to Pending
               </button>
             )}
           </div>
