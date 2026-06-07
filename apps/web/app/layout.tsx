@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import { ClerkProvider } from '@clerk/nextjs';
-import { Plus_Jakarta_Sans } from 'next/font/google';
+import { Plus_Jakarta_Sans, DM_Serif_Display, DM_Sans, IBM_Plex_Mono } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
 import { RailwayClientProvider } from '@/components/RailwayClientProvider';
 import './globals.css';
@@ -11,6 +11,29 @@ const font = Plus_Jakarta_Sans({
   variable: '--font-jakarta',
   weight: ['400', '500', '600', '700'],
   display: 'swap',
+});
+
+// Marketing landing fonts — `/`, `/pricing`. Dashboard pages keep
+// Plus Jakarta Sans (via body fontFamily). The marketing pages opt in
+// by setting `font-display`, `font-sys`, or `font-mono` on their root.
+const dmSerif = DM_Serif_Display({
+  subsets: ['latin'],
+  variable: '--font-dm-serif',
+  weight:   ['400'],
+  style:    ['normal', 'italic'],
+  display:  'swap',
+});
+const dmSans = DM_Sans({
+  subsets: ['latin'],
+  variable: '--font-dm-sans',
+  weight:   ['400', '500', '600', '700'],
+  display:  'swap',
+});
+const ibmMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  variable: '--font-ibm-mono',
+  weight:   ['400', '500', '700'],
+  display:  'swap',
 });
 
 export const metadata: Metadata = {
@@ -69,7 +92,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <html
         lang="en"
         data-theme={theme}
-        className={`${font.variable} h-full`}
+        className={`${font.variable} ${dmSerif.variable} ${dmSans.variable} ${ibmMono.variable} h-full`}
         suppressHydrationWarning
       >
         <head>

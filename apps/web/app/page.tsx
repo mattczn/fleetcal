@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
-import { ArrowRight, Calendar, FileText, Receipt, Users } from 'lucide-react';
+import { PricingTable } from '@clerk/nextjs';
 
 /**
  * Marketing landing page at `/`.
@@ -12,8 +12,15 @@ import { ArrowRight, Calendar, FileText, Receipt, Users } from 'lucide-react';
  * they can finish onboarding (mirrors what middleware does for all
  * other private routes).
  *
- * Server component. Reads `auth()` synchronously on the server so we
- * never flash the landing to a returning customer.
+ * Design language mirrors systematica-site:
+ *   - DM Serif Display headlines, DM Sans body, IBM Plex Mono labels
+ *   - Zero border-radius rectangles everywhere
+ *   - Section-as-color-block rhythm (white → blue → white → blue → white)
+ *   - 1px hairlines between sections, no shadows or gradients
+ *   - Numbered eyebrows ("01 · Features"), colored top-banner cards
+ *
+ * Light mode only — marketing pages should not respect the dashboard's
+ * dark-mode preference (the visual identity is light-by-design).
  */
 export default async function HomePage() {
   const { userId, orgId } = await auth();
@@ -22,175 +29,309 @@ export default async function HomePage() {
 
   return (
     <div
-      className="h-full overflow-y-auto"
-      style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-1)' }}
+      className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg"
+      style={{ scrollBehavior: 'smooth' }}
     >
-      <main className="max-w-5xl mx-auto px-6 pt-16 pb-24 sm:pt-24">
+      <Nav />
+      <Hero />
+      <Features />
+      <Pricing />
+      <BuiltBy />
+      <FinalCta />
+      <Footer />
+    </div>
+  );
+}
 
-        {/* Header — wordmark + auth links */}
-        <header className="flex items-center justify-between mb-20 sm:mb-28">
-          <div className="flex items-center gap-2.5">
-            <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold"
-              style={{ background: 'var(--gc-blue)' }}
-            >
-              F
-            </div>
-            <span className="text-[20px] font-semibold tracking-tight">FleetCal</span>
-          </div>
-          <Link
-            href="/sign-in"
-            className="text-[14px] font-medium hover:underline"
-            style={{ color: 'var(--gc-text-2)' }}
-          >
-            Sign in
-          </Link>
-        </header>
+// ── Sub-sections ────────────────────────────────────────────────────────
 
-        {/* Hero */}
-        <section className="mb-20 sm:mb-28">
-          <h1 className="text-[40px] sm:text-[56px] font-bold tracking-tight leading-[1.05] mb-5 sm:mb-7 max-w-3xl">
-            The TMS built by a 13-truck fleet owner, for fleets like yours.
-          </h1>
-          <p
-            className="text-[17px] sm:text-[19px] leading-[1.55] max-w-2xl mb-9 sm:mb-11"
-            style={{ color: 'var(--gc-text-2)' }}
-          >
-            Rate-con to invoice in one tool. No ELD lock-in. No per-driver fees.
-            Built and used daily at Curzon Trucking in Salt Lake City.
-          </p>
-          <div className="flex flex-wrap items-center gap-4">
-            <Link
-              href="/sign-up"
-              className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-[15px] font-semibold transition-colors"
-              style={{ background: 'var(--gc-blue)', color: '#fff' }}
-            >
-              Start your free trial
-              <ArrowRight size={16} />
-            </Link>
-            <Link
-              href="/sign-in"
-              className="text-[15px] font-medium hover:underline"
-              style={{ color: 'var(--gc-text-2)' }}
-            >
-              Already have an account?
-            </Link>
-          </div>
-        </section>
-
-        {/* Features — 2x2 grid */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 gap-x-10 gap-y-9 mb-20 sm:mb-24">
-          <FeatureBlock
-            icon={FileText}
-            title="AI rate-con parser"
-            body="Drop a rate confirmation PDF onto the calendar. Customer, rate, stops, and appointment times extracted automatically. Edit what's wrong, save what's right."
-          />
-          <FeatureBlock
-            icon={Calendar}
-            title="Real dispatch calendar"
-            body="One screen for every truck on every day. Drag to reschedule. Day or week view. Built for the way dispatchers actually think — not for what looked good in a demo."
-          />
-          <FeatureBlock
-            icon={Receipt}
-            title="Paperwork to invoice in 3 clicks"
-            body="POD verification queue. Release to billing. Generate the invoice. Send to the customer. Mark paid. Every step where it should be, no leaving the app."
-          />
-          <FeatureBlock
-            icon={Users}
-            title="Driver payroll built in"
-            body="Per-driver weekly totals computed from the loads you actually ran. Detention and layover adjustments. Export when payroll Friday rolls around."
-          />
-        </section>
-
-        {/* Pricing teaser */}
-        <section
-          className="rounded-2xl p-6 sm:p-8 mb-20"
-          style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border-light)' }}
-        >
-          <h2 className="text-[22px] sm:text-[26px] font-bold mb-3 tracking-tight">
-            Three tiers. One product. Priced by fleet size.
-          </h2>
-          <p className="mb-7 text-[15px] max-w-2xl" style={{ color: 'var(--gc-text-2)' }}>
-            Identical feature set at every tier. Pick the one that fits your
-            truck count. Founding Carrier pricing — 50% off for life — for the
-            first 20 sign-ups.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-7">
-            <TierCard name="Starter" trucks="1–4 trucks" price="$149" />
-            <TierCard name="Growth"  trucks="5–9 trucks" price="$299" />
-            <TierCard name="Fleet"   trucks="10–14 trucks" price="$499" />
-          </div>
+function Nav() {
+  return (
+    <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
+      <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
+        <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
+          <span className="text-sys-blue">FLEET</span>
+          <span className="text-sys-orange">CAL</span>
+        </Link>
+        <div className="flex items-center gap-8">
+          <a href="#features"  className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Features</a>
+          <a href="#pricing"   className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Pricing</a>
+          <Link href="/sign-in" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Sign in</Link>
           <Link
             href="/sign-up"
-            className="inline-flex items-center gap-2 text-[15px] font-semibold hover:underline"
-            style={{ color: 'var(--gc-blue)' }}
+            className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
+            style={{ borderRadius: 0 }}
           >
-            Get started — 14-day free trial
-            <ArrowRight size={15} />
+            Start trial
           </Link>
-        </section>
-
-        {/* Footer */}
-        <footer
-          className="flex flex-wrap items-center justify-between gap-3 pt-8 text-[13px]"
-          style={{
-            borderTop: '1px solid var(--gc-border-light)',
-            color: 'var(--gc-text-3)',
-          }}
-        >
-          <span>© {new Date().getFullYear()} FleetCal · Built in Salt Lake City</span>
-          <div className="flex gap-5">
-            <Link href="/sign-in" className="hover:underline">Sign in</Link>
-            <Link href="/sign-up" className="hover:underline">Sign up</Link>
-          </div>
-        </footer>
-      </main>
-    </div>
+        </div>
+      </div>
+    </nav>
   );
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────
+function Hero() {
+  return (
+    <section className="border-b border-sys-line">
+      <div className="max-w-6xl mx-auto px-8 md:px-12 py-32 md:py-40">
+        <div className="max-w-3xl">
+          <div className="font-sys font-semibold text-[13px] uppercase text-sys-blue mb-8" style={{ letterSpacing: '0.12em' }}>
+            01 · Dispatch + Billing
+          </div>
+          <h1 className="font-display text-[52px] md:text-[72px] lg:text-[82px] leading-[1.0] tracking-tight mb-10">
+            Rate-con to invoice.{' '}
+            <span className="text-sys-blue">One tool.</span>
+          </h1>
+          <p className="font-sys text-[17px] md:text-[18px] leading-[1.6] text-sys-muted mb-10 max-w-2xl">
+            The TMS built by a 13-truck fleet owner, for fleets like yours.
+            No ELD lock-in. No per-driver fees.{' '}
+            <strong className="text-sys-primary font-semibold">Built and used daily at Curzon Trucking</strong>.
+          </p>
+          <div className="flex flex-wrap items-center gap-3 mb-10">
+            <Chip color="orange">RATE-CON AI</Chip>
+            <Chip color="green">PAYROLL BUILT-IN</Chip>
+            <Chip color="teal">14-DAY FREE TRIAL</Chip>
+          </div>
+          <div className="flex flex-wrap items-center gap-6">
+            <Link
+              href="/sign-up"
+              className="inline-flex items-center bg-sys-blue text-white font-semibold text-[15px] px-8 py-4 hover:bg-sys-blue-hover transition-colors"
+              style={{ borderRadius: 0 }}
+            >
+              Start your free trial →
+            </Link>
+            <a href="#pricing" className="font-sys font-semibold text-[15px] text-sys-blue hover:underline">
+              See pricing →
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
-type IconComponent = React.ComponentType<{ size?: number; style?: React.CSSProperties; strokeWidth?: number }>;
+function Features() {
+  return (
+    <section id="features" className="bg-sys-blue text-white border-b border-sys-blue" style={{ scrollMarginTop: 64 }}>
+      <div className="max-w-6xl mx-auto px-8 md:px-12 py-32">
+        <div className="font-sys font-semibold text-[13px] uppercase text-white/70 mb-6" style={{ letterSpacing: '0.12em' }}>
+          02 · Features
+        </div>
+        <h2 className="font-display text-[40px] md:text-[52px] leading-tight tracking-tight mb-6 max-w-3xl">
+          Everything dispatch needs.{' '}
+          <span className="text-white/70">Nothing they don&apos;t.</span>
+        </h2>
+        <p className="font-sys text-[17px] leading-[1.6] text-white/80 mb-16 max-w-2xl">
+          Drop a rate-con PDF. Dispatch the load. Verify the POD. Send the invoice.
+          Pay the driver. Every step where it should be, no leaving the app.
+        </p>
+        <div className="grid md:grid-cols-2 gap-px bg-sys-line">
+          <FeatureCard
+            accent="orange"
+            label="AI · Documents"
+            title="AI rate-con parser"
+            body="Drop a rate confirmation PDF onto the calendar. Customer, rate, stops, and appointment times extracted automatically. Edit what's wrong, save what's right."
+            bullets={['PDF or photo upload', 'Stops + appointment times', 'Auto customer match']}
+          />
+          <FeatureCard
+            accent="green"
+            label="Live · Dispatch"
+            title="Real dispatch calendar"
+            body="One screen for every truck on every day. Drag to reschedule. Day or week view. Built for the way dispatchers actually think — not for what looked good in a demo."
+            bullets={['Drag-and-drop scheduling', 'Day / week / driver view', 'Status auto-flips on assign']}
+          />
+          <FeatureCard
+            accent="teal"
+            label="POD · Billing"
+            title="Paperwork to invoice in 3 clicks"
+            body="POD verification queue. Release to billing. Generate the invoice. Send to the customer. Mark paid. No re-keying, no spreadsheets."
+            bullets={['POD verify + release', 'Auto-numbered invoices', 'Resend / dispute tracking']}
+          />
+          <FeatureCard
+            accent="purple"
+            label="Payroll · Drivers"
+            title="Driver payroll built in"
+            body="Per-driver weekly totals computed from the loads you actually ran. Detention and layover adjustments. Finalize on Friday and you're done."
+            bullets={['Per-driver pay × %', 'TONU / layover / deduction', 'Lock-on-finalize']}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
 
-function FeatureBlock({ icon: Icon, title, body }: {
-  icon: IconComponent;
+function Pricing() {
+  return (
+    <section id="pricing" className="border-b border-sys-line" style={{ scrollMarginTop: 64 }}>
+      <div className="max-w-6xl mx-auto px-8 md:px-12 py-32">
+        <div className="font-sys font-semibold text-[13px] uppercase text-sys-blue mb-6" style={{ letterSpacing: '0.12em' }}>
+          03 · Pricing
+        </div>
+        <h2 className="font-display text-[40px] md:text-[52px] leading-tight tracking-tight mb-6 max-w-3xl">
+          Priced by fleet size.{' '}
+          <span className="text-sys-blue">Same product at every tier.</span>
+        </h2>
+        <p className="font-sys text-[17px] leading-[1.6] text-sys-muted mb-12 max-w-2xl">
+          14-day free trial on every plan. No credit card to start.
+          Cancel any time — no annual lock-in, no per-driver surcharges.
+        </p>
+
+        {/* Clerk's PricingTable. for="organization" tells it to read the
+            B2B plan list (Owner Op / Growth / Fleet) instead of B2C. */}
+        <div className="-mx-2">
+          <PricingTable for="organization" />
+        </div>
+
+        <div className="mt-16 pt-8 border-t border-sys-line text-center">
+          <p className="font-sys text-[14px] text-sys-muted">
+            Running a fleet larger than 14 trucks?{' '}
+            <a
+              href="mailto:sales@fleetcal.app?subject=Enterprise%20inquiry"
+              className="font-semibold text-sys-blue hover:underline"
+            >
+              Contact sales →
+            </a>
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BuiltBy() {
+  return (
+    <section className="bg-sys-surface border-b border-sys-line">
+      <div className="max-w-6xl mx-auto px-8 md:px-12 py-32">
+        <div className="grid md:grid-cols-2 gap-16 md:gap-24 items-start">
+          <div>
+            <div className="font-sys font-semibold text-[13px] uppercase text-sys-blue mb-6" style={{ letterSpacing: '0.12em' }}>
+              04 · Built by carriers
+            </div>
+            <h2 className="font-display text-[40px] md:text-[52px] leading-tight tracking-tight mb-8">
+              Made by people who&apos;ve actually{' '}
+              <span className="text-sys-blue">run a dispatch desk.</span>
+            </h2>
+          </div>
+          <div className="font-sys text-[16px] md:text-[17px] leading-[1.85] text-sys-muted space-y-6">
+            <p>
+              FleetCal was built at <strong className="text-sys-primary font-semibold">Curzon Trucking</strong>,
+              a 13-truck reefer carrier in Salt Lake City. The first version was a
+              calendar built to replace a whiteboard. Then a POD queue. Then invoicing.
+              Then payroll.
+            </p>
+            <p>
+              Every feature in here exists because someone yelled across the dispatch
+              office for it. There&apos;s no design committee, no UX consultancy,
+              no &quot;competitive feature parity&quot; spreadsheet driving the roadmap.
+              Just the actual work of running freight.
+            </p>
+            <p>
+              If you&apos;ve ever paid for a TMS that was clearly built by someone
+              who&apos;s never sat next to a dispatcher at 6am, you&apos;ll feel the difference.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FinalCta() {
+  return (
+    <section className="bg-sys-blue text-white border-b border-sys-blue">
+      <div className="max-w-6xl mx-auto px-8 md:px-12 py-32 text-center">
+        <div className="font-sys font-semibold text-[13px] uppercase text-white/70 mb-6" style={{ letterSpacing: '0.12em' }}>
+          05 · Get started
+        </div>
+        <h2 className="font-display text-[40px] md:text-[64px] leading-[1.05] tracking-tight mb-8 max-w-3xl mx-auto">
+          See your loads on a calendar that{' '}
+          <span className="text-white/70">actually fits how you dispatch.</span>
+        </h2>
+        <p className="font-sys text-[17px] md:text-[18px] leading-[1.6] text-white/80 mb-10 max-w-xl mx-auto">
+          14 days. No card. No sales call. Sign up and you&apos;re in.
+        </p>
+        <Link
+          href="/sign-up"
+          className="inline-flex items-center bg-white text-sys-blue font-semibold text-[15px] px-10 py-4 hover:bg-sys-blue-light transition-colors"
+          style={{ borderRadius: 0 }}
+        >
+          Start your free trial →
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="bg-sys-bg">
+      <div className="max-w-6xl mx-auto px-8 md:px-12 py-12 flex flex-wrap items-center justify-between gap-4">
+        <Link href="/" className="font-mono font-bold text-[14px] uppercase" style={{ letterSpacing: '0.2em' }}>
+          <span className="text-sys-blue">FLEET</span>
+          <span className="text-sys-orange">CAL</span>
+        </Link>
+        <div className="font-sys text-[12px] uppercase text-sys-muted" style={{ letterSpacing: '0.12em' }}>
+          © {new Date().getFullYear()} · Built in Salt Lake City
+        </div>
+        <div className="flex gap-6 text-[13px] font-medium text-sys-muted">
+          <Link href="/sign-in" className="hover:text-sys-primary transition-colors">Sign in</Link>
+          <Link href="/sign-up" className="hover:text-sys-primary transition-colors">Sign up</Link>
+          <a href="mailto:sales@fleetcal.app" className="hover:text-sys-primary transition-colors">Contact</a>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+// ── Building blocks ────────────────────────────────────────────────────
+
+type ChipColor = 'orange' | 'green' | 'teal' | 'purple';
+const CHIP_BG: Record<ChipColor, string> = {
+  orange: '#F47316',
+  green:  '#16A34A',
+  teal:   '#0891B2',
+  purple: '#7C3AED',
+};
+
+function Chip({ color, children }: { color: ChipColor; children: React.ReactNode }) {
+  return (
+    <span
+      className="font-sys font-medium text-[12px] uppercase text-white px-4 py-2"
+      style={{ background: CHIP_BG[color], borderRadius: 0, letterSpacing: '0.08em' }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function FeatureCard({
+  accent, label, title, body, bullets,
+}: {
+  accent: ChipColor;
+  label: string;
   title: string;
   body: string;
+  bullets: string[];
 }) {
   return (
-    <div>
+    <div className="bg-white" style={{ borderRadius: 0 }}>
       <div
-        className="w-10 h-10 rounded-lg flex items-center justify-center mb-4"
-        style={{ background: 'var(--gc-blue-light)', color: 'var(--gc-blue)' }}
+        className="font-mono font-bold text-[11px] uppercase text-white px-8 py-3"
+        style={{ background: CHIP_BG[accent], letterSpacing: '0.12em' }}
       >
-        <Icon size={20} strokeWidth={2} />
+        {label}
       </div>
-      <h3 className="text-[17px] font-semibold mb-2 tracking-tight">{title}</h3>
-      <p className="text-[14.5px] leading-[1.55]" style={{ color: 'var(--gc-text-2)' }}>
-        {body}
-      </p>
-    </div>
-  );
-}
-
-function TierCard({ name, trucks, price }: {
-  name: string;
-  trucks: string;
-  price: string;
-}) {
-  return (
-    <div
-      className="rounded-xl p-5"
-      style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}
-    >
-      <div className="text-[13px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--gc-text-3)' }}>
-        {name}
-      </div>
-      <div className="text-[14px] mb-3" style={{ color: 'var(--gc-text-2)' }}>{trucks}</div>
-      <div className="flex items-baseline gap-1">
-        <span className="text-[28px] font-bold tracking-tight">{price}</span>
-        <span className="text-[13px]" style={{ color: 'var(--gc-text-3)' }}>/mo</span>
+      <div className="px-8 py-10">
+        <h3 className="font-sys text-[20px] font-semibold text-sys-primary mb-3 tracking-tight">{title}</h3>
+        <p className="font-sys text-[15px] leading-[1.65] text-sys-muted mb-6">{body}</p>
+        <ul className="space-y-2">
+          {bullets.map(b => (
+            <li key={b} className="flex items-start gap-3 font-sys text-[14px] text-sys-primary">
+              <span className="w-1.5 h-1.5 bg-sys-muted mt-2 flex-shrink-0" />
+              {b}
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
