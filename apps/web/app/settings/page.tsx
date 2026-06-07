@@ -2251,6 +2251,7 @@ function InvoicingPanel() {
     invoiceNumberPrefix: string;
     invoiceEmailSubjectTemplate: string;
     invoiceEmailBodyTemplate: string;
+    invoiceFromAddress: string;
   };
   const emptyForm: Form = {
     companyName:             '',
@@ -2271,6 +2272,7 @@ function InvoicingPanel() {
     invoiceNumberPrefix:     '',
     invoiceEmailSubjectTemplate: '',
     invoiceEmailBodyTemplate:    '',
+    invoiceFromAddress:      '',
   };
   const [form, setForm] = useState<Form>(emptyForm);
   // Snapshot of the last-saved (or freshly-loaded) state. Compared
@@ -2348,6 +2350,7 @@ function InvoicingPanel() {
           invoiceNumberPrefix:     inv.invoiceNumberPrefix     ?? '',
           invoiceEmailSubjectTemplate: inv.invoiceEmailSubjectTemplate ?? '',
           invoiceEmailBodyTemplate:    inv.invoiceEmailBodyTemplate    ?? '',
+          invoiceFromAddress:          inv.invoiceFromAddress          ?? '',
         };
         setForm(next);
         // Snapshot the loaded state as the new baseline — the form
@@ -2395,6 +2398,7 @@ function InvoicingPanel() {
         invoiceNumberPrefix:     form.invoiceNumberPrefix.trim()     || undefined,
         invoiceEmailSubjectTemplate: form.invoiceEmailSubjectTemplate.trim() || undefined,
         invoiceEmailBodyTemplate:    form.invoiceEmailBodyTemplate.trim()    || undefined,
+        invoiceFromAddress:          form.invoiceFromAddress.trim()          || undefined,
       };
       await railway.updateOrgSettings({ invoiceSettings: cleaned });
       // Snapshot moves forward to the just-saved values so the form
@@ -2553,6 +2557,24 @@ function InvoicingPanel() {
                 <Textarea value={form.invoiceFooterNotes} onChange={v => updateField('invoiceFooterNotes', v)}
                   placeholder="Thank you for your business. Payment due per terms above."
                   rows={3} />
+              </FieldRow>
+            </Card>
+
+            <Card title="Email sender" subtitle="Which address brokers see invoices come from.">
+              <FieldRow
+                label="From address"
+                subtitle="Defaults to invoices@fleetcal.app — works out of the box for every org. Override with your own address (e.g. billing@yourcarrier.com) ONLY after the domain is verified in our Resend account; an unverified domain causes Resend to reject the send.">
+                <div className="flex-1 flex flex-col gap-1">
+                  <Input value={form.invoiceFromAddress}
+                    onChange={v => updateField('invoiceFromAddress', v.trim())}
+                    placeholder="invoices@fleetcal.app" type="email" />
+                  <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                    Brokers always see your <strong>company name</strong> in the &ldquo;From&rdquo; display
+                    (e.g. &ldquo;Acme Trucking &lt;{form.invoiceFromAddress || 'invoices@fleetcal.app'}&gt;&rdquo;) — only the
+                    envelope address changes. Replies route to your AR email above.
+                    <br />Need a new domain verified? Contact support with the domain you own and we&rsquo;ll add it.
+                  </div>
+                </div>
               </FieldRow>
             </Card>
 

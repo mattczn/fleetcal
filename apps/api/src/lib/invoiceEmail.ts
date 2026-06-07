@@ -193,15 +193,21 @@ export async function sendInvoiceEmail(args: SendInvoiceEmailArgs): Promise<Send
 
   const first = args.invoices[0];
 
-  // From address pattern: the carrier's company name appears in the
-  // display slot, the actual envelope address stays on our verified
-  // domain. Replies route to the carrier's AR email via Reply-To.
-  // This is the shape brokers expect — they see who they're paying
-  // without us needing every org to verify a domain in Resend.
+  // From address: per-org override wins over the platform default.
+  // Orgs that have verified their own domain in Resend can set
+  // invoiceSettings.invoiceFromAddress to something like
+  // "billing@curzontrucking.com" so brokers see emails from the
+  // carrier's actual domain. New orgs without a verified domain
+  // fall back to env.invoiceFromEmail (invoices@fleetcal.app),
+  // which our platform domain is verified for. If the override
+  // points at an unverified domain, Resend rejects the send with
+  // an error that surfaces back to the caller — there's no silent
+  // half-broken state.
   const displayName = safeDisplayName(
     first.snapshot.companyName?.trim() || env.invoiceFromNameFallback,
   );
-  const fromAddr = `${displayName} <${env.invoiceFromEmail}>`;
+  const envelopeAddress = args.invoiceSettings?.invoiceFromAddress?.trim() || env.invoiceFromEmail;
+  const fromAddr = `${displayName} <${envelopeAddress}>`;
 
   // Reply-To: the carrier's AR/accounting email if they've configured
   // one. Falls back to undefined (Resend omits the header) so replies

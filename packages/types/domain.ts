@@ -416,6 +416,19 @@ export interface InvoiceSettings {
    *  into the per-send CC list at the API; duplicates removed. */
   ccEmail?: string;
 
+  // ── Email sender ────────────────────────────────────────
+  /** Per-org override for the envelope From address on outbound
+   *  invoice emails. Must be a real address on a domain VERIFIED
+   *  with the platform's Resend account (otherwise Resend rejects
+   *  the send). Leave empty to use the platform default
+   *  (invoices@fleetcal.app), which is verified for every org out
+   *  of the box. Orgs with their own verified domain set this to
+   *  e.g. "billing@curzontrucking.com" so brokers see invoices
+   *  from the carrier's actual domain. The display name on every
+   *  send is always the carrier's `companyName` regardless of
+   *  this field. */
+  invoiceFromAddress?: string;
+
   // ── Template config ────────────────────────────────────
   /** Default payment terms in days. 30 = "Net 30". */
   defaultPaymentTermsDays?: number;
