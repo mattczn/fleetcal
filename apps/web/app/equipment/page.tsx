@@ -25,8 +25,9 @@ import {
   Package, Wrench, ClipboardCheck, Fuel as FuelIcon,
   Camera, Loader2, MapPin, X, Clock, User, Truck, FileText, ExternalLink, Check, Trash2,
   ChevronLeft, ChevronRight, ChevronDown, CalendarDays, List as ListIcon, AlertCircle, CheckCircle2,
-  Calendar, Plus,
+  Calendar, Plus, Info,
 } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import { railway } from '@/lib/railway';
 import AppShell from '@/components/nav/AppShell';
 import type { Driver, Asset } from '@/lib/types';
@@ -4815,21 +4816,25 @@ function FuelKpiBar({
           label="Total fuel spend"
           value={fmtMoney(kpis.spend)}
           unit={`${kpis.txnCount} transaction${kpis.txnCount === 1 ? '' : 's'}`}
+          formula={<>Sum of <strong>Total Charged</strong> on every fuel transaction (diesel + DEF + fees + taxes) whose transaction date falls in the selected period.</>}
         />
         <KpiTile
           label="Diesel gallons"
           value={kpis.diesel > 0 ? kpis.diesel.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '—'}
           unit={kpis.diesel > 0 ? 'gal' : undefined}
+          formula={<>Sum of <strong>diesel gallons</strong> across every transaction in the selected period. DEF is tracked separately.</>}
         />
         <KpiTile
           label="Avg $/gallon"
           value={kpis.avgPerGal > 0 ? `$${kpis.avgPerGal.toFixed(3)}` : '—'}
           unit="diesel only"
+          formula={<>Diesel spend ÷ diesel gallons (DEF gallons + spend excluded so the rate reflects what trucks actually burn).</>}
         />
         <KpiTile
           label="DEF gallons"
           value={kpis.def > 0 ? kpis.def.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '—'}
           unit={kpis.def > 0 ? 'gal' : undefined}
+          formula={<>Sum of <strong>DEF (diesel exhaust fluid)</strong> gallons across every transaction in the selected period.</>}
         />
       </div>
 
@@ -6130,7 +6135,7 @@ function DriverOnlyMatchInfo({ report }: { report: FuelReport }) {
 
 // ─── New-panel helpers ──────────────────────────────────────────────
 
-function KpiTile({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function KpiTile({ label, value, unit, formula }: { label: string; value: string; unit?: string; formula?: React.ReactNode }) {
   return (
     <div
       className="rounded-lg px-3 py-2.5"
@@ -6138,8 +6143,13 @@ function KpiTile({ label, value, unit }: { label: string; value: string; unit?: 
         background: 'var(--gc-bg)',
         border: '1px solid var(--gc-border-light)',
       }}>
-      <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)' }}>
+      <div className="text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
         {label}
+        {formula && (
+          <Tooltip content={formula} placement="bottom">
+            <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+          </Tooltip>
+        )}
       </div>
       <div className="text-[20px] font-semibold tabular-nums mt-0.5" style={{ color: 'var(--gc-text-1)' }}>
         {value}

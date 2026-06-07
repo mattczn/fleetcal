@@ -3,7 +3,8 @@
 import { useMemo, useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import Link from 'next/link';
 import { useOrganization } from '@clerk/nextjs';
-import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw } from 'lucide-react';
+import { Users, ChevronDown, Loader2, AlertCircle, Check, Pencil, Plus, X, Trash2, CornerDownRight, Lock, Unlock, Download, RotateCcw, Info } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import CopyChip from '@/components/ui/CopyChip';
 import DriversModal from '@/components/sidebar/DriversModal';
 import {
@@ -762,11 +763,35 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         )}
         <div className="flex items-center gap-4">
           <div className="text-right">
-            <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: 'var(--gc-text-3)' }}>Driver Pay</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5 inline-flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
+              Driver Pay
+              <Tooltip
+                placement="bottom"
+                content={
+                  <>
+                    Per-load <strong>driver pay</strong> for every leg this driver delivered this week
+                    {' '}+ payroll <strong>adjustments</strong> (bonuses, deductions, deferred amounts)
+                    {' '}+ pay-to-driver <strong>accessorials</strong> matched to this driver by name.
+                  </>
+                }>
+                <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+              </Tooltip>
+            </div>
             <div className="text-[18px] font-semibold" style={{ color: isFinalized ? '#1e8e3e' : 'var(--gc-text-1)' }}>{fmtMoney(totalPay)}</div>
           </div>
           <div className="text-right">
-            <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5" style={{ color: 'var(--gc-text-3)' }}>Load Revenue</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide mb-0.5 inline-flex items-center gap-1" style={{ color: 'var(--gc-text-3)' }}>
+              Load Revenue
+              <Tooltip
+                placement="bottom"
+                content={
+                  <>
+                    Sum of <strong>per-leg revenue</strong> across this driver&rsquo;s loads this week. Non-relay legs use full loadPrice; relay legs are prorated by loaded miles (each leg gets its mileage share of the load&rsquo;s total).
+                  </>
+                }>
+                <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+              </Tooltip>
+            </div>
             <div className="text-[18px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>{fmtMoney(totalRev)}</div>
           </div>
           <button

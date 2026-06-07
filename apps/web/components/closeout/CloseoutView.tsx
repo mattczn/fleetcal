@@ -36,6 +36,7 @@ import FollowUpModal from './FollowUpModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import { OpsTable, type OpsColumn, type OpsFilter } from '@/components/ui/OpsTable';
 import { AccessorialsCell, FastTooltip } from '@/components/queue/QueueTablePrimitives';
+import Tooltip from '@/components/ui/Tooltip';
 
 type Tab = 'all' | 'recent' | 'flagged' | 'released';
 
@@ -104,11 +105,15 @@ const DEFAULT_COL_WIDTHS = {
   actions:      170,
 };
 
-const TABS: { value: Tab; label: string; subtitle: string; tint: string }[] = [
-  { value: 'all',      label: 'All',                subtitle: 'Delivered loads ready to release',     tint: '#5f6368' },
-  { value: 'recent',   label: 'Recently Delivered', subtitle: 'Delivered within the past 24 hours',   tint: '#1a73e8' },
-  { value: 'flagged',  label: 'Flagged',            subtitle: 'Missing POD · pending acc · priority · manual', tint: '#b45309' },
-  { value: 'released', label: 'Released',           subtitle: 'Released for billing',                 tint: '#15803d' },
+const TABS: { value: Tab; label: string; subtitle: string; tint: string; formula: React.ReactNode }[] = [
+  { value: 'all',      label: 'All',                subtitle: 'Delivered loads ready to release',     tint: '#5f6368',
+    formula: <>Every delivered load not yet released for billing. Count is total loads; $ is sum of <strong>Total Billable</strong> (linehaul + billable accessorials) per load.</> },
+  { value: 'recent',   label: 'Recently Delivered', subtitle: 'Delivered within the past 24 hours',   tint: '#1a73e8',
+    formula: <>Loads whose delivery leg ended in the last 24 hours and aren&rsquo;t yet released. $ = sum of <strong>Total Billable</strong> per load.</> },
+  { value: 'flagged',  label: 'Flagged',            subtitle: 'Missing POD · pending acc · priority · manual', tint: '#b45309',
+    formula: <>Delivered loads that need attention: missing POD, accessorial pending approval, marked priority, or manually flagged. $ = sum of <strong>Total Billable</strong> per load.</> },
+  { value: 'released', label: 'Released',           subtitle: 'Released for billing',                 tint: '#15803d',
+    formula: <>Loads already released to accounting. Count only — $ is hidden here so dispatchers without accounting access don&rsquo;t see revenue aggregates.</> },
 ];
 
 function ageDays(deliveredEnd: string): number {
@@ -1132,6 +1137,9 @@ export default function CloseoutView() {
                   <div className="flex items-center gap-2">
                     <Icon size={16} style={{ color: b.tint }} />
                     <span className="text-[12.5px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
+                    <Tooltip content={b.formula} placement="bottom">
+                      <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
                     <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
                   </div>
                   <div

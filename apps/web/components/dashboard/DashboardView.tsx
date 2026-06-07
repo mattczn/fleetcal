@@ -5,8 +5,9 @@ import Link from 'next/link';
 import {
   TrendingUp, Truck, CheckCircle2, DollarSign,
   BarChart2, AlertCircle, Loader2,
-  Wallet, Fuel, Route, Gauge,
+  Wallet, Fuel, Route, Gauge, Info,
 } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import { fetchWithRetry } from '@/lib/fetchWithRetry';
 import { parseNaiveIsoInTz } from '@/lib/time-utils';
 import { useOrganization } from '@clerk/nextjs';
@@ -337,7 +338,7 @@ function CostBar({
 }
 
 function KpiCard({
-  label, value, sub, icon, accent, badge, loading,
+  label, value, sub, icon, accent, badge, loading, formula,
 }: {
   label: string; value: string; sub: string;
   icon: React.ReactNode; accent: string;
@@ -351,15 +352,25 @@ function KpiCard({
    *  loading state based on whichever async fetch backs it (most use
    *  loadSummaries, a few have their own sources). */
   loading?: boolean;
+  /** Optional "what's in this number" explainer surfaced via a small
+   *  Info icon next to the label. The tooltip is the right place for
+   *  the long formula — keeps the tile clean while still being one
+   *  hover away. */
+  formula?: React.ReactNode;
 }) {
   return (
     <Card>
       <div className="flex items-start justify-between mb-3">
         <span
-          className="text-[11px] font-semibold uppercase tracking-wider"
+          className="text-[11px] font-semibold uppercase tracking-wider inline-flex items-center gap-1"
           style={{ color: 'var(--gc-text-3)' }}
         >
           {label}
+          {formula && (
+            <Tooltip content={formula} placement="bottom">
+              <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+            </Tooltip>
+          )}
         </span>
         <div
           className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
@@ -1260,6 +1271,11 @@ export default function DashboardView() {
               icon={<DollarSign size={17} />}
               accent="#1a73e8"
               loading={loadSummaries === null}
+              formula={
+                <>
+                  Sum of <strong>Total Billable</strong> (linehaul + billable accessorials) for every load with a pickup in the selected period. Cancelled loads are excluded; relay loads are counted once.
+                </>
+              }
             />
             <KpiCard
               label="Avg Revenue / Truck"
@@ -1268,6 +1284,11 @@ export default function DashboardView() {
               icon={<CheckCircle2 size={17} />}
               accent="#f9ab00"
               loading={loadSummaries === null}
+              formula={
+                <>
+                  Total Revenue ÷ number of <strong>active trucks</strong>. A truck counts as active if its lifecycle (active_from / active_to) overlaps the selected period — even by one day.
+                </>
+              }
             />
             {showPayrollKpi && (
               <KpiCard
@@ -1278,6 +1299,11 @@ export default function DashboardView() {
                 icon={<Wallet size={17} />}
                 accent="#5e35b1"
                 loading={payrollData === null}
+                formula={
+                  <>
+                    Sum of finalized payroll records for every Sat–Fri week whose Friday falls inside the period. While a week is still pending, the dashboard falls back to summed driver pay on this period&rsquo;s loads.
+                  </>
+                }
               />
             )}
             {showFuelKpi && (
@@ -1288,6 +1314,11 @@ export default function DashboardView() {
                 icon={<Fuel size={17} />}
                 accent="#ea4335"
                 loading={fuelSpend === null}
+                formula={
+                  <>
+                    Sum of <strong>Total Charged</strong> on every fuel transaction (diesel + DEF + fees + taxes) whose transaction date falls in the selected period.
+                  </>
+                }
               />
             )}
             {/* Row 2 ─ volume — gated on the performance module. MVP
@@ -1301,6 +1332,11 @@ export default function DashboardView() {
                 icon={<Route size={17} />}
                 accent="#00838f"
                 loading={loadSummaries === null}
+                formula={
+                  <>
+                    Sum of every leg&rsquo;s <strong>loaded miles</strong> for loads with a pickup in the period. Relay loads sum across legs. Deadhead between loads is excluded.
+                  </>
+                }
               />
             )}
             {showEldMiles && (
@@ -1311,6 +1347,11 @@ export default function DashboardView() {
                 icon={<Gauge size={17} />}
                 accent="#0288d1"
                 loading={eldMiles === null}
+                formula={
+                  <>
+                    Sum of <strong>(max odometer − min odometer)</strong> for every ELD-equipped truck over the selected period, pulled from Motive. Includes deadhead, bobtail, and personal use — these are wheels-turning miles, not loaded miles.
+                  </>
+                }
               />
             )}
             {showVolumeKpis && (
@@ -1321,6 +1362,11 @@ export default function DashboardView() {
                 icon={<Truck size={17} />}
                 accent="#1e8e3e"
                 loading={loadSummaries === null}
+                formula={
+                  <>
+                    Count of distinct loads (deduped by load id, so relays count once) whose pickup leg falls in the period. Cancelled loads are excluded.
+                  </>
+                }
               />
             )}
             <KpiCard
@@ -1330,6 +1376,11 @@ export default function DashboardView() {
               icon={<TrendingUp size={17} />}
               accent="#a142f4"
               loading={loadSummaries === null}
+              formula={
+                <>
+                  Total Revenue ÷ Total Loads. Same exclusions as the upstream tiles (cancelled out, relays count once).
+                </>
+              }
             />
           </div>
 

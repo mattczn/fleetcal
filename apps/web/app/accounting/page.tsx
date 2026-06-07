@@ -23,8 +23,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Receipt, Loader2, AlertCircle, Search, X, Send, Check, FilePlus,
-  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw,
+  AlertOctagon, Inbox, CircleCheckBig, CheckCircle2, Layers, Eye, Star, RefreshCw, Info,
 } from 'lucide-react';
+import Tooltip from '@/components/ui/Tooltip';
 import { useAuth, useUser } from '@clerk/nextjs';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -51,12 +52,17 @@ import type {
 
 type Bucket = 'released' | 'queued' | 'invoiced' | 'paid' | 'all';
 
-const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>; tint: string; subtitle: string }> = [
-  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', subtitle: 'Paperwork verified · ready to invoice' },
-  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea', subtitle: 'Invoice generated · waiting to be sent' },
-  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8', subtitle: 'Invoice sent · awaiting payment'       },
-  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a', subtitle: 'Payment received'                       },
-  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'All released loads'                     },
+const BUCKETS: Array<{ key: Bucket; label: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }>; tint: string; subtitle: string; formula: React.ReactNode }> = [
+  { key: 'released', label: 'Released',  icon: AlertOctagon,    tint: '#1a73e8', subtitle: 'Paperwork verified · ready to invoice',
+    formula: <>Loads with <code>billing_status = verified</code> and no invoice yet. $ = sum of <strong>Total Billable</strong> (linehaul + billable accessorials) per load.</> },
+  { key: 'queued',   label: 'Queued',    icon: Inbox,           tint: '#9333ea', subtitle: 'Invoice generated · waiting to be sent',
+    formula: <>Loads with <code>billing_status = invoiced</code> whose invoice is still in <code>draft</code>. $ = sum of the invoice <strong>Total</strong> (snapshot at draft time); falls back to load Total Billable if the snapshot is missing.</> },
+  { key: 'invoiced', label: 'Invoiced',  icon: CircleCheckBig,  tint: '#1d4ed8', subtitle: 'Invoice sent · awaiting payment',
+    formula: <>Loads with <code>billing_status = invoiced</code> whose invoice is in <code>sent</code>. $ = sum of the invoice <strong>Total</strong> snapshot.</> },
+  { key: 'paid',     label: 'Paid',      icon: CheckCircle2,    tint: '#16a34a', subtitle: 'Payment received',
+    formula: <>Loads with <code>billing_status = paid</code>. $ = sum of the invoice <strong>Total</strong> at the time payment was recorded.</> },
+  { key: 'all',      label: 'All',       icon: Layers,          tint: '#5f6368', subtitle: 'All released loads',
+    formula: <>Union of Queued + Invoiced + Paid (excludes Released — those don&rsquo;t have an invoice yet). $ = sum of invoice <strong>Total</strong> per row.</> },
 ];
 
 // ─── Columns ────────────────────────────────────────────────────────────
@@ -1315,6 +1321,9 @@ function AccountingPageInner() {
                   <div className="flex items-center gap-2">
                     <Icon size={16} style={{ color: b.tint }} />
                     <span className="text-[12.5px] font-semibold truncate" style={{ color: 'var(--gc-text-2)' }}>{b.label}</span>
+                    <Tooltip content={b.formula} placement="bottom">
+                      <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
+                    </Tooltip>
                     <span className="ml-auto text-[15px] lg:text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
                   </div>
                   <div
