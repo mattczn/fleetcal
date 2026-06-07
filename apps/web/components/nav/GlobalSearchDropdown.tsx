@@ -64,16 +64,29 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
         .then(res => {
           if (cancelled) return;
           // The endpoint may return both legs of a relay. Dedupe by
-          // loadId so each load surfaces once in the dropdown.
-          const seen = new Set<string>();
-          const deduped: Load[] = [];
+          // loadId so each load surfaces once in the dropdown. For
+          // relays we prefer the pickup leg (earlier `start`) so the
+          // displayed date is the actual pickup, not the delivery.
+          const byKey = new Map<string, Load>();
           for (const l of res.loads ?? []) {
             const key = l.loadId ?? l.id;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            deduped.push(l);
+            const existing = byKey.get(key);
+            if (!existing || new Date(l.start).getTime() < new Date(existing.start).getTime()) {
+              byKey.set(key, l);
+            }
           }
-          setLoads(deduped.slice(0, PER_CATEGORY_LIMIT));
+          // Sort by absolute distance from "now" so the closest load —
+          // past or future — surfaces first. A load 2 days out beats
+          // one 6 days back, etc. Server already sorted newest first,
+          // but for global search "closest in time" is more useful
+          // than "newest pickup".
+          const now = Date.now();
+          const sorted = [...byKey.values()].sort((a, b) => {
+            const da = Math.abs(new Date(a.start).getTime() - now);
+            const db = Math.abs(new Date(b.start).getTime() - now);
+            return da - db;
+          });
+          setLoads(sorted.slice(0, PER_CATEGORY_LIMIT));
         })
         .catch(err => {
           if (cancelled) return;
@@ -251,8 +264,8 @@ export default function GlobalSearchDropdown({ query, anchorRef, onClose }: Prop
         <Section title="Loads" icon={FileText} loading={loadsLoading && loads.length === 0}>
           {loads.map(load => (
             <ResultRow key={load.loadId ?? load.id}
-              primary={`#${load.loadNum ?? load.internalLoadId ?? ''}`}
-              secondary={[load.broker, load.title].filter(Boolean).join(' · ')}
+              primary={loadPrimary(load)}
+              secondary={loadSecondary(load)}
               onClick={() => handleClickLoad(load)} />
           ))}
         </Section>
@@ -342,6 +355,44 @@ function Section({ title, icon: Icon, children, loading }: {
       )}
     </div>
   );
+}
+
+// ── Load row formatters ────────────────────────────────────────────────
+
+/** Primary line for a load row: "#LOAD123 · INT45678" — the broker's
+ *  load # plus our internal id, both visible so dispatchers can match
+ *  whichever number they have on hand. Falls back gracefully when one
+ *  side is missing. */
+function loadPrimary(load: Load): string {
+  const parts: string[] = [];
+  if (load.loadNum)              parts.push(`#${load.loadNum}`);
+  if (load.internalLoadId != null) parts.push(String(load.internalLoadId));
+  return parts.join(' · ') || '(no #)';
+}
+
+/** Secondary line: pickup-date · customer · price. Each segment is
+ *  optional; omitted entirely if missing rather than rendering an
+ *  empty placeholder. */
+function loadSecondary(load: Load): string {
+  const date = fmtPickupDate(load.start);
+  const price = load.loadPrice != null
+    ? `$${load.loadPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+    : '';
+  return [date, load.broker, price].filter(Boolean).join(' · ');
+}
+
+/** "2026-06-08T08:00" → "Jun 8" (this year) or "Jun 8, 2025" (cross-year).
+ *  Empty string for unparseable input. */
+function fmtPickupDate(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const thisYear = new Date().getFullYear();
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day:   'numeric',
+    year:  d.getFullYear() === thisYear ? undefined : 'numeric',
+  });
 }
 
 function ResultRow({ primary, secondary, onClick }: {
