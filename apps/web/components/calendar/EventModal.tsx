@@ -5121,18 +5121,33 @@ export default function EventModal() {
                 {priority && <span style={{ fontSize: 12, fontWeight: 700, color: '#92400e' }}>Priority</span>}
               </button>
             </Tooltip>
-            {eventKind === 'revenue' && (
-              <StyledSelect value={status} onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
-                style={{
-                  border: `1px solid ${STATUSES.find(s => s.value === status)?.color ?? headerColor}50`,
-                  borderRadius: 8, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
-                  color: STATUSES.find(s => s.value === status)?.color ?? headerColor,
-                  background: STATUSES.find(s => s.value === status)?.bg ?? `${headerColor}12`,
-                  outline: 'none', cursor: 'pointer', width: 'auto', transition: 'border-color 150ms',
-                }}>
-                {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </StyledSelect>
-            )}
+            {eventKind === 'revenue' && (() => {
+              // When the load is cancelled (any mode — status flag,
+              // remove-event, or in trash) the status pill should READ
+              // cancelled regardless of what the underlying event row
+              // says. A trash-mode delete preserves whatever status the
+              // row had when it was deleted (usually 'scheduled'), so
+              // without this override the pill would say "Scheduled"
+              // next to a CANCELLED kicker — confusing.
+              const displayStatus: EventStatus = isCancelled ? 'cancelled' : status;
+              const tone = STATUSES.find(s => s.value === displayStatus);
+              return (
+                <StyledSelect value={displayStatus}
+                  onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
+                  disabled={isCancelled}
+                  style={{
+                    border: `1px solid ${tone?.color ?? headerColor}50`,
+                    borderRadius: 8, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
+                    color: tone?.color ?? headerColor,
+                    background: tone?.bg ?? `${headerColor}12`,
+                    outline: 'none', cursor: isCancelled ? 'not-allowed' : 'pointer',
+                    width: 'auto', transition: 'border-color 150ms',
+                    opacity: isCancelled ? 0.85 : 1,
+                  }}>
+                  {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </StyledSelect>
+              );
+            })()}
             {eventKind === 'revenue' && stops.length >= 2 && stops.some(s => s.geocodeStatus === 'success') && (
               <button type="button" onClick={() => { setShowMapPanel(v => !v); setShowPdfViewer(false); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap"
@@ -6606,34 +6621,31 @@ export default function EventModal() {
                 </button>
               </div>
             </div>
+          ) : isEdit && eventKind === 'revenue' && isCancelled ? (
+            // Cancelled-state footer: Reinstate is the only action.
+            // Cancel/Save/Duplicate/+1 Week/Remove are all hidden so
+            // the dispatcher can't accidentally edit-then-save a load
+            // that's logically dead. After Reinstate the load lands
+            // back as a normal scheduled load and this footer collapses
+            // away to the standard layout.
+            <div className="shrink-0 flex items-center justify-end px-8 py-5"
+              style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
+              <button type="button" onClick={() => void handleReinstate()}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-[13px] font-semibold transition-colors text-white"
+                style={{ background: 'var(--gc-blue)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+                <RefreshCw size={15} />
+                Reinstate
+              </button>
+            </div>
           ) : (
             <div className="shrink-0 flex items-center justify-between px-8 py-5"
               style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
               <div className="flex items-center gap-1">
                 {isEdit && (
                   <>
-                    {eventKind === 'revenue' && isCancelled ? (
-                      <>
-                        <button type="button" onClick={() => void handleReinstate()}
-                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
-                          style={{ color: 'var(--gc-blue)', background: 'transparent' }}
-                          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                          <RefreshCw size={15} />
-                          Reinstate
-                        </button>
-                        {canDeleteLoad && (
-                          <button type="button" onClick={() => setRemoveDialogOpen(true)}
-                            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
-                            style={{ color: '#d93025', background: 'transparent' }}
-                            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
-                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                            <Trash2 size={15} />
-                            Remove
-                          </button>
-                        )}
-                      </>
-                    ) : eventKind === 'revenue' ? (
+                    {eventKind === 'revenue' ? (
                       canDeleteLoad && !cancelLocked ? (
                         <button type="button" onClick={() => setCancelDialogOpen(true)}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
