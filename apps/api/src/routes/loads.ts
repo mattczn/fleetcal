@@ -1100,6 +1100,49 @@ loads.get("/:id/rate-con-url", async (c) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /v1/loads/by-internal-id/:n — single load by org-scoped internal id
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Keyed by internal_load_id (the 5+ digit per-org numeric ID shown to
+// dispatchers as "#10761"). The load detail page uses this so the URL
+// reads /loads/10761 instead of a UUID. Returns the same shape as the
+// uuid-keyed GET above: 1 entry for single-leg loads, 2 for relays.
+//
+// Declared BEFORE the uuid handler so the route matcher doesn't try
+// to interpret "by-internal-id" as a uuid.
+
+loads.get("/by-internal-id/:n", async (c) => {
+  const orgId = c.get("orgId");
+  const raw = c.req.param("n");
+  const internalId = Number.parseInt(raw, 10);
+  if (!Number.isFinite(internalId) || internalId <= 0 || internalId > 2_147_483_647) {
+    return c.json({ error: "invalid_internal_id" } satisfies ApiErrorResponse, 400);
+  }
+
+  // Look up the uuid, then hand off to the same join helper used by
+  // every other read path — keeps the response shape identical.
+  const { data, error } = await supabase
+    .from("loads")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("internal_load_id", internalId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) {
+    console.error("[GET /v1/loads/by-internal-id] lookup failed:", error);
+    return c.json({ error: "lookup_failed", detail: error.message } satisfies ApiErrorResponse, 500);
+  }
+  if (!data) return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+
+  const joined = await fetchLoadJoined((data as { id: string }).id, orgId);
+  if (joined === null) {
+    return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
+  }
+  const res: GetLoadResponse = { loads: joined };
+  return c.json(res);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /v1/loads/:id — single load by uuid
 // ─────────────────────────────────────────────────────────────────────────
 

@@ -494,6 +494,12 @@ class RailwayClient {
     return this.req<ListLoadsResponse>('GET', `/v1/loads${qs ? `?${qs}` : ''}`);
   }
   getLoad(id: string)                 { return this.req<GetLoadResponse>('GET',      `/v1/loads/${id}`); }
+  /** Same shape as getLoad but keyed by the org-scoped internal_load_id
+   *  number (the "#10761" the dispatcher sees). Used by the /loads
+   *  detail page so the URL reads /loads/10761 instead of a UUID. */
+  getLoadByInternalId(internalLoadId: number) {
+    return this.req<GetLoadResponse>('GET', `/v1/loads/by-internal-id/${internalLoadId}`);
+  }
 
   /** Load-shaped report endpoint — one row per load (relays collapse).
    *  See packages/types/api.ts LoadSummary for the response shape. */
