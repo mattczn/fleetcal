@@ -29,7 +29,7 @@ import {
   ExternalLink as ExternalLinkIcon, Eye,
   CheckCircle2, Plus, Clock, Copy, RotateCcw, Calendar as CalendarIcon,
   Info, Pin, X, Star, Lock, ClipboardCheck, FolderOpen,
-  Send, Mail, Globe, FilePlus, RefreshCw,
+  Send, Mail, Globe, FilePlus, RefreshCw, Check, AlertTriangle,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -638,6 +638,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             <BillingCard
               load={primaryLeg}
               onOpenReview={() => setReviewQueueOpen(true)}
+              onOpenCustomerProfile={setCustomerProfileId}
               customer={(() => {
                 // Customer details for the billing pane. Prefer the FK
                 // bound on the load row; fall back to a case-insensitive
@@ -1897,6 +1898,7 @@ function LoadHistorySection({ load, calendarTimezone }: {
 function BillingCard({
   load, customer, invoice, busy,
   onGenerate, onSendOrResend, onViewInvoice, onViewDocs, onOpenReview,
+  onOpenCustomerProfile,
 }: {
   load: Load;
   customer: Customer | undefined;
@@ -1906,10 +1908,15 @@ function BillingCard({
   onSendOrResend: () => void;
   onViewInvoice: () => void;
   onViewDocs: () => void;
-  /** Open the closeout Review panel. Only used in the Released state
-   *  where the dispatcher is still verifying docs before generating
-   *  an invoice. */
+  /** Open the closeout Review panel. Only used in the Pending state
+   *  while the dispatcher is still verifying docs before releasing
+   *  the load to billing. */
   onOpenReview: () => void;
+  /** Open the BrokerProfileModal for the given customer id. The
+   *  customer name in the header is a button that calls this so the
+   *  dispatcher can jump into the customer record to edit invoice
+   *  method / email / portal without leaving the load page. */
+  onOpenCustomerProfile: (customerId: string) => void;
 }) {
   const status = load.billingStatus ?? 'pending';
 
@@ -1957,9 +1964,22 @@ function BillingCard({
           <div className="text-[10px] uppercase tracking-wider font-bold mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
             Customer
           </div>
-          <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
-            {customer?.name ?? load.broker ?? '— No customer linked —'}
-          </div>
+          {customer?.id ? (
+            <button
+              type="button"
+              onClick={() => onOpenCustomerProfile(customer.id)}
+              title="Open customer profile to edit invoicing settings"
+              className="text-[13px] font-semibold underline decoration-dotted underline-offset-2 text-left transition-colors"
+              style={{ color: 'var(--gc-text-1)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'var(--gc-blue)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--gc-text-1)')}>
+              {customer.name}
+            </button>
+          ) : (
+            <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+              {load.broker ?? '— No customer linked —'}
+            </div>
+          )}
           {method && billingDetail && (
             <div className="mt-1.5 flex items-center gap-1.5 text-[12px]"
               style={{ color: 'var(--gc-text-2)' }}>
@@ -2031,12 +2051,15 @@ function BillingCard({
             takes over below. */}
         {status === 'pending' ? (
           <div className="space-y-2 pt-1">
+            {/* Required-doc checklist. Renders ABOVE the action button
+                so the dispatcher reads the gap (e.g. "missing scale
+                ticket") before clicking through to the review panel. */}
+            <DocPresenceList load={load} />
             <button onClick={onOpenReview}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
               style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none' }}>
-              <ClipboardCheck size={12} /> Review
+              <ClipboardCheck size={12} /> Review Paperwork to Release
             </button>
-            <DocPresenceBadges load={load} />
           </div>
         ) : (
           <div className="space-y-1.5 pt-1">
@@ -2081,25 +2104,19 @@ function BillingCard({
   );
 }
 
-// Same tint palette the Paperwork table uses for doc badges so the
-// load detail page reads the same vocabulary. Keep these mirrored if
-// CloseoutView's table palette ever changes.
-const DOC_BADGE_TINT: Record<string, string> = {
-  RC:       '#5b21b6',
-  POD:      '#188038',
-  BOL:      '#1a73e8',
-  Scale:    '#e37400',
-  Lumper:   '#a16207',
-};
-
 /**
- * Required-doc presence badges. Opaque tinted chip = doc is present
- * (with ×N when more than one); transparent + dashed red border =
- * expected but not uploaded yet. RC and POD are always required;
- * Lumper and Scale only when the load has a matching accessorial.
- * BOL renders as an extra opaque chip when present.
+ * Required-doc verification checklist. One row per expected doc with
+ * a green check + "{Label} Uploaded" when present, or an amber
+ * warning + "Missing {label}" when not. Stacked vertically above the
+ * Review button so the dispatcher reads exactly what's missing before
+ * clicking through.
+ *
+ * RC and POD are always required. Lumper / Scale ticket only when the
+ * load has a matching accessorial line item — mirrors the Paperwork
+ * table's conditional-required logic. BOL renders only when one is
+ * already on file (it's a nice-to-have, not a release blocker).
  */
-function DocPresenceBadges({ load }: { load: Load }) {
+function DocPresenceList({ load }: { load: Load }) {
   const counts = load.documentCounts ?? {};
   const rcCount     = Math.max(counts.rate_con ?? 0, load.rateConPdf ? 1 : 0);
   const podCount    = counts.pod    ?? 0;
@@ -2111,52 +2128,38 @@ function DocPresenceBadges({ load }: { load: Load }) {
   const needsLumper = accs.some(a => a.category === 'lumper');
   const needsScale  = accs.some(a => a.category === 'scale_ticket');
 
+  type Row = { label: string; present: boolean; count: number };
+  const rows: Row[] = [
+    { label: 'Rate Con',     present: rcCount  > 0, count: rcCount  },
+    { label: 'POD',          present: podCount > 0, count: podCount },
+  ];
+  if (needsLumper) rows.push({ label: 'Lumper receipt', present: lumperCount > 0, count: lumperCount });
+  if (needsScale)  rows.push({ label: 'Scale ticket',   present: scaleCount  > 0, count: scaleCount  });
+  // BOL — only surface when one's on file; otherwise the row would
+  // read as a missing required doc which it isn't.
+  if (bolCount > 0) rows.push({ label: 'BOL', present: true, count: bolCount });
+
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      <DocPresenceBadge label="RC"  present={rcCount  > 0} count={rcCount} />
-      <DocPresenceBadge label="POD" present={podCount > 0} count={podCount} />
-      {needsLumper && (
-        <DocPresenceBadge label="Lumper" present={lumperCount > 0} count={lumperCount} />
-      )}
-      {needsScale && (
-        <DocPresenceBadge label="Scale" present={scaleCount > 0} count={scaleCount} />
-      )}
-      {/* BOL is a nice-to-have, not strictly required — render the
-          opaque chip when we have one and omit it otherwise (no red
-          missing state). Mirrors the Paperwork table behavior. */}
-      {bolCount > 0 && (
-        <DocPresenceBadge label="BOL" present={true} count={bolCount} />
-      )}
+    <div className="flex flex-col gap-1">
+      {rows.map(r => <DocPresenceRow key={r.label} {...r} />)}
     </div>
   );
 }
 
-function DocPresenceBadge({
-  label, present, count,
-}: { label: string; present: boolean; count: number }) {
+function DocPresenceRow({ label, present, count }: { label: string; present: boolean; count: number }) {
   if (present) {
-    const tint = DOC_BADGE_TINT[label] ?? '#5f6368';
     return (
-      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
-        title={`${label} — Present${count > 1 ? ` (×${count})` : ''}`}
-        style={{ background: tint, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
-        {label}{count > 1 ? ` ×${count}` : ''}
-      </span>
+      <div className="flex items-center gap-1.5 text-[12px]" style={{ color: '#166534' }}>
+        <Check size={13} style={{ flexShrink: 0 }} />
+        <span>{label} Uploaded{count > 1 ? ` (×${count})` : ''}</span>
+      </div>
     );
   }
   return (
-    <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
-      title={`${label} — Missing`}
-      style={{
-        background: 'transparent',
-        color: '#991b1b',
-        border: '1px dashed #991b1b',
-        // Subtract the 1px border so the missing chip lines up at the
-        // same height as the opaque present chips.
-        padding: '1px 7px',
-      }}>
-      {label}
-    </span>
+    <div className="flex items-center gap-1.5 text-[12px]" style={{ color: '#b45309' }}>
+      <AlertTriangle size={13} style={{ flexShrink: 0 }} />
+      <span>Missing {label}</span>
+    </div>
   );
 }
 

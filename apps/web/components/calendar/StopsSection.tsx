@@ -852,10 +852,15 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                 )}
               </div>
 
-              {/* Appt window — wider than facility column on roomy screens
-                  so the Appt / Window / FCFS pills don't get cramped and
-                  the date+time inputs stay on one line. */}
-              <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 320 }}>
+              {/* Appt window — caps at 320px on roomy screens so the
+                  Appt / Window / FCFS pills + date/time inputs stay on
+                  one line, but `clamp` lets it shrink on narrower
+                  surfaces (load detail page on smaller monitors,
+                  narrowed EventModal) so the column stays proportionate
+                  to the facility/address column instead of dominating
+                  the row. flexShrink: 1 + min-width 0 lets the inputs
+                  inside ride that shrink without overflowing. */}
+              <div style={{ flexShrink: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 'clamp(200px, 40%, 320px)' }}>
                 {stop.type === 'relay' ? (
                   <>
                     <div>
