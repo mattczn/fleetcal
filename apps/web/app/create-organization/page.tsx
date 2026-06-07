@@ -20,9 +20,10 @@
  *                    → /onboarding/pick-plan?plan=growth
  *                    → /calendar
  */
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
-import { CreateOrganization } from '@clerk/nextjs';
+import { CreateOrganization, SignOutButton } from '@clerk/nextjs';
 
 export default async function CreateOrganizationPage({
   searchParams,
@@ -39,8 +40,33 @@ export default async function CreateOrganizationPage({
     : '/onboarding/pick-plan';
 
   return (
-    <div className="flex h-full items-center justify-center">
-      <CreateOrganization afterCreateOrganizationUrl={afterCreateOrganizationUrl} />
+    <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
+      {/* Same nav pattern as /sign-up and /onboarding/pick-plan so the
+          user has a consistent escape hatch — logo back to landing,
+          sign-out button to bail entirely. Without this, this page was
+          a centered modal with zero navigation, and any user who
+          landed here via the middleware fallback was effectively
+          trapped. */}
+      <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
+        <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
+          <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
+            <span className="text-sys-blue">FLEET</span>
+            <span className="text-sys-orange">CAL</span>
+          </Link>
+          <SignOutButton redirectUrl="/">
+            <button
+              type="button"
+              className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
+            >
+              Cancel &amp; sign out
+            </button>
+          </SignOutButton>
+        </div>
+      </nav>
+
+      <main className="flex items-center justify-center py-16 md:py-24">
+        <CreateOrganization afterCreateOrganizationUrl={afterCreateOrganizationUrl} />
+      </main>
     </div>
   );
 }

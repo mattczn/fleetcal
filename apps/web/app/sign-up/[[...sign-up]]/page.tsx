@@ -15,7 +15,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
-import { SignUp } from '@clerk/nextjs';
+import { SignUp, SignOutButton } from '@clerk/nextjs';
 import { Check } from 'lucide-react';
 
 type PlanKey = 'owner_op' | 'growth' | 'fleet';
@@ -43,7 +43,10 @@ export default async function SignUpPage({
   const { userId, orgId } = await auth();
   if (userId && orgId) redirect('/calendar');
   // Signed in but no org → SignUp's internal create-org step will fire;
-  // that's the expected branch.
+  // that's the expected branch. We show the Sign-out escape in the nav
+  // (instead of "Already have an account?") so they can back out cleanly
+  // mid-flow without being trapped on /sign-up/tasks/choose-organization.
+  const partiallySignedIn = !!userId;
 
   const plan = isPlanKey(params.plan) ? PLAN_META[params.plan] : null;
   // Funnel chain: sign-up → /onboarding/pick-plan?plan=…
@@ -65,19 +68,34 @@ export default async function SignUpPage({
 
   return (
     <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
-      {/* Slim nav — wordmark + sign-in link */}
-      <nav className="h-16 bg-sys-bg border-b border-sys-line">
+      {/* Sticky nav — wordmark + auth-aware escape. The Sign out
+          button below appears once the user is partially signed in
+          (e.g. after Google OAuth but before they finish the in-SignUp
+          org-creation step) so they can bail without being trapped on
+          /sign-up/tasks/choose-organization. */}
+      <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
         <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
           <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
             <span className="text-sys-blue">FLEET</span>
             <span className="text-sys-orange">CAL</span>
           </Link>
-          <Link
-            href="/sign-in"
-            className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
-          >
-            Already have an account? <span className="text-sys-blue font-semibold">Sign in</span>
-          </Link>
+          {partiallySignedIn ? (
+            <SignOutButton redirectUrl="/">
+              <button
+                type="button"
+                className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
+              >
+                Cancel &amp; sign out
+              </button>
+            </SignOutButton>
+          ) : (
+            <Link
+              href="/sign-in"
+              className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
+            >
+              Already have an account? <span className="text-sys-blue font-semibold">Sign in</span>
+            </Link>
+          )}
         </div>
       </nav>
 
