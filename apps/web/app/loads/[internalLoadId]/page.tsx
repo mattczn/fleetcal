@@ -20,7 +20,7 @@
  *   └─────────────────────────────────────────┴────────────────────┘
  */
 
-import { use, useCallback, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth, useUser } from '@clerk/nextjs';
@@ -28,7 +28,7 @@ import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
   CheckCircle2, Plus, Clock, Copy, RotateCcw, Calendar as CalendarIcon,
-  Info, Pin, X,
+  Info, Pin, X, Star, Lock,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -133,8 +133,6 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const addCustomer = useCalendarStore(s => s.addCustomer);
   const assets = useCalendarStore(s => s.assets);
   const drivers = useCalendarStore(s => s.drivers);
-  const trailers = useCalendarStore(s => s.trailers);
-  const dispatchers = useCalendarStore(s => s.dispatchers);
   const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const driverPayPct = useCalendarStore(s => s.driverPayPct);
@@ -312,6 +310,73 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     }
   }
 
+  // Locked-field hint. Flashes a yellow callout at the top of the form
+  // pane when a dispatcher clicks a non-editable field. Auto-dismisses
+  // after a few seconds so it never blocks the page indefinitely.
+  const [lockedHintAt, setLockedHintAt] = useState<number>(0);
+  const lockedHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function flashLockedHint() {
+    setLockedHintAt(Date.now());
+    if (lockedHintTimerRef.current) clearTimeout(lockedHintTimerRef.current);
+    lockedHintTimerRef.current = setTimeout(() => setLockedHintAt(0), 4000);
+  }
+
+  // Priority + billing status flip immediately via the closeout
+  // endpoint — they aren't part of the Save draft like the financial
+  // edits are. The endpoint covers both legs of a relay so we only need
+  // the primary's load id.
+  async function flipPriority() {
+    if (!primaryLeg?.loadId) return;
+    const next = !primaryLeg.priority;
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
+      await railway.updateLoadCloseout(primaryLeg.loadId, {
+        action: next ? 'set_priority' : 'clear_priority',
+        actorName: currentUserName,
+      });
+      bumpLoadEditTick();
+      await refresh({ silent: true });
+    } catch (e) {
+      console.error('[load detail] priority toggle failed:', e);
+      window.alert(`Priority change failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+    }
+  }
+  async function setBillingStatus(next: NonNullable<Load['billingStatus']>) {
+    if (!primaryLeg?.loadId) return;
+    const current = primaryLeg.billingStatus ?? 'pending';
+    if (current === next) return;
+    // Map status target → closeout action. "flag" requires a reason;
+    // we default to 'other' since this control is a quick-switch, not a
+    // structured flag dialog. Dispatchers can refine the reason from
+    // the closeout flow.
+    type Action = Parameters<typeof railway.updateLoadCloseout>[1]['action'];
+    let action: Action;
+    let flagReason: 'other' | undefined;
+    if (next === 'verified')        action = 'verify';
+    else if (next === 'on_hold')  { action = 'flag'; flagReason = 'other'; }
+    else if (next === 'invoiced')   action = 'mark_invoiced';
+    else if (next === 'paid')       action = 'mark_paid';
+    else if (next === 'pending') {
+      // Coming out of a flag goes through clear_flag; coming back from
+      // invoiced/paid uses reopen. Either route lands on 'pending'.
+      action = current === 'on_hold' ? 'clear_flag' : 'reopen';
+    }
+    else return;
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
+      await railway.updateLoadCloseout(primaryLeg.loadId, {
+        action,
+        actorName: currentUserName,
+        ...(flagReason ? { flagReason } : {}),
+      });
+      bumpLoadEditTick();
+      await refresh({ silent: true });
+    } catch (e) {
+      console.error('[load detail] status change failed:', e);
+      window.alert(`Status change failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+    }
+  }
+
   if (!authLoaded || !isSignedIn || (loading && !legs)) {
     return (
       <AppShell title="Load" icon={Truck} noPageScroll>
@@ -402,6 +467,39 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               </button>
             </>
           )}
+          {/* Priority star + Billing status select — both flip
+              immediately via the closeout endpoint (not the Save draft)
+              since they're single-click lifecycle actions, not field
+              edits. Priority writes to BOTH legs' events so a relay
+              load can't end up with one leg flagged and the other not. */}
+          <button
+            type="button"
+            onClick={() => void flipPriority()}
+            title={primaryLeg.priority ? 'Clear priority' : 'Mark priority'}
+            className="px-2 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+            style={{
+              background: primaryLeg.priority ? '#fef3c7' : 'var(--gc-surface)',
+              border: `1px solid ${primaryLeg.priority ? '#fcd34d' : 'var(--gc-border)'}`,
+              color: primaryLeg.priority ? '#b45309' : 'var(--gc-text-3)',
+            }}>
+            <Star size={13}
+              style={{ fill: primaryLeg.priority ? '#f59e0b' : 'none' }} />
+          </button>
+          <ToolbarStatusSelect
+            value={primaryLeg.billingStatus ?? 'pending'}
+            onChange={(next) => void setBillingStatus(next)}
+          />
+          {/* Locked-field click hint. Surfaces in-line with the toolbar
+              so the prompt is always next to the View in Calendar pill
+              the dispatcher needs to click next. Auto-dismisses after
+              4 seconds via the flash timer. */}
+          {lockedHintAt > 0 && (
+            <div className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5"
+              style={{ background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e' }}>
+              <Lock size={11} />
+              Edit this field in the calendar.
+            </div>
+          )}
           <div className="flex-1" />
           {isDirty && (
             <>
@@ -436,15 +534,14 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 customerById={customerById}
                 assets={assets}
                 drivers={drivers}
-                trailers={trailers}
                 customers={customers}
-                dispatchers={dispatchers}
                 sectionOrder={sectionOrder}
                 fieldSettings={fieldSettings}
                 driverPayPct={driverPayPct}
                 onOpenCustomerProfile={setCustomerProfileId}
                 onCreateBroker={setPendingNewBroker}
                 onChangePartner={patchPartnerDraft}
+                onClickLocked={flashLockedHint}
                 currentUserName={currentUserName}
                 calendarTimezone={calendarTimezone}
                 onChange={patchDraft}
@@ -519,9 +616,10 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 // ─── Left card — modal-styled form ──────────────────────────────────────
 
 function LoadFormPane({
-  primary, partner, customerById, assets, drivers, trailers, customers, dispatchers,
+  primary, partner, customerById, assets, drivers, customers,
   sectionOrder, fieldSettings,
   driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangePartner,
+  onClickLocked,
   currentUserName, calendarTimezone, onChange,
 }: {
   primary: Load;
@@ -529,9 +627,7 @@ function LoadFormPane({
   customerById: Map<string, { id: string; name: string }>;
   assets: { id: number; name?: string | null; unit?: string | null }[];
   drivers: { id?: number; name?: string; firstName?: string; lastName?: string; phone?: string }[];
-  trailers: { id: number; name: string; trailerNumber?: string; activeTo?: string | null }[];
   customers: Customer[];
-  dispatchers: { id: string; name: string; isDefault?: boolean }[];
   sectionOrder: FieldSection[];
   fieldSettings: Record<string, boolean>;
   /** Org default driver-pay percentage from settings.rateConSettings.
@@ -545,6 +641,9 @@ function LoadFormPane({
   /** Patch into the PARTNER leg's draft — currently used for the relay
    *  delivery driver pay. Only meaningful when `partner` is set. */
   onChangePartner: (patch: Partial<Pick<Load, 'driverPay'>>) => void;
+  /** Click on a locked (calendar-only) field. Parent flashes a top-of-
+   *  page banner pointing the dispatcher at the View in Calendar pill. */
+  onClickLocked: () => void;
   currentUserName: string;
   calendarTimezone: string;
   /** Patch into the draft. Each call merges into the page-level draft;
@@ -636,25 +735,6 @@ function LoadFormPane({
     onChange({ [id]: raw === '' ? null : raw } as Partial<Load>);
   }
 
-  // Trailer dropdown — same StyledSelect look as the Driver / Truck
-  // selects in Assignment. Sourced from `trailers` in the calendar
-  // store; we surface the live row (even if retired) at the top so an
-  // already-assigned retired trailer still displays correctly.
-  const trailerOptions = useMemo(() => {
-    // Trailer labels are name-only (no "#trailerNumber" suffix). The
-    // store keeps the number around for filters and reports but
-    // dispatch wants a clean picker here.
-    const active = trailers.filter(t => !t.activeTo);
-    const items = active.map(t => ({ id: t.id, label: t.name }));
-    // Surface the currently-attached trailer even if it's retired
-    // (activeTo set) — otherwise the page would silently look unassigned.
-    if (primary.trailerId != null && !items.some(i => i.id === primary.trailerId)) {
-      const t = trailers.find(t => t.id === primary.trailerId);
-      if (t) items.unshift({ id: t.id, label: `${t.name} (retired)` });
-    }
-    return items;
-  }, [trailers, primary.trailerId]);
-
   // ── Driver Pay percentage UX ────────────────────────────────────────
   // Same affordance EventModal shows: a small chip next to the Driver
   // Pay label rendering the live (driverPay / loadPrice) percentage,
@@ -698,15 +778,29 @@ function LoadFormPane({
     </span>
   ) : null;
 
+  // Editable allowlist. Only these fields stay interactive on this
+  // page — everything else is calendar-modal-only. Stops + accessorials
+  // + internal notes are handled outside renderField but follow the
+  // same rule.
+  const EDITABLE_FIELD_IDS = new Set<string>(['broker', 'loadPrice', 'driverPay']);
+
+  // Style locked inputs as muted + not-allowed so dispatchers can tell
+  // at a glance which fields require the calendar to edit.
+  const lockedStyle: React.CSSProperties = {
+    ...iStyle,
+    background: 'var(--gc-bg)',
+    color: 'var(--gc-text-2)',
+    cursor: 'not-allowed',
+  };
+
   // Render one field row by id. Broker, refNums, and textareas get
   // dedicated treatments; everything else is a single text/number
   // input wired through commitField.
   function renderField(field: FieldDef) {
-    // Load # — text input with a copy-to-clipboard button inline next
-    // to the LOAD # label (matches the same label-suffix pattern the
-    // modal uses for the Driver Pay percentage chip). The input
-    // stretches the full row width so it stays aligned with the
-    // adjacent Reference #s field on the right.
+    const isEditable = EDITABLE_FIELD_IDS.has(field.id);
+
+    // Load # — locked. Keep the inline CopyBtnInline working so
+    // dispatchers can still grab the number for broker portals.
     if (field.id === 'loadNum') {
       const v = fieldValue('loadNum');
       return (
@@ -715,45 +809,24 @@ function LoadFormPane({
           labelSuffix={<CopyBtnInline value={v} title="Copy load number" />}>
           <input type="text" value={v}
             placeholder={field.placeholder}
-            onChange={e => commitField('loadNum', e.target.value)}
-            style={iStyle} onFocus={focusH} onBlur={blurColor} />
+            readOnly
+            onMouseDown={onClickLocked}
+            style={lockedStyle} />
         </Field>
       );
     }
-    // Trailer — StyledSelect off the trailers store (active first,
-    // currently-assigned retired trailer shown for back-compat). Stores
-    // back through trailerId + trailerName/trailerNum so the load row
-    // stays in sync without a join. Empty value clears all three.
+    // Trailer — locked StyledSelect-like display. We render the current
+    // trailer name as a disabled "input" so the user sees the same
+    // shape but clicks fire the lock hint.
     if (field.id === 'trailer') {
+      const current = primary.trailerName ?? primary.trailerNum ?? '';
       return (
         <Field label={field.label}>
-          <StyledSelect
-            value={primary.trailerId != null ? String(primary.trailerId) : ''}
-            onChange={e => {
-              const raw = e.target.value;
-              if (!raw) {
-                // Null sentinel — the API + converter both treat null as
-                // "clear" (loads.ts coerces `?? null`). The Load type
-                // models these as optional so cast through unknown to
-                // satisfy TS without losing the clear semantics.
-                onChange({ trailerId: null, trailerName: null, trailerNum: null } as unknown as Partial<Load>);
-                return;
-              }
-              const id = Number(raw);
-              const t = trailers.find(x => x.id === id);
-              onChange({
-                trailerId: id,
-                trailerName: t?.name ?? null,
-                trailerNum:  t?.trailerNumber ?? null,
-              } as unknown as Partial<Load>);
-            }}
-            style={{ ...iStyle, cursor: 'pointer' }}
-            onFocus={focusH} onBlur={blurColor}>
-            <option value="">— No trailer —</option>
-            {trailerOptions.map(t => (
-              <option key={t.id} value={String(t.id)}>{t.label}</option>
-            ))}
-          </StyledSelect>
+          <input type="text" value={current}
+            placeholder="—"
+            readOnly
+            onMouseDown={onClickLocked}
+            style={lockedStyle} />
         </Field>
       );
     }
@@ -840,47 +913,43 @@ function LoadFormPane({
         </Field>
       );
     }
-    // Dispatcher — StyledSelect of the org's dispatchers. Default
-    // dispatcher gets a "★" mark next to the name so the operator can
-    // spot which one auto-applies to new loads.
-    if (field.id === 'dispatcher') {
-      return (
-        <Field label={field.label}>
-          <StyledSelect
-            value={fieldValue('dispatcher')}
-            onChange={e => commitField('dispatcher', e.target.value)}
-            style={{ ...iStyle, cursor: 'pointer' }}
-            onFocus={focusH} onBlur={blurColor}>
-            <option value="">— None —</option>
-            {/* Keep the current value selectable even if the dispatcher
-                was deleted or renamed, so the field doesn't silently
-                drop a value on first paint. */}
-            {primary.dispatcher && !dispatchers.some(d => d.name === primary.dispatcher) && (
-              <option value={primary.dispatcher}>{primary.dispatcher}</option>
-            )}
-            {dispatchers.map(d => (
-              <option key={d.id} value={d.name}>
-                {d.name}{d.isDefault ? ' ★' : ''}
-              </option>
-            ))}
-          </StyledSelect>
-        </Field>
-      );
-    }
-    // Ref numbers — render the same chip-badge widget the modal uses.
-    // Shared component lives in components/forms/EventModalForm.tsx so
-    // any visual change here lands in the modal too without drift.
+    // Ref numbers — locked. Render the same chip-badge widget the modal
+    // uses but wrap it in a click-capturing overlay so any interaction
+    // (×-remove, copy, add) bounces the dispatcher to the calendar.
     if (field.id === 'refNums') {
       const refs = primary.refNums ?? [];
       return (
         <Field label={field.label}>
-          <RefNumsField
-            value={refs}
-            onChange={(next) => onChange({ refNums: next })}
-            headerColor={LOAD_ACCENT}
-            chipBg={LOAD_ACCENT_BG}
-            chipBorder={LOAD_ACCENT_BORDER}
-          />
+          <div
+            onClickCapture={(e) => {
+              // The shared RefNumsField has its own copy buttons. We
+              // keep those working (they're a pure side-channel), but
+              // any click that lands on an input, ×, or Add fires the
+              // lock hint. Detect by tagName.
+              const t = e.target as HTMLElement;
+              const tag = t.tagName.toLowerCase();
+              if (tag === 'input' || tag === 'textarea') {
+                onClickLocked();
+              }
+            }}
+            style={{ position: 'relative' }}>
+            <div style={{ pointerEvents: 'none', opacity: 0.85 }}>
+              <RefNumsField
+                value={refs}
+                onChange={() => { /* locked */ }}
+                headerColor={LOAD_ACCENT}
+                chipBg={LOAD_ACCENT_BG}
+                chipBorder={LOAD_ACCENT_BORDER}
+              />
+            </div>
+            {/* Catch-all overlay for clicks anywhere in the field area
+                so the dispatcher gets the lock hint even if their click
+                misses an input. pointerEvents: none on the child means
+                the wrapper receives the click first. */}
+            <div
+              onClick={onClickLocked}
+              style={{ position: 'absolute', inset: 0, cursor: 'not-allowed' }} />
+          </div>
         </Field>
       );
     }
@@ -890,20 +959,34 @@ function LoadFormPane({
           <textarea value={fieldValue(field.id)}
             placeholder={field.placeholder}
             rows={3}
+            readOnly
+            onMouseDown={onClickLocked}
+            style={{ ...lockedStyle, resize: 'none', fontFamily: 'inherit', minHeight: 72 }} />
+        </Field>
+      );
+    }
+    // Generic text/number input. loadPrice is the only one that stays
+    // editable; everything else (commodity, weight, trailerType,
+    // dispatcher, etc.) is locked.
+    const isNumber = field.type === 'number';
+    if (isEditable) {
+      return (
+        <Field label={field.label}>
+          <input type={isNumber ? 'number' : 'text'} value={fieldValue(field.id)}
+            placeholder={field.placeholder}
             onChange={e => commitField(field.id, e.target.value)}
-            style={{ ...iStyle, resize: 'vertical', fontFamily: 'inherit', minHeight: 72 }}
+            style={{ ...iStyle, fontVariantNumeric: isNumber ? 'tabular-nums' : undefined }}
             onFocus={focusH} onBlur={blurColor} />
         </Field>
       );
     }
-    const isNumber = field.type === 'number';
     return (
       <Field label={field.label}>
         <input type={isNumber ? 'number' : 'text'} value={fieldValue(field.id)}
           placeholder={field.placeholder}
-          onChange={e => commitField(field.id, e.target.value)}
-          style={{ ...iStyle, fontVariantNumeric: isNumber ? 'tabular-nums' : undefined }}
-          onFocus={focusH} onBlur={blurColor} />
+          readOnly
+          onMouseDown={onClickLocked}
+          style={{ ...lockedStyle, fontVariantNumeric: isNumber ? 'tabular-nums' : undefined }} />
       </Field>
     );
   }
@@ -989,24 +1072,38 @@ function LoadFormPane({
                 <Field label="Delivery Driver">
                   <input type="text" value={partner.driverName ?? ''} readOnly
                     placeholder="Unassigned"
-                    style={{ ...iStyle, borderColor: '#ddd6fe' }} />
+                    onMouseDown={onClickLocked}
+                    style={{ ...lockedStyle, borderColor: '#ddd6fe' }} />
                 </Field>
                 <Field label="Delivery Truck">
                   <input type="text" value={truckLabel(assetById.get(partner.assetId))} readOnly
                     placeholder="—"
-                    style={{ ...iStyle, borderColor: '#ddd6fe' }} />
+                    onMouseDown={onClickLocked}
+                    style={{ ...lockedStyle, borderColor: '#ddd6fe' }} />
                 </Field>
               </div>
             </div>
           )}
-          <StopsSection
-            stops={primary.stops}
-            onChange={(stops) => onChange({ stops })}
-            headerColor={LOAD_ACCENT}
-            loadedMiles={loadedMiles}
-            loadPrice={primary.loadPrice ?? null}
-            ratePerMile={rpm}
-          />
+          {/* StopsSection is locked — the calendar modal owns route
+              editing because each leg's stops live on its own event.
+              We still render the full widget so dispatch can read
+              everything (facility names, appt windows, geocode), but
+              any click bounces them to the calendar via the hint. */}
+          <div style={{ position: 'relative' }}>
+            <div style={{ pointerEvents: 'none', opacity: 0.92 }}>
+              <StopsSection
+                stops={primary.stops}
+                onChange={() => { /* locked */ }}
+                headerColor={LOAD_ACCENT}
+                loadedMiles={loadedMiles}
+                loadPrice={primary.loadPrice ?? null}
+                ratePerMile={rpm}
+              />
+            </div>
+            <div
+              onClick={onClickLocked}
+              style={{ position: 'absolute', inset: 0, cursor: 'not-allowed' }} />
+          </div>
         </div>
       );
     }
@@ -1127,13 +1224,14 @@ function LoadFormPane({
         value={primary.title ?? ''}
         readOnly
         placeholder="No title"
+        onMouseDown={onClickLocked}
         className="w-full bg-transparent outline-none font-medium"
         style={{
           fontSize: 22,
           borderBottom: `2px solid ${LOAD_ACCENT}`,
           paddingBottom: 8,
           color: 'var(--gc-text-1)',
-          cursor: 'default',
+          cursor: 'not-allowed',
         }}
       />
 
@@ -1146,37 +1244,28 @@ function LoadFormPane({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Field label={partner ? 'Pickup Driver' : 'Driver'}>
-              <StyledSelect
+              {/* Locked — driver assignment is event-level. Mouse-down
+                  flashes the calendar hint; the select itself is
+                  pointer-events: none via the wrapper so the click
+                  always reaches the parent. */}
+              <input type="text"
                 value={primary.driverName ?? ''}
-                onChange={() => { /* read-only on detail page */ }}
-                style={{ ...iStyle, cursor: 'pointer' }}
-                onFocus={focusH} onBlur={blurColor}>
-                <option value="">— No driver —</option>
-                {primary.driverName && (
-                  <option value={primary.driverName}>{primary.driverName}</option>
-                )}
-                {drivers.map(d => {
-                  const name = d.name ?? `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
-                  if (!name || name === primary.driverName) return null;
-                  return <option key={d.id ?? name} value={name}>{name}</option>;
-                })}
-              </StyledSelect>
+                placeholder="— Unassigned —"
+                readOnly
+                onMouseDown={onClickLocked}
+                style={lockedStyle} />
             </Field>
             {primaryDriver?.phone && (
               <DriverPhoneCopy phone={primaryDriver.phone} />
             )}
           </div>
           <Field label={partner ? 'Pickup Truck' : 'Truck'}>
-            <StyledSelect
-              value={String(primary.assetId ?? '')}
-              onChange={() => { /* read-only */ }}
-              style={{ ...iStyle, cursor: 'pointer' }}
-              onFocus={focusH} onBlur={blurColor}>
-              <option value="">— No truck —</option>
-              {assets.map(a => (
-                <option key={a.id} value={String(a.id)}>{truckLabel(a)}</option>
-              ))}
-            </StyledSelect>
+            <input type="text"
+              value={truckLabel(assetById.get(primary.assetId))}
+              placeholder="— Unassigned —"
+              readOnly
+              onMouseDown={onClickLocked}
+              style={lockedStyle} />
           </Field>
         </div>
 
@@ -1716,6 +1805,52 @@ function BillingPill({ billingStatus }: { billingStatus?: string }) {
       style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
       {p.label}
     </span>
+  );
+}
+
+/**
+ * Toolbar billing-status select. Shows the current status as a colored
+ * pill (same palette as BillingPill) with a native select layered on
+ * top so dispatchers can flip lifecycle stages in one click. The
+ * underlying API actions for each transition are handled by the
+ * parent's setBillingStatus(); this is render-only otherwise.
+ */
+function ToolbarStatusSelect({
+  value, onChange,
+}: {
+  value: NonNullable<Load['billingStatus']>;
+  onChange: (next: NonNullable<Load['billingStatus']>) => void;
+}) {
+  const palette: Record<NonNullable<Load['billingStatus']>, { bg: string; fg: string; border: string; label: string }> = {
+    pending:  { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Pending' },
+    verified: { bg: '#ede9fe', fg: '#5b21b6', border: '#ddd6fe', label: 'Released' },
+    invoiced: { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Invoiced' },
+    paid:     { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid' },
+    on_hold:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Flagged' },
+  };
+  const p = palette[value] ?? palette.pending;
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex' }}>
+      <span className="text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
+        style={{ background: p.bg, color: p.fg, border: `1px solid ${p.border}` }}>
+        {p.label}
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as NonNullable<Load['billingStatus']>)}
+        style={{
+          position: 'absolute', inset: 0, width: '100%', height: '100%',
+          opacity: 0, cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none',
+          border: 'none', outline: 'none', background: 'transparent', padding: 0, margin: 0,
+        }}>
+        {Object.entries(palette).map(([k, v]) => (
+          <option key={k} value={k}>{v.label}</option>
+        ))}
+      </select>
+    </div>
   );
 }
 
