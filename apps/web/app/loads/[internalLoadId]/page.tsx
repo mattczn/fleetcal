@@ -26,9 +26,10 @@ import Link from 'next/link';
 import { useAuth, useUser } from '@clerk/nextjs';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
-  ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
+  ExternalLink as ExternalLinkIcon, Eye,
   CheckCircle2, Plus, Clock, Copy, RotateCcw, Calendar as CalendarIcon,
   Info, Pin, X, Star, Lock, ClipboardCheck, FolderOpen,
+  Send, Mail, Globe, FilePlus, RefreshCw,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -369,6 +370,60 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     }
   }
 
+  // Invoice action state. Tracks which mutation is in flight so the
+  // billing card can disable the affected button + show a spinner.
+  // Generate, send, and resend are the three remote mutations; "view"
+  // affordances stay synchronous (they just open a modal).
+  const [invoiceBusy, setInvoiceBusy] = useState<null | 'generate' | 'send' | 'resend'>(null);
+
+  async function handleGenerateInvoice() {
+    if (!primaryLeg?.loadId || invoiceBusy) return;
+    setInvoiceBusy('generate');
+    try {
+      // batchGenerateInvoices is the same path accounting takes — it
+      // handles the "revive stale void" rescue and the customer-fk
+      // fallback. We pass thenSend=false so the user can review the
+      // draft before mailing it.
+      if (invoice && invoice.status !== 'void') {
+        // Existing invoice → regenerate refreshes the packet against
+        // the current load shape (line items, included docs, broker).
+        await railway.regenerateInvoice(invoice.id, {});
+      } else {
+        await railway.batchGenerateInvoices({
+          loadIds: [primaryLeg.loadId],
+          thenSend: false,
+          bccSelf: true,
+          attachLoadDocs: true,
+        });
+      }
+      bumpLoadEditTick();
+      await refresh({ silent: true });
+    } catch (e) {
+      console.error('[load detail] generate invoice failed:', e);
+      window.alert(`Invoice generation failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+    } finally {
+      setInvoiceBusy(null);
+    }
+  }
+
+  async function handleSendOrResendInvoice() {
+    if (!invoice || invoiceBusy) return;
+    const resend = invoice.status === 'sent' || invoice.status === 'paid';
+    setInvoiceBusy(resend ? 'resend' : 'send');
+    try {
+      const body = { invoiceIds: [invoice.id], bccSelf: true, attachLoadDocs: true };
+      if (resend) await railway.batchResendInvoices(body);
+      else        await railway.batchSendInvoices(body);
+      bumpLoadEditTick();
+      await refresh({ silent: true });
+    } catch (e) {
+      console.error('[load detail] send invoice failed:', e);
+      window.alert(`Invoice send failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+    } finally {
+      setInvoiceBusy(null);
+    }
+  }
+
   if (!authLoaded || !isSignedIn || (loading && !legs)) {
     return (
       <AppShell title="Load" icon={Truck} noPageScroll>
@@ -566,8 +621,27 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
             <BillingCard
               load={primaryLeg}
+              customer={(() => {
+                // Customer details for the billing pane. Prefer the FK
+                // bound on the load row; fall back to a case-insensitive
+                // broker-text + alias match so legacy loads still
+                // surface invoiceMethod / email / portal info.
+                if (primaryLeg.customerId) {
+                  return customers.find(c => c.id === primaryLeg.customerId);
+                }
+                const t = (primaryLeg.broker ?? '').trim().toLowerCase();
+                if (!t) return undefined;
+                return customers.find(c =>
+                  c.name.toLowerCase() === t
+                  || (c.aliases ?? []).some(a => a.toLowerCase() === t),
+                );
+              })()}
               invoice={invoice}
+              busy={invoiceBusy}
+              onGenerate={() => void handleGenerateInvoice()}
+              onSendOrResend={() => void handleSendOrResendInvoice()}
               onViewInvoice={() => setInvoiceModalOpen(true)}
+              onViewDocs={() => setDocsModalOpen(true)}
             />
           </div>
         </div>
@@ -1803,13 +1877,45 @@ function LoadHistorySection({ load, calendarTimezone }: {
 
 // ─── Billing card (bottom right) ────────────────────────────────────────
 
-function BillingCard({ load, invoice, onViewInvoice }: {
+function BillingCard({
+  load, customer, invoice, busy,
+  onGenerate, onSendOrResend, onViewInvoice, onViewDocs,
+}: {
   load: Load;
+  customer: Customer | undefined;
   invoice: Invoice | null;
+  busy: null | 'generate' | 'send' | 'resend';
+  onGenerate: () => void;
+  onSendOrResend: () => void;
   onViewInvoice: () => void;
+  onViewDocs: () => void;
 }) {
   const status = load.billingStatus ?? 'pending';
-  const showReviewQueueLink = status === 'pending' || status === 'verified' || status === 'invoiced';
+
+  // Treat a void invoice as "no invoice" — that's how the rest of the
+  // app reasons about it (regenerate would rescue the void row, etc.).
+  const activeInvoice = invoice && invoice.status !== 'void' ? invoice : null;
+  const hasInvoice  = !!activeInvoice;
+  const isSent      = activeInvoice?.status === 'sent' || activeInvoice?.status === 'paid';
+
+  // Line items: linehaul + billable accessorials + computed total. Use
+  // the server-maintained total_billable when present so the figure
+  // matches the table elsewhere; fall back to linehaul + sum(accessorials).
+  const linehaul = load.loadPrice ?? 0;
+  const billableAccessorials = (load.accessorials ?? []).filter(a => a.billable && a.amount > 0);
+  const accessorialsSum = billableAccessorials.reduce((s, a) => s + a.amount, 0);
+  const total = load.totalBillable ?? (linehaul + accessorialsSum);
+
+  // Billing-method chip + detail line. Email / portal each get an icon
+  // + the contact value. When no method is configured we fall back to
+  // a muted "no billing method configured" line so the operator knows
+  // to update the customer record before sending.
+  const method = customer?.invoiceMethod;
+  const billingDetail = method === 'email'
+    ? (customer?.invoiceEmail ?? '— No email on file —')
+    : method === 'portal'
+      ? (customer?.invoicePortal ?? '— No portal on file —')
+      : null;
 
   return (
     <>
@@ -1818,73 +1924,144 @@ function BillingCard({ load, invoice, onViewInvoice }: {
         <Receipt size={14} style={{ color: 'var(--gc-text-3)' }} />
         <span className="text-[13px] font-bold" style={{ color: 'var(--gc-text-1)' }}>Billing</span>
         <BillingPill billingStatus={status} />
+        {hasInvoice && (
+          <span className="ml-auto text-[11px] tabular-nums" style={{ color: 'var(--gc-text-3)' }}>
+            Invoice <strong style={{ color: 'var(--gc-text-2)' }}>#{activeInvoice.invoiceNumber}</strong>
+          </span>
+        )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-3">
-        {invoice ? (
-          <>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: 'var(--gc-text-3)' }}>
-                  Invoice #
-                </div>
-                <div className="text-[18px] font-extrabold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-                  {invoice.invoiceNumber}
-                </div>
+      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
+        {/* Customer + billing method */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-bold mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
+            Customer
+          </div>
+          <div className="text-[13px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+            {customer?.name ?? load.broker ?? '— No customer linked —'}
+          </div>
+          {method && billingDetail && (
+            <div className="mt-1.5 flex items-center gap-1.5 text-[12px]"
+              style={{ color: 'var(--gc-text-2)' }}>
+              {method === 'email' ? <Mail size={11} /> : <Globe size={11} />}
+              <span className="truncate" title={billingDetail}>{billingDetail}</span>
+            </div>
+          )}
+          {!method && (
+            <div className="mt-1.5 text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
+              No billing method configured — set email or portal on the customer profile.
+            </div>
+          )}
+        </div>
+
+        {/* Line items */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-bold mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
+            Line items
+          </div>
+          <div className="rounded-lg overflow-hidden text-[12.5px]"
+            style={{ border: '1px solid var(--gc-border-light)' }}>
+            <div className="flex items-center px-3 py-2"
+              style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+              <span className="flex-1" style={{ color: 'var(--gc-text-1)' }}>Linehaul</span>
+              <span className="tabular-nums font-semibold" style={{ color: 'var(--gc-text-1)' }}>
+                {moneyFmt.format(linehaul)}
+              </span>
+            </div>
+            {billableAccessorials.map(a => (
+              <div key={a.id} className="flex items-center px-3 py-2"
+                style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                <span className="flex-1 truncate" style={{ color: 'var(--gc-text-2)' }}>
+                  {accessorialLineLabel(a)}
+                </span>
+                <span className="tabular-nums" style={{ color: 'var(--gc-text-2)' }}>
+                  {moneyFmt.format(a.amount)}
+                </span>
               </div>
-              <div className="text-right">
-                <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: 'var(--gc-text-3)' }}>
-                  Total
-                </div>
-                <div className="text-[18px] font-extrabold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-                  {moneyFmt.format(invoice.total)}
-                </div>
-              </div>
+            ))}
+            <div className="flex items-center px-3 py-2"
+              style={{ background: 'var(--gc-bg)' }}>
+              <span className="flex-1 font-bold uppercase tracking-wider text-[11px]"
+                style={{ color: 'var(--gc-text-3)' }}>Total</span>
+              <span className="tabular-nums font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
+                {moneyFmt.format(total)}
+              </span>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-[12px]">
-              <KeyVal label="Issued" value={fmtShortDate(invoice.issuedAt)} />
-              <KeyVal label="Due"    value={fmtShortDate(invoice.dueAt)} />
-              <KeyVal label="Paid"   value={fmtShortDate(invoice.paidAt)} />
-            </div>
-          </>
-        ) : (
-          <div className="text-center py-2">
-            <div className="text-[13px] font-semibold mb-0.5" style={{ color: 'var(--gc-text-1)' }}>
-              No invoice yet
-            </div>
-            <div className="text-[11.5px]" style={{ color: 'var(--gc-text-3)' }}>
-              {status === 'verified'
-                ? 'Released for billing — generate an invoice from Billing.'
-                : status === 'pending'
-                  ? 'Awaiting paperwork verification.'
-                  : 'No invoice on file.'}
-            </div>
+          </div>
+        </div>
+
+        {/* Invoice meta dates — only when an invoice exists. Keeps the
+            issued/due/paid timeline visible without crowding the empty
+            state above. */}
+        {hasInvoice && (
+          <div className="grid grid-cols-3 gap-2 text-[12px]">
+            <KeyVal label="Issued" value={fmtShortDate(activeInvoice.issuedAt)} />
+            <KeyVal label="Due"    value={fmtShortDate(activeInvoice.dueAt)} />
+            <KeyVal label="Paid"   value={fmtShortDate(activeInvoice.paidAt)} />
           </div>
         )}
 
+        {/* Actions. Three buttons (max): Generate/Regenerate, Send/Resend,
+            and View Docs / View Invoice depending on whether an invoice
+            exists. Generate is gated on billingStatus = verified — the
+            backend rejects earlier states with a 4xx, so we mirror that
+            up here to keep the affordance from looking clickable when
+            it isn't. */}
         <div className="space-y-1.5 pt-1">
-          {invoice && (
+          <button onClick={onGenerate}
+            disabled={!!busy || (!hasInvoice && status !== 'verified')}
+            title={!hasInvoice && status !== 'verified'
+              ? 'Release the load for billing before generating.'
+              : undefined}
+            className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none' }}>
+            {busy === 'generate'
+              ? <Loader2 size={12} className="animate-spin" />
+              : hasInvoice ? <RefreshCw size={12} /> : <FilePlus size={12} />}
+            {hasInvoice ? 'Regenerate Invoice' : 'Generate Invoice'}
+          </button>
+          <button onClick={onSendOrResend}
+            disabled={!hasInvoice || !!busy}
+            className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+            {busy === 'send' || busy === 'resend'
+              ? <Loader2 size={12} className="animate-spin" />
+              : <Send size={12} />}
+            {isSent ? 'Resend Invoice' : 'Send Invoice'}
+          </button>
+          {hasInvoice ? (
             <button onClick={onViewInvoice}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
               style={{ background: 'var(--gc-bg)', color: 'var(--gc-blue)', border: '1px solid #bfdbfe' }}>
-              <Eye size={12} /> View invoice packet
+              <Eye size={12} /> View Invoice
             </button>
-          )}
-          {showReviewQueueLink && (
-            <Link href="/closeout"
+          ) : (
+            <button onClick={onViewDocs}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
               style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-              <FileCheck2 size={12} /> Open in Paperwork
-            </Link>
+              <FolderOpen size={12} /> View Docs
+            </button>
           )}
-          <Link href="/accounting"
-            className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
-            style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-            <ExternalLinkIcon size={12} /> Open in Billing
-          </Link>
         </div>
       </div>
     </>
   );
+}
+
+/** Format a single accessorial as an invoice line label. Prefers the
+ *  user-typed description when present so detention rows read as
+ *  "Detention · 2 hours" instead of just "Detention". */
+function accessorialLineLabel(a: import('@fleetcal/types').Accessorial): string {
+  const kindLabel: Record<string, string> = {
+    detention:    'Detention',
+    lumper:       'Lumper',
+    layover:      'Layover',
+    scale_ticket: 'Scale ticket',
+    extra_stop:   'Extra stop',
+    other:        'Other',
+  };
+  const base = kindLabel[a.category] ?? a.category;
+  const desc = a.description?.trim();
+  return desc ? `${base} · ${desc}` : base;
 }
 
 function BillingPill({ billingStatus }: { billingStatus?: string }) {
