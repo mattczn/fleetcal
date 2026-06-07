@@ -1383,6 +1383,19 @@ export const useCalendarStore = create<CalendarStore>()(
   addEvent: (event, presetId?, options?) => {
     if (get().isDemo) return;
     const tempId = presetId ?? crypto.randomUUID();
+    // Default-status auto-flip: if the caller is creating a revenue
+    // event WITH a driver but the status is the bare 'scheduled'
+    // default, surface as 'assigned' instead so the calendar reflects
+    // reality (driver is on it but hasn't confirmed yet). Mirrors the
+    // server-side default in POST /v1/loads — apply locally too so the
+    // optimistic insert is correct before the server echoes back.
+    if (
+      event.eventKind !== 'non_revenue' &&
+      event.status === 'scheduled' &&
+      event.driverId != null
+    ) {
+      event = { ...event, status: 'assigned' };
+    }
     // Optimistic insert with temp id; gets swapped for the server-allocated
     // uuid when the Railway create returns.
     set((state) => ({ events: [...state.events, { ...event, id: tempId }] }));
@@ -1493,6 +1506,30 @@ export const useCalendarStore = create<CalendarStore>()(
     const prevEvent      = get().events.find((e) => e.id === id);
     const prevDriverId   = prevEvent?.driverId;
     const prevConfirmedAt = prevEvent?.confirmedAt;
+
+    // ── Driver-driven status auto-flip (client mirror) ───────────────
+    // Mirrors the rule in apps/api/src/routes/events.ts PATCH handler
+    // so the calendar reflects the new status instantly instead of
+    // waiting for the server round-trip. Status semantics:
+    //   scheduled   — no driver on the load
+    //   assigned    — driver assigned, not yet confirmed
+    //   dispatched  — driver confirmed via the driver app
+    // Auto-flip rules:
+    //   - driverId goes null → non-null AND status is 'scheduled'
+    //     → bump to 'assigned'
+    //   - driverId goes non-null → null AND status is 'assigned'
+    //     → revert to 'scheduled'
+    // Skipped when the caller is explicitly setting `status` in the
+    // same update (explicit wins) and for non-revenue events.
+    const isRevenueEvt = prevEvent?.eventKind !== 'non_revenue';
+    if ('driverId' in updates && !('status' in updates) && isRevenueEvt && prevEvent) {
+      const newDriverId = updates.driverId ?? null;
+      const becameAssigned   = prevDriverId == null && newDriverId != null && prevEvent.status === 'scheduled';
+      const becameUnassigned = prevDriverId != null && newDriverId == null && prevEvent.status === 'assigned';
+      if (becameAssigned)   (updates as Partial<CalendarEvent>).status = 'assigned';
+      if (becameUnassigned) (updates as Partial<CalendarEvent>).status = 'scheduled';
+    }
+
     // Tag the write so the realtime echo doesn't fire a conflict banner.
     markSelfWrite(id);
     set((state) => ({ events: state.events.map((e) => (e.id === id ? { ...e, ...updates } : e)) }));

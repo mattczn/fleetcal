@@ -1123,9 +1123,11 @@ driver.patch("/loads/:id", async (c) => {
 
 // POST /v1/driver/loads/:id/confirm — driver confirms an assigned load.
 // Sets events.confirmed_at = now() and events.confirmed_by = driver_id.
-// Also advances status from 'scheduled' to 'dispatched' since Confirm
-// replaces the legacy "Accept Load" CTA — they're the same conceptual
-// action (driver acknowledges they're taking the load).
+// Also advances status to 'dispatched' from either 'scheduled' or
+// 'assigned' (these are the two pre-confirm states — see the load
+// status semantics doc in events.ts PATCH). Confirm replaces the
+// legacy "Accept Load" CTA — they're the same conceptual action
+// (driver acknowledges they're taking the load).
 //
 // Idempotent: re-confirming the same load just returns ok with the
 // existing timestamp (we don't bump it; UI shows "Confirmed 2h ago"
@@ -1155,9 +1157,10 @@ driver.post("/loads/:id/confirm", async (c) => {
   }
 
   const nowIso = new Date().toISOString();
-  // Only advance status if it's still 'scheduled'. If the driver is
-  // already at en_route/picked_up/etc., leave it alone.
-  const willBumpStatus = existing?.status === "scheduled";
+  // Advance status from either pre-confirm state ('scheduled' or
+  // 'assigned') to 'dispatched'. If the driver is already at en_route
+  // / picked_up / etc., the trip has moved past confirm — leave it.
+  const willBumpStatus = existing?.status === "scheduled" || existing?.status === "assigned";
   const update: Record<string, unknown> = {
     confirmed_at: nowIso,
     confirmed_by: driverId,

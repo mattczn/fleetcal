@@ -278,13 +278,20 @@ loads.post("/", requireCapability("loads.create"), async (c) => {
   }
 
   // 2. Insert events
+  //
+  // Default status follows the same auto-flip rule as PATCH events:
+  // a leg created WITH a driver already on it is `assigned` (driver
+  // is on the load but hasn't confirmed yet), a leg without a driver
+  // is `scheduled`. The caller can still override by passing `status`
+  // explicitly — useful for rate-con AI that already knows the driver
+  // confirmed verbally, or for manual closeout backfills.
   const eventInserts = body.events.map((ev) =>
     appLoadToEventInsert(
       {
         ...ev,
         loadId:    loadRow.id,
         eventKind: "revenue",
-        status:    ev.status ?? "scheduled",
+        status:    ev.status ?? (ev.driverId != null ? "assigned" : "scheduled"),
         // Apply the auto-fill only to single-leg loads — see above.
         driverPay: autoDriverPay != null ? autoDriverPay : ev.driverPay,
         stops:     [],

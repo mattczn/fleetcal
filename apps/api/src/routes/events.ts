@@ -302,14 +302,14 @@ events.patch("/:id", async (c) => {
   // can fix up their own blocks without touching revenue loads.
   const { data: kindRow } = await supabase
     .from("events")
-    .select("event_kind,load_id")
+    .select("event_kind,load_id,driver_id,status")
     .eq("id", eventId)
     .eq("org_id", orgId)
     .maybeSingle();
   if (!kindRow) {
     return c.json({ error: "not_found" } satisfies ApiErrorResponse, 404);
   }
-  const kr = kindRow as { event_kind: string; load_id: string | null };
+  const kr = kindRow as { event_kind: string; load_id: string | null; driver_id: number | null; status: string };
   const isRevenue = kr.event_kind === "revenue" || kr.load_id !== null;
   const required = isRevenue ? "loads.edit" : "nonRevenueEvents.edit";
   if (!(await effectiveCanForOrg(role, required, orgId))) {
@@ -365,6 +365,36 @@ events.patch("/:id", async (c) => {
   if ("nonRevenueType" in body) update.non_revenue_type  = body.nonRevenueType ?? null;
   if ("trailerDropoffAddress" in body)
     update.trailer_dropoff_address = (body.trailerDropoffAddress as string | null | undefined) ?? null;
+
+  // ── Driver-driven status auto-flip ──────────────────────────────────
+  // Status semantics:
+  //   scheduled  — on the calendar, no driver assigned
+  //   assigned   — driver assigned, info not yet sent / confirmed
+  //   dispatched — driver confirmed via the driver app
+  //
+  // Until this rule existed, `assigned` was a purely manual status:
+  // adding a driver to a `scheduled` load left the status untouched
+  // and the calendar gave the dispatcher no signal that the load was
+  // "with a driver but unconfirmed." Now we auto-flip:
+  //
+  //   - driverId goes null → non-null AND current status is scheduled
+  //     → bump to `assigned`
+  //   - driverId goes non-null → null AND current status is assigned
+  //     → revert to `scheduled`
+  //
+  // We DON'T touch the status if:
+  //   - the dispatcher set `status` in the same PATCH (explicit wins),
+  //   - the load is already past assigned (dispatched, en_route, picked_up,
+  //     delivered, cancelled, etc.) — removing a driver mid-flight is
+  //     a recovery situation, not a fresh assignment.
+  if ("driverId" in body && !("status" in body) && isRevenue) {
+    const oldDriverId = kr.driver_id;
+    const newDriverId = body.driverId ?? null;
+    const becameAssigned = oldDriverId == null && newDriverId != null && kr.status === "scheduled";
+    const becameUnassigned = oldDriverId != null && newDriverId == null && kr.status === "assigned";
+    if (becameAssigned)   update.status = "assigned";
+    if (becameUnassigned) update.status = "scheduled";
+  }
 
   if (Object.keys(update).length === 0) {
     return badRequest(c, ["no allowed fields supplied; nothing to update"]);
