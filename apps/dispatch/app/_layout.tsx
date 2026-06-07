@@ -1,6 +1,6 @@
 import React from "react";
 import { Slot, useRouter, useSegments } from "expo-router";
-import { ClerkProvider, useAuth } from "@clerk/clerk-expo";
+import { ClerkProvider, useAuth, useClerk } from "@clerk/clerk-expo";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -23,29 +23,60 @@ import OfflineBanner from "@/components/OfflineBanner";
 import RealtimeSync from "@/components/RealtimeSync";
 
 /* ============================================================
- * Splash overlay — visible loading state.
- *
- * The old _layout used <ClerkLoaded>, which renders NOTHING while
- * Clerk is initializing. Combined with the blue native splash, that
- * meant any Clerk hang (bad publishable key, persisted dev token
- * against a prod instance, network block) produced a featureless
- * blue screen with no way to diagnose. We now always render a
- * spinner + status label so the user can SEE what state we're in,
- * and after 8 seconds we surface enough debug info to know whether
- * the issue is fonts, Clerk init, or the token cache.
+ * Bypass switch — when the Clerk SDK hangs on init and we can't
+ * see why, this lets the user force-render the rest of the tree
+ * so they can at least try to navigate to sign-in manually.
+ * Stored in module scope (not state) because RootLayout doesn't
+ * own ClerkGate — we need a way for the inner component to flip
+ * it without prop-drilling.
  * ============================================================ */
-function Splash({ status, detail }: { status: string; detail?: string }) {
+const bypassRef = { current: false };
+
+function Splash({ status, detail, showProbe }: { status: string; detail?: string; showProbe?: boolean }) {
   const [showHelp, setShowHelp] = React.useState(false);
+  const [elapsed, setElapsed] = React.useState(0);
+  const [probe, setProbe] = React.useState<string>("not run");
+  const [, forceRender] = React.useReducer(x => x + 1, 0);
+
+  // Tick the elapsed counter every 500ms.
   React.useEffect(() => {
-    const t = setTimeout(() => setShowHelp(true), 8000);
+    const start = Date.now();
+    const t = setInterval(() => setElapsed(Date.now() - start), 500);
+    return () => clearInterval(t);
+  }, []);
+
+  // After 6 seconds reveal the help panel.
+  React.useEffect(() => {
+    const t = setTimeout(() => setShowHelp(true), 6000);
     return () => clearTimeout(t);
   }, []);
+
+  // Reach behind the SDK and confirm WE can hit Clerk's frontend
+  // directly. If this succeeds while useAuth().isLoaded never
+  // flips, the SDK is broken (not the network). If it fails, the
+  // device can't reach Clerk at all.
+  React.useEffect(() => {
+    if (!showProbe) return;
+    const start = Date.now();
+    const url = `https://clerk.fleetcal.app/v1/environment?_clerk_js_version=5`;
+    fetch(url, { method: "GET" })
+      .then(r => r.text().then(() => setProbe(`OK ${r.status} in ${Date.now() - start}ms`)))
+      .catch(e => setProbe(`FAIL ${(e as Error).message}`));
+  }, [showProbe]);
+
+  // Try to read Clerk's internal state — gives us the boolean we
+  // see (useAuth.isLoaded) PLUS the underlying client/session ids
+  // when they exist. Surface non-fatally; if useClerk throws (no
+  // provider) we just show "no clerk".
+  let clerkState = "no clerk";
+  try {
+    const clerk = useClerk();
+    const clientId = clerk?.client?.id ?? "—";
+    const sessionId = clerk?.session?.id ?? "—";
+    clerkState = `loaded=${clerk?.loaded} client=${clientId.slice(0, 16)} session=${sessionId.slice(0, 16)}`;
+  } catch { /* outside ClerkProvider */ }
+
   const clearAndRetry = async () => {
-    // Best-effort wipe of every SecureStore key Clerk might own.
-    // SecureStore has no "list keys" API on iOS, so we delete by
-    // the known Clerk key names under both the new (prefixed) and
-    // legacy (unprefixed) namespaces. Anything we miss is harmless
-    // — it just sits in the keychain unused.
     const candidates = [
       "__clerk_client_jwt",
       "__clerk_session_jwt",
@@ -57,10 +88,14 @@ function Splash({ status, detail }: { status: string; detail?: string }) {
       try { await SecureStore.deleteItemAsync(k); } catch {}
       try { await SecureStore.deleteItemAsync(`${prefix}__${k}`); } catch {}
     }
-    // Restart the app surface by re-mounting at root.
-    // (User-facing version: tell them to force-quit and reopen.)
     setShowHelp(false);
   };
+
+  const bypassClerk = () => {
+    bypassRef.current = true;
+    forceRender();
+  };
+
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#1a73e8", padding: 24 }}>
       <ActivityIndicator color="#ffffff" size="large" />
@@ -68,24 +103,38 @@ function Splash({ status, detail }: { status: string; detail?: string }) {
       {detail ? (
         <Text style={{ color: "#dbeafe", marginTop: 4, fontSize: 12 }}>{detail}</Text>
       ) : null}
+      <Text style={{ color: "#bfdbfe", marginTop: 12, fontSize: 11, fontVariant: ["tabular-nums"] }}>
+        {(elapsed / 1000).toFixed(1)}s elapsed
+      </Text>
       {showHelp ? (
-        <ScrollView style={{ marginTop: 24, maxHeight: 240, width: "100%" }}>
+        <ScrollView style={{ marginTop: 20, maxHeight: 360, width: "100%" }} contentContainerStyle={{ paddingBottom: 24 }}>
           <Text style={{ color: "#ffffff", fontSize: 13, fontWeight: "700", marginBottom: 8 }}>
-            Still loading after 8s.
+            Diagnostic
           </Text>
           <Text style={{ color: "#dbeafe", fontSize: 11, marginBottom: 4 }}>
             pk: {env.clerkPublishableKey.slice(0, 24)}…
           </Text>
-          <Text style={{ color: "#dbeafe", fontSize: 11, marginBottom: 16 }}>
+          <Text style={{ color: "#dbeafe", fontSize: 11, marginBottom: 4 }}>
             api: {env.railwayApiUrl ?? "unset"}
+          </Text>
+          <Text style={{ color: "#dbeafe", fontSize: 11, marginBottom: 4 }}>
+            clerk: {clerkState}
+          </Text>
+          <Text style={{ color: "#dbeafe", fontSize: 11, marginBottom: 16 }}>
+            probe: {probe}
           </Text>
           <Pressable
             onPress={clearAndRetry}
-            style={{ backgroundColor: "#ffffff", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, alignItems: "center" }}>
+            style={{ backgroundColor: "#ffffff", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, alignItems: "center", marginBottom: 8 }}>
             <Text style={{ color: "#1a73e8", fontWeight: "700" }}>Clear cached session</Text>
           </Pressable>
+          <Pressable
+            onPress={bypassClerk}
+            style={{ backgroundColor: "#fbbf24", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, alignItems: "center" }}>
+            <Text style={{ color: "#78350f", fontWeight: "700" }}>Continue without auth</Text>
+          </Pressable>
           <Text style={{ color: "#dbeafe", fontSize: 10, marginTop: 8, textAlign: "center" }}>
-            Then force-quit the app (swipe up) and reopen.
+            Bypasses Clerk init — sends you to sign-in screen where you can sign in manually
           </Text>
         </ScrollView>
       ) : null}
@@ -93,12 +142,6 @@ function Splash({ status, detail }: { status: string; detail?: string }) {
   );
 }
 
-/* ============================================================
- * Error boundary — catches anything thrown during render so we
- * never render literally nothing. Without this, a thrown error
- * in the provider tree leaves the user staring at the native
- * blue splash forever.
- * ============================================================ */
 class RootErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { error: Error | null }
@@ -133,15 +176,10 @@ class RootErrorBoundary extends React.Component<
   }
 }
 
-/* ============================================================
- * ClerkGate — replaces <ClerkLoaded>. When isLoaded is false we
- * show the Splash with a meaningful status label; once Clerk is
- * loaded we render the rest of the tree.
- * ============================================================ */
 function ClerkGate({ children }: { children: React.ReactNode }) {
   const { isLoaded } = useAuth();
-  if (!isLoaded) {
-    return <Splash status="Signing you in…" detail="Loading Clerk" />;
+  if (!isLoaded && !bypassRef.current) {
+    return <Splash status="Signing you in…" detail="Loading Clerk" showProbe />;
   }
   return <>{children}</>;
 }
@@ -152,7 +190,9 @@ function AuthGate() {
   const router = useRouter();
 
   React.useEffect(() => {
-    if (!isLoaded) return;
+    // If we bypassed Clerk, treat as signed-out and route to sign-in.
+    const effectiveLoaded = isLoaded || bypassRef.current;
+    if (!effectiveLoaded) return;
     const inAuthGroup = segments[0] === "(auth)";
     if (isSignedIn && inAuthGroup) {
       router.replace("/");
