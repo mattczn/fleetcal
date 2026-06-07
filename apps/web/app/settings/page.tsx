@@ -6,6 +6,7 @@ import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
 import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
+import { isInternalOrg } from '@/lib/internalOrg';
 import {
   CAPABILITY_CATALOG,
   ORG_ROLES,
@@ -4833,6 +4834,13 @@ export default function SettingsPage() {
   const [active, setActive] = useState<NavItem>('appearance');
   const { can, isLoading: permsLoading } = usePermissions();
   const { enabled: moduleEnabled } = useModules();
+  // Active org_id — needed for the internal-org gate that hides the
+  // Modules nav entry from customer orgs. The Modules panel only makes
+  // sense for our dogfooding orgs where we want to toggle product
+  // surfaces; for paying customers the tier locks the module set, so
+  // there's literally nothing to flip and we hide the entry entirely.
+  const { organization } = useOrganization();
+  const internal = isInternalOrg(organization?.id);
 
   // Filter the nav by the active user's capabilities AND the org's
   // enabled modules. While Clerk is still hydrating the membership,
@@ -4842,6 +4850,8 @@ export default function SettingsPage() {
   const visibleNav = NAV.map(group => ({
     ...group,
     items: group.items.filter(item => {
+      // Internal-org gate — the Modules entry is FleetCal-internal only.
+      if (item.id === 'modules' && !internal) return false;
       // Capability gate (role-based)
       const cap = NAV_CAPABILITY[item.id];
       if (cap && !permsLoading && !can(cap)) return false;
