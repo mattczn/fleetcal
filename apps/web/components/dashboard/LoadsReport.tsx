@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown, X, Download, FileSpreadsheet, Loader2, Settings, Filter, Calendar, Users, Truck, User, Eye, ChevronUp, ChevronLeft, ChevronRight, GripVertical } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -323,6 +324,7 @@ interface Props {
 }
 
 export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
+  const router = useRouter();
   const { customers, drivers, assets, openEditModal, dbReady } = useCalendarStore();
   const { can } = usePermissions();
   // Hide the Driver Pay column entirely for users without
@@ -1109,7 +1111,21 @@ export default function LoadsReport({ defaultFrom, defaultTo }: Props = {}) {
                     // canonical event for the load.
                     const eventId = load.legs[0]?.eventId ?? load.loadId;
                     return (
-                      <tr key={load.loadId} style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                      <tr key={load.loadId}
+                          onDoubleClick={(e) => {
+                            // Mirror the OpsTable behavior — clicking a
+                            // button / link / copyable cell inside the
+                            // row shouldn't fire the navigation. Also
+                            // clear the OS-level word selection the
+                            // first click started so we don't leave a
+                            // highlight behind us.
+                            const target = e.target as HTMLElement;
+                            if (target.closest('button, a, input, [data-row-click-ignore]')) return;
+                            if (load.internalLoadId == null) return;
+                            window.getSelection?.()?.removeAllRanges?.();
+                            router.push(`/loads/${load.internalLoadId}`);
+                          }}
+                          style={{ borderBottom: '1px solid var(--gc-border-light)', cursor: load.internalLoadId != null ? 'pointer' : 'default' }}>
                         <td style={{ padding: '10px 12px', textAlign: 'left', whiteSpace: 'nowrap' }}>
                           <button
                             type="button"
