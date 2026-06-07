@@ -129,7 +129,8 @@ DECLARE
     'maintenance_action_item_photos', 'maintenance_action_item_events',
     'inspection_reports', 'inspection_photos',
     -- Load & financial
-    'load_documents', 'load_notifications', 'loads_internal_id_counters',
+    'load_documents', 'load_notifications',
+    'loads_internal_id_counters', 'org_load_id_counters',
     'invoices', 'fuel_reports', 'fuel_report_photos', 'fuel_transactions',
     'cost_analysis_reports',
     -- Payroll & motive
@@ -139,10 +140,15 @@ DECLARE
     -- Assets & settings
     'movement_links', 'asset_documents', 'trailer_documents',
     'org_settings', 'check_calls', 'org_api_keys',
-    -- Customers / trailers / saved_locations / dispatchers — verify these
-    -- exist with org_id columns. If your migration history doesn't show
-    -- org_id on these, they're managed elsewhere; comment them out.
+    -- Customers / trailers / saved_locations / dispatchers — all confirmed
+    -- via preflight to exist with org_id columns.
     'customers', 'trailers', 'saved_locations', 'dispatchers'
+    -- Removed entries that exist in the migration files but NOT in the
+    -- live DB (preflight flagged them as EXTRA — the existence check
+    -- skips them gracefully, but pruning here keeps NOTICE output clean):
+    --   inspection_reports  ← exists, kept above under Maintenance
+    --   inspection_photos             — removed (live DB has no such table)
+    --   maintenance_action_item_events — removed (live DB has no such table)
   ];
 BEGIN
   FOREACH v_table IN ARRAY v_tables
