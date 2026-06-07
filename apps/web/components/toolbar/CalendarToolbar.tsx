@@ -13,6 +13,8 @@ import DatePicker from '@/components/calendar/DatePicker';
 import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
 import TruckFleetPanel from '@/components/calendar/TruckFleetPanel';
 import AssetsModal from '@/components/sidebar/AssetsModal';
+import RecentlyDeletedDetailModal from '@/components/calendar/RecentlyDeletedDetailModal';
+import type { CalendarEvent } from '@/lib/types';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -80,6 +82,10 @@ export default function CalendarToolbar() {
   // tray can close the tray AND show the Truck Directory modal
   // underneath without the modal vanishing along with the tray.
   const [editTruckAssetId,   setEditTruckAssetId]   = useState<number | null>(null);
+  // Read-only detail view for a trash-dropdown row click. Mounted at
+  // the toolbar level (not inside the dropdown) so the dropdown can
+  // close cleanly while the modal stays open.
+  const [trashDetailEvent,   setTrashDetailEvent]   = useState<CalendarEvent | null>(null);
   // Hide the button when no trailers — keeps the toolbar clean for
   // orgs that don't use trailers yet. Retired trailers don't count.
   // The fleet map itself is Motive-only (live GPS pins via ELD), so
@@ -554,14 +560,9 @@ export default function CalendarToolbar() {
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                       <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6' }} />
-                      {/* Title block is a button — clicking opens the
-                          load modal against the deleted event so the
-                          dispatcher can review + Reinstate from the
-                          modal's footer. Restore/Purge icons on the
-                          right stay as one-click shortcuts. */}
                       <button type="button"
-                        onClick={() => { setTrashOpen(false); useCalendarStore.getState().openEditModal(ev.id); }}
-                        className="flex-1 min-w-0 text-left bg-transparent border-0 cursor-pointer">
+                        onClick={() => { setTrashOpen(false); setTrashDetailEvent(ev); }}
+                        className="flex-1 min-w-0 text-left bg-transparent border-0 p-0 cursor-pointer">
                         <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
                         <div className="text-[11px] flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
                           <span>{eventDateLabel(ev.start)}{ev.loadNum ? ` · #${ev.loadNum}` : ''}</span>
@@ -963,6 +964,12 @@ export default function CalendarToolbar() {
       <AssetsModal
         initialAssetId={editTruckAssetId}
         onClose={() => setEditTruckAssetId(null)}
+      />
+    )}
+    {trashDetailEvent && (
+      <RecentlyDeletedDetailModal
+        event={trashDetailEvent}
+        onClose={() => setTrashDetailEvent(null)}
       />
     )}
     </>

@@ -2002,11 +2002,11 @@ function SectionFields({ fields, fieldValues, onChange, headerColor, overrides, 
 
 export default function EventModal() {
   const {
-    assets, events, deletedEvents, drivers, driverPrefs, driverPrefsSecondary, currentDate,
+    assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
     prefillWorkOrderLinkIds,
     refetchEvent, refetchingEventIds,
-    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, restoreEvent, closeModal,
+    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
     openEditModal, openCreateModal,
     createRelayPair, splitToRelay, saveRelayBoth, removeRelay,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
@@ -2073,21 +2073,7 @@ export default function EventModal() {
   // get an error back. To genuinely walk one back: void the
   // invoice first, billing_status drops back to 'pending', then
   // cancel is offered again.
-  // Unified event lookup. Falls back to the deleted-events list so a
-  // load opened from search / Recently Deleted finds its metadata even
-  // when it was already removed from the active list. Wrapped in
-  // try/catch + optional-chaining defensively: a deleted-event payload
-  // may be missing fields the modal would normally read, and we don't
-  // want one bad row to crash the whole modal mount.
-  const findEvent = (id: string | undefined): import('@/lib/types').CalendarEvent | undefined => {
-    if (!id) return undefined;
-    try {
-      return events.find(e => e.id === id) ?? (deletedEvents ?? []).find(e => e.id === id);
-    } catch {
-      return undefined;
-    }
-  };
-  const cancelLockedEv = findEvent(modalEventId);
+  const cancelLockedEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
   const cancelLocked = !!cancelLockedEv?.billingStatus && cancelLockedEv.billingStatus !== 'pending';
   // ── Read-only gate for this modal ────────────────────────────────
   // Maintenance opens a revenue load → has loads.view but not
@@ -2372,7 +2358,7 @@ export default function EventModal() {
   // round-trip on every modal open.
   useEffect(() => {
     if (!modalEventId || !orgId) return;
-    const ev = findEvent(modalEventId);
+    const ev = events.find(e => e.id === modalEventId);
     if (!ev?.loadId) return; // documents are load-scoped
     const isRelayLeg = !!ev.relayRole; // 'pickup' or 'delivery'
     if (!isRelayLeg && !showPdfViewer) return;
@@ -2449,7 +2435,7 @@ export default function EventModal() {
 
     // Stored on the load — ask the API for a signed URL (or pass-through
     // for legacy data: URLs stored before the storage migration).
-    const ev = modalEventId ? findEvent(modalEventId) : undefined;
+    const ev = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
     if (!ev?.loadId) { setPdfObjectUrl(''); return () => { cancelled = true; }; }
     setPdfObjectUrl(''); // clear stale URL while re-fetching
     import('@/lib/railway').then(({ railway }) => railway.getRateConUrl(ev.loadId!))
@@ -2543,7 +2529,7 @@ export default function EventModal() {
   // analytics.
   useEffect(() => {
     if (!isEdit || !modalEventId) return;
-    const ev = findEvent(modalEventId);
+    const ev = events.find(e => e.id === modalEventId);
     if (!ev) return;
     const stored = ev.loadedMiles ?? null;
     // Computed null + column has stale value → clear it. Cast to any
@@ -2670,7 +2656,7 @@ export default function EventModal() {
     setPrevDriverPay(null);
 
     if (isEdit && modalEventId) {
-      const ev = findEvent(modalEventId);
+      const ev = events.find(e => e.id === modalEventId);
       if (!ev) return;
       setTitle(ev.title);
       setAssetId(ev.assetId);
@@ -2910,7 +2896,7 @@ export default function EventModal() {
     // Already attempted recovery for this event in this session —
     // accept whatever state the cache is in, don't loop.
     if (refetchedEventIdsRef.current.has(modalEventId)) return;
-    const ev = findEvent(modalEventId);
+    const ev = events.find(e => e.id === modalEventId);
     // Don't stack refetches on top of an in-flight one.
     if (refetchingEventIds.has(modalEventId)) return;
     // Case A: event missing from the local cache entirely. Happens
@@ -3346,7 +3332,7 @@ export default function EventModal() {
       if (!relayStop?.apptStart) return;
       const rgId = crypto.randomUUID();
       const delivEndDate = deliveryLegStart.split('T')[0] > endDate ? deliveryLegStart.split('T')[0] : endDate;
-      const existingEv = isEdit && modalEventId ? findEvent(modalEventId) : undefined;
+      const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       // Pre-resolve display names so the audit entry survives later
       // customer/trailer deletes — same pattern as the non-relay
       // path below. See doSave for the rationale.
@@ -3414,7 +3400,7 @@ export default function EventModal() {
 
     } else {
       const newDriverName = driverName || undefined;
-      const existingEv = isEdit && modalEventId ? findEvent(modalEventId) : undefined;
+      const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       // Resolve display names for the audit's ID-typed fields so the
       // history panel can render readable text later without needing
       // to refetch customers / trailers. Lookups use the current
@@ -3608,7 +3594,7 @@ export default function EventModal() {
     } else {
       // Single-leg load: zero rate on the load record before the
       // event row is deleted so the preserved load reads as cancelled.
-      const evNow = findEvent(modalEventId);
+      const evNow = events.find(e => e.id === modalEventId);
       if (evNow?.loadId) {
         const loadId = evNow.loadId;
         // Suppress the realtime echo of this load write so the
@@ -3655,18 +3641,10 @@ export default function EventModal() {
     return null;
   }, [auditLog]);
   const isRemovedEventCancelled = lastCancelEntry?.mode === 'remove-event';
-  // True when the modal was opened against an event in the trash
-  // (deletedEvents). Drives a different Reinstate path that calls
-  // the store's restoreEvent (which routes through restoreLoad
-  // server-side) rather than the audit-log replay used for cancelled-
-  // but-still-active loads. Optional-chain in case deletedEvents is
-  // undefined at startup (defensive — the store seeds it as []).
-  const isInTrash = !!(modalEventId && (deletedEvents ?? []).some(e => e.id === modalEventId));
   // The combined "this load is cancelled" gate: a 'status'-mode cancel
   // shows status='cancelled' on the row; a 'remove-event'-mode cancel
-  // only shows up via the audit log; isInTrash covers the "Move to
-  // Recently Deleted" path which lives in a separate store list.
-  const isCancelled = status === 'cancelled' || isRemovedEventCancelled || isInTrash;
+  // only shows up via the audit log.
+  const isCancelled = status === 'cancelled' || isRemovedEventCancelled;
 
   // Flip a cancelled load back to its previous status. Pulls prev rate
   // + miles from the most recent loadCancelled audit entry so a misclick
@@ -3675,16 +3653,6 @@ export default function EventModal() {
   // /v1/events/:id/restore before updating client state.
   const handleReinstate = async () => {
     if (!modalEventId) return;
-    // Trash-mode reinstate: the load was permanently deleted via
-    // "Move to Recently Deleted." Route through the store's
-    // restoreEvent which handles both client list movement
-    // (deletedEvents → events) AND server-side restoreLoad. No
-    // audit-log replay needed since the full row was preserved.
-    if (isInTrash) {
-      restoreEvent(modalEventId);
-      closeModal();
-      return;
-    }
     // remove-event mode needs the server-side un-delete first; without
     // this the event row stays soft-deleted in the DB even though the
     // local store thinks it's active again.
@@ -3741,7 +3709,7 @@ export default function EventModal() {
   const handleRelayRemove = () => {
     if (!confirmRelayRemove) { setConfirmRelayRemove(true); return; }
     if (modalEventId) {
-      const existingEv = findEvent(modalEventId);
+      const existingEv = events.find(e => e.id === modalEventId);
       const entry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, relayRemoved: true };
       const nextAuditLog = existingEv ? appendAuditEntry(auditLog, entry) : [entry];
       removeRelay(modalEventId, nextAuditLog);
@@ -4737,7 +4705,7 @@ export default function EventModal() {
                           const blob = await res.blob();
                           const objectUrl = URL.createObjectURL(blob);
                           const safeNum = String(
-                            (findEvent(modalEventId)?.loadNum)
+                            (events.find(e => e.id === modalEventId)?.loadNum)
                             ?? (fieldValues['loadNum'] ?? '')
                           ).replace(/[^A-Za-z0-9_-]/g, '');
                           const a = document.createElement('a');
@@ -4853,12 +4821,12 @@ export default function EventModal() {
                 onSignedUrlError={refreshSelectedDocUrl}
                 headerColor={headerColor}
                 loadId={(() => {
-                  const ev = findEvent(modalEventId);
+                  const ev = events.find(e => e.id === modalEventId);
                   return ev?.loadId;
                 })()}
                 onChange={async () => {
                   // Re-fetch the docs list after add/delete.
-                  const ev = findEvent(modalEventId);
+                  const ev = events.find(e => e.id === modalEventId);
                   if (!ev?.loadId || !orgId) return;
                   const { fetchLoadDocuments } = await import('@/lib/db');
                   const fresh = await fetchLoadDocuments(ev.loadId, orgId);
@@ -4953,7 +4921,7 @@ export default function EventModal() {
                   {isBatch ? `Create Load ${batchIndex + 1} of ${batchItems.length}` : isEdit ? (eventKind === 'non_revenue' ? 'Edit Event' : 'Edit Load') : (eventKind === 'non_revenue' ? 'New Event' : 'New Load')}
                 </div>
                 {isEdit && (() => {
-                  const ev = findEvent(modalEventId);
+                  const ev = events.find(e => e.id === modalEventId);
                   if (!ev?.internalLoadId) return null;
                   return (
                     <>
@@ -5127,23 +5095,13 @@ export default function EventModal() {
               </button>
             </Tooltip>
             {eventKind === 'revenue' && (
-              // When the load is cancelled (any mode), force the pill
-              // to read "Cancelled" regardless of the underlying row's
-              // status. Trash items preserve their pre-delete status
-              // (usually 'scheduled') — without the override the pill
-              // would say "Scheduled" next to the red CANCELLED kicker.
-              <StyledSelect
-                value={isCancelled ? 'cancelled' : status}
-                onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
-                disabled={isCancelled}
+              <StyledSelect value={status} onChange={e => { markDirty(); setStatus(e.target.value as EventStatus); }}
                 style={{
-                  border: `1px solid ${(STATUSES.find(s => s.value === (isCancelled ? 'cancelled' : status))?.color ?? headerColor)}50`,
+                  border: `1px solid ${STATUSES.find(s => s.value === status)?.color ?? headerColor}50`,
                   borderRadius: 8, padding: '6px 32px 6px 12px', fontSize: 13, fontWeight: 600,
-                  color: STATUSES.find(s => s.value === (isCancelled ? 'cancelled' : status))?.color ?? headerColor,
-                  background: STATUSES.find(s => s.value === (isCancelled ? 'cancelled' : status))?.bg ?? `${headerColor}12`,
-                  outline: 'none', cursor: isCancelled ? 'not-allowed' : 'pointer',
-                  width: 'auto', transition: 'border-color 150ms',
-                  opacity: isCancelled ? 0.85 : 1,
+                  color: STATUSES.find(s => s.value === status)?.color ?? headerColor,
+                  background: STATUSES.find(s => s.value === status)?.bg ?? `${headerColor}12`,
+                  outline: 'none', cursor: 'pointer', width: 'auto', transition: 'border-color 150ms',
                 }}>
                 {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </StyledSelect>
@@ -5171,7 +5129,7 @@ export default function EventModal() {
               // "Add Docs" even when a POD existed, because the array
               // was still empty. `loadDocuments` is used as a fallback
               // for the rare case `documentCounts` is missing.
-              const evCur = findEvent(modalEventId);
+              const evCur = events.find(e => e.id === modalEventId);
               const countsTotal = evCur?.documentCounts
                 ? Object.entries(evCur.documentCounts)
                     .filter(([k]) => k !== 'rate_con')
@@ -5345,7 +5303,7 @@ export default function EventModal() {
               </div>
               <div className="flex-1 flex items-center justify-end gap-2">
                 {eventKind === 'revenue' && isEdit && (() => {
-                  const ev = findEvent(modalEventId);
+                  const ev = events.find(e => e.id === modalEventId);
                   if (!ev) return null;
                   const bs = ev.billingStatus;
                   const bsTint = (() => {
@@ -5609,7 +5567,7 @@ export default function EventModal() {
                 {(() => {
                   const sel = findDriverByName(driverName) ?? null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
-                  const currentEv = modalEventId ? findEvent(modalEventId) : undefined;
+                  const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
                   const showNotify = driverAppEnabled && eventKind === 'revenue' && isEdit && !!sel?.id && !!modalEventId;
                   if (!sel?.phone && !showSummaryBtn && !showNotify) return null;
                   // Per-kind ack state — drives which buttons in the
@@ -5899,7 +5857,7 @@ export default function EventModal() {
                                 }
                               </span>
                               {(() => {
-                                const currentEv = findEvent(modalEventId);
+                                const currentEv = events.find(e => e.id === modalEventId);
                                 if (!currentEv?.loadId) return null;
                                 const handoffPhotos = loadDocuments
                                   .filter(d => d.kind === 'relay_handoff')
@@ -6086,7 +6044,7 @@ export default function EventModal() {
                           </div>
                           {(() => {
                             const relayStop = stops.find(s => s.type === 'relay');
-                            const currentEv = findEvent(modalEventId);
+                            const currentEv = events.find(e => e.id === modalEventId);
                             const handoffPhotos = currentEv?.loadId
                               ? loadDocuments
                                   .filter(d => d.kind === 'relay_handoff')
@@ -6134,7 +6092,7 @@ export default function EventModal() {
                               with the driver-app RelayTrailerLocation
                               removal. Re-enable by uncommenting. */}
                           {/* {(() => {
-                            const currentEv = findEvent(modalEventId);
+                            const currentEv = events.find(e => e.id === modalEventId);
                             if (currentEv?.trailerDropoffLat == null) return null;
                             return (
                               <TrailerLocationCard
@@ -6415,7 +6373,7 @@ export default function EventModal() {
 
           {/* Check Calls — only when load row exists */}
           {isEdit && (() => {
-            const ev = findEvent(modalEventId);
+            const ev = events.find(e => e.id === modalEventId);
             if (!ev?.loadId) return null;
             return (
               <CheckCallsSection
@@ -6428,7 +6386,7 @@ export default function EventModal() {
 
           {/* Audit history — edit mode only */}
           {isEdit && (() => {
-            const ev = findEvent(modalEventId);
+            const ev = events.find(e => e.id === modalEventId);
             if (!ev) return null;
             const hasHistory = auditLog.length > 0;
             if (!ev.createdByName && !hasHistory) return null;
@@ -6621,31 +6579,34 @@ export default function EventModal() {
                 </button>
               </div>
             </div>
-          ) : isEdit && eventKind === 'revenue' && isCancelled ? (
-            // Cancelled-state footer: Reinstate is the only action.
-            // Cancel/Save/Duplicate/+1 Week/Remove are all hidden so
-            // the dispatcher can't accidentally edit-then-save a load
-            // that's logically dead. After Reinstate the load lands
-            // back as a normal scheduled load and this footer collapses
-            // away to the standard layout.
-            <div className="shrink-0 flex items-center justify-end px-8 py-5"
-              style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-              <button type="button" onClick={() => void handleReinstate()}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-[13px] font-semibold transition-colors text-white"
-                style={{ background: 'var(--gc-blue)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-                <RefreshCw size={15} />
-                Reinstate
-              </button>
-            </div>
           ) : (
             <div className="shrink-0 flex items-center justify-between px-8 py-5"
               style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
               <div className="flex items-center gap-1">
                 {isEdit && (
                   <>
-                    {eventKind === 'revenue' ? (
+                    {eventKind === 'revenue' && isCancelled ? (
+                      <>
+                        <button type="button" onClick={() => void handleReinstate()}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                          style={{ color: 'var(--gc-blue)', background: 'transparent' }}
+                          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
+                          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                          <RefreshCw size={15} />
+                          Reinstate
+                        </button>
+                        {canDeleteLoad && (
+                          <button type="button" onClick={() => setRemoveDialogOpen(true)}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
+                            style={{ color: '#d93025', background: 'transparent' }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(217,48,37,.1)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                            <Trash2 size={15} />
+                            Remove
+                          </button>
+                        )}
+                      </>
+                    ) : eventKind === 'revenue' ? (
                       canDeleteLoad && !cancelLocked ? (
                         <button type="button" onClick={() => setCancelDialogOpen(true)}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-[13px] font-medium transition-all"
@@ -6723,7 +6684,7 @@ export default function EventModal() {
             driver group chats. Hidden by default; toggled via the
             "Driver Summary" button in the toolbar. */}
         {showDriverSummary && isEdit && (() => {
-          const currentEv = modalEventId ? findEvent(modalEventId) : undefined;
+          const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
           const summaryEvent = {
             title,
             start: startDate && startTime ? `${startDate}T${startTime}` : undefined,
@@ -6875,7 +6836,7 @@ export default function EventModal() {
         billing status pill reflects the new state without a full
         page refresh. */}
     {reviewQueueOpen && (() => {
-      const currentEv = modalEventId ? findEvent(modalEventId) : undefined;
+      const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
       if (!currentEv) return null;
       const reviewLoad: CalendarEvent =
         currentEv.relayRole === 'delivery' && currentEv.relayGroupId
