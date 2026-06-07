@@ -860,7 +860,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                   to the facility/address column instead of dominating
                   the row. flexShrink: 1 + min-width 0 lets the inputs
                   inside ride that shrink without overflowing. */}
-              <div style={{ flexShrink: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 'clamp(200px, 40%, 320px)' }}>
+              <div style={{ flexShrink: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 'clamp(150px, 30%, 240px)' }}>
                 {stop.type === 'relay' ? (
                   <>
                     <div>
