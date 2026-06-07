@@ -34,6 +34,7 @@ function fmtDateTime(iso: string | undefined): string {
 
 export default function RecentlyDeletedDetailModal({ event, onClose }: Props) {
   const restoreEvent = useCalendarStore((s) => s.restoreEvent);
+  const openEditModal = useCalendarStore((s) => s.openEditModal);
   const assets = useCalendarStore((s) => s.assets);
   const drivers = useCalendarStore((s) => s.drivers);
   const asset = assets.find((a) => a.id === event.assetId);
@@ -45,7 +46,11 @@ export default function RecentlyDeletedDetailModal({ event, onClose }: Props) {
       changedByName: 'Dispatcher',
       loadRestored: true,
     });
+    // Close this read-only viewer, then open the regular load modal for the
+    // just-restored event. restoreEvent moves the row into state.events
+    // synchronously, so by the time openEditModal runs EventModal can find it.
     onClose();
+    openEditModal(event.id);
   };
 
   return (
