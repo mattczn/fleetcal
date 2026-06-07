@@ -3,8 +3,8 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 // `/` is public so the marketing landing renders for signed-out
 // visitors. Signed-in users with an org get bounced to /calendar by
 // the page component itself (see app/page.tsx).
-const isPublicRoute = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)'])
-const isOrgFreeRoute = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)', '/settings(.*)'])
+const isPublicRoute = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)', '/pricing(.*)'])
+const isOrgFreeRoute = createRouteMatcher(['/', '/sign-in(.*)', '/sign-up(.*)', '/create-organization(.*)', '/pricing(.*)', '/settings(.*)'])
 
 export default clerkMiddleware(async (auth, request) => {
   if (!isPublicRoute(request)) {

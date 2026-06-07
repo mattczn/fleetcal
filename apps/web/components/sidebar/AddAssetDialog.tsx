@@ -1,24 +1,33 @@
 'use client';
 
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import Link from 'next/link';
+import { X, AlertTriangle } from 'lucide-react';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { PRESET_COLORS } from '@/lib/asset-colors';
+import { useOrgTier, nextTierUp } from '@/lib/useOrgTier';
 
 const INPUT = 'w-full px-3 py-2 rounded-lg text-sm outline-none transition-all';
 const INPUT_STYLE = { border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)', background: 'var(--gc-surface)' };
 
 export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
   const { addAsset, assetCategories } = useCalendarStore();
+  const { tier, tierLabel, maxTrucks, currentTrucks, atLimit } = useOrgTier();
   const [name,  setName]  = useState('');
   const [unit,  setUnit]  = useState('');
   const [truck, setTruck] = useState('');
   const [color, setColor] = useState(PRESET_COLORS[0]);
   const [type,  setType]  = useState(() => assetCategories[0] ?? '');
 
+  // Tier cap: soft-block adding a truck when the org is at the limit.
+  // The pricing page (/pricing) handles upgrades; we just route there.
+  // Unrestricted tier (legacy / grandfathered orgs) bypasses the gate.
+  const upsellTier = nextTierUp(tier);
+  const blocked = atLimit && tier !== 'unrestricted';
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || blocked) return;
     addAsset({ name: name.trim(), color, type, unit: unit.trim() || undefined, truck: truck.trim() || undefined, hidden: false, sortOrder: 0 });
     onClose();
   };
@@ -53,6 +62,35 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <form onSubmit={handleSubmit} className="px-7 py-5 space-y-4">
+          {blocked && (
+            <div
+              className="rounded-lg px-4 py-3 flex items-start gap-3"
+              style={{
+                background: '#fef3c7',
+                border: '1px solid #f59e0b',
+                color: '#7c2d12',
+              }}
+            >
+              <AlertTriangle size={18} style={{ flex: '0 0 18px', marginTop: 1 }} />
+              <div className="flex-1 text-[13px] leading-snug">
+                <div className="font-semibold">
+                  {tierLabel} plan limit reached — {currentTrucks} of {maxTrucks} trucks used.
+                </div>
+                <div className="mt-1">
+                  {upsellTier ? (
+                    <>
+                      Add more by upgrading to the next tier.{' '}
+                      <Link href="/pricing" onClick={onClose} className="font-semibold underline">
+                        View plans →
+                      </Link>
+                    </>
+                  ) : (
+                    <>You&apos;ve reached the highest standard tier. Contact sales for fleets above 14 trucks.</>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           <div>
             <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--gc-text-3)' }}>
               Name *
@@ -117,10 +155,10 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
               onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
               Cancel
             </button>
-            <button type="submit" disabled={!name.trim()}
+            <button type="submit" disabled={!name.trim() || blocked}
               className="px-5 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-40 transition-colors"
               style={{ background: 'var(--gc-blue)' }}
-              onMouseOver={e => { if (name.trim()) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
+              onMouseOver={e => { if (name.trim() && !blocked) e.currentTarget.style.background = 'var(--gc-blue-hover)'; }}
               onMouseOut={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
               Add
             </button>
