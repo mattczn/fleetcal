@@ -621,6 +621,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
             <BillingCard
               load={primaryLeg}
+              onOpenReview={() => setReviewQueueOpen(true)}
               customer={(() => {
                 // Customer details for the billing pane. Prefer the FK
                 // bound on the load row; fall back to a case-insensitive
@@ -1879,7 +1880,7 @@ function LoadHistorySection({ load, calendarTimezone }: {
 
 function BillingCard({
   load, customer, invoice, busy,
-  onGenerate, onSendOrResend, onViewInvoice, onViewDocs,
+  onGenerate, onSendOrResend, onViewInvoice, onViewDocs, onOpenReview,
 }: {
   load: Load;
   customer: Customer | undefined;
@@ -1889,6 +1890,10 @@ function BillingCard({
   onSendOrResend: () => void;
   onViewInvoice: () => void;
   onViewDocs: () => void;
+  /** Open the closeout Review panel. Only used in the Released state
+   *  where the dispatcher is still verifying docs before generating
+   *  an invoice. */
+  onOpenReview: () => void;
 }) {
   const status = load.billingStatus ?? 'pending';
 
@@ -2000,50 +2005,142 @@ function BillingCard({
           </div>
         )}
 
-        {/* Actions. Three buttons (max): Generate/Regenerate, Send/Resend,
-            and View Docs / View Invoice depending on whether an invoice
-            exists. Generate is gated on billingStatus = verified — the
-            backend rejects earlier states with a 4xx, so we mirror that
-            up here to keep the affordance from looking clickable when
-            it isn't. */}
-        <div className="space-y-1.5 pt-1">
-          <button onClick={onGenerate}
-            disabled={!!busy || (!hasInvoice && status !== 'verified')}
-            title={!hasInvoice && status !== 'verified'
-              ? 'Release the load for billing before generating.'
-              : undefined}
-            className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none' }}>
-            {busy === 'generate'
-              ? <Loader2 size={12} className="animate-spin" />
-              : hasInvoice ? <RefreshCw size={12} /> : <FilePlus size={12} />}
-            {hasInvoice ? 'Regenerate Invoice' : 'Generate Invoice'}
-          </button>
-          <button onClick={onSendOrResend}
-            disabled={!hasInvoice || !!busy}
-            className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-            {busy === 'send' || busy === 'resend'
-              ? <Loader2 size={12} className="animate-spin" />
-              : <Send size={12} />}
-            {isSent ? 'Resend Invoice' : 'Send Invoice'}
-          </button>
-          {hasInvoice ? (
-            <button onClick={onViewInvoice}
+        {/* Actions. Released (verified) state replaces the invoice
+            buttons with a doc-verification slot — Review opens the
+            closeout panel and the badges read present/missing for
+            each required-doc kind, same look as the Paperwork table
+            (opaque tint = present, transparent dashed red = missing).
+            Once the dispatcher releases the load all expected docs
+            should be on file, so this lets them confirm at a glance
+            before moving the load to invoicing. */}
+        {status === 'verified' && !hasInvoice ? (
+          <div className="space-y-2 pt-1">
+            <button onClick={onOpenReview}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
-              style={{ background: 'var(--gc-bg)', color: 'var(--gc-blue)', border: '1px solid #bfdbfe' }}>
-              <Eye size={12} /> View Invoice
+              style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none' }}>
+              <ClipboardCheck size={12} /> Review
             </button>
-          ) : (
-            <button onClick={onViewDocs}
-              className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
-              style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-              <FolderOpen size={12} /> View Docs
+            <DocPresenceBadges load={load} />
+          </div>
+        ) : (
+          <div className="space-y-1.5 pt-1">
+            <button onClick={onGenerate}
+              disabled={!!busy || (!hasInvoice && status !== 'verified')}
+              title={!hasInvoice && status !== 'verified'
+                ? 'Release the load for billing before generating.'
+                : undefined}
+              className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none' }}>
+              {busy === 'generate'
+                ? <Loader2 size={12} className="animate-spin" />
+                : hasInvoice ? <RefreshCw size={12} /> : <FilePlus size={12} />}
+              {hasInvoice ? 'Regenerate Invoice' : 'Generate Invoice'}
             </button>
-          )}
-        </div>
+            <button onClick={onSendOrResend}
+              disabled={!hasInvoice || !!busy}
+              className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+              {busy === 'send' || busy === 'resend'
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Send size={12} />}
+              {isSent ? 'Resend Invoice' : 'Send Invoice'}
+            </button>
+            {hasInvoice ? (
+              <button onClick={onViewInvoice}
+                className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
+                style={{ background: 'var(--gc-bg)', color: 'var(--gc-blue)', border: '1px solid #bfdbfe' }}>
+                <Eye size={12} /> View Invoice
+              </button>
+            ) : (
+              <button onClick={onViewDocs}
+                className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
+                style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
+                <FolderOpen size={12} /> View Docs
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </>
+  );
+}
+
+// Same tint palette the Paperwork table uses for doc badges so the
+// load detail page reads the same vocabulary. Keep these mirrored if
+// CloseoutView's table palette ever changes.
+const DOC_BADGE_TINT: Record<string, string> = {
+  RC:       '#5b21b6',
+  POD:      '#188038',
+  BOL:      '#1a73e8',
+  Scale:    '#e37400',
+  Lumper:   '#a16207',
+};
+
+/**
+ * Required-doc presence badges. Opaque tinted chip = doc is present
+ * (with ×N when more than one); transparent + dashed red border =
+ * expected but not uploaded yet. RC and POD are always required;
+ * Lumper and Scale only when the load has a matching accessorial.
+ * BOL renders as an extra opaque chip when present.
+ */
+function DocPresenceBadges({ load }: { load: Load }) {
+  const counts = load.documentCounts ?? {};
+  const rcCount     = Math.max(counts.rate_con ?? 0, load.rateConPdf ? 1 : 0);
+  const podCount    = counts.pod    ?? 0;
+  const bolCount    = counts.bol    ?? 0;
+  const lumperCount = counts.lumper ?? 0;
+  const scaleCount  = counts.scale  ?? 0;
+
+  const accs = load.accessorials ?? [];
+  const needsLumper = accs.some(a => a.category === 'lumper');
+  const needsScale  = accs.some(a => a.category === 'scale_ticket');
+
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <DocPresenceBadge label="RC"  present={rcCount  > 0} count={rcCount} />
+      <DocPresenceBadge label="POD" present={podCount > 0} count={podCount} />
+      {needsLumper && (
+        <DocPresenceBadge label="Lumper" present={lumperCount > 0} count={lumperCount} />
+      )}
+      {needsScale && (
+        <DocPresenceBadge label="Scale" present={scaleCount > 0} count={scaleCount} />
+      )}
+      {/* BOL is a nice-to-have, not strictly required — render the
+          opaque chip when we have one and omit it otherwise (no red
+          missing state). Mirrors the Paperwork table behavior. */}
+      {bolCount > 0 && (
+        <DocPresenceBadge label="BOL" present={true} count={bolCount} />
+      )}
+    </div>
+  );
+}
+
+function DocPresenceBadge({
+  label, present, count,
+}: { label: string; present: boolean; count: number }) {
+  if (present) {
+    const tint = DOC_BADGE_TINT[label] ?? '#5f6368';
+    return (
+      <span className="px-2 py-0.5 rounded-lg text-[10px] font-extrabold tabular-nums"
+        title={`${label} — Present${count > 1 ? ` (×${count})` : ''}`}
+        style={{ background: tint, color: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }}>
+        {label}{count > 1 ? ` ×${count}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-lg text-[10px] font-extrabold tabular-nums"
+      title={`${label} — Missing`}
+      style={{
+        background: 'transparent',
+        color: '#991b1b',
+        border: '1px dashed #991b1b',
+        // Subtract the 1px border so the missing chip lines up at the
+        // same height as the opaque present chips.
+        padding: '1px 7px',
+      }}>
+      {label}
+    </span>
   );
 }
 
