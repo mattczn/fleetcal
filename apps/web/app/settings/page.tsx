@@ -2215,6 +2215,10 @@ function vehicleLabel(v: MotiveVehicle) {
 // instructions, optional factor info, optional footer notes / number
 // prefix. Settings live on org_settings.invoice_settings (JSONB) so we
 // can iterate on the shape without DDL.
+// Sane default for net-terms on invoices. MVP users should never need
+// to think about this; advanced users can change it via the input.
+const DEFAULT_PAYMENT_TERMS_DAYS = '30';
+
 function InvoicingPanel() {
   // Clerk org provides company name (and logo via imageUrl) — pre-fill
   // those when invoice settings haven't been written yet, so the
@@ -2224,6 +2228,11 @@ function InvoicingPanel() {
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
   const [err,     setErr]     = useState<string | null>(null);
+  // Advanced sections are collapsed by default so the MVP form fits on
+  // one screen — Remit-to, template tweaks, and outbound email
+  // templates all live behind this toggle. Power users can flip it on
+  // to access the existing fields without losing any functionality.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Track which fields were auto-filled from Clerk (vs explicitly
   // saved) so we can show a subtle "auto-filled" hint and not save
   // the prefilled value unless the user explicitly touches it.
@@ -2330,7 +2339,10 @@ function InvoicingPanel() {
           phone:                   inv.phone                   ?? '',
           email:                   inv.email                   ?? '',
           ccEmail:                 inv.ccEmail                 ?? '',
-          defaultPaymentTermsDays: inv.defaultPaymentTermsDays != null ? String(inv.defaultPaymentTermsDays) : '',
+          // Default to 30 when nothing is saved yet so MVP orgs ship
+          // an invoice with net-30 terms out of the box. Power users
+          // overwrite it from the input.
+          defaultPaymentTermsDays: inv.defaultPaymentTermsDays != null ? String(inv.defaultPaymentTermsDays) : DEFAULT_PAYMENT_TERMS_DAYS,
           remitToInstructions:     inv.remitToInstructions     ?? '',
           invoiceFooterNotes:      inv.invoiceFooterNotes      ?? '',
           invoiceNumberPrefix:     inv.invoiceNumberPrefix     ?? '',
@@ -2482,61 +2494,91 @@ function InvoicingPanel() {
         </FieldRow>
       </Card>
 
-      {/* Payment terms + remit-to */}
+      {/* Payment — MVP-friendly: just the terms field. Remit-to lives
+          under Advanced below since it's optional and most carriers
+          can ship without it. */}
       <Card title="Payment" subtitle="How and when customers should pay.">
-        <FieldRow label="Default payment terms (days)" subtitle="Net 30 = 30. Customers can override on their profile.">
+        <FieldRow label="Default payment terms (days)" subtitle="Net 30 is the default. Customers can override on their profile.">
           <Input value={form.defaultPaymentTermsDays}
             onChange={v => updateField('defaultPaymentTermsDays', v.replace(/[^\d]/g, ''))}
             placeholder="30" />
         </FieldRow>
-        <FieldRow label="Remit-to instructions" subtitle="Free-form block at the bottom of the invoice.">
-          <div className="flex-1 flex flex-col gap-1">
-            <Textarea value={form.remitToInstructions} onChange={v => updateField('remitToInstructions', v)}
-              placeholder={'Make checks payable to:\nAcme Trucking LLC\nP.O. Box 1234, Salt Lake City, UT 84101\n\nACH inquiries: ar@acmetrucking.com'}
-              rows={6} />
-            <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-              <strong style={{ color: '#92400e' }}>Heads-up:</strong> invoices travel through customers, AP staff, and factor archives.
-              Putting full ACH routing + account numbers in plain text on the invoice exposes them widely.
-              Safer pattern: bank name + last-4 digits, with &ldquo;Contact AR for full ACH details.&rdquo;
-            </div>
-          </div>
-        </FieldRow>
       </Card>
 
-      {/* Template tweaks */}
-      <Card title="Template" subtitle="Optional overrides for the generated invoice.">
-        <FieldRow label="Invoice number prefix" subtitle="Prepended to the load&rsquo;s internal ID. Leave blank to use the ID by itself.">
-          <Input value={form.invoiceNumberPrefix} onChange={v => updateField('invoiceNumberPrefix', v)} placeholder="INV-" />
-        </FieldRow>
-        <FieldRow label="Footer notes" subtitle="Optional. Prints under the totals on every invoice.">
-          <Textarea value={form.invoiceFooterNotes} onChange={v => updateField('invoiceFooterNotes', v)}
-            placeholder="Thank you for your business. Payment due per terms above."
-            rows={3} />
-        </FieldRow>
-      </Card>
-
-      {/* Email subject + body templates. Placeholders documented inline
-          so the user doesn't have to hunt for them. Empty = use defaults. */}
-      <Card title="Outbound email" subtitle="Templates for the email sent when you click Send / Submit on an invoice.">
-        <FieldRow label="Subject template" subtitle={'Available placeholders: {{invoiceNumber}}, {{loadNumber}}, {{internalLoadNumber}}, {{brokerName}}, {{companyName}}, {{total}}, {{count}}. Leave blank for the default.'}>
-          <Input value={form.invoiceEmailSubjectTemplate} onChange={v => updateField('invoiceEmailSubjectTemplate', v)}
-            placeholder="Invoice #{{invoiceNumber}}, Load {{loadNumber}}" />
-        </FieldRow>
-        <FieldRow label="Body template" subtitle={'Same placeholders as subject, plus {{invoiceList}} (one line per invoice), {{remitTo}}, {{email}}, {{phone}}. Leave blank for the default.'}>
-          <div className="flex-1 flex flex-col gap-1">
-            <Textarea value={form.invoiceEmailBodyTemplate} onChange={v => updateField('invoiceEmailBodyTemplate', v)}
-              placeholder={'Please find the attached invoice(s):\n\n{{invoiceList}}\n\nBill to: {{brokerName}}\nTotal: {{total}}\n\n{{remitTo}}\n\n{{companyName}}\n{{email}}\n{{phone}}'}
-              rows={10} />
-            <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-              Batch sends to the same customer share one email — placeholders like
-              <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceNumber}}`}</code>
-              expand to a comma-joined list (capped at 4 with &ldquo;+ N more&rdquo;).
-              <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceList}}`}</code>
-              renders one bullet per invoice for the body.
+      {/* Advanced — collapsed by default. Lets MVP users get to a
+          working invoice without scrolling past a wall of optional
+          fields, while preserving every existing power-user knob. */}
+      <div className="rounded-2xl"
+        style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
+        <button type="button" onClick={() => setAdvancedOpen(v => !v)}
+          className="w-full flex items-center justify-between gap-3 px-5 py-4 transition-colors"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          <div className="text-left">
+            <div className="text-[15px] font-semibold" style={{ color: 'var(--gc-text-1)' }}>Advanced</div>
+            <div className="text-[12.5px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+              Remit-to instructions, invoice number prefix, footer notes, and outbound email templates. Most carriers don&rsquo;t need these.
             </div>
           </div>
-        </FieldRow>
-      </Card>
+          <ChevronDown size={16} style={{
+            color: 'var(--gc-text-3)', flexShrink: 0,
+            transform: advancedOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms',
+          }} />
+        </button>
+
+        {advancedOpen && (
+          <div className="space-y-6 px-5 pb-5"
+            style={{ borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
+            <Card title="Remit-to" subtitle="Free-form block at the bottom of the invoice. Optional.">
+              <FieldRow label="Remit-to instructions" subtitle="Where customers should send payment.">
+                <div className="flex-1 flex flex-col gap-1">
+                  <Textarea value={form.remitToInstructions} onChange={v => updateField('remitToInstructions', v)}
+                    placeholder={'Make checks payable to:\nAcme Trucking LLC\nP.O. Box 1234, Salt Lake City, UT 84101\n\nACH inquiries: ar@acmetrucking.com'}
+                    rows={6} />
+                  <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                    <strong style={{ color: '#92400e' }}>Heads-up:</strong> invoices travel through customers, AP staff, and factor archives.
+                    Putting full ACH routing + account numbers in plain text on the invoice exposes them widely.
+                    Safer pattern: bank name + last-4 digits, with &ldquo;Contact AR for full ACH details.&rdquo;
+                  </div>
+                </div>
+              </FieldRow>
+            </Card>
+
+            <Card title="Template" subtitle="Optional overrides for the generated invoice.">
+              <FieldRow label="Invoice number prefix" subtitle="Prepended to the load&rsquo;s internal ID. Leave blank to use the ID by itself.">
+                <Input value={form.invoiceNumberPrefix} onChange={v => updateField('invoiceNumberPrefix', v)} placeholder="INV-" />
+              </FieldRow>
+              <FieldRow label="Footer notes" subtitle="Optional. Prints under the totals on every invoice.">
+                <Textarea value={form.invoiceFooterNotes} onChange={v => updateField('invoiceFooterNotes', v)}
+                  placeholder="Thank you for your business. Payment due per terms above."
+                  rows={3} />
+              </FieldRow>
+            </Card>
+
+            <Card title="Outbound email" subtitle="Templates for the email sent when you click Send / Submit on an invoice.">
+              <FieldRow label="Subject template" subtitle={'Available placeholders: {{invoiceNumber}}, {{loadNumber}}, {{internalLoadNumber}}, {{brokerName}}, {{companyName}}, {{total}}, {{count}}. Leave blank for the default.'}>
+                <Input value={form.invoiceEmailSubjectTemplate} onChange={v => updateField('invoiceEmailSubjectTemplate', v)}
+                  placeholder="Invoice #{{invoiceNumber}}, Load {{loadNumber}}" />
+              </FieldRow>
+              <FieldRow label="Body template" subtitle={'Same placeholders as subject, plus {{invoiceList}} (one line per invoice), {{remitTo}}, {{email}}, {{phone}}. Leave blank for the default.'}>
+                <div className="flex-1 flex flex-col gap-1">
+                  <Textarea value={form.invoiceEmailBodyTemplate} onChange={v => updateField('invoiceEmailBodyTemplate', v)}
+                    placeholder={'Please find the attached invoice(s):\n\n{{invoiceList}}\n\nBill to: {{brokerName}}\nTotal: {{total}}\n\n{{remitTo}}\n\n{{companyName}}\n{{email}}\n{{phone}}'}
+                    rows={10} />
+                  <div className="text-[11px] leading-snug mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
+                    Batch sends to the same customer share one email — placeholders like
+                    <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceNumber}}`}</code>
+                    expand to a comma-joined list (capped at 4 with &ldquo;+ N more&rdquo;).
+                    <code style={{ margin: '0 3px', padding: '0 3px', background: 'var(--gc-bg)', borderRadius: 3 }}>{`{{invoiceList}}`}</code>
+                    renders one bullet per invoice for the body.
+                  </div>
+                </div>
+              </FieldRow>
+            </Card>
+          </div>
+        )}
+      </div>
 
         {/* Save bar */}
         <div className="flex items-center gap-3">
