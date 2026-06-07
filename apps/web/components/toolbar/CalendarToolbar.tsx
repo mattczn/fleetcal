@@ -12,6 +12,7 @@ import Tooltip from '@/components/ui/Tooltip';
 import DatePicker from '@/components/calendar/DatePicker';
 import TrailerFleetMapPanel from '@/components/calendar/TrailerFleetMapPanel';
 import TruckFleetPanel from '@/components/calendar/TruckFleetPanel';
+import AssetsModal from '@/components/sidebar/AssetsModal';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
@@ -75,6 +76,10 @@ export default function CalendarToolbar() {
   const [trashOpen,          setTrashOpen]          = useState(false);
   const [trailerFleetOpen,   setTrailerFleetOpen]   = useState(false);
   const [truckFleetOpen,     setTruckFleetOpen]     = useState(false);
+  // Lives outside the truck-fleet tray so editing a row from the
+  // tray can close the tray AND show the Truck Directory modal
+  // underneath without the modal vanishing along with the tray.
+  const [editTruckAssetId,   setEditTruckAssetId]   = useState<number | null>(null);
   // Hide the button when no trailers — keeps the toolbar clean for
   // orgs that don't use trailers yet. Retired trailers don't count.
   // The fleet map itself is Motive-only (live GPS pins via ELD), so
@@ -936,7 +941,21 @@ export default function CalendarToolbar() {
       </div>
     </header>
     {trailerFleetOpen && <TrailerFleetMapPanel onClose={() => setTrailerFleetOpen(false)} />}
-    {truckFleetOpen && <TruckFleetPanel onClose={() => setTruckFleetOpen(false)} />}
+    {truckFleetOpen && (
+      <TruckFleetPanel
+        onClose={() => setTruckFleetOpen(false)}
+        // Edit-from-tray collapses the tray and opens the directory
+        // modal here at the toolbar level — so it doesn't get hidden
+        // behind the slide-over that originated the click.
+        onEditTruck={(id) => setEditTruckAssetId(id)}
+      />
+    )}
+    {editTruckAssetId != null && (
+      <AssetsModal
+        initialAssetId={editTruckAssetId}
+        onClose={() => setEditTruckAssetId(null)}
+      />
+    )}
     </>
   );
 }

@@ -35,11 +35,16 @@ import type { Asset } from '@/lib/types';
 
 interface Props {
   onClose: () => void;
+  /** When provided, clicking a row's Edit button calls this AND
+   *  closes the tray, instead of mounting an AssetsModal on top of
+   *  the tray. Lets the calendar parent show the directory modal
+   *  without the tray covering it. */
+  onEditTruck?: (assetId: number) => void;
 }
 
 const PANEL_WIDTH = 420;
 
-export default function TruckFleetPanel({ onClose }: Props) {
+export default function TruckFleetPanel({ onClose, onEditTruck }: Props) {
   const {
     assets,
     toggleAssetVisibility,
@@ -269,7 +274,10 @@ export default function TruckFleetPanel({ onClose }: Props) {
                   onDragOver={(e) => handleDragOver(e, a.id)}
                   onDrop={() => handleDrop(a.id)}
                   onDragEnd={handleDragEnd}
-                  onEdit={() => setEditingId(a.id)}
+                  onEdit={() => {
+                    if (onEditTruck) { onEditTruck(a.id); onClose(); }
+                    else             setEditingId(a.id);
+                  }}
                   onToggleHide={() => toggleAssetVisibility(a.id)}
                 />
               ))}
@@ -301,7 +309,10 @@ export default function TruckFleetPanel({ onClose }: Props) {
                       // hidden vs active is the only ordering that
                       // matters once a truck is hidden.
                       draggable={false}
-                      onEdit={() => setEditingId(a.id)}
+                      onEdit={() => {
+                        if (onEditTruck) { onEditTruck(a.id); onClose(); }
+                        else             setEditingId(a.id);
+                      }}
                       onToggleHide={() => toggleAssetVisibility(a.id)}
                     />
                   ))}
