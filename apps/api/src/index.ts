@@ -74,8 +74,8 @@ app.use(
       if (/^http:\/\/localhost:\d+$/.test(origin)) return origin;
       // Any Vercel preview/prod URL
       if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)) return origin;
-      // Future production domain — add here when it exists
-      // if (origin === "https://app.fleetcal.com") return origin;
+      // Production custom domain — both apex and www
+      if (/^https:\/\/(www\.)?fleetcal\.app$/.test(origin)) return origin;
       return null;
     },
     credentials: true,
