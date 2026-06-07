@@ -26,17 +26,19 @@ import RealtimeSync from "@/components/RealtimeSync";
  * Bypass switch — when the Clerk SDK hangs on init and we can't
  * see why, this lets the user force-render the rest of the tree
  * so they can at least try to navigate to sign-in manually.
- * Stored in module scope (not state) because RootLayout doesn't
- * own ClerkGate — we need a way for the inner component to flip
- * it without prop-drilling.
+ *
+ * Stored as BOTH a module ref (so non-React code like AuthGate's
+ * effect can read it synchronously) AND a useState pair lifted
+ * into ClerkGate (so React knows to re-render when it flips).
+ * The earlier version only flipped the ref, which is why tapping
+ * the button did nothing — ClerkGate never re-rendered.
  * ============================================================ */
 const bypassRef = { current: false };
 
-function Splash({ status, detail, showProbe }: { status: string; detail?: string; showProbe?: boolean }) {
+function Splash({ status, detail, showProbe, onBypass }: { status: string; detail?: string; showProbe?: boolean; onBypass?: () => void }) {
   const [showHelp, setShowHelp] = React.useState(false);
   const [elapsed, setElapsed] = React.useState(0);
   const [probe, setProbe] = React.useState<string>("not run");
-  const [, forceRender] = React.useReducer(x => x + 1, 0);
 
   // Tick the elapsed counter every 500ms.
   React.useEffect(() => {
@@ -93,7 +95,7 @@ function Splash({ status, detail, showProbe }: { status: string; detail?: string
 
   const bypassClerk = () => {
     bypassRef.current = true;
-    forceRender();
+    onBypass?.();
   };
 
   return (
@@ -178,8 +180,9 @@ class RootErrorBoundary extends React.Component<
 
 function ClerkGate({ children }: { children: React.ReactNode }) {
   const { isLoaded } = useAuth();
-  if (!isLoaded && !bypassRef.current) {
-    return <Splash status="Signing you in…" detail="Loading Clerk" showProbe />;
+  const [bypass, setBypass] = React.useState(false);
+  if (!isLoaded && !bypass) {
+    return <Splash status="Signing you in…" detail="Loading Clerk" showProbe onBypass={() => setBypass(true)} />;
   }
   return <>{children}</>;
 }
