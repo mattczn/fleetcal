@@ -124,12 +124,20 @@ export function InvoiceDocument({
             <div className="font-extrabold text-[13px]">
               {snapshot.brokerName || (placeholdersOnEmpty ? <span style={{ opacity: 0.4 }}>Customer name</span> : null)}
             </div>
-            {(snapshot.brokerAddrLine1 || snapshot.brokerAddrLine2) && (
+            {/* New invoices carry the address in brokerBillingAddress
+                as multi-line free-form text; older snapshots used
+                brokerAddrLine1/2. Prefer the new field when present
+                and fall back to the legacy lines for archived rows. */}
+            {snapshot.brokerBillingAddress ? (
+              <div className="leading-snug whitespace-pre-line" style={{ color: '#3c4043' }}>
+                {snapshot.brokerBillingAddress}
+              </div>
+            ) : (snapshot.brokerAddrLine1 || snapshot.brokerAddrLine2) ? (
               <div className="leading-snug" style={{ color: '#3c4043' }}>
                 {snapshot.brokerAddrLine1}{snapshot.brokerAddrLine1 && <br/>}
                 {snapshot.brokerAddrLine2}
               </div>
-            )}
+            ) : null}
           </div>
           <div className="shrink-0" style={{ minWidth: 240 }}>
             {snapshot.orderNo      && <LabelRow label="Order No"     value={snapshot.orderNo} />}

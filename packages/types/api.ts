@@ -683,6 +683,7 @@ export interface CreateCustomerRequest {
   invoiceEmail?:        string | null;
   invoicePortal?:       string | null;
   invoiceInstructions?: string | null;
+  billingAddress?:      string | null;
 }
 export interface CreateCustomerResponse { customer: Customer; }
 export interface UpdateCustomerRequest {
@@ -700,6 +701,7 @@ export interface UpdateCustomerRequest {
   invoiceEmail?:        string | null;
   invoicePortal?:       string | null;
   invoiceInstructions?: string | null;
+  billingAddress?:      string | null;
 }
 export interface UpdateCustomerResponse { customer: Customer; }
 
@@ -737,6 +739,7 @@ export interface HarvestRateConFromPdfResponse {
     contactName?:         string;
     contactEmail?:        string;
     contactPhone?:        string;
+    billingAddress?:      string;
   };
   parsedAt: string;
 }
@@ -747,6 +750,7 @@ export interface RefreshCustomerInvoicingResponse {
     invoiceEmail?:        string;
     invoicePortal?:       string;
     invoiceInstructions?: string;
+    billingAddress?:      string;
   };
   /** Load whose rate con was used (newest with a non-null rate_con_pdf). */
   sourceLoadId:    string;

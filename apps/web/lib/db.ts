@@ -207,6 +207,7 @@ export async function createCustomer(_orgId: string, c: Omit<Customer, 'id'>): P
       invoiceEmail:        c.invoiceEmail        ?? null,
       invoicePortal:       c.invoicePortal       ?? null,
       invoiceInstructions: c.invoiceInstructions ?? null,
+      billingAddress:      c.billingAddress      ?? null,
     });
     return customer;
   } catch (err) { console.error('createCustomer:', err); return null; }
@@ -234,6 +235,7 @@ export async function updateCustomer(id: string, updates: Partial<Omit<Customer,
     ...(updates.invoiceEmail !== undefined        ? { invoiceEmail: updates.invoiceEmail ?? null } : {}),
     ...(updates.invoicePortal !== undefined       ? { invoicePortal: updates.invoicePortal ?? null } : {}),
     ...(updates.invoiceInstructions !== undefined ? { invoiceInstructions: updates.invoiceInstructions ?? null } : {}),
+    ...(updates.billingAddress      !== undefined ? { billingAddress:      updates.billingAddress      ?? null } : {}),
   };
   if (Object.keys(body).length === 0) return;
   try { await railway.updateCustomer(id, body); }

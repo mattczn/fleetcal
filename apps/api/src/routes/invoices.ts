@@ -209,9 +209,10 @@ interface StopRowForInvoice {
 }
 
 interface CustomerRowForInvoice {
-  id:            string;
-  name:          string;
-  invoice_email: string | null;
+  id:               string;
+  name:             string;
+  invoice_email:    string | null;
+  billing_address:  string | null;
 }
 
 /** Map a stop row's `type` to the display label rendered on the invoice.
@@ -375,11 +376,12 @@ async function buildSnapshot(
   if (load.customer_id) {
     const { data: custRow } = await supabase
       .from("customers")
-      .select("id,name,invoice_email")
+      .select("id,name,invoice_email,billing_address")
       .eq("id", load.customer_id)
       .eq("org_id", orgId)
       .maybeSingle();
-    customer = (custRow as CustomerRowForInvoice | null) ?? null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    customer = (custRow as any as CustomerRowForInvoice | null) ?? null;
   }
 
   // 5. Stops → display rows. Number pickups and deliveries separately so
@@ -478,8 +480,14 @@ async function buildSnapshot(
     invoiceFooterNotes:  overrides.invoiceFooterNotes  ?? invoiceSettings.invoiceFooterNotes,
 
     brokerName:        customer?.name ?? load.broker ?? "",
-    // We don't yet have structured broker addresses on customers — leave
-    // these blank until Phase 3 broker batch flow adds them.
+    // The customer's billing address — populated either by the
+    // dispatcher in the customer profile or extracted by the rate-con
+    // AI. Snapshotted at generation time so edits to the customer
+    // record don't retroactively change past invoices.
+    brokerBillingAddress: customer?.billing_address ?? undefined,
+    // Legacy structured line fields kept for back-compat with old
+    // invoice snapshots that used them. New invoices put the address
+    // into brokerBillingAddress as a single multi-line string.
     brokerAddrLine1:   undefined,
     brokerAddrLine2:   undefined,
 

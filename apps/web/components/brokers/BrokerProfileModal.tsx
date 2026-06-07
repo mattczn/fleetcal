@@ -6,7 +6,7 @@ import {
   TrendingUp, Package, Clock, CheckCircle2, Search,
   ChevronUp, ChevronDown, ChevronsUpDown, ArrowLeft,
   Truck, Calendar, DollarSign, ExternalLink, Plus, Trash2,
-  Sparkles, Loader2, AlertCircle,
+  Sparkles, Loader2, AlertCircle, MapPin,
 } from 'lucide-react';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -532,6 +532,38 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
   const [invoiceEmail,        setInvoiceEmail]        = useState(broker.invoiceEmail        ?? '');
   const [invoicePortal,       setInvoicePortal]       = useState(broker.invoicePortal       ?? '');
   const [invoiceInstructions, setInvoiceInstructions] = useState(broker.invoiceInstructions ?? '');
+  const [billingAddress,      setBillingAddress]      = useState(broker.billingAddress      ?? '');
+
+  // Google Places autocomplete for billing address — same pattern
+  // SavedLocationsDirectoryBody uses for the location address input.
+  // Debounce input → /api/places?input=…; click a suggestion → resolve
+  // the canonical formatted address via /api/places?place_id=… and
+  // overwrite the field. Geocode coords are unused here (just the
+  // postal-address text matters for the invoice block).
+  const [billingAddressSuggestions, setBillingAddressSuggestions] = useState<{ place_id: string; description: string }[]>([]);
+  const billingAcTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const billingJustPicked = useRef(false);
+  const fetchBillingAddressSuggestions = (input: string) => {
+    if (billingAcTimer.current) clearTimeout(billingAcTimer.current);
+    if (!input.trim() || input.length < 4) { setBillingAddressSuggestions([]); return; }
+    billingAcTimer.current = setTimeout(async () => {
+      try {
+        const res  = await fetch(`/api/places?input=${encodeURIComponent(input)}`);
+        const data = await res.json() as { suggestions: { place_id: string; description: string }[] };
+        setBillingAddressSuggestions(data.suggestions ?? []);
+      } catch { setBillingAddressSuggestions([]); }
+    }, 300);
+  };
+  const pickBillingAddressSuggestion = async (s: { place_id: string; description: string }) => {
+    billingJustPicked.current = true;
+    setBillingAddressSuggestions([]);
+    setBillingAddress(s.description);
+    try {
+      const res  = await fetch(`/api/places?place_id=${encodeURIComponent(s.place_id)}`);
+      const data = await res.json() as { result: { address?: string } | null };
+      if (data.result?.address) setBillingAddress(data.result.address);
+    } catch { /* keep the description fallback */ }
+  };
   // "Refresh from latest rate con" button — kicks off a server-side
   // re-parse of this customer's most recent rate confirmation and
   // pre-fills the four invoicing fields. Doesn't auto-save; user
@@ -556,6 +588,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     setInvoiceEmail(broker.invoiceEmail ?? '');
     setInvoicePortal(broker.invoicePortal ?? '');
     setInvoiceInstructions(broker.invoiceInstructions ?? '');
+    setBillingAddress(broker.billingAddress ?? '');
     setRefreshError(null);
     setRefreshedFromLoad(null);
     setSearch('');
@@ -584,7 +617,8 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
     invoiceMethod              !== (broker.invoiceMethod       ?? '') ||
     invoiceEmail.trim()        !== (broker.invoiceEmail        ?? '') ||
     invoicePortal.trim()       !== (broker.invoicePortal       ?? '') ||
-    invoiceInstructions.trim() !== (broker.invoiceInstructions ?? '');
+    invoiceInstructions.trim() !== (broker.invoiceInstructions ?? '') ||
+    billingAddress.trim()      !== (broker.billingAddress      ?? '');
 
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
@@ -608,6 +642,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       if (p.invoiceEmail)        setInvoiceEmail(p.invoiceEmail);
       if (p.invoicePortal)       setInvoicePortal(p.invoicePortal);
       if (p.invoiceInstructions) setInvoiceInstructions(p.invoiceInstructions);
+      if (p.billingAddress)      setBillingAddress(p.billingAddress);
       setRefreshedFromLoad({ id: res.sourceLoadId, loadNum: res.sourceLoadNum });
     } catch (err) {
       const msg = (err as Error)?.message ?? '';
@@ -652,6 +687,7 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       invoiceEmail:        invoiceMethod === 'email'  ? (invoiceEmail.trim()  || undefined) : undefined,
       invoicePortal:       invoiceMethod === 'portal' ? (invoicePortal.trim() || undefined) : undefined,
       invoiceInstructions: invoiceInstructions.trim() || undefined,
+      billingAddress:      billingAddress.trim()      || undefined,
     }),
     discard: () => {
       setName(broker.name ?? '');
@@ -663,8 +699,9 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
       setInvoiceEmail(broker.invoiceEmail ?? '');
       setInvoicePortal(broker.invoicePortal ?? '');
       setInvoiceInstructions(broker.invoiceInstructions ?? '');
+      setBillingAddress(broker.billingAddress ?? '');
     },
-  }), [name, shortName, mcNum, contacts, notes, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, broker]);
+  }), [name, shortName, mcNum, contacts, notes, invoiceMethod, invoiceEmail, invoicePortal, invoiceInstructions, billingAddress, broker]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -971,6 +1008,45 @@ const BrokerDetailPanel = forwardRef<BrokerDetailHandle, {
                 onBlur={e => e.currentTarget.style.borderColor = 'var(--gc-border)'} />
             </PField>
           ) : null}
+          <div className="mt-2">
+            <PField label="Billing address" icon={<MapPin size={11} />}>
+              <div style={{ position: 'relative' }}>
+                <textarea
+                  value={billingAddress}
+                  onChange={e => { setBillingAddress(e.target.value); fetchBillingAddressSuggestions(e.target.value); }}
+                  onBlur={() => { setTimeout(() => { if (!billingJustPicked.current) setBillingAddressSuggestions([]); billingJustPicked.current = false; }, 150); }}
+                  placeholder="Start typing — pick a Google suggestion for clean formatting"
+                  rows={3}
+                  style={{ ...P_INPUT, resize: 'vertical', lineHeight: '1.5', fontFamily: 'inherit' }}
+                  onFocus={e => (e.currentTarget.style.borderColor = ACCENT)} />
+                {billingAddressSuggestions.length > 0 && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                    background: 'var(--gc-surface)', border: '1px solid var(--gc-border)',
+                    borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', marginTop: 2, overflow: 'hidden',
+                  }}>
+                    {billingAddressSuggestions.map(s => (
+                      <button key={s.place_id} type="button" onMouseDown={() => void pickBillingAddressSuggestion(s)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
+                          padding: '8px 12px', fontSize: 13, color: 'var(--gc-text-1)',
+                          background: 'transparent', border: 'none', cursor: 'pointer',
+                          borderBottom: '1px solid var(--gc-border-light)',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                        <MapPin size={11} style={{ color: 'var(--gc-text-3)', flexShrink: 0 }} />
+                        {s.description}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="text-[11px] mt-1.5" style={{ color: 'var(--gc-text-3)' }}>
+                Shown on every invoice for this customer in the &ldquo;Bill To&rdquo; block. Multi-line is fine.
+              </div>
+            </PField>
+          </div>
           <div className="mt-2">
             <PField label="Other billing notes" icon={<FileText size={11} />}>
               <textarea value={invoiceInstructions} onChange={e => setInvoiceInstructions(e.target.value)}

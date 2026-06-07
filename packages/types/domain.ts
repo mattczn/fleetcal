@@ -613,6 +613,18 @@ export interface Customer {
    * above. Auto-populated by the rate-con parser on first capture.
    */
   invoiceInstructions?: string;
+  /**
+   * Billing / remit-to address for the customer. Rendered as the
+   * "Bill To" block on every invoice for this customer; if absent
+   * the invoice falls back to just the customer name.
+   *
+   * Free-form text on purpose — Google Places autocomplete on the
+   * dispatcher-facing input keeps the format clean (multi-line
+   * "Knight-Swift\n2002 W Wahalla Ln\nPhoenix, AZ 85027"), but
+   * AI-extracted values and legacy hand-typed values should both
+   * save without validation.
+   */
+  billingAddress?: string;
 }
 
 // ── Dispatcher ──────────────────────────────────────────────────────────
@@ -1045,6 +1057,14 @@ export interface InvoiceSnapshot {
 
   // ── Broker / bill-to ─────────────────────────────────────────────
   brokerName?:        string;
+  /** Customer's billing address snapshotted at invoice-generation time.
+   *  Multi-line free-form text (the BrokerProfileModal collects it via
+   *  Google Places autocomplete, and the rate-con AI extracts it).
+   *  Rendered as the Bill To block under the broker name. */
+  brokerBillingAddress?: string;
+  /** @deprecated Older invoices stored the broker address split across
+   *  two lines. New invoices write `brokerBillingAddress` instead;
+   *  these stay readable for back-compat with archived snapshots. */
   brokerAddrLine1?:   string;
   brokerAddrLine2?:   string;
 

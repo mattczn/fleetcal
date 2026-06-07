@@ -43,6 +43,7 @@ interface DbCustomerRow {
   invoice_email: string | null;
   invoice_portal: string | null;
   invoice_instructions: string | null;
+  billing_address: string | null;
 }
 
 import type { CustomerContact } from "@fleetcal/types";
@@ -79,10 +80,11 @@ function rowToCustomer(r: DbCustomerRow): Customer {
     invoiceEmail:        r.invoice_email        ?? undefined,
     invoicePortal:       r.invoice_portal       ?? undefined,
     invoiceInstructions: r.invoice_instructions ?? undefined,
+    billingAddress:      r.billing_address      ?? undefined,
   };
 }
 
-const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,contacts,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions";
+const COLS = "id,name,short_name,aliases,mc_num,contact_name,contact_email,contact_phone,contacts,notes,parse_hints,invoice_method,invoice_email,invoice_portal,invoice_instructions,billing_address";
 
 customers.get("/", async (c) => {
   const orgId = c.get("orgId");
@@ -95,7 +97,10 @@ customers.get("/", async (c) => {
     console.error("[GET /v1/customers] failed:", error);
     return c.json({ error: "fetch_failed", detail: error.message } satisfies ApiErrorResponse, 500);
   }
-  const res: ListCustomersResponse = { customers: ((data ?? []) as DbCustomerRow[]).map(rowToCustomer) };
+  // Cast through unknown — generated Supabase types lag the schema
+  // until `pnpm types:gen` runs against a DB where 20260607_customers_billing_address
+  // has been applied. Drop the `as unknown` once that's regenerated.
+  const res: ListCustomersResponse = { customers: ((data ?? []) as unknown as DbCustomerRow[]).map(rowToCustomer) };
   return c.json(res);
 });
 
@@ -125,6 +130,7 @@ customers.post("/", requireCapability("customers.create"), async (c) => {
     invoice_email:        body.invoiceEmail        ?? null,
     invoice_portal:       body.invoicePortal       ?? null,
     invoice_instructions: body.invoiceInstructions ?? null,
+    billing_address:      body.billingAddress      ?? null,
   };
   const { data, error } = await supabase
     .from("customers")
@@ -135,7 +141,7 @@ customers.post("/", requireCapability("customers.create"), async (c) => {
     console.error("[POST /v1/customers] failed:", error);
     return c.json({ error: "create_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
-  const res: CreateCustomerResponse = { customer: rowToCustomer(data as DbCustomerRow) };
+  const res: CreateCustomerResponse = { customer: rowToCustomer(data as unknown as DbCustomerRow) };
   return c.json(res, 201);
 });
 
@@ -159,6 +165,7 @@ customers.patch("/:id", requireCapability("customers.edit"), async (c) => {
   if ("invoiceEmail"        in body) update.invoice_email        = body.invoiceEmail        ?? null;
   if ("invoicePortal"       in body) update.invoice_portal       = body.invoicePortal       ?? null;
   if ("invoiceInstructions" in body) update.invoice_instructions = body.invoiceInstructions ?? null;
+  if ("billingAddress"      in body) update.billing_address      = body.billingAddress      ?? null;
   if (Object.keys(update).length === 0) {
     return c.json({ error: "validation_failed", errors: ["no fields"] } satisfies ApiErrorResponse, 400);
   }
@@ -174,7 +181,7 @@ customers.patch("/:id", requireCapability("customers.edit"), async (c) => {
     console.error("[PATCH /v1/customers/:id] failed:", error);
     return c.json({ error: "update_failed", detail: error?.message } satisfies ApiErrorResponse, 500);
   }
-  const res: UpdateCustomerResponse = { customer: rowToCustomer(data as DbCustomerRow) };
+  const res: UpdateCustomerResponse = { customer: rowToCustomer(data as unknown as DbCustomerRow) };
   return c.json(res);
 });
 
@@ -233,7 +240,8 @@ Return a single JSON object with this exact shape — no markdown, no explanatio
     "invoiceMethod":       "<'email' | 'portal' | '' — how this broker wants invoices submitted. 'portal' if any online billing system is named (TriumphPay, RMIS, McLeod, MyCarrierPortal, broker's own portal, etc.). 'email' if invoices go to a specific AP/billing email. Empty string if unclear.>",
     "invoiceEmail":        "<AP / billing email when invoiceMethod is 'email', otherwise empty string>",
     "invoicePortal":       "<portal name + URL when invoiceMethod is 'portal', e.g. 'TriumphPay (https://app.triumphpay.com)'. Otherwise empty string.>",
-    "invoiceInstructions": "<BROKER-WIDE billing policies only — things that apply to EVERY load from this broker, not just this one. Allowed: payment terms (net 30, quickpay rates), required documents that are always needed (BOL/POD/scale tickets/lumper receipts), factor preferences, remit-to address overrides, billing portal requirements, required line items the broker wants on every invoice. 1-3 short bulleted lines. STRICTLY EXCLUDE anything load-specific: this load's load number, PRO number, BOL number, PO number, shipment/order/confirmation number, references to 'this load' or 'this shipment', or any value that would change on the next load from the same broker. Empty string if there's nothing broker-wide to add.>"
+    "invoiceInstructions": "<BROKER-WIDE billing policies only — things that apply to EVERY load from this broker, not just this one. Allowed: payment terms (net 30, quickpay rates), required documents that are always needed (BOL/POD/scale tickets/lumper receipts), factor preferences, remit-to address overrides, billing portal requirements, required line items the broker wants on every invoice. 1-3 short bulleted lines. STRICTLY EXCLUDE anything load-specific: this load's load number, PRO number, BOL number, PO number, shipment/order/confirmation number, references to 'this load' or 'this shipment', or any value that would change on the next load from the same broker. Empty string if there's nothing broker-wide to add.>",
+    "billingAddress":      "<Physical mailing address where invoices should be sent — the 'Bill To' / 'Send invoices to' address. Multi-line format: 'Company Line 1\\nStreet\\nCity, ST ZIP'. Look for labels like 'Bill To', 'Remit To', 'Invoice To', 'Billing Address', 'A/P Address', or the broker's accounting/billing office. Empty string if only an email or portal is given, or if no postal address appears on the document.>"
   },
   "docType": "<rate_con | amendment | revised | other>"
 }
@@ -255,6 +263,7 @@ interface HarvestBroker {
   invoiceEmail?:        string;
   invoicePortal?:       string;
   invoiceInstructions?: string;
+  billingAddress?:      string;
 }
 
 /** Run the broker-harvest prompt against base64 PDF bytes. Centralized
@@ -329,6 +338,7 @@ customers.post("/harvest-from-pdf", requireCapability("customers.edit"), async (
       contactName:         clean(broker.contactName),
       contactEmail:        clean(broker.contactEmail),
       contactPhone:        clean(broker.contactPhone),
+      billingAddress:      clean(broker.billingAddress),
     },
     parsedAt: new Date().toISOString(),
   };
@@ -419,6 +429,7 @@ customers.post("/:id/refresh-invoicing-from-ratecon", requireCapability("custome
       invoiceEmail:        clean(broker.invoiceEmail),
       invoicePortal:       clean(broker.invoicePortal),
       invoiceInstructions: clean(broker.invoiceInstructions),
+      billingAddress:      clean(broker.billingAddress),
     },
     sourceLoadId:   row.id,
     sourceLoadNum:  row.load_num ?? undefined,
