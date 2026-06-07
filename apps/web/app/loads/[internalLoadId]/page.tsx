@@ -37,7 +37,12 @@ import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import {
   inputStyle, focusColor, blurColor, Field, ModalSection,
+  DriverPhoneCopy, InternalNoteButton,
 } from '@/components/forms/EventModalForm';
+import {
+  SECTION_LABELS, getEnabledFieldsForSection,
+  type FieldSection, type FieldDef,
+} from '@/lib/fields';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
@@ -88,6 +93,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const drivers = useCalendarStore(s => s.drivers);
   const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const loadEditTick = useCalendarStore(s => s.loadEditTick);
+  // sectionOrder + fieldSettings live in Settings → Appearance →
+  // Calendar form fields. Mirroring them here keeps the load page in
+  // sync with whatever the operator has configured for EventModal —
+  // they don't need to maintain two configs.
+  const sectionOrder = useCalendarStore(s => s.sectionOrder);
+  const fieldSettings = useCalendarStore(s => s.fieldSettings);
 
   const [legs, setLegs] = useState<Load[] | null>(null);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
@@ -215,6 +226,8 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                   assets={assets}
                   drivers={drivers}
                   customers={customers}
+                  sectionOrder={sectionOrder}
+                  fieldSettings={fieldSettings}
                 />
               </fieldset>
             </div>
@@ -262,14 +275,16 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 // ─── Left card — modal-styled form ──────────────────────────────────────
 
 function LoadFormPane({
-  primary, partner, customerById, assets, drivers, customers,
+  primary, partner, customerById, assets, drivers, customers, sectionOrder, fieldSettings,
 }: {
   primary: Load;
   partner: Load | undefined;
   customerById: Map<string, { id: string; name: string }>;
   assets: { id: number; name?: string | null; unit?: string | null }[];
-  drivers: { id?: number; name?: string; firstName?: string; lastName?: string }[];
+  drivers: { id?: number; name?: string; firstName?: string; lastName?: string; phone?: string }[];
   customers: { name: string; aliases?: string[] }[];
+  sectionOrder: FieldSection[];
+  fieldSettings: Record<string, boolean>;
 }) {
   const iStyle = inputStyle();
   const focusH = focusColor(LOAD_ACCENT);
@@ -287,21 +302,213 @@ function LoadFormPane({
   const truckLabel = (a?: { name?: string | null; unit?: string | null }) =>
     a ? `${a.name ?? ''}${a.unit ? ` #${a.unit}` : ''}`.trim() : '';
 
-  const primaryTruckLabel = truckLabel(assetById.get(primary.assetId));
-  const partnerTruckLabel = partner ? truckLabel(assetById.get(partner.assetId)) : '';
+  // Driver lookup so we can surface the driver phone underneath the
+  // driver select — same affordance EventModal shows.
+  const findDriver = (name: string | undefined) => {
+    if (!name) return undefined;
+    const n = name.trim().toLowerCase();
+    return drivers.find(d => {
+      const full = (d.name ?? `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim()).toLowerCase();
+      return full === n;
+    });
+  };
+  const primaryDriver = findDriver(primary.driverName);
+
+  // Pull the EXACT field-value for a given EventModal field id from
+  // the load row. Mirrors how EventModal hydrates fieldValues from
+  // the event, except sourced from loads.* instead of events.*.
+  // Returns a string (or empty string) for rendering inside an
+  // <input>. Special-case fields (refNums, accessorials) render their
+  // own UI outside the generic field loop.
+  function loadFieldValue(id: string): string {
+    switch (id) {
+      case 'loadNum':     return primary.loadNum ?? '';
+      case 'broker':      return brokerDisplay ?? '';
+      case 'dispatcher':  return primary.dispatcher ?? '';
+      case 'trailerType': return primary.trailerType ?? '';
+      case 'trailer':     return primary.trailerName ?? primary.trailerNum ?? '';
+      case 'commodity':   return primary.commodity ?? '';
+      case 'weight':      return primary.weight != null ? primary.weight.toLocaleString() : '';
+      case 'loadPrice':   return primary.loadPrice != null ? moneyFmt.format(primary.loadPrice) : '';
+      case 'driverPay':   return primary.driverPay != null ? moneyFmt.format(primary.driverPay) : '';
+      case 'specialInstructions': return primary.specialInstructions ?? '';
+      default:            return '';
+    }
+  }
+
+  // Render one field row by id. RefNums get a dedicated list shape;
+  // textareas (specialInstructions) get rows=3.
+  function renderField(field: FieldDef) {
+    if (field.id === 'refNums') {
+      return (
+        <Field label={field.label}>
+          {primary.refNums && primary.refNums.length > 0 ? (
+            <div className="space-y-1.5">
+              {primary.refNums.map((r, i) => (
+                <div key={i} className="grid grid-cols-2 gap-2 items-center">
+                  <input type="text" value={r.label || `Ref ${i + 1}`} readOnly
+                    style={{ ...iStyle, fontSize: 'calc(12px * var(--ui-scale, 1))' }}
+                    onFocus={focusH} onBlur={blurColor} />
+                  <input type="text" value={r.value} readOnly
+                    style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                    onFocus={focusH} onBlur={blurColor} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <input type="text" value="" readOnly placeholder="None"
+              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+          )}
+        </Field>
+      );
+    }
+    if (field.type === 'textarea') {
+      return (
+        <Field label={field.label}>
+          <textarea value={loadFieldValue(field.id)} readOnly
+            placeholder={field.placeholder}
+            rows={3}
+            style={{ ...iStyle, resize: 'none', fontFamily: 'inherit', minHeight: 72 }}
+            onFocus={focusH} onBlur={blurColor} />
+        </Field>
+      );
+    }
+    return (
+      <Field label={field.label}>
+        <input type="text" value={loadFieldValue(field.id)} readOnly
+          placeholder={field.placeholder}
+          style={{ ...iStyle, fontVariantNumeric: field.type === 'number' ? 'tabular-nums' : undefined }}
+          onFocus={focusH} onBlur={blurColor} />
+      </Field>
+    );
+  }
+
+  // Pair adjacent fields into two-column rows the same way the modal
+  // does: every two fields share a `grid grid-cols-2 gap-4`. Fields
+  // flagged `span` (none today, but future-proof) force a full-width
+  // row and skip pairing.
+  function renderSectionFields(fields: FieldDef[]) {
+    const rows: FieldDef[][] = [];
+    let bucket: FieldDef[] = [];
+    for (const f of fields) {
+      if (f.span) {
+        if (bucket.length) { rows.push(bucket); bucket = []; }
+        rows.push([f]);
+        continue;
+      }
+      bucket.push(f);
+      if (bucket.length === 2) { rows.push(bucket); bucket = []; }
+    }
+    if (bucket.length) rows.push(bucket);
+    return (
+      <div className="space-y-4">
+        {rows.map((row, i) => (
+          <div key={i} className="grid grid-cols-2 gap-4">
+            {row.map(f => <div key={f.id}>{renderField(f)}</div>)}
+            {row.length === 1 && <div />}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // The 'locations' section is special — it renders our stops list
+  // (StopsSection's load-page equivalent), not the generic field grid.
+  function renderSection(section: FieldSection, first: boolean) {
+    if (section === 'locations') {
+      return (
+        <ModalSection key={section} title="Stops" first={first}>
+          {primary.stops.length === 0 ? (
+            <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
+              No stops added.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {primary.stops.map((s, i) => (
+                <StopCard key={s.id} stop={s} index={i + 1} accent={LOAD_ACCENT} />
+              ))}
+            </div>
+          )}
+        </ModalSection>
+      );
+    }
+
+    // Generic load/financial/notes section.
+    const fields = getEnabledFieldsForSection(section, fieldSettings);
+    if (fields.length === 0 && section !== 'financial') return null;
+
+    return (
+      <ModalSection key={section} title={SECTION_LABELS[section]} first={first}>
+        {renderSectionFields(fields)}
+
+        {/* Accessorials only live inside the Financial section.
+            Hand-rendered (not a normal field) because EventModal also
+            renders a custom list editor here. */}
+        {section === 'financial' && (
+          <div className="mt-4">
+            <Field label="Accessorials">
+              {primary.accessorials && primary.accessorials.length > 0 ? (
+                <div className="space-y-1.5">
+                  {primary.accessorials.map((a, i) => (
+                    <div key={i}
+                      className="flex items-center justify-between px-3 py-2 rounded-lg"
+                      style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[12.5px] font-semibold capitalize" style={{ color: 'var(--gc-text-1)' }}>
+                          {a.category}
+                        </div>
+                        {a.description && (
+                          <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>
+                            {a.description}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                        {moneyFmt.format(a.amount ?? 0)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <input type="text" value="" readOnly placeholder="None"
+                  style={iStyle} onFocus={focusH} onBlur={blurColor} />
+              )}
+            </Field>
+            {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice && (
+              <div className="mt-3">
+                <Field label="Total billable">
+                  <input type="text" value={moneyFmt.format(primary.totalBillable)} readOnly
+                    style={{ ...iStyle, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}
+                    onFocus={focusH} onBlur={blurColor} />
+                </Field>
+              </div>
+            )}
+          </div>
+        )}
+      </ModalSection>
+    );
+  }
+
+  // Order sections per ALL_FIELDS' DEFAULT_SECTION_ORDER (settings
+  // override applies). Always ensure 'locations' renders even when
+  // missing from the saved order — the stops list is too important
+  // to drop just because a config skipped it.
+  const finalOrder = sectionOrder.includes('locations')
+    ? sectionOrder
+    : [...sectionOrder, 'locations' as FieldSection];
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
     <div className="px-8 py-6 space-y-5">
 
-      {/* Title row — same look as EventModal's title input.
-          Static text styled to read like the input it would have been
-          on the event surface. Underline uses LOAD_ACCENT. */}
+      {/* Title row — identical look to EventModal's title input.
+          Source is load.title (the event title — both relay legs share
+          the same one). The bottom border uses LOAD_ACCENT. */}
       <input
         type="text"
-        value={brokerDisplay || ''}
+        value={primary.title ?? ''}
         readOnly
-        placeholder="No broker"
+        placeholder="No title"
         className="w-full bg-transparent outline-none font-medium"
         style={{
           fontSize: 22,
@@ -312,26 +519,35 @@ function LoadFormPane({
         }}
       />
 
-      {/* ── Assignment ── */}
+      {/* ── Assignment (always rendered first, above the user-ordered
+          sections — matches EventModal's pinning of driver/asset above
+          the load info). Driver phone chip sits below the driver field
+          when we have one; + Internal Note lives at the bottom of the
+          assignment block. */}
       <ModalSection title="Assignment" first>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Driver">
-            <StyledSelect
-              value={primary.driverName ?? ''}
-              onChange={() => { /* read-only on detail page */ }}
-              style={{ ...iStyle, cursor: 'pointer' }}
-              onFocus={focusH} onBlur={blurColor}>
-              <option value="">— No driver —</option>
-              {primary.driverName && (
-                <option value={primary.driverName}>{primary.driverName}</option>
-              )}
-              {drivers.map(d => {
-                const name = d.name ?? `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
-                if (!name || name === primary.driverName) return null;
-                return <option key={d.id ?? name} value={name}>{name}</option>;
-              })}
-            </StyledSelect>
-          </Field>
+          <div>
+            <Field label="Driver">
+              <StyledSelect
+                value={primary.driverName ?? ''}
+                onChange={() => { /* read-only on detail page */ }}
+                style={{ ...iStyle, cursor: 'pointer' }}
+                onFocus={focusH} onBlur={blurColor}>
+                <option value="">— No driver —</option>
+                {primary.driverName && (
+                  <option value={primary.driverName}>{primary.driverName}</option>
+                )}
+                {drivers.map(d => {
+                  const name = d.name ?? `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
+                  if (!name || name === primary.driverName) return null;
+                  return <option key={d.id ?? name} value={name}>{name}</option>;
+                })}
+              </StyledSelect>
+            </Field>
+            {primaryDriver?.phone && (
+              <DriverPhoneCopy phone={primaryDriver.phone} />
+            )}
+          </div>
           <Field label="Truck">
             <StyledSelect
               value={String(primary.assetId ?? '')}
@@ -346,6 +562,7 @@ function LoadFormPane({
           </Field>
         </div>
 
+        {/* Relay: second driver/truck pair below the primary one. */}
         {partner && (
           <div className="grid grid-cols-2 gap-4 mt-4">
             <Field label="Delivery driver (relay)">
@@ -354,152 +571,28 @@ function LoadFormPane({
                 style={iStyle} onFocus={focusH} onBlur={blurColor} />
             </Field>
             <Field label="Delivery truck (relay)">
-              <input type="text" value={partnerTruckLabel} readOnly
+              <input type="text" value={truckLabel(assetById.get(partner.assetId))} readOnly
                 placeholder="—"
                 style={iStyle} onFocus={focusH} onBlur={blurColor} />
             </Field>
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-4 mt-4">
-          <Field label="Trailer type">
-            <input type="text" value={primary.trailerType ?? ''} readOnly
-              placeholder="—"
-              style={iStyle} onFocus={focusH} onBlur={blurColor} />
-          </Field>
-          <Field label="Dispatcher">
-            <input type="text" value={primary.dispatcher ?? ''} readOnly
-              placeholder="—"
-              style={iStyle} onFocus={focusH} onBlur={blurColor} />
-          </Field>
-        </div>
-      </ModalSection>
-
-      {/* ── Load info ── */}
-      <ModalSection title="Load">
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Broker load #">
-            <input type="text" value={primary.loadNum ?? ''} readOnly
-              placeholder="None"
-              style={iStyle} onFocus={focusH} onBlur={blurColor} />
-          </Field>
-          <Field label="Commodity">
-            <input type="text" value={primary.commodity ?? ''} readOnly
-              placeholder="—"
-              style={iStyle} onFocus={focusH} onBlur={blurColor} />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-4 mt-4">
-          <Field label="Weight (lb)">
-            <input type="text"
-              value={primary.weight != null ? primary.weight.toLocaleString() : ''}
-              readOnly placeholder="—"
-              style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
-              onFocus={focusH} onBlur={blurColor} />
-          </Field>
-          <div />
-        </div>
-      </ModalSection>
-
-      {/* ── Reference numbers ── */}
-      <ModalSection title="Reference numbers">
-        {primary.refNums && primary.refNums.length > 0 ? (
-          <div className="space-y-3">
-            {primary.refNums.map((r, i) => (
-              <div key={i} className="grid grid-cols-2 gap-4">
-                <Field label={r.label || `Ref ${i + 1}`}>
-                  <input type="text" value={r.value} readOnly
-                    style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
-                    onFocus={focusH} onBlur={blurColor} />
-                </Field>
-                <div />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
-            None.
-          </div>
-        )}
-      </ModalSection>
-
-      {/* ── Stops ── */}
-      <ModalSection title="Stops">
-        {primary.stops.length === 0 ? (
-          <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
-            No stops added.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {primary.stops.map((s, i) => (
-              <StopCard key={s.id} stop={s} index={i + 1} accent={LOAD_ACCENT} />
-            ))}
-          </div>
-        )}
-      </ModalSection>
-
-      {/* ── Financial ── */}
-      <ModalSection title="Financial">
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Linehaul">
-            <input type="text"
-              value={primary.loadPrice != null ? moneyFmt.format(primary.loadPrice) : ''}
-              readOnly placeholder="—"
-              style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
-              onFocus={focusH} onBlur={blurColor} />
-          </Field>
-          <Field label="Total billable">
-            <input type="text"
-              value={primary.totalBillable != null ? moneyFmt.format(primary.totalBillable) : ''}
-              readOnly placeholder="—"
-              style={{ ...iStyle, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}
-              onFocus={focusH} onBlur={blurColor} />
-          </Field>
-        </div>
-
+        {/* + Internal Note button — matches EventModal placement
+            (immediately under the driver/truck block, above the rest
+            of the load info). Wired as render-only for now; the
+            composer hook lands in a follow-up alongside save support. */}
         <div className="mt-4">
-          <Field label="Accessorials">
-            {primary.accessorials && primary.accessorials.length > 0 ? (
-              <div className="space-y-1.5">
-                {primary.accessorials.map((a, i) => (
-                  <div key={i}
-                    className="flex items-center justify-between px-3 py-2 rounded-lg"
-                    style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border)' }}>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[12.5px] font-semibold capitalize" style={{ color: 'var(--gc-text-1)' }}>
-                        {a.category}
-                      </div>
-                      {a.description && (
-                        <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)' }}>
-                          {a.description}
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-[13px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-                      {moneyFmt.format(a.amount ?? 0)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
-                None.
-              </div>
-            )}
-          </Field>
+          <InternalNoteButton />
         </div>
       </ModalSection>
 
-      {/* ── Notes ── */}
-      <ModalSection title="Notes">
-        <textarea
-          value={primary.notes ?? ''}
-          readOnly placeholder="No notes."
-          rows={4}
-          style={{ ...iStyle, resize: 'none', fontFamily: 'inherit', minHeight: 88 }}
-          onFocus={focusH} onBlur={blurColor}
-        />
-      </ModalSection>
+      {/* Sections in user-defined order from Settings → Appearance →
+          Calendar form fields. Same source-of-truth EventModal uses,
+          so reordering one reorders the other. Assignment is pinned
+          above (already rendered with first=true), so none of these
+          take the `first` flag — they all draw the upper divider. */}
+      {finalOrder.map(section => renderSection(section, false))}
     </div>
   );
 }

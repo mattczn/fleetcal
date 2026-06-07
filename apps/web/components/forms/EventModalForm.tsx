@@ -10,7 +10,9 @@
 
 'use client';
 
+import { useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactNode } from 'react';
+import { Phone, Plus } from 'lucide-react';
 
 /**
  * Standard text/select input styling. Field sizing follows the
@@ -96,5 +98,60 @@ export function ModalSection({
       </div>
       <div>{children}</div>
     </div>
+  );
+}
+
+/**
+ * Driver phone chip — copy-to-clipboard button. Same look as
+ * EventModal's driver phone chip: phone icon + number, hover tint,
+ * 1.5s "Copied!" green flip on click.
+ */
+export function DriverPhoneCopy({ phone }: { phone: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = () => {
+    if (!navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(phone).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button type="button" onClick={onClick}
+      title={copied ? 'Copied!' : 'Click to copy'}
+      className="mt-1.5 text-xs flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors"
+      style={{ color: copied ? '#15803d' : 'var(--gc-text-3)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+      onMouseEnter={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+      <Phone size={11} />
+      <span style={{ fontVariantNumeric: 'tabular-nums' }}>{phone}</span>
+      {copied && (
+        <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 4 }}>✓</span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * "+ Internal Note" button — dashed amber outline, expands into a
+ * yellow notes card when clicked. Same look as EventModal.
+ * Currently render-only here; the page can pass an onClick to wire
+ * the composer up when ready.
+ */
+export function InternalNoteButton({ onClick, label }: {
+  onClick?: () => void;
+  label?: string;
+}) {
+  return (
+    <button type="button" onClick={onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        fontSize: 12, fontWeight: 600, padding: '4px 10px',
+        borderRadius: 6, border: '1px dashed #d4a017',
+        background: 'transparent', color: '#a16207', cursor: onClick ? 'pointer' : 'default',
+      }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.background = '#fef9c3'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+      <Plus size={12} /> {label ?? 'Internal Note'}
+    </button>
   );
 }
