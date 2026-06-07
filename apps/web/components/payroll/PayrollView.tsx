@@ -59,17 +59,22 @@ function buildWeekOptions(): { label: string; sat: Date; fri: Date }[] {
 
 function LegBadge({ role }: { role: CalendarEvent['relayRole'] }) {
   const cfg = role === 'pickup'
-    ? { label: 'Pickup',   bg: '#1a73e81a', color: '#1a73e8' }
+    ? { label: 'Pickup',   bg: '#1a73e81a', color: '#1a73e8',
+        tip: <>This driver ran the <strong>pickup leg</strong> of a relay load. They picked up from the shipper and handed off to the delivery driver. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
     : role === 'delivery'
-    ? { label: 'Delivery', bg: '#1e8e3e1a', color: '#1e8e3e' }
-    : { label: 'Both',     bg: 'var(--gc-hover)', color: 'var(--gc-text-2)' };
+    ? { label: 'Delivery', bg: '#1e8e3e1a', color: '#1e8e3e',
+        tip: <>This driver ran the <strong>delivery leg</strong> of a relay load. They took the freight from the pickup driver to the consignee. Pay is split: this driver gets their leg&rsquo;s share of revenue and their own driverPay.</> }
+    : { label: 'Both',     bg: 'var(--gc-hover)', color: 'var(--gc-text-2)',
+        tip: <>Non-relay load — one driver ran the <strong>full load from pickup to delivery</strong>. Full loadPrice and full driverPay belong to this driver.</> };
   return (
-    <span
-      className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
-      style={{ background: cfg.bg, color: cfg.color }}
-    >
-      {cfg.label}
-    </span>
+    <Tooltip content={cfg.tip}>
+      <span
+        className="px-2 py-0.5 rounded-lg text-[11px] font-semibold whitespace-nowrap"
+        style={{ background: cfg.bg, color: cfg.color, cursor: 'help' }}
+      >
+        {cfg.label}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -312,21 +317,35 @@ function AdjustmentsSection({
         <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: 'var(--gc-text-3)' }}>Adjustments</span>
         {mode === 'idle' && (
           <div className="flex items-center gap-1">
-            <button onClick={openAdd}
-              className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg transition-colors"
-              style={{ color: 'var(--gc-blue)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <Plus size={12} /> Add
-            </button>
-            {futureWeeks.length > 0 && (
-              <button onClick={openDefer}
+            <Tooltip
+              content={
+                <>
+                  Add a manual line to this week&rsquo;s pay — bonus, deduction, reimbursement, per-diem, fuel advance, etc. Adds to <strong>Driver Pay</strong> immediately; persists across reloads.
+                </>
+              }>
+              <button onClick={openAdd}
                 className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg transition-colors"
-                style={{ color: 'var(--gc-text-2)' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                style={{ color: 'var(--gc-blue)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-blue-light)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                <CornerDownRight size={12} /> Defer
+                <Plus size={12} /> Add
               </button>
+            </Tooltip>
+            {futureWeeks.length > 0 && (
+              <Tooltip
+                content={
+                  <>
+                    Push a dollar amount out of this week&rsquo;s pay into a future week. Writes a matched pair of adjustments: <strong>negative</strong> here, <strong>positive</strong> in the target week. Use for over-the-road runs that span the Sat–Fri cutoff.
+                  </>
+                }>
+                <button onClick={openDefer}
+                  className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg transition-colors"
+                  style={{ color: 'var(--gc-text-2)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <CornerDownRight size={12} /> Defer
+                </button>
+              </Tooltip>
             )}
           </div>
         )}
@@ -928,31 +947,40 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
                     <td className="px-2 py-3 print:hidden">
                       {isDeferredIn ? (
                         /* Deferred-in load: show undo button */
-                        <button
-                          onClick={() => setUndoDeferLoadId(isUndoOpen ? null : load.id)}
-                          title="Undo defer — move this load back to its original week"
-                          className="flex items-center justify-center w-7 h-7 rounded-full transition-colors"
-                          style={{ color: '#6941c6', background: isUndoOpen ? '#6941c61a' : 'transparent' }}
-                          onMouseEnter={e => { e.currentTarget.style.background = '#6941c61a'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = isUndoOpen ? '#6941c61a' : 'transparent'; }}
-                        >
-                          <RotateCcw size={13} />
-                        </button>
+                        <Tooltip content={<>Undo defer — move this load&rsquo;s pay back to its <strong>original week</strong>. Removes the matched +/&minus; deferred adjustment pair.</>}>
+                          <button
+                            onClick={() => setUndoDeferLoadId(isUndoOpen ? null : load.id)}
+                            className="flex items-center justify-center w-7 h-7 rounded-full transition-colors"
+                            style={{ color: '#6941c6', background: isUndoOpen ? '#6941c61a' : 'transparent' }}
+                            onMouseEnter={e => { e.currentTarget.style.background = '#6941c61a'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = isUndoOpen ? '#6941c61a' : 'transparent'; }}
+                          >
+                            <RotateCcw size={13} />
+                          </button>
+                        </Tooltip>
                       ) : (
                         /* Normal load: show defer button */
-                        <button
-                          onClick={() => { if (isDeferOpen) { setDeferLoadId(null); setDeferConfirm(false); } else { openDeferForLoad(load); } }}
-                          title={isDeferOpen ? 'Cancel' : isSpanning ? 'Delivery in next week — defer this load\'s pay' : 'Defer this load to a future week'}
-                          className="flex items-center justify-center w-7 h-7 rounded-full transition-colors"
-                          style={{
-                            color: isSpanning ? '#d97706' : isDeferOpen ? 'var(--gc-blue)' : 'var(--gc-text-3)',
-                            background: isDeferOpen ? 'var(--gc-hover)' : 'transparent',
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
-                          onMouseLeave={e => { e.currentTarget.style.background = isDeferOpen ? 'var(--gc-hover)' : 'transparent'; }}
-                        >
-                          <CornerDownRight size={13} />
-                        </button>
+                        <Tooltip
+                          content={
+                            isDeferOpen
+                              ? <>Cancel</>
+                              : isSpanning
+                                ? <><strong>Delivery falls in next week.</strong> Defer this load&rsquo;s pay so the driver gets paid the week the freight actually delivers, not the week it picked up.</>
+                                : <>Defer this load&rsquo;s driver pay to a <strong>future week</strong>. Writes a matched pair of adjustments and removes the load&rsquo;s pay contribution here.</>
+                          }>
+                          <button
+                            onClick={() => { if (isDeferOpen) { setDeferLoadId(null); setDeferConfirm(false); } else { openDeferForLoad(load); } }}
+                            className="flex items-center justify-center w-7 h-7 rounded-full transition-colors"
+                            style={{
+                              color: isSpanning ? '#d97706' : isDeferOpen ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                              background: isDeferOpen ? 'var(--gc-hover)' : 'transparent',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.background = 'var(--gc-hover)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = isDeferOpen ? 'var(--gc-hover)' : 'transparent'; }}
+                          >
+                            <CornerDownRight size={13} />
+                          </button>
+                        </Tooltip>
                       )}
                     </td>
                   </tr>
@@ -1141,13 +1169,20 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
         </div>
         <div className="flex items-center gap-2">
           {isFinalized ? (
-            <button onClick={handleReopen}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
-              style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              <Unlock size={11} /> Reopen
-            </button>
+            <Tooltip
+              content={
+                <>
+                  <strong>Reopen</strong> this driver&rsquo;s pay for the week. Removes the payroll record so loads + adjustments can be edited again. Use sparingly once a pay stub has been issued.
+                </>
+              }>
+              <button onClick={handleReopen}
+                className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                style={{ color: 'var(--gc-text-3)', border: '1px solid var(--gc-border)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                <Unlock size={11} /> Reopen
+              </button>
+            </Tooltip>
           ) : confirmFin ? (
             <>
               <span className="text-sm font-medium" style={{ color: 'var(--gc-text-2)' }}>
@@ -1168,13 +1203,21 @@ function DriverCard({ row, assets, drivers, orgId, weekStart, orgName, orgLogoUr
               </button>
             </>
           ) : (
-            <button onClick={() => setConfirmFin(true)}
-              className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
-              style={{ background: 'var(--gc-blue)', color: '#fff' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#1558d6')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
-              <Lock size={13} /> Finalize Pay
-            </button>
+            <Tooltip
+              placement="top"
+              content={
+                <>
+                  <strong>Lock</strong> this driver&rsquo;s pay for the week. Writes a payroll record with the current Driver Pay total so it&rsquo;s preserved even if loads or adjustments change later. Use <em>Reopen</em> to unlock.
+                </>
+              }>
+              <button onClick={() => setConfirmFin(true)}
+                className="flex items-center gap-1.5 text-sm font-semibold px-4 py-1.5 rounded-lg transition-colors"
+                style={{ background: 'var(--gc-blue)', color: '#fff' }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#1558d6')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-blue)')}>
+                <Lock size={13} /> Finalize Pay
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>
