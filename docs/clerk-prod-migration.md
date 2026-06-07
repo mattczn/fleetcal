@@ -130,7 +130,11 @@ When you're ready to actually flip:
 
 - **In-flight requests.** The 30-min maintenance window assumes nobody is editing data mid-migration. If a dispatcher submits a load update after the env-var flip but before the SQL runs, that update goes to the new prod org_id (which doesn't exist yet in the DB) and silently fails. Maintenance mode prevents this.
 
-- **Driver mobile app.** Drivers authenticate against the dev Clerk JWT today. After cutover their tokens are invalid; they'll get a login prompt. Pre-stage a "we've upgraded — sign in again" notification if you can.
+- **Driver mobile app.** Drivers are NOT on Clerk — they auth via Supabase phone-OTP (`apps/api/src/middleware/driverAuth.ts`). The middleware verifies the Supabase JWT, looks up `drivers.phone`, and reads `drivers.org_id` from that row. Since the SQL remap updates `drivers.org_id` to the new prod value but doesn't touch `drivers.id` or `drivers.phone`, the driver app keeps working with **zero driver-side action**:
+  - Existing Supabase sessions stay valid (Supabase is independent of Clerk)
+  - Drivers don't need to re-log in
+  - Their next API call after cutover just naturally lands in the prod-org tenant
+  - The `uploaded_by` / `submitted_by` values drivers write to the DB are `driver:{bigint}` prefixed (not `user_xxx`), so the user_id remap block skips them automatically. The internal `drivers.id` doesn't change.
 
 - **Realtime subscriptions.** Supabase realtime filters on `org_id` — open browser tabs will stop receiving events for the old org_id mid-migration. Forcing a refresh after cutover resolves this.
 
