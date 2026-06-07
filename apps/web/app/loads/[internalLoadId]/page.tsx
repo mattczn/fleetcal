@@ -28,7 +28,7 @@ import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
   CheckCircle2, Plus, Clock, Copy, RotateCcw, Calendar as CalendarIcon,
-  Info,
+  Info, Pin, X,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -42,8 +42,10 @@ import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import {
   inputStyle, focusColor, blurColor, Field, ModalSection,
-  DriverPhoneCopy, InternalNoteButton, RefNumsField,
+  DriverPhoneCopy, RefNumsField,
 } from '@/components/forms/EventModalForm';
+import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
+import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
 import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 import {
   SECTION_LABELS, getEnabledFieldsForSection,
@@ -52,7 +54,7 @@ import {
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
-import type { Load, Invoice } from '@fleetcal/types';
+import type { Load, Invoice, Customer, InternalNote } from '@fleetcal/types';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -128,9 +130,11 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const { user } = useUser();
   const currentUserName = user?.fullName ?? user?.firstName ?? 'Unknown';
   const customers = useCalendarStore(s => s.customers);
+  const addCustomer = useCalendarStore(s => s.addCustomer);
   const assets = useCalendarStore(s => s.assets);
   const drivers = useCalendarStore(s => s.drivers);
   const trailers = useCalendarStore(s => s.trailers);
+  const dispatchers = useCalendarStore(s => s.dispatchers);
   const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const driverPayPct = useCalendarStore(s => s.driverPayPct);
@@ -161,15 +165,30 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     'trailerType' | 'trailerId' | 'trailerName' | 'trailerNum' |
     'commodity' | 'weight' |
     'loadPrice' | 'driverPay' |
-    'notes' | 'specialInstructions' |
+    'notes' | 'specialInstructions' | 'internalNotes' |
     'accessorials' | 'refNums' | 'stops'>>;
   const [draft, setDraft] = useState<LoadDraft>({});
+  // Partner-leg draft holds the per-leg fields the page can edit on the
+  // partner load (right now just driverPay for the relay delivery leg).
+  // We separate it from `draft` so handleSave knows to PATCH the partner
+  // load row vs the primary one without diffing key sets.
+  const [partnerDraft, setPartnerDraft] = useState<Partial<Pick<Load, 'driverPay'>>>({});
   const [saving, setSaving] = useState(false);
+  // Name the dispatcher typed in the broker combobox that doesn't match
+  // any existing customer. When set, NewBrokerReviewModal opens with
+  // that name pre-filled; null = closed.
+  const [pendingNewBroker, setPendingNewBroker] = useState<string | null>(null);
 
   function patchDraft(patch: LoadDraft) {
     setDraft(d => ({ ...d, ...patch }));
   }
-  function discardDraft() { setDraft({}); }
+  function discardDraft() {
+    setDraft({});
+    setPartnerDraft({});
+  }
+  function patchPartnerDraft(patch: Partial<Pick<Load, 'driverPay'>>) {
+    setPartnerDraft(d => ({ ...d, ...patch }));
+  }
 
   const internalIdNum = useMemo(() => {
     const n = Number.parseInt(internalLoadId, 10);
@@ -237,14 +256,19 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // resets to the persisted state. Without this, refresh-after-save
   // would visibly leave the user's input on top of the saved row.
   const primaryLoadId = primaryLeg?.loadId;
-  useEffect(() => { setDraft({}); }, [primaryLoadId]);
+  const partnerLoadId = partnerLeg?.loadId;
+  useEffect(() => { setDraft({}); setPartnerDraft({}); }, [primaryLoadId, partnerLoadId]);
 
   // Effective load = persisted row + any pending edits on top.
   const effective: Load | undefined = useMemo(
     () => primaryLeg ? { ...primaryLeg, ...draft } : undefined,
     [primaryLeg, draft],
   );
-  const isDirty = Object.keys(draft).length > 0;
+  const effectivePartner: Load | undefined = useMemo(
+    () => partnerLeg ? { ...partnerLeg, ...partnerDraft } : undefined,
+    [partnerLeg, partnerDraft],
+  );
+  const isDirty = Object.keys(draft).length > 0 || Object.keys(partnerDraft).length > 0;
 
   // Save flow. Routes load-level fields through PATCH /v1/loads/:id and
   // stops through replaceStops on the primary event. Stops live event-
@@ -256,6 +280,9 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     setSaving(true);
     try {
       useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
+      if (partnerLeg?.loadId) {
+        useCalendarStore.getState().markLoadSelfWrite(partnerLeg.loadId);
+      }
       const { stops: nextStops, ...loadPatch } = draft;
       if (Object.keys(loadPatch).length > 0) {
         await railway.updateLoad(primaryLeg.loadId, loadPatch);
@@ -263,7 +290,18 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
       if (nextStops !== undefined) {
         await railway.replaceStops(primaryLeg.id, { stops: nextStops });
       }
+      // Partner driver pay is the only partner-side field the page
+      // currently edits. PATCH the partner's load row directly — the
+      // other relay assignment fields (driver/asset/stops) stay
+      // calendar-modal-only on this page.
+      if (partnerLeg?.loadId && Object.keys(partnerDraft).length > 0) {
+        // Cast: UpdateLoadRequest's driverPay is number|null whereas
+        // Load.driverPay is number|undefined. Same shape on the wire,
+        // just a narrower union — safe to widen back here.
+        await railway.updateLoad(partnerLeg.loadId, partnerDraft as Parameters<typeof railway.updateLoad>[1]);
+      }
       setDraft({});
+      setPartnerDraft({});
       bumpLoadEditTick();
       await refresh({ silent: true });
     } catch (e) {
@@ -394,16 +432,19 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               style={{ ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}>
               <LoadFormPane
                 primary={effective ?? primaryLeg}
-                partner={partnerLeg}
+                partner={effectivePartner ?? partnerLeg}
                 customerById={customerById}
                 assets={assets}
                 drivers={drivers}
                 trailers={trailers}
                 customers={customers}
+                dispatchers={dispatchers}
                 sectionOrder={sectionOrder}
                 fieldSettings={fieldSettings}
                 driverPayPct={driverPayPct}
                 onOpenCustomerProfile={setCustomerProfileId}
+                onCreateBroker={setPendingNewBroker}
+                onChangePartner={patchPartnerDraft}
                 currentUserName={currentUserName}
                 calendarTimezone={calendarTimezone}
                 onChange={patchDraft}
@@ -451,6 +492,26 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           initialBrokerId={customerProfileId}
           onClose={() => setCustomerProfileId(null)} />
       )}
+      {/* NewBrokerReviewModal — appears when the CustomerCombobox
+          "Add &lt;name&gt;" affordance fires for a name that doesn't
+          match any existing customer. On confirm we create the row,
+          stash both broker text + customerId into the draft so the
+          FK and the display name save atomically, and re-open the
+          combobox in linked-state on the next render. */}
+      {pendingNewBroker !== null && (
+        <NewBrokerReviewModal
+          initialName={pendingNewBroker}
+          accentColor={LOAD_ACCENT}
+          onCancel={() => setPendingNewBroker(null)}
+          onConfirm={async (payload) => {
+            const created = await addCustomer(payload);
+            if (created) {
+              patchDraft({ broker: created.name, customerId: created.id });
+            }
+            setPendingNewBroker(null);
+          }}
+        />
+      )}
     </AppShell>
   );
 }
@@ -458,8 +519,10 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 // ─── Left card — modal-styled form ──────────────────────────────────────
 
 function LoadFormPane({
-  primary, partner, customerById, assets, drivers, trailers, customers, sectionOrder, fieldSettings,
-  driverPayPct, onOpenCustomerProfile, currentUserName, calendarTimezone, onChange,
+  primary, partner, customerById, assets, drivers, trailers, customers, dispatchers,
+  sectionOrder, fieldSettings,
+  driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangePartner,
+  currentUserName, calendarTimezone, onChange,
 }: {
   primary: Load;
   partner: Load | undefined;
@@ -467,7 +530,8 @@ function LoadFormPane({
   assets: { id: number; name?: string | null; unit?: string | null }[];
   drivers: { id?: number; name?: string; firstName?: string; lastName?: string; phone?: string }[];
   trailers: { id: number; name: string; trailerNumber?: string; activeTo?: string | null }[];
-  customers: { id: string; name: string; aliases?: string[] }[];
+  customers: Customer[];
+  dispatchers: { id: string; name: string; isDefault?: boolean }[];
   sectionOrder: FieldSection[];
   fieldSettings: Record<string, boolean>;
   /** Org default driver-pay percentage from settings.rateConSettings.
@@ -475,6 +539,12 @@ function LoadFormPane({
    *  affordance when the manual value diverges. null disables both. */
   driverPayPct: number | null;
   onOpenCustomerProfile: (customerId: string) => void;
+  /** Fires when the CustomerCombobox user clicks "Add &lt;name&gt;".
+   *  Parent opens NewBrokerReviewModal with the prefilled name. */
+  onCreateBroker: (name: string) => void;
+  /** Patch into the PARTNER leg's draft — currently used for the relay
+   *  delivery driver pay. Only meaningful when `partner` is set. */
+  onChangePartner: (patch: Partial<Pick<Load, 'driverPay'>>) => void;
   currentUserName: string;
   calendarTimezone: string;
   /** Patch into the draft. Each call merges into the page-level draft;
@@ -687,9 +757,38 @@ function LoadFormPane({
         </Field>
       );
     }
-    // Driver Pay — same generic number input, but with the percentage
-    // chip + reset button piped in as labelSuffix.
+    // Driver Pay — for solo loads, a generic number input with the
+    // percentage chip + reset button via labelSuffix.
+    // For relay loads, swap the slot for a read-only "Total Driver Pay"
+    // tile (Pickup + Delivery summed). The editable Pickup/Delivery
+    // inputs appear below the section's fields (see renderSection
+    // 'financial' tail) — same pattern EventModal uses.
     if (field.id === 'driverPay') {
+      if (partner) {
+        const pickupNum = typeof primary.driverPay === 'number' ? primary.driverPay : 0;
+        const deliveryNum = typeof partner.driverPay === 'number' ? partner.driverPay : 0;
+        const total = pickupNum + deliveryNum;
+        const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
+        const totalPct = lp > 0 && total > 0
+          ? Math.round((total / lp) * 1000) / 10
+          : null;
+        const totalSuffix = totalPct !== null ? (
+          <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
+            style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+            {totalPct % 1 === 0 ? totalPct.toFixed(0) : totalPct.toFixed(1)}%
+          </span>
+        ) : null;
+        return (
+          <Field label="Total Driver Pay" labelSuffix={totalSuffix}>
+            <div className="flex items-center w-full rounded-lg text-sm"
+              style={{ border: '1px solid var(--gc-border)', padding: '8px 10px', background: 'var(--gc-bg)', color: 'var(--gc-text-1)', minHeight: 38 }}>
+              {total > 0
+                ? `$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : <span style={{ color: 'var(--gc-text-3)' }}>—</span>}
+            </div>
+          </Field>
+        );
+      }
       return (
         <Field label={field.label} labelSuffix={driverPayLabelSuffix}>
           <input type="number" value={fieldValue('driverPay')}
@@ -707,10 +806,18 @@ function LoadFormPane({
       return (
         <Field label={field.label}>
           <div className="space-y-2">
-            <input type="text" value={fieldValue('broker')}
-              placeholder={field.placeholder}
-              onChange={e => commitField('broker', e.target.value)}
-              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+            <CustomerCombobox
+              value={fieldValue('broker')}
+              customers={customers}
+              accentColor={LOAD_ACCENT}
+              // Free-typing — sync the text but DON'T touch customerId.
+              // The "Matches X" pill below uses name fallback, but the
+              // FK only flips when the user picks from the dropdown or
+              // creates a new customer.
+              onChange={(val) => onChange({ broker: val === '' ? null : val } as Partial<Load>)}
+              onPick={(c) => onChange({ broker: c.name, customerId: c.id })}
+              onCreateNew={(name) => { onCreateBroker(name); }}
+            />
             {linkedCustomer && (
               <>
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl"
@@ -730,6 +837,33 @@ function LoadFormPane({
               </>
             )}
           </div>
+        </Field>
+      );
+    }
+    // Dispatcher — StyledSelect of the org's dispatchers. Default
+    // dispatcher gets a "★" mark next to the name so the operator can
+    // spot which one auto-applies to new loads.
+    if (field.id === 'dispatcher') {
+      return (
+        <Field label={field.label}>
+          <StyledSelect
+            value={fieldValue('dispatcher')}
+            onChange={e => commitField('dispatcher', e.target.value)}
+            style={{ ...iStyle, cursor: 'pointer' }}
+            onFocus={focusH} onBlur={blurColor}>
+            <option value="">— None —</option>
+            {/* Keep the current value selectable even if the dispatcher
+                was deleted or renamed, so the field doesn't silently
+                drop a value on first paint. */}
+            {primary.dispatcher && !dispatchers.some(d => d.name === primary.dispatcher) && (
+              <option value={primary.dispatcher}>{primary.dispatcher}</option>
+            )}
+            {dispatchers.map(d => (
+              <option key={d.id} value={d.name}>
+                {d.name}{d.isDefault ? ' ★' : ''}
+              </option>
+            ))}
+          </StyledSelect>
         </Field>
       );
     }
@@ -885,6 +1019,57 @@ function LoadFormPane({
       <ModalSection key={section} title={SECTION_LABELS[section]} first={first}>
         {renderSectionFields(fields)}
 
+        {/* Relay-only: Pickup + Delivery Driver Pay inputs. Sit right
+            below the (now read-only) Total Driver Pay tile so the
+            two halves and the sum stay visually grouped. Pickup goes
+            to primary.driverPay (the same column solo loads write).
+            Delivery routes through onChangePartner since it lives on
+            the partner load row. */}
+        {section === 'financial' && partner && (() => {
+          const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
+          const pctOf = (n: number) => (lp > 0 && n > 0 ? Math.round((n / lp) * 1000) / 10 : null);
+          const pickupNum = typeof primary.driverPay === 'number' ? primary.driverPay : 0;
+          const deliveryNum = typeof partner.driverPay === 'number' ? partner.driverPay : 0;
+          const fmtPct = (p: number) => `${p % 1 === 0 ? p.toFixed(0) : p.toFixed(1)}%`;
+          const pctChip = (p: number | null) => p === null ? null : (
+            <span className="px-1.5 py-0.5 rounded-lg normal-case tracking-normal font-semibold"
+              style={{ fontSize: 10, background: '#f1f3f4', color: 'var(--gc-text-3)', border: '1px solid var(--gc-border-light)' }}>
+              {fmtPct(p)}
+            </span>
+          );
+          return (
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              <Field label="Pickup Driver Pay" labelSuffix={pctChip(pctOf(pickupNum))}>
+                <input type="number" value={pickupNum === 0 ? '' : pickupNum}
+                  placeholder="0.00"
+                  onChange={e => {
+                    const raw = e.target.value.trim();
+                    const parsed = raw === '' ? null : Number(raw);
+                    if (raw !== '' && (parsed == null || isNaN(parsed))) return;
+                    onChange({ driverPay: parsed } as Partial<Load>);
+                  }}
+                  style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                  onFocus={focusH} onBlur={blurColor} />
+              </Field>
+              <Field label="Delivery Driver Pay" labelSuffix={pctChip(pctOf(deliveryNum))}>
+                <input type="number" value={deliveryNum === 0 ? '' : deliveryNum}
+                  placeholder="0.00"
+                  onChange={e => {
+                    const raw = e.target.value.trim();
+                    const parsed = raw === '' ? null : Number(raw);
+                    if (raw !== '' && (parsed == null || isNaN(parsed))) return;
+                    // null is the "clear" sentinel; cast through unknown
+                    // to satisfy Load.driverPay's number|undefined sig.
+                    // The converter (loads.ts) coerces null → DB NULL.
+                    onChangePartner({ driverPay: parsed as unknown as number });
+                  }}
+                  style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                  onFocus={focusH} onBlur={blurColor} />
+              </Field>
+            </div>
+          );
+        })()}
+
         {/* Accessorials editor — same data model as the modal:
             category select, description, amount, billable toggle,
             and the per-row Pay Driver flip that routes the amount
@@ -995,12 +1180,19 @@ function LoadFormPane({
           </Field>
         </div>
 
-        {/* + Internal Note button — matches EventModal placement
-            (immediately under the driver/truck block, above the rest
-            of the load info). Wired as render-only for now; the
-            composer hook lands in a follow-up alongside save support. */}
+        {/* Internal notes — yellow pinned thread tied to the load.
+            Same look + state machine as EventModal: when there are no
+            notes and no composer, show the dashed amber "+ Internal
+            Note" button. Click → composer slides into a yellow card.
+            Posted notes get pinned with author + timestamp; the × on
+            each removes the note. Persisted via the draft payload on
+            Save like any other load-level field. */}
         <div className="mt-4">
-          <InternalNoteButton />
+          <InternalNotesComposer
+            value={primary.internalNotes ?? []}
+            onChange={(next) => onChange({ internalNotes: next })}
+            authorName={currentUserName}
+          />
         </div>
       </ModalSection>
 
@@ -1172,6 +1364,136 @@ function AccessorialsEditor({
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Internal notes composer ────────────────────────────────────────────
+//
+// Pinned thread of internal notes attached to the load. Same data model
+// as EventModal (loads.internal_notes column). Empty state: dashed
+// amber "+ Internal Note" button. Active state: yellow card with the
+// existing notes + an optional composer textarea below. New notes flow
+// up to the parent via onChange and ride along the normal Save flow.
+
+function InternalNotesComposer({
+  value, onChange, authorName,
+}: {
+  value: InternalNote[];
+  onChange: (next: InternalNote[]) => void;
+  authorName: string;
+}) {
+  const [composer, setComposer] = useState('');
+  const [composerOpen, setComposerOpen] = useState(false);
+
+  function post() {
+    const text = composer.trim();
+    if (!text) return;
+    const next: InternalNote = {
+      id: crypto.randomUUID(),
+      text,
+      author: authorName ?? null,
+      at: new Date().toISOString(),
+    };
+    onChange([...value, next]);
+    setComposer('');
+    setComposerOpen(false);
+  }
+  function remove(id: string) {
+    onChange(value.filter(n => n.id !== id));
+  }
+
+  if (value.length === 0 && !composerOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => setComposerOpen(true)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          fontSize: 12, fontWeight: 600, padding: '4px 10px',
+          borderRadius: 6, border: '1px dashed #d4a017',
+          background: 'transparent', color: '#a16207', cursor: 'pointer',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = '#fef9c3'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+        <Plus size={12} /> Internal Note
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ padding: '10px 12px', borderRadius: 8, background: '#fef9c3', border: '1px solid #fde68a' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <Pin size={13} style={{ color: '#a16207', flexShrink: 0 }} />
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e' }}>
+          Internal Notes
+        </div>
+      </div>
+      {value.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: composerOpen ? 10 : 0 }}>
+          {value.map((n) => (
+            <div key={n.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, lineHeight: 1.4, color: '#78350f', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {n.text}
+                </div>
+                <div style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
+                  {n.author ? `${n.author}` : 'Unknown'}
+                  {' · '}
+                  {new Date(n.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => remove(n.id)}
+                title="Remove note"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#a16207' }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#dc2626'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#a16207'; }}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {composerOpen ? (
+        <div style={{ borderTop: value.length > 0 ? '1px solid #fde68a' : 'none', paddingTop: value.length > 0 ? 10 : 0 }}>
+          <textarea
+            value={composer}
+            onChange={e => setComposer(e.target.value)}
+            placeholder="Add a note. Pinned to this load. Never sent to driver or customer."
+            rows={2}
+            autoFocus
+            style={{
+              width: '100%', fontSize: 13, lineHeight: 1.4, color: '#78350f',
+              background: 'transparent', border: 'none', outline: 'none', resize: 'vertical',
+              fontFamily: 'inherit',
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
+            <button
+              type="button"
+              onClick={() => { setComposer(''); setComposerOpen(false); }}
+              style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 4, border: 'none', background: 'transparent', color: '#a16207', cursor: 'pointer' }}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!composer.trim()}
+              onClick={post}
+              style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 4, border: 'none', background: composer.trim() ? '#a16207' : '#fde68a', color: '#fff', cursor: composer.trim() ? 'pointer' : 'default' }}>
+              Post
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setComposerOpen(true)}
+          style={{ fontSize: 11, fontWeight: 600, padding: '3px 0', border: 'none', background: 'transparent', color: '#a16207', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Plus size={11} /> Add note
+        </button>
       )}
     </div>
   );

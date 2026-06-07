@@ -23,6 +23,7 @@ import { cleanBrokerName } from '@/lib/brokerName';
 import { NewBrokerReviewModal } from './NewBrokerReviewModal';
 import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER, LOAD_ACCENT_HOVER } from '@/lib/loadAccent';
 import { RefNumsField } from '@/components/forms/EventModalForm';
+import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
@@ -1618,138 +1619,6 @@ function FieldInput({ field, value, onChange, headerColor }: {
 }
 
 // Searchable combobox for selecting a customer/broker from the org's customer list
-function CustomerCombobox({ value, onChange, onPick, customers, inputRef, accentColor, onCreateNew }: {
-  value: string;
-  // Fires on every keystroke when the user is free-typing. Parent
-  // mirrors the text into the broker field; the sync effect decides
-  // whether to also bind customerId based on matchCustomer's score.
-  onChange: (val: string) => void;
-  // Fires when the user clicks a customer in the dropdown. Carries
-  // the WHOLE customer record — including .id — so the parent can
-  // bind broker + customerId atomically. Without this, picking a
-  // customer only updated the text and left customerId stale: the
-  // sync effect won't overwrite an existing FK, so a re-pick from
-  // "Customer A" to "Customer B" left broker="B" but customer_id=A.
-  onPick?: (customer: import('@/lib/types').Customer) => void;
-  customers: import('@/lib/types').Customer[];
-  inputRef?: React.RefObject<HTMLInputElement | null>;
-  accentColor?: string;
-  onCreateNew?: (name: string) => Promise<void> | void;
-}) {
-  const [query, setQuery] = useState(value);
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const style = inputStyle();
-
-  // Sync external value changes (e.g. from rate con parse)
-  useEffect(() => { setQuery(value); }, [value]);
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const filtered = query.trim()
-    ? customers.filter(c =>
-        c.name.toLowerCase().includes(query.toLowerCase()) ||
-        c.aliases.some(a => a.toLowerCase().includes(query.toLowerCase()))
-      )
-    : customers;
-
-  const isLinked = customers.some(c => c.name === value);
-
-  return (
-    <div ref={containerRef} style={{ position: 'relative' }}>
-      <div style={{ position: 'relative' }}>
-        <input
-          ref={inputRef as React.RefObject<HTMLInputElement>}
-          type="text"
-          value={query}
-          placeholder="Search customers…"
-          style={{ ...style, paddingRight: 28 }}
-          onFocus={e => { setOpen(true); if (accentColor) e.currentTarget.style.borderColor = accentColor; }}
-          onChange={e => {
-            setQuery(e.target.value);
-            onChange(e.target.value);
-            setOpen(true);
-          }}
-          onBlur={blurColor}
-        />
-        {isLinked ? (
-          <CheckCircle2 size={13} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#16a34a', pointerEvents: 'none' }} />
-        ) : value.trim() ? (
-          <AlertCircle size={13} style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', color: '#f59e0b', pointerEvents: 'none' }} />
-        ) : null}
-      </div>
-      {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-          background: '#1e2433', border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: 10, marginTop: 4, maxHeight: 200, overflowY: 'auto',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-        }}>
-          {filtered.map(c => (
-            <button
-              key={c.id}
-              type="button"
-              onMouseDown={e => {
-                e.preventDefault();
-                setQuery(c.name);
-                // Prefer onPick when wired — it lets the parent bind
-                // broker + customerId in a single setState so the FK
-                // can't drift. Fall back to onChange(name) for callers
-                // that only care about the text.
-                if (onPick) onPick(c);
-                else        onChange(c.name);
-                setOpen(false);
-              }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '9px 12px', background: 'none', border: 'none',
-                cursor: 'pointer', color: 'rgba(255,255,255,0.85)', fontSize: 13,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-            >
-              {c.name}
-              {c.aliases.length > 0 && (
-                <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginLeft: 6 }}>
-                  aka {c.aliases.slice(0, 2).join(', ')}
-                </span>
-              )}
-            </button>
-          ))}
-          {onCreateNew && query.trim() && !customers.some(c => c.name.toLowerCase() === query.trim().toLowerCase()) && (
-            <button
-              type="button"
-              onMouseDown={async e => {
-                e.preventDefault();
-                setOpen(false);
-                await onCreateNew(query.trim());
-              }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
-                padding: '9px 12px', background: 'none', border: 'none',
-                borderTop: filtered.length > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
-                cursor: 'pointer', color: '#60a5fa', fontSize: 13, fontWeight: 700,
-              }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}
-            >
-              <Plus size={13} /> Add &ldquo;{query.trim()}&rdquo;
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // Renders a section of optional fields in a 2-col grid (booleans and textareas take full width)
 function BrokerMatchBanner({ match, onConfirmMatch, onRejectMatch, onCreateNew, onFocusSearch }: {
   match: CustomerMatchResult;
