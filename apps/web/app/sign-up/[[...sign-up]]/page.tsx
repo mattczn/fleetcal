@@ -36,6 +36,12 @@ export default async function SignUpPage({
 }) {
   const params = await searchParams;
   const plan = isPlanKey(params.plan) ? PLAN_META[params.plan] : null;
+  // Funnel chain: sign-up → /create-organization?plan=… → /onboarding/pick-plan?plan=…
+  // Preserves the marketing-CTA plan choice through Clerk's org creation
+  // step so the final Subscribe button highlights the right tier.
+  const afterSignUpUrl = params.plan
+    ? `/create-organization?plan=${encodeURIComponent(params.plan)}`
+    : '/create-organization';
 
   return (
     <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
@@ -114,6 +120,8 @@ export default async function SignUpPage({
           {/* RIGHT — Clerk's SignUp form, restyled */}
           <div>
             <SignUp
+              forceRedirectUrl={afterSignUpUrl}
+              fallbackRedirectUrl={afterSignUpUrl}
               appearance={{
                 variables: {
                   colorPrimary:    '#1B5EE4',
