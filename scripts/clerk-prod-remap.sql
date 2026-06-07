@@ -34,8 +34,8 @@ BEGIN;
 
 DO $$
 DECLARE
-  v_old_org_id text := 'org_3Cgzom31hVxbq6WR3FjVTbL6K3t';   -- ← REPLACE with current dev org_id
-  v_new_org_id text := 'org_REPLACE_WITH_PROD_ORG_ID_FROM_CLERK';   -- ← REPLACE
+  v_old_org_id text := 'org_3Cgzom31hVxbq6WR3FjVTbL6K3t';   -- Curzon dev (Clerk Development instance)
+  v_new_org_id text := 'org_3Ck09w6LuEjiX4WgxJEPyiyjuXN';   -- Curzon prod (Clerk Production instance, fleetcal.app)
 
   v_old_count int;
 BEGIN
@@ -67,18 +67,36 @@ CREATE TEMP TABLE clerk_user_map (
   display_name text  -- optional, for sanity checking the CSV
 ) ON COMMIT DROP;
 
+-- The 8 dev user_ids below were enumerated from the FleetCal DB on
+-- 2026-06-07. Replace each REPLACE_WITH_PROD_… with the new
+-- user_xxx value Clerk hands out after that user accepts the invite
+-- to the prod Curzon org. The display_name column is for your
+-- sanity check during review — pull each user's name/email from
+-- the dev Clerk dashboard's Users list and fill it in so the
+-- script's history is self-documenting.
 INSERT INTO clerk_user_map (dev_user_id, prod_user_id, display_name) VALUES
-  -- ('user_DEV_xxxxxxxxxxxxxxxx', 'user_PROD_yyyyyyyyyyyyyyyy', 'Matt Curzon'),
-  -- ('user_DEV_abcdefghijklmn',   'user_PROD_zzzzzzzzzzzz',     'Other team member'),
-  -- … add one row per team member …
-  ('UNFILLED_DEV_ID_REMOVE_THIS_LINE', 'UNFILLED_PROD_ID_REMOVE_THIS_LINE', 'placeholder');
+  ('user_3EYE29KB5QhqA5OX6ZiyBR9CGHG', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3E7J1RpHh0COQxFhSd9iqCNmeRc', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3E698Z2KQzAR2xB2ZjTGCxMs5a8', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3E5cc7nMDWD0E0PzvtynusA7PKI', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3DyGOVbIH5cyfNCdPwy8nsWs9Xc', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3CjyUDl0dR0Wi9Pq1HbFaSZGLsg', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3Dn7dfW8FTZnTLyDQFQg4IlQ6oe', 'REPLACE_WITH_PROD_USER_ID', 'TBD'),
+  ('user_3Cgz7uSjL0IX359kSOh0PRIHq3b', 'REPLACE_WITH_PROD_USER_ID', 'Matt Curzon');  -- adjust display name
 
--- Bail out if the placeholder is still present — protects against
--- accidentally running an empty mapping.
+-- Bail out if any prod_user_id placeholder is still present — protects
+-- against accidentally running a half-finished mapping where some
+-- users would get the literal string "REPLACE_WITH_PROD_USER_ID" as
+-- their identifier.
 DO $$
+DECLARE
+  v_unfilled int;
 BEGIN
-  IF EXISTS (SELECT 1 FROM clerk_user_map WHERE dev_user_id LIKE 'UNFILLED%') THEN
-    RAISE EXCEPTION 'clerk_user_map still contains the placeholder row — fill in real values before proceeding';
+  SELECT count(*) INTO v_unfilled
+    FROM clerk_user_map
+    WHERE prod_user_id LIKE 'REPLACE_%' OR prod_user_id NOT LIKE 'user_%';
+  IF v_unfilled > 0 THEN
+    RAISE EXCEPTION 'clerk_user_map has % rows whose prod_user_id is still unfilled — replace every REPLACE_WITH_PROD_USER_ID before running', v_unfilled;
   END IF;
 END $$;
 
