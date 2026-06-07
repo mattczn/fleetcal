@@ -48,6 +48,8 @@ import {
 import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
+import { InvoiceSummaryModal, BatchSendDialog } from '@/components/invoicing/BatchInvoiceModals';
+import type { LoadSummary } from '@fleetcal/types/api';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
 import { useLoadPayFinalized } from '@/lib/useLoadPayFinalized';
 import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
@@ -106,6 +108,34 @@ function CopyBtnInline({ value, title = 'Copy' }: { value: string; title?: strin
   );
 }
 
+/**
+ * Adapt the rich `Load` shape into the `LoadSummary` slice the shared
+ * invoice modals expect. The modals only read a thin set of fields
+ * (loadId + internalLoadId + customer + line items + loadNum), so we
+ * cast through unknown rather than synthesize every leg-level field
+ * (pickupAt / pickupAssetId / etc.) that LoadSummary requires for
+ * unrelated table-row callers.
+ */
+function loadAsLoadSummary(l: Load): LoadSummary {
+  const subset = {
+    loadId:           l.loadId ?? l.id,
+    internalLoadId:   l.internalLoadId ?? 0,
+    loadNum:          l.loadNum,
+    isRelay:          !!l.relayGroupId,
+    title:            l.title,
+    broker:           l.broker,
+    customerId:       l.customerId,
+    dispatcher:       l.dispatcher,
+    loadPrice:        l.loadPrice,
+    totalBillable:    l.totalBillable,
+    accessorials:     l.accessorials,
+    rateConPdf:       l.rateConPdf,
+    internalNotes:    l.internalNotes,
+    billingStatus:    l.billingStatus,
+  };
+  return subset as unknown as LoadSummary;
+}
+
 function fmtShortDate(iso: string | undefined | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -159,6 +189,13 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [reviewQueueOpen, setReviewQueueOpen] = useState(false);
   const [docsModalOpen, setDocsModalOpen] = useState(false);
+  // Invoice action popups. Generate/Send route through the shared
+  // InvoiceSummaryModal when there's no invoice yet (it can both
+  // generate-only or generate-and-send via its internal toggle).
+  // Send/Resend against an existing invoice route through
+  // BatchSendDialog. null = closed.
+  const [summaryAction, setSummaryAction] = useState<'generate' | 'generateSend' | null>(null);
+  const [sendDialogMode, setSendDialogMode] = useState<'send' | 'resend' | null>(null);
 
   // Editable draft. Only fields the user has touched land here — we
   // overlay it on top of the canonical fetched load when rendering,
@@ -370,55 +407,89 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     }
   }
 
-  // Invoice action state. Tracks which mutation is in flight so the
-  // billing card can disable the affected button + show a spinner.
-  // Generate, send, and resend are the three remote mutations; "view"
-  // affordances stay synchronous (they just open a modal).
-  const [invoiceBusy, setInvoiceBusy] = useState<null | 'generate' | 'send' | 'resend'>(null);
+  // Invoice action state. Tracks which sync mutation (regenerate /
+  // mark-paid / revert) is in flight so the billing card can spinner
+  // the affected button. Generate and Send route through their own
+  // modals now (InvoiceSummaryModal / BatchSendDialog), so they
+  // manage their own busy state.
+  const [invoiceBusy, setInvoiceBusy] = useState<null | 'regenerate' | 'markPaid' | 'revert'>(null);
 
-  async function handleGenerateInvoice() {
-    if (!primaryLeg?.loadId || invoiceBusy) return;
-    setInvoiceBusy('generate');
+  function handleGenerateClick() {
+    // Whether or not an invoice exists, open the Invoice Summary
+    // modal — for fresh invoices it generates a draft; for existing
+    // ones the dispatcher can re-trigger generate (the server's
+    // batchGenerateInvoices revives a stale void into a new draft).
+    // Regenerate of an already-active invoice still uses the
+    // synchronous path below.
+    if (invoice && invoice.status !== 'void') {
+      void handleRegenerateInvoice();
+      return;
+    }
+    setSummaryAction('generate');
+  }
+
+  async function handleRegenerateInvoice() {
+    if (!invoice || invoiceBusy) return;
+    setInvoiceBusy('regenerate');
     try {
-      // batchGenerateInvoices is the same path accounting takes — it
-      // handles the "revive stale void" rescue and the customer-fk
-      // fallback. We pass thenSend=false so the user can review the
-      // draft before mailing it.
-      if (invoice && invoice.status !== 'void') {
-        // Existing invoice → regenerate refreshes the packet against
-        // the current load shape (line items, included docs, broker).
-        await railway.regenerateInvoice(invoice.id, {});
-      } else {
-        await railway.batchGenerateInvoices({
-          loadIds: [primaryLeg.loadId],
-          thenSend: false,
-          bccSelf: true,
-          attachLoadDocs: true,
-        });
-      }
+      await railway.regenerateInvoice(invoice.id, {});
       bumpLoadEditTick();
       await refresh({ silent: true });
     } catch (e) {
-      console.error('[load detail] generate invoice failed:', e);
-      window.alert(`Invoice generation failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+      console.error('[load detail] regenerate failed:', e);
+      window.alert(`Regenerate failed: ${(e as Error)?.message ?? 'Unknown error'}`);
     } finally {
       setInvoiceBusy(null);
     }
   }
 
-  async function handleSendOrResendInvoice() {
-    if (!invoice || invoiceBusy) return;
+  function handleSendOrResendClick() {
+    // No invoice → open the Invoice Summary modal pre-set to
+    // "generate + send" (same popup the user sees on the billing
+    // page). Invoice exists → route through the BatchSendDialog,
+    // which mirrors the per-broker grouping + warning banners the
+    // accounting page shows.
+    if (!invoice || invoice.status === 'void') {
+      setSummaryAction('generateSend');
+      return;
+    }
     const resend = invoice.status === 'sent' || invoice.status === 'paid';
-    setInvoiceBusy(resend ? 'resend' : 'send');
+    setSendDialogMode(resend ? 'resend' : 'send');
+  }
+
+  async function handleMarkPaid() {
+    if (!invoice || invoiceBusy) return;
+    setInvoiceBusy('markPaid');
     try {
-      const body = { invoiceIds: [invoice.id], bccSelf: true, attachLoadDocs: true };
-      if (resend) await railway.batchResendInvoices(body);
-      else        await railway.batchSendInvoices(body);
+      await railway.markInvoicePaid(invoice.id, {});
       bumpLoadEditTick();
       await refresh({ silent: true });
     } catch (e) {
-      console.error('[load detail] send invoice failed:', e);
-      window.alert(`Invoice send failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+      console.error('[load detail] mark paid failed:', e);
+      window.alert(`Mark paid failed: ${(e as Error)?.message ?? 'Unknown error'}`);
+    } finally {
+      setInvoiceBusy(null);
+    }
+  }
+
+  async function handleRevertToPending() {
+    if (!primaryLeg?.loadId || invoiceBusy) return;
+    setInvoiceBusy('revert');
+    try {
+      useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
+      // 'reopen' is the closeout action that wipes verified_at /
+      // verified_by + flips billing_status back to 'pending', which
+      // moves the load from the Released bucket in Billing back into
+      // the Paperwork queue.
+      await railway.updateLoadCloseout(primaryLeg.loadId, {
+        action: 'reopen',
+        actorName: currentUserName,
+      });
+      bumpLoadEditTick();
+      await refresh({ silent: true });
+    } catch (e) {
+      console.error('[load detail] revert to pending failed:', e);
+      window.alert(`Revert failed: ${(e as Error)?.message ?? 'Unknown error'}`);
     } finally {
       setInvoiceBusy(null);
     }
@@ -656,8 +727,10 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               })()}
               invoice={invoice}
               busy={invoiceBusy}
-              onGenerate={() => void handleGenerateInvoice()}
-              onSendOrResend={() => void handleSendOrResendInvoice()}
+              onGenerate={handleGenerateClick}
+              onSendOrResend={handleSendOrResendClick}
+              onMarkPaid={() => void handleMarkPaid()}
+              onRevertToPending={() => void handleRevertToPending()}
               onViewInvoice={() => setInvoiceModalOpen(true)}
               onViewDocs={() => setDocsModalOpen(true)}
             />
@@ -700,6 +773,51 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           stash both broker text + customerId into the draft so the
           FK and the display name save atomically, and re-open the
           combobox in linked-state on the next render. */}
+      {/* Invoice Summary popup — same modal accounting shows for batch
+          generate / generate-and-send. Reuses the dispatcher-facing
+          flow exactly, so the load-detail experience matches what the
+          billing page surfaces when sending. */}
+      {summaryAction && primaryLeg.loadId && (
+        <InvoiceSummaryModal
+          loads={[loadAsLoadSummary(primaryLeg)]}
+          customerById={new Map(customers.map(c => [c.id, c]))}
+          action={summaryAction}
+          onClose={() => setSummaryAction(null)}
+          onOpenBroker={(id) => setCustomerProfileId(id)}
+          onComplete={() => {
+            setSummaryAction(null);
+            bumpLoadEditTick();
+            void refresh({ silent: true });
+          }}
+        />
+      )}
+      {/* Batch Send dialog — fires from Send / Resend when an invoice
+          already exists. Single-row array; the dialog's per-broker
+          grouping + warning banners still apply. */}
+      {sendDialogMode && invoice && (
+        <BatchSendDialog
+          rows={[{
+            invoice,
+            broker: (() => {
+              if (primaryLeg.customerId) return customers.find(c => c.id === primaryLeg.customerId) ?? null;
+              const t = (primaryLeg.broker ?? '').trim().toLowerCase();
+              if (!t) return null;
+              return customers.find(c =>
+                c.name.toLowerCase() === t
+                || (c.aliases ?? []).some(a => a.toLowerCase() === t),
+              ) ?? null;
+            })(),
+          }]}
+          mode={sendDialogMode}
+          onOpenBroker={(id) => setCustomerProfileId(id)}
+          onClose={() => setSendDialogMode(null)}
+          onComplete={() => {
+            setSendDialogMode(null);
+            bumpLoadEditTick();
+            void refresh({ silent: true });
+          }}
+        />
+      )}
       {pendingNewBroker !== null && (
         <NewBrokerReviewModal
           initialName={pendingNewBroker}
@@ -1897,15 +2015,25 @@ function LoadHistorySection({ load, calendarTimezone }: {
 
 function BillingCard({
   load, customer, invoice, busy,
-  onGenerate, onSendOrResend, onViewInvoice, onViewDocs, onOpenReview,
+  onGenerate, onSendOrResend, onMarkPaid, onRevertToPending,
+  onViewInvoice, onViewDocs, onOpenReview,
   onOpenCustomerProfile,
 }: {
   load: Load;
   customer: Customer | undefined;
   invoice: Invoice | null;
-  busy: null | 'generate' | 'send' | 'resend';
+  busy: null | 'regenerate' | 'markPaid' | 'revert';
   onGenerate: () => void;
   onSendOrResend: () => void;
+  /** Flip the active invoice to paid. Wired to railway.markInvoicePaid;
+   *  only surfaces after the invoice has been sent but not yet paid. */
+  onMarkPaid: () => void;
+  /** Revert billing_status from verified back to pending. Used when a
+   *  load was released by mistake (e.g. a missing accessorial slipped
+   *  through). Maps to the closeout `reopen` action so the load drops
+   *  from the Released / Queued / Invoiced billing buckets back into
+   *  the Paperwork queue. */
+  onRevertToPending: () => void;
   onViewInvoice: () => void;
   onViewDocs: () => void;
   /** Open the closeout Review panel. Only used in the Pending state
@@ -2070,20 +2198,36 @@ function BillingCard({
                 : undefined}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: 'var(--gc-blue)', color: '#fff', border: 'none' }}>
-              {busy === 'generate'
+              {busy === 'regenerate'
                 ? <Loader2 size={12} className="animate-spin" />
                 : hasInvoice ? <RefreshCw size={12} /> : <FilePlus size={12} />}
               {hasInvoice ? 'Regenerate Invoice' : 'Generate Invoice'}
             </button>
             <button onClick={onSendOrResend}
-              disabled={!hasInvoice || !!busy}
+              disabled={!!busy || (!hasInvoice && status !== 'verified')}
+              title={!hasInvoice && status !== 'verified'
+                ? 'Release the load for billing before sending.'
+                : undefined}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: 'var(--gc-surface)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
-              {busy === 'send' || busy === 'resend'
-                ? <Loader2 size={12} className="animate-spin" />
-                : <Send size={12} />}
+              <Send size={12} />
               {isSent ? 'Resend Invoice' : 'Send Invoice'}
             </button>
+            {/* Mark Paid surfaces after the invoice has been sent (or
+                portal-marked sent) but isn't paid yet. Flipping it
+                rolls the load into the Paid bucket on the billing
+                page. */}
+            {invoice?.status === 'sent' && (
+              <button onClick={onMarkPaid}
+                disabled={!!busy}
+                className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: '#dcfce7', color: '#166534', border: '1px solid #86efac' }}>
+                {busy === 'markPaid'
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : <Check size={12} />}
+                Mark Paid
+              </button>
+            )}
             {hasInvoice ? (
               <button onClick={onViewInvoice}
                 className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
@@ -2095,6 +2239,22 @@ function BillingCard({
                 className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
                 style={{ background: 'var(--gc-bg)', color: 'var(--gc-text-2)', border: '1px solid var(--gc-border)' }}>
                 <FolderOpen size={12} /> View Docs
+              </button>
+            )}
+            {/* Revert to Pending — only on Released. Moves the load
+                back to Paperwork (billing_status='pending'); used when
+                a load is accidentally released while detention or
+                lumper is still pending. */}
+            {status === 'verified' && (
+              <button onClick={onRevertToPending}
+                disabled={!!busy}
+                title="Move this load back to Paperwork (billing_status = pending). Use when a load was released before all accessorials were ready."
+                className="w-full text-[11.5px] font-medium px-3 py-1.5 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: 'transparent', color: 'var(--gc-text-3)', border: '1px dashed var(--gc-border)' }}>
+                {busy === 'revert'
+                  ? <Loader2 size={11} className="animate-spin" />
+                  : <ArrowLeft size={11} />}
+                Revert to Pending
               </button>
             )}
           </div>
