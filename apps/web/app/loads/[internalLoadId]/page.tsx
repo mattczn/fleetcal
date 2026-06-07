@@ -27,7 +27,7 @@ import { useAuth, useUser } from '@clerk/nextjs';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
-  CheckCircle2, Plus, Clock,
+  CheckCircle2, Plus, Clock, Copy, RotateCcw,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -57,6 +57,42 @@ const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: '
 /** Same accent the calendar uses for revenue loads. Hard-coded here
  *  because the load page isn't tied to a single truck's color. */
 const LOAD_ACCENT = '#1a73e8';
+
+/**
+ * Tiny copy-to-clipboard button. Mirrors EventModal's `CopyLabelBtn`
+ * pixel-for-pixel — same 20×20 box, same bordered surface, same
+ * 1.5-second green check flash on success. Used inline next to the
+ * Load # input and each reference value so dispatchers can grab the
+ * digits without highlight-and-cmd-c.
+ */
+function CopyBtn({ value, title = 'Copy' }: { value: string; title?: string }) {
+  const [copied, setCopied] = useState(false);
+  function onClick() {
+    if (!value || !navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <button type="button" onClick={onClick}
+      title={copied ? 'Copied!' : title}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 24, height: 24, borderRadius: 4, flexShrink: 0,
+        cursor: value ? 'pointer' : 'default',
+        border: '1px solid var(--gc-border)',
+        background: 'var(--gc-bg)',
+        color: copied ? '#15803d' : 'var(--gc-text-3)',
+        transition: 'color 120ms, background 120ms',
+        opacity: value ? 1 : 0.4,
+      }}
+      onMouseEnter={e => { if (!copied && value) e.currentTarget.style.background = 'var(--gc-hover)'; }}
+      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-bg)'; }}>
+      {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
 
 function fmtShortDate(iso: string | undefined | null): string {
   if (!iso) return '—';
@@ -88,8 +124,10 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const customers = useCalendarStore(s => s.customers);
   const assets = useCalendarStore(s => s.assets);
   const drivers = useCalendarStore(s => s.drivers);
+  const trailers = useCalendarStore(s => s.trailers);
   const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
+  const driverPayPct = useCalendarStore(s => s.driverPayPct);
   const loadEditTick = useCalendarStore(s => s.loadEditTick);
   const bumpLoadEditTick = useCalendarStore(s => s.bumpLoadEditTick);
   // sectionOrder + fieldSettings live in Settings → Appearance →
@@ -114,7 +152,8 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   // successful save / on Discard / when a different load loads.
   type LoadDraft = Partial<Pick<Load,
     'loadNum' | 'broker' | 'customerId' | 'dispatcher' |
-    'trailerType' | 'commodity' | 'weight' |
+    'trailerType' | 'trailerId' | 'trailerName' | 'trailerNum' |
+    'commodity' | 'weight' |
     'loadPrice' | 'driverPay' |
     'notes' | 'specialInstructions' |
     'accessorials' | 'refNums' | 'stops'>>;
@@ -303,9 +342,11 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 customerById={customerById}
                 assets={assets}
                 drivers={drivers}
+                trailers={trailers}
                 customers={customers}
                 sectionOrder={sectionOrder}
                 fieldSettings={fieldSettings}
+                driverPayPct={driverPayPct}
                 onOpenCustomerProfile={setCustomerProfileId}
                 currentUserName={currentUserName}
                 calendarTimezone={calendarTimezone}
@@ -361,17 +402,22 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 // ─── Left card — modal-styled form ──────────────────────────────────────
 
 function LoadFormPane({
-  primary, partner, customerById, assets, drivers, customers, sectionOrder, fieldSettings,
-  onOpenCustomerProfile, currentUserName, calendarTimezone, onChange,
+  primary, partner, customerById, assets, drivers, trailers, customers, sectionOrder, fieldSettings,
+  driverPayPct, onOpenCustomerProfile, currentUserName, calendarTimezone, onChange,
 }: {
   primary: Load;
   partner: Load | undefined;
   customerById: Map<string, { id: string; name: string }>;
   assets: { id: number; name?: string | null; unit?: string | null }[];
   drivers: { id?: number; name?: string; firstName?: string; lastName?: string; phone?: string }[];
+  trailers: { id: number; name: string; trailerNumber?: string; activeTo?: string | null }[];
   customers: { name: string; aliases?: string[] }[];
   sectionOrder: FieldSection[];
   fieldSettings: Record<string, boolean>;
+  /** Org default driver-pay percentage from settings.rateConSettings.
+   *  Powers the "%" badge next to Driver Pay + the "Reset to default"
+   *  affordance when the manual value diverges. null disables both. */
+  driverPayPct: number | null;
   onOpenCustomerProfile: (customerId: string) => void;
   currentUserName: string;
   calendarTimezone: string;
@@ -452,10 +498,138 @@ function LoadFormPane({
     onChange({ [id]: raw === '' ? null : raw } as Partial<Load>);
   }
 
+  // Trailer dropdown — same StyledSelect look as the Driver / Truck
+  // selects in Assignment. Sourced from `trailers` in the calendar
+  // store; we surface the live row (even if retired) at the top so an
+  // already-assigned retired trailer still displays correctly.
+  const trailerOptions = useMemo(() => {
+    const active = trailers.filter(t => !t.activeTo);
+    const labelFor = (t: { name: string; trailerNumber?: string }) =>
+      `${t.name}${t.trailerNumber ? ` #${t.trailerNumber}` : ''}`.trim();
+    const items = active.map(t => ({ id: t.id, label: labelFor(t) }));
+    // Surface the currently-attached trailer even if it's retired
+    // (activeTo set) — otherwise the page would silently look unassigned.
+    if (primary.trailerId != null && !items.some(i => i.id === primary.trailerId)) {
+      const t = trailers.find(t => t.id === primary.trailerId);
+      if (t) items.unshift({ id: t.id, label: `${labelFor(t)} (retired)` });
+    }
+    return items;
+  }, [trailers, primary.trailerId]);
+
+  // ── Driver Pay percentage UX ────────────────────────────────────────
+  // Same affordance EventModal shows: a small chip next to the Driver
+  // Pay label rendering the live (driverPay / loadPrice) percentage,
+  // plus a "Reset to default" button when the manual value diverges
+  // from the org default. Persisted on Save like any other field.
+  const driverPayPctValue = (() => {
+    const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
+    const dp = typeof primary.driverPay === 'number' ? primary.driverPay : 0;
+    if (lp <= 0 || dp <= 0) return null;
+    return Math.round((dp / lp) * 1000) / 10;
+  })();
+  const driverPayIsAuto = driverPayPct != null && driverPayPctValue != null
+    && Math.abs(driverPayPctValue - driverPayPct) < 0.05;
+  function resetDriverPay() {
+    const lp = typeof primary.loadPrice === 'number' ? primary.loadPrice : 0;
+    if (driverPayPct == null || lp <= 0) return;
+    const auto = Math.round(lp * (driverPayPct / 100) * 100) / 100;
+    onChange({ driverPay: auto });
+  }
+  const driverPayLabelSuffix = driverPayPctValue !== null ? (
+    <span className="flex items-center gap-1 normal-case tracking-normal font-semibold" style={{ fontSize: 10 }}>
+      <span className="px-1.5 py-0.5 rounded-lg"
+        style={{
+          background: driverPayIsAuto ? '#dbeafe' : '#f1f3f4',
+          color:      driverPayIsAuto ? '#1d4ed8' : 'var(--gc-text-3)',
+          border:     `1px solid ${driverPayIsAuto ? '#bfdbfe' : 'var(--gc-border-light)'}`,
+        }}>
+        {driverPayPctValue % 1 === 0 ? driverPayPctValue.toFixed(0) : driverPayPctValue.toFixed(1)}%
+      </span>
+      {!driverPayIsAuto && driverPayPct != null && (
+        <button type="button" onClick={resetDriverPay}
+          title={`Reset to ${driverPayPct}%`}
+          className="flex items-center gap-1 rounded transition-colors"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--gc-text-3)', padding: '1px 4px' }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#1d4ed8'; e.currentTarget.style.background = '#dbeafe'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--gc-text-3)'; e.currentTarget.style.background = 'transparent'; }}>
+          <RotateCcw size={10} />
+          <span style={{ fontSize: 10 }}>Reset to {driverPayPct}%</span>
+        </button>
+      )}
+    </span>
+  ) : null;
+
   // Render one field row by id. Broker, refNums, and textareas get
   // dedicated treatments; everything else is a single text/number
   // input wired through commitField.
   function renderField(field: FieldDef) {
+    // Load # — text input + a copy-to-clipboard button on the right.
+    // Same primitive Ref Numbers uses below so dispatchers can grab the
+    // number into broker portals / Excel without highlighting.
+    if (field.id === 'loadNum') {
+      const v = fieldValue('loadNum');
+      return (
+        <Field label={field.label}>
+          <div className="flex items-center gap-1.5">
+            <input type="text" value={v}
+              placeholder={field.placeholder}
+              onChange={e => commitField('loadNum', e.target.value)}
+              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+            <CopyBtn value={v} title="Copy load number" />
+          </div>
+        </Field>
+      );
+    }
+    // Trailer — StyledSelect off the trailers store (active first,
+    // currently-assigned retired trailer shown for back-compat). Stores
+    // back through trailerId + trailerName/trailerNum so the load row
+    // stays in sync without a join. Empty value clears all three.
+    if (field.id === 'trailer') {
+      return (
+        <Field label={field.label}>
+          <StyledSelect
+            value={primary.trailerId != null ? String(primary.trailerId) : ''}
+            onChange={e => {
+              const raw = e.target.value;
+              if (!raw) {
+                // Null sentinel — the API + converter both treat null as
+                // "clear" (loads.ts coerces `?? null`). The Load type
+                // models these as optional so cast through unknown to
+                // satisfy TS without losing the clear semantics.
+                onChange({ trailerId: null, trailerName: null, trailerNum: null } as unknown as Partial<Load>);
+                return;
+              }
+              const id = Number(raw);
+              const t = trailers.find(x => x.id === id);
+              onChange({
+                trailerId: id,
+                trailerName: t?.name ?? null,
+                trailerNum:  t?.trailerNumber ?? null,
+              } as unknown as Partial<Load>);
+            }}
+            style={{ ...iStyle, cursor: 'pointer' }}
+            onFocus={focusH} onBlur={blurColor}>
+            <option value="">— No trailer —</option>
+            {trailerOptions.map(t => (
+              <option key={t.id} value={String(t.id)}>{t.label}</option>
+            ))}
+          </StyledSelect>
+        </Field>
+      );
+    }
+    // Driver Pay — same generic number input, but with the percentage
+    // chip + reset button piped in as labelSuffix.
+    if (field.id === 'driverPay') {
+      return (
+        <Field label={field.label} labelSuffix={driverPayLabelSuffix}>
+          <input type="number" value={fieldValue('driverPay')}
+            placeholder={field.placeholder}
+            onChange={e => commitField('driverPay', e.target.value)}
+            style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+            onFocus={focusH} onBlur={blurColor} />
+        </Field>
+      );
+    }
     // Broker — editable input + the green "Linked to" tag and "View
     // customer profile" button when the FK is set. Editing the text
     // doesn't break the FK link (separate columns).
@@ -503,7 +677,7 @@ function LoadFormPane({
           <div className="space-y-1.5">
             {refs.map((r, i) => (
               <div key={i} className="grid items-center gap-2"
-                style={{ gridTemplateColumns: '1fr 1fr auto' }}>
+                style={{ gridTemplateColumns: '1fr 1fr auto auto' }}>
                 <input type="text" value={r.label}
                   placeholder="Label (PO #, BOL…)"
                   onChange={e => update(i, { label: e.target.value })}
@@ -514,6 +688,7 @@ function LoadFormPane({
                   onChange={e => update(i, { value: e.target.value })}
                   style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
                   onFocus={focusH} onBlur={blurColor} />
+                <CopyBtn value={r.value} title={`Copy ${r.label || 'reference'}`} />
                 <button type="button" onClick={() => remove(i)} title="Remove reference"
                   style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 16, lineHeight: 1 }}>
                   ×
@@ -631,15 +806,27 @@ function LoadFormPane({
         {renderSectionFields(fields)}
 
         {/* Accessorials editor — same data model as the modal:
-            category select, description, amount, billable toggle.
-            "+ Accessorial" appends a new detention row at $0 which the
-            user fills in. Remove via the × button on each row. */}
+            category select, description, amount, billable toggle,
+            and the per-row Pay Driver flip that routes the amount
+            into payroll. Empty list renders just the + button. */}
         {section === 'financial' && (
           <div className="mt-4">
             <AccessorialsEditor
               value={primary.accessorials ?? []}
               onChange={(next) => onChange({ accessorials: next })}
               iStyle={iStyle}
+              payOpts={(() => {
+                // Drivers eligible for an accessorial payroll line.
+                // Primary leg's driver first; relay partner's second
+                // (deduped). Empty list when neither leg has a driver —
+                // the toggle still works, the dropdown just hides.
+                const opts: string[] = [];
+                if (primary.driverName) opts.push(primary.driverName);
+                if (partner?.driverName && !opts.includes(partner.driverName)) {
+                  opts.push(partner.driverName);
+                }
+                return opts;
+              })()}
             />
             {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice && (
               <div className="mt-2 text-right text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
@@ -799,11 +986,16 @@ const ACCESSORIAL_CATEGORIES = [
 ] as const;
 
 function AccessorialsEditor({
-  value, onChange, iStyle,
+  value, onChange, iStyle, payOpts,
 }: {
   value: import('@fleetcal/types').Accessorial[];
   onChange: (next: import('@fleetcal/types').Accessorial[]) => void;
   iStyle: React.CSSProperties;
+  /** Drivers eligible to receive a per-accessorial payroll line. For
+   *  non-relay loads this is just the load's assigned driver; for relays
+   *  it includes both legs' drivers. Empty list hides the dropdown
+   *  (toggle still shows so dispatch can flip the flag pre-assignment). */
+  payOpts: string[];
 }) {
   const focusH = focusColor('#16a34a');
   const ACC_COLOR = '#16a34a';
@@ -827,6 +1019,9 @@ function AccessorialsEditor({
 
   return (
     <div>
+      {/* Header row. Render the "+ Accessorial" button only — when the
+          list is empty we skip the bordered "None." placeholder, so the
+          UI stays compact until the dispatcher actually adds something. */}
       <div className="flex items-center justify-between mb-2">
         <label className="text-[11px] font-semibold uppercase tracking-wider"
           style={{ color: 'var(--gc-text-3)' }}>
@@ -840,18 +1035,13 @@ function AccessorialsEditor({
           <Plus size={12} /> Accessorial
         </button>
       </div>
-      {value.length === 0 ? (
-        <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
-          None.
-        </div>
-      ) : (
+      {value.length > 0 && (
         <div className="space-y-2">
           {value.map((a, i) => (
-            <div key={a.id} className="grid items-center gap-2"
-              style={{ gridTemplateColumns: '140px 1fr 110px auto auto' }}>
+            <div key={a.id} className="flex items-center gap-2 flex-wrap">
               <StyledSelect value={a.category}
                 onChange={e => update(i, { category: e.target.value as typeof a.category })}
-                style={{ ...iStyle, cursor: 'pointer' }}
+                style={{ ...iStyle, cursor: 'pointer', width: 140, flexShrink: 0 }}
                 onFocus={focusH} onBlur={blurColor}>
                 {ACCESSORIAL_CATEGORIES.map(c => (
                   <option key={c.value} value={c.value}>{c.label}</option>
@@ -860,18 +1050,57 @@ function AccessorialsEditor({
               <input type="text" value={a.description ?? ''}
                 placeholder="Description"
                 onChange={e => update(i, { description: e.target.value })}
-                style={iStyle} onFocus={focusH} onBlur={blurColor} />
+                style={{ ...iStyle, flex: 1, minWidth: 140 }}
+                onFocus={focusH} onBlur={blurColor} />
               <input type="number" value={a.amount ?? 0}
                 placeholder="0.00"
                 onChange={e => update(i, { amount: Number(e.target.value) || 0 })}
-                style={{ ...iStyle, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}
+                style={{ ...iStyle, width: 110, flexShrink: 0, fontVariantNumeric: 'tabular-nums', textAlign: 'right' }}
                 onFocus={focusH} onBlur={blurColor} />
-              <label className="flex items-center gap-1 text-[11px]"
-                style={{ color: 'var(--gc-text-2)' }}>
-                <input type="checkbox" checked={a.billable}
-                  onChange={e => update(i, { billable: e.target.checked })} />
-                Billable
-              </label>
+              {/* Billable toggle — pill style matching EventModal. Off
+                  by default keeps non-billable internal-cost rows out of
+                  the broker invoice. */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>Billable</span>
+                <button type="button" onClick={() => update(i, { billable: !a.billable })}
+                  className="relative flex items-center shrink-0 rounded-full"
+                  style={{ width: 32, height: 18, background: a.billable ? ACC_COLOR : '#dadce0', transition: 'background 150ms', cursor: 'pointer', border: 'none' }}>
+                  <span className="absolute rounded-full bg-white"
+                    style={{ width: 12, height: 12, left: 3, transform: a.billable ? 'translateX(14px)' : 'translateX(0)', transition: 'transform 150ms', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
+                </button>
+              </div>
+              {/* Pay Driver toggle — flips the accessorial into the
+                  driver's payroll. Auto-defaults the payDriverName to
+                  the first eligible driver when turned on, clears it
+                  when turned off. Mirrors EventModal exactly. */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs font-medium" style={{ color: 'var(--gc-text-3)' }}>Pay Driver</span>
+                <button type="button" onClick={() => {
+                  const next = !a.payToDriver;
+                  update(i, {
+                    payToDriver: next,
+                    ...(next && payOpts.length > 0 && !a.payDriverName ? { payDriverName: payOpts[0] } : {}),
+                    ...(!next ? { payDriverName: undefined } : {}),
+                  });
+                }}
+                  className="relative flex items-center shrink-0 rounded-full"
+                  style={{ width: 32, height: 18, background: a.payToDriver ? '#1e8e3e' : '#dadce0', transition: 'background 150ms', cursor: 'pointer', border: 'none' }}>
+                  <span className="absolute rounded-full bg-white"
+                    style={{ width: 12, height: 12, left: 3, transform: a.payToDriver ? 'translateX(14px)' : 'translateX(0)', transition: 'transform 150ms', boxShadow: '0 1px 2px rgba(0,0,0,.2)' }} />
+                </button>
+              </div>
+              {a.payToDriver && payOpts.length > 0 && (
+                <StyledSelect
+                  value={a.payDriverName ?? payOpts[0]}
+                  onChange={e => update(i, { payDriverName: e.target.value })}
+                  style={{ ...iStyle, cursor: 'pointer', width: 160, flexShrink: 0, borderColor: '#1e8e3e' }}
+                  onFocus={e => (e.currentTarget.style.borderColor = '#1e8e3e')}
+                  onBlur={e => (e.currentTarget.style.borderColor = '#1e8e3e')}>
+                  {payOpts.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </StyledSelect>
+              )}
               <button type="button" onClick={() => remove(i)} title="Remove accessorial"
                 style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 16, lineHeight: 1 }}>
                 ×
