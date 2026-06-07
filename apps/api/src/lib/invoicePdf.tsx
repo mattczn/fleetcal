@@ -187,8 +187,19 @@ function InvoicePdfDoc({ snapshot, invoiceNumber, issuedDate, dueDate, logoData 
           <View style={styles.colFlex}>
             <Text style={styles.billToLabel}>BILL TO</Text>
             {snapshot.brokerName ? <Text style={styles.brokerName}>{snapshot.brokerName}</Text> : null}
-            {snapshot.brokerAddrLine1 ? <Text style={{ color: COLORS.muted }}>{snapshot.brokerAddrLine1}</Text> : null}
-            {snapshot.brokerAddrLine2 ? <Text style={{ color: COLORS.muted }}>{snapshot.brokerAddrLine2}</Text> : null}
+            {/* Prefer brokerBillingAddress (multi-line free-form text
+                — same split-per-line pattern as remitToInstructions
+                below). Fall back to legacy split lines for older
+                snapshots that pre-date the field. */}
+            {snapshot.brokerBillingAddress
+              ? snapshot.brokerBillingAddress.split(/\r?\n/).map((line, i) => (
+                  <Text key={i} style={{ color: COLORS.muted }}>{line}</Text>
+                ))
+              : <>
+                  {snapshot.brokerAddrLine1 ? <Text style={{ color: COLORS.muted }}>{snapshot.brokerAddrLine1}</Text> : null}
+                  {snapshot.brokerAddrLine2 ? <Text style={{ color: COLORS.muted }}>{snapshot.brokerAddrLine2}</Text> : null}
+                </>
+            }
           </View>
           <View style={{ minWidth: 220 }}>
             {snapshot.orderNo       ? <LabelRow label="Order No"     value={snapshot.orderNo} />       : null}
