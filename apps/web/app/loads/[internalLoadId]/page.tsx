@@ -2021,15 +2021,15 @@ function BillingCard({
           </div>
         )}
 
-        {/* Actions. Released (verified) state replaces the invoice
-            buttons with a doc-verification slot — Review opens the
-            closeout panel and the badges read present/missing for
-            each required-doc kind, same look as the Paperwork table
-            (opaque tint = present, transparent dashed red = missing).
-            Once the dispatcher releases the load all expected docs
-            should be on file, so this lets them confirm at a glance
-            before moving the load to invoicing. */}
-        {status === 'verified' && !hasInvoice ? (
+        {/* Actions. Pending state (paperwork still being verified)
+            replaces the invoice buttons with a doc-verification slot —
+            Review opens the closeout panel and the badges read
+            present/missing for each required-doc kind, same look as
+            the Paperwork table (opaque tint = present, transparent
+            dashed red = missing). Once the dispatcher releases the
+            load it flips to Released and the invoice action stack
+            takes over below. */}
+        {status === 'pending' ? (
           <div className="space-y-2 pt-1">
             <button onClick={onOpenReview}
               className="w-full text-[12.5px] font-semibold px-3 py-2 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
