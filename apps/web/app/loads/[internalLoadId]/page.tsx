@@ -41,8 +41,9 @@ import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import {
   inputStyle, focusColor, blurColor, Field, ModalSection,
-  DriverPhoneCopy, InternalNoteButton,
+  DriverPhoneCopy, InternalNoteButton, RefNumsField,
 } from '@/components/forms/EventModalForm';
+import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 import {
   SECTION_LABELS, getEnabledFieldsForSection,
   type FieldSection, type FieldDef,
@@ -65,7 +66,12 @@ const LOAD_ACCENT = '#1a73e8';
  * Load # input and each reference value so dispatchers can grab the
  * digits without highlight-and-cmd-c.
  */
-function CopyBtn({ value, title = 'Copy' }: { value: string; title?: string }) {
+/**
+ * Compact inline copy button, sized to sit beside a small uppercase
+ * field label. Same flash semantics as CopyBtn — 1.5s green check on
+ * success — but the smaller box (18px) keeps the label row tight.
+ */
+function CopyBtnInline({ value, title = 'Copy' }: { value: string; title?: string }) {
   const [copied, setCopied] = useState(false);
   function onClick() {
     if (!value || !navigator.clipboard?.writeText) return;
@@ -79,17 +85,16 @@ function CopyBtn({ value, title = 'Copy' }: { value: string; title?: string }) {
       title={copied ? 'Copied!' : title}
       style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 24, height: 24, borderRadius: 4, flexShrink: 0,
+        width: 18, height: 18, borderRadius: 4, flexShrink: 0,
         cursor: value ? 'pointer' : 'default',
-        border: '1px solid var(--gc-border)',
-        background: 'var(--gc-bg)',
+        border: 'none', background: 'transparent',
         color: copied ? '#15803d' : 'var(--gc-text-3)',
         transition: 'color 120ms, background 120ms',
         opacity: value ? 1 : 0.4,
       }}
       onMouseEnter={e => { if (!copied && value) e.currentTarget.style.background = 'var(--gc-hover)'; }}
-      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'var(--gc-bg)'; }}>
-      {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+      onMouseLeave={e => { if (!copied) e.currentTarget.style.background = 'transparent'; }}>
+      {copied ? <CheckCircle2 size={11} /> : <Copy size={11} />}
     </button>
   );
 }
@@ -411,7 +416,7 @@ function LoadFormPane({
   assets: { id: number; name?: string | null; unit?: string | null }[];
   drivers: { id?: number; name?: string; firstName?: string; lastName?: string; phone?: string }[];
   trailers: { id: number; name: string; trailerNumber?: string; activeTo?: string | null }[];
-  customers: { name: string; aliases?: string[] }[];
+  customers: { id: string; name: string; aliases?: string[] }[];
   sectionOrder: FieldSection[];
   fieldSettings: Record<string, boolean>;
   /** Org default driver-pay percentage from settings.rateConSettings.
@@ -430,13 +435,25 @@ function LoadFormPane({
   const focusH = focusColor(LOAD_ACCENT);
 
   // ── Derived values ──────────────────────────────────────────────────
-  // Linked customer is keyed off the FK, not text equality — same
-  // approach EventModal uses. Avoids the "shows linked but the
-  // customer_id is NULL" bug where the badge would light up just
-  // because the broker text happened to match a customer name.
-  const linkedCustomer = primary.customerId
+  // Linked customer — first try the FK (canonical source). If the load
+  // pre-dates customerId being written, fall back to a case-insensitive
+  // name match so we still surface the linked badge + profile link for
+  // those legacy loads. EventModal does the same for the profile popup.
+  const linkedCustomerByFk = primary.customerId
     ? customerById.get(primary.customerId)
     : undefined;
+  const brokerTextLc = (primary.broker ?? '').trim().toLowerCase();
+  const linkedCustomerByName = !linkedCustomerByFk && brokerTextLc
+    ? customers.find(c =>
+        c.name.toLowerCase() === brokerTextLc
+        || (c.aliases ?? []).some(a => a.toLowerCase() === brokerTextLc),
+      )
+    : undefined;
+  const linkedCustomer = linkedCustomerByFk ?? linkedCustomerByName;
+  // True when the badge is keyed off broker text rather than the FK.
+  // We render the green "Linked to" pill either way, but use a different
+  // affordance in copy so dispatch knows the FK isn't bound yet.
+  const linkedByNameOnly = !linkedCustomerByFk && !!linkedCustomerByName;
   const brokerDisplay = displayBrokerName(
     linkedCustomer?.name ?? primary.broker ?? '',
     customers as Parameters<typeof displayBrokerName>[1],
@@ -503,15 +520,16 @@ function LoadFormPane({
   // store; we surface the live row (even if retired) at the top so an
   // already-assigned retired trailer still displays correctly.
   const trailerOptions = useMemo(() => {
+    // Trailer labels are name-only (no "#trailerNumber" suffix). The
+    // store keeps the number around for filters and reports but
+    // dispatch wants a clean picker here.
     const active = trailers.filter(t => !t.activeTo);
-    const labelFor = (t: { name: string; trailerNumber?: string }) =>
-      `${t.name}${t.trailerNumber ? ` #${t.trailerNumber}` : ''}`.trim();
-    const items = active.map(t => ({ id: t.id, label: labelFor(t) }));
+    const items = active.map(t => ({ id: t.id, label: t.name }));
     // Surface the currently-attached trailer even if it's retired
     // (activeTo set) — otherwise the page would silently look unassigned.
     if (primary.trailerId != null && !items.some(i => i.id === primary.trailerId)) {
       const t = trailers.find(t => t.id === primary.trailerId);
-      if (t) items.unshift({ id: t.id, label: `${labelFor(t)} (retired)` });
+      if (t) items.unshift({ id: t.id, label: `${t.name} (retired)` });
     }
     return items;
   }, [trailers, primary.trailerId]);
@@ -563,20 +581,21 @@ function LoadFormPane({
   // dedicated treatments; everything else is a single text/number
   // input wired through commitField.
   function renderField(field: FieldDef) {
-    // Load # — text input + a copy-to-clipboard button on the right.
-    // Same primitive Ref Numbers uses below so dispatchers can grab the
-    // number into broker portals / Excel without highlighting.
+    // Load # — text input with a copy-to-clipboard button inline next
+    // to the LOAD # label (matches the same label-suffix pattern the
+    // modal uses for the Driver Pay percentage chip). The input
+    // stretches the full row width so it stays aligned with the
+    // adjacent Reference #s field on the right.
     if (field.id === 'loadNum') {
       const v = fieldValue('loadNum');
       return (
-        <Field label={field.label}>
-          <div className="flex items-center gap-1.5">
-            <input type="text" value={v}
-              placeholder={field.placeholder}
-              onChange={e => commitField('loadNum', e.target.value)}
-              style={iStyle} onFocus={focusH} onBlur={blurColor} />
-            <CopyBtn value={v} title="Copy load number" />
-          </div>
+        <Field
+          label={field.label}
+          labelSuffix={<CopyBtnInline value={v} title="Copy load number" />}>
+          <input type="text" value={v}
+            placeholder={field.placeholder}
+            onChange={e => commitField('loadNum', e.target.value)}
+            style={iStyle} onFocus={focusH} onBlur={blurColor} />
         </Field>
       );
     }
@@ -647,7 +666,8 @@ function LoadFormPane({
                   style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
                   <CheckCircle2 size={13} style={{ color: '#16a34a', flexShrink: 0 }} />
                   <span style={{ fontSize: 12, color: '#15803d' }}>
-                    Linked to <strong>{linkedCustomer.name}</strong>
+                    {linkedByNameOnly ? 'Matches' : 'Linked to'}{' '}
+                    <strong>{linkedCustomer.name}</strong>
                   </span>
                 </div>
                 <button type="button"
@@ -662,45 +682,20 @@ function LoadFormPane({
         </Field>
       );
     }
-    // Ref numbers — list editor: label + value inputs per row plus a
-    // remove button. The "+ Reference" button below appends an empty
-    // row that the user fills in.
+    // Ref numbers — render the same chip-badge widget the modal uses.
+    // Shared component lives in components/forms/EventModalForm.tsx so
+    // any visual change here lands in the modal too without drift.
     if (field.id === 'refNums') {
       const refs = primary.refNums ?? [];
-      const update = (idx: number, patch: Partial<typeof refs[number]>) =>
-        onChange({ refNums: refs.map((r, i) => i === idx ? { ...r, ...patch } : r) });
-      const add = () => onChange({ refNums: [...refs, { label: '', value: '' }] });
-      const remove = (idx: number) =>
-        onChange({ refNums: refs.filter((_, i) => i !== idx) });
       return (
         <Field label={field.label}>
-          <div className="space-y-1.5">
-            {refs.map((r, i) => (
-              <div key={i} className="grid items-center gap-2"
-                style={{ gridTemplateColumns: '1fr 1fr auto auto' }}>
-                <input type="text" value={r.label}
-                  placeholder="Label (PO #, BOL…)"
-                  onChange={e => update(i, { label: e.target.value })}
-                  style={{ ...iStyle, fontSize: 'calc(12px * var(--ui-scale, 1))' }}
-                  onFocus={focusH} onBlur={blurColor} />
-                <input type="text" value={r.value}
-                  placeholder="Value"
-                  onChange={e => update(i, { value: e.target.value })}
-                  style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
-                  onFocus={focusH} onBlur={blurColor} />
-                <CopyBtn value={r.value} title={`Copy ${r.label || 'reference'}`} />
-                <button type="button" onClick={() => remove(i)} title="Remove reference"
-                  style={{ color: 'var(--gc-text-3)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, fontSize: 16, lineHeight: 1 }}>
-                  ×
-                </button>
-              </div>
-            ))}
-            <button type="button" onClick={add}
-              className="flex items-center gap-1 text-xs font-semibold transition-opacity"
-              style={{ color: LOAD_ACCENT, background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-              <Plus size={12} /> Reference
-            </button>
-          </div>
+          <RefNumsField
+            value={refs}
+            onChange={(next) => onChange({ refNums: next })}
+            headerColor={LOAD_ACCENT}
+            chipBg={LOAD_ACCENT_BG}
+            chipBorder={LOAD_ACCENT_BORDER}
+          />
         </Field>
       );
     }
@@ -788,7 +783,6 @@ function LoadFormPane({
             stops={primary.stops}
             onChange={(stops) => onChange({ stops })}
             headerColor={LOAD_ACCENT}
-            onMapRoute={() => { /* page already shows the map on the right */ }}
             loadedMiles={loadedMiles}
             loadPrice={primary.loadPrice ?? null}
             ratePerMile={rpm}

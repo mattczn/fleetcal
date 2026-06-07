@@ -22,6 +22,7 @@ import { matchCustomer } from '@/lib/customerMatch';
 import { cleanBrokerName } from '@/lib/brokerName';
 import { NewBrokerReviewModal } from './NewBrokerReviewModal';
 import { LOAD_ACCENT, LOAD_ACCENT_BG, LOAD_ACCENT_BG_HOVER, LOAD_ACCENT_BORDER, LOAD_ACCENT_HOVER } from '@/lib/loadAccent';
+import { RefNumsField } from '@/components/forms/EventModalForm';
 import { generateLoadTitle } from '@/lib/generateTitle';
 import { ALL_FIELDS, FieldDef, getEnabledFieldsForSection, SECTION_LABELS } from '@/lib/fields';
 import DatePicker from './DatePicker';
@@ -191,8 +192,6 @@ function parseAiRefNums(raw: unknown): RefNum[] {
   return result.filter(isValidRefNum);
 }
 
-const PRESET_REF_LABELS = ['Pickup #', 'Delivery #', 'BOL', 'PO #', 'PRO #', 'Order #'];
-
 /**
  * Safety-net for the rate-con AI parser: snap any stop appointment
  * dates that fall outside the load's [start, end] window back into
@@ -252,143 +251,6 @@ function snapStopsToLoadWindow<S extends { apptStart?: string; apptEnd?: string 
   });
 }
 
-function RefNumsField({ value, onChange, headerColor }: { value: RefNum[]; onChange: (v: RefNum[]) => void; headerColor: string }) {
-  const [draftLabel, setDraftLabel] = useState('');
-  const [draftValue, setDraftValue] = useState('');
-  const [copiedIdx, setCopiedIdx]   = useState<number | null>(null);
-  const [confirmIdx, setConfirmIdx] = useState<number | null>(null);
-  const [lastRemoved, setLastRemoved] = useState<{ ref: RefNum; idx: number } | null>(null);
-  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const valueRef = useRef<HTMLInputElement>(null);
-
-  const commit = () => {
-    const v = draftValue.trim();
-    if (!v) return;
-    onChange([...value, { label: draftLabel.trim(), value: v }]);
-    setDraftLabel(''); setDraftValue('');
-  };
-
-  const remove = (i: number) => {
-    setLastRemoved({ ref: value[i], idx: i });
-    onChange(value.filter((_, idx) => idx !== i));
-    setConfirmIdx(null);
-    if (undoTimer.current) clearTimeout(undoTimer.current);
-    undoTimer.current = setTimeout(() => setLastRemoved(null), 5000);
-  };
-
-  const undo = () => {
-    if (!lastRemoved) return;
-    const next = [...value];
-    next.splice(lastRemoved.idx, 0, lastRemoved.ref);
-    onChange(next);
-    setLastRemoved(null);
-    if (undoTimer.current) clearTimeout(undoTimer.current);
-  };
-
-  const copy = (ref: RefNum, i: number) => {
-    // Copy the value only — the label is just a UI hint and pasting it
-    // into another system (broker portal, BOL, etc.) is rarely useful.
-    navigator.clipboard.writeText(ref.value).then(() => {
-      setCopiedIdx(i);
-      setTimeout(() => setCopiedIdx(null), 1500);
-    });
-  };
-
-  const inp: React.CSSProperties = {
-    border: '1px solid var(--gc-border)', borderRadius: 6,
-    padding: '5px 8px', fontSize: 13, outline: 'none',
-    color: 'var(--gc-text-1)', background: 'var(--gc-surface)',
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {/* Existing ref badges */}
-      {value.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-          {value.map((ref, i) => (
-            confirmIdx === i ? (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 8, background: '#fee2e2', border: '1px solid #fca5a5', fontSize: 12 }}>
-                <span style={{ color: '#991b1b', fontWeight: 600, whiteSpace: 'nowrap' }}>Remove?</span>
-                <button type="button" onClick={() => remove(i)}
-                  style={{ background: '#d93025', border: 'none', borderRadius: 4, cursor: 'pointer', padding: '1px 7px', fontSize: 11, fontWeight: 700, color: '#fff' }}>
-                  Yes
-                </button>
-                <button type="button" onClick={() => setConfirmIdx(null)}
-                  style={{ background: 'none', border: '1px solid #fca5a5', borderRadius: 4, cursor: 'pointer', padding: '1px 7px', fontSize: 11, fontWeight: 600, color: '#991b1b' }}>
-                  No
-                </button>
-              </div>
-            ) : (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px 3px 6px', borderRadius: 8, background: LOAD_ACCENT_BG, border: `1px solid ${LOAD_ACCENT_BORDER}`, fontSize: 12 }}>
-                <button type="button" onClick={() => setConfirmIdx(i)} title="Remove"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: 'var(--gc-text-3)', transition: 'color 120ms' }}
-                  onMouseEnter={e => (e.currentTarget.style.color = '#d93025')}
-                  onMouseLeave={e => (e.currentTarget.style.color = 'var(--gc-text-3)')}>
-                  <X size={10} />
-                </button>
-                <span style={{ fontWeight: 600, color: 'var(--gc-text-1)', whiteSpace: 'nowrap' }}>
-                  {ref.label ? <><span style={{ color: 'var(--gc-text-3)' }}>{ref.label}</span>{' '}{ref.value}</> : ref.value}
-                </span>
-                <button type="button" onClick={() => copy(ref, i)} title="Copy"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', display: 'flex', alignItems: 'center', color: copiedIdx === i ? '#15803d' : 'var(--gc-text-3)', transition: 'color 120ms' }}>
-                  <Copy size={10} />
-                </button>
-              </div>
-            )
-          ))}
-        </div>
-      )}
-      {/* Undo row */}
-      {lastRemoved && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 11, color: 'var(--gc-text-3)' }}>
-            Removed {lastRemoved.ref.label ? `${lastRemoved.ref.label} ${lastRemoved.ref.value}` : lastRemoved.ref.value}
-          </span>
-          <button type="button" onClick={undo}
-            style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, border: '1px solid var(--gc-border)', background: 'var(--gc-bg)', color: 'var(--gc-text-2)', cursor: 'pointer' }}>
-            ↩ Undo
-          </button>
-        </div>
-      )}
-
-      {/* Add row: [label] [number] [Add] */}
-      <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-        <input
-          type="text" value={draftLabel} onChange={e => setDraftLabel(e.target.value)}
-          placeholder="Type (e.g. BOL)"
-          style={{ ...inp, width: 120, flexShrink: 0 }}
-          onFocus={e => (e.currentTarget.style.borderColor = headerColor)}
-          onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); valueRef.current?.focus(); } }}
-        />
-        <input
-          ref={valueRef} type="text" value={draftValue} onChange={e => setDraftValue(e.target.value)}
-          placeholder="Number"
-          style={{ ...inp, flex: 1 }}
-          onFocus={e => (e.currentTarget.style.borderColor = headerColor)}
-          onBlur={e => (e.currentTarget.style.borderColor = 'var(--gc-border)')}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
-        />
-        <button type="button" onClick={commit} disabled={!draftValue.trim()}
-          style={{ flexShrink: 0, padding: '5px 10px', borderRadius: 6, border: 'none', background: draftValue.trim() ? headerColor : 'var(--gc-hover)', color: draftValue.trim() ? '#fff' : 'var(--gc-text-3)', fontSize: 12, fontWeight: 600, cursor: draftValue.trim() ? 'pointer' : 'default', transition: 'background 150ms' }}>
-          Add
-        </button>
-      </div>
-
-      {/* Preset chips */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-        {PRESET_REF_LABELS.map(label => (
-          <button key={label} type="button"
-            onClick={() => { setDraftLabel(label); valueRef.current?.focus(); }}
-            style={{ fontSize: 10, padding: '2px 8px', borderRadius: 8, border: '1px solid var(--gc-border)', background: 'var(--gc-surface)', color: 'var(--gc-text-3)', cursor: 'pointer', transition: 'border-color 150ms, color 150ms' }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = headerColor; e.currentTarget.style.color = headerColor; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--gc-border)'; e.currentTarget.style.color = 'var(--gc-text-3)'; }}
-          >{label}</button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function Field({ label, labelSuffix, children }: { label: string; labelSuffix?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -4242,6 +4104,8 @@ export default function EventModal() {
         value={Array.isArray(fieldValues['refNums']) ? fieldValues['refNums'] as RefNum[] : []}
         onChange={v => { markDirty(); setFieldValues(prev => ({ ...prev, refNums: v })); }}
         headerColor={headerColor}
+        chipBg={LOAD_ACCENT_BG}
+        chipBorder={LOAD_ACCENT_BORDER}
       />
     ),
     trailer: (

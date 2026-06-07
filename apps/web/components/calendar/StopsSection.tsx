@@ -13,7 +13,11 @@ interface Props {
   stops: Stop[];
   onChange: (stops: Stop[]) => void;
   headerColor: string;
-  onMapRoute: () => void;
+  /** Map Route header badge handler. Optional — when omitted the badge
+   *  doesn't render (e.g. on the load detail page where the map is
+   *  already mounted in the page chrome and a separate route button
+   *  would be redundant). */
+  onMapRoute?: () => void;
   onActivateRelay?: () => void;
   relayActive?: boolean;
   relayRole?: 'pickup' | 'delivery';
@@ -459,7 +463,7 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
               ${ratePerMile.toFixed(2)}/mi
             </span>
           )}
-          {stops.length >= 2 && geocodedCount >= 2 && (
+          {onMapRoute && stops.length >= 2 && geocodedCount >= 2 && (
             <button
               type="button"
               onClick={onMapRoute}
@@ -816,8 +820,10 @@ export default function StopsSection({ stops, onChange, headerColor, onMapRoute,
                 )}
               </div>
 
-              {/* Appt window */}
-              <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 260 }}>
+              {/* Appt window — wider than facility column on roomy screens
+                  so the Appt / Window / FCFS pills don't get cramped and
+                  the date+time inputs stay on one line. */}
+              <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 5, width: 320 }}>
                 {stop.type === 'relay' ? (
                   <>
                     <div>
