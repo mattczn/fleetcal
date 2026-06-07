@@ -65,7 +65,10 @@ export function PeriodSelector({
               key={p.value}
               type="button"
               onClick={() => onPeriodChange(p.value)}
-              className="px-3 py-1 rounded-lg text-[13px] font-medium transition-all"
+              // rounded-full to match the bar — `rounded-lg` left
+              // square-ish corners inside a fully-rounded track, which
+              // looked off against the outer pill shape.
+              className="px-3 py-1 rounded-full text-[13px] font-medium transition-all"
               style={{
                 background: active ? 'var(--gc-surface)' : 'transparent',
                 color:      active ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
