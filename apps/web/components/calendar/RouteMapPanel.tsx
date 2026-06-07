@@ -31,8 +31,16 @@ function fmtCheckInTime(iso: string): string {
 
 interface Props {
   stops: Stop[];
-  onClose: () => void;
+  /** Required in modal mode (the EventModal sets this to close the
+   *  map panel). Optional in embedded mode — the page-level container
+   *  manages its own visibility and never needs the X. */
+  onClose?: () => void;
   motiveVehicleId?: string;
+  /** When true, drops the hardcoded 44% width and the close-button
+   *  header so the panel renders full-size inside a card on the load
+   *  detail page (or anywhere else that wants the map standalone).
+   *  Default false preserves the EventModal-side-panel behaviour. */
+  embedded?: boolean;
 }
 
 interface TruckLocation {
@@ -63,7 +71,7 @@ const MARKER_COLORS: Record<StopType, string> = {
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? '';
 
-export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props) {
+export default function RouteMapPanel({ stops, onClose, motiveVehicleId, embedded = false }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef       = useRef<google.maps.Map | null>(null);
   const trafficRef   = useRef<google.maps.TrafficLayer | null>(null);
@@ -305,8 +313,12 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
   };
 
   return (
-    <div className="flex flex-col shrink-0" style={{ width: '44%', borderRight: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
-      {/* Panel header */}
+    <div className={embedded ? 'flex flex-col h-full w-full' : 'flex flex-col shrink-0'}
+      style={embedded
+        ? { background: 'var(--gc-bg)' }
+        : { width: '44%', borderRight: '1px solid var(--gc-border)', background: 'var(--gc-bg)' }}>
+      {/* Panel header — close button only renders in modal mode; the
+          embedded usage skips the X since the page owns its chrome. */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3"
         style={{ borderBottom: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}>
         <div className="flex items-center gap-2">
@@ -316,11 +328,13 @@ export default function RouteMapPanel({ stops, onClose, motiveVehicleId }: Props
             {geocodedStops.length} of {stops.length} geocoded
           </span>
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-full transition-colors" style={{ color: 'var(--gc-text-3)' }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-          <X size={15} />
-        </button>
+        {!embedded && onClose && (
+          <button onClick={onClose} className="p-1.5 rounded-full transition-colors" style={{ color: 'var(--gc-text-3)' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+            <X size={15} />
+          </button>
+        )}
       </div>
 
       {/* Map */}

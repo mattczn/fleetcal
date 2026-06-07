@@ -8,6 +8,7 @@ import LinkedWorkOrdersSection from './LinkedWorkOrdersSection';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { StyledSelect } from '@/components/ui/StyledSelect';
 import { useUser } from '@clerk/nextjs';
+import { useRouter } from 'next/navigation';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
 import { useCalendarStore } from '@/store/useCalendarStore';
@@ -2021,6 +2022,8 @@ export default function EventModal() {
 
   const { user } = useUser();
   const currentUserName = user?.fullName ?? user?.firstName ?? 'Unknown';
+  // Router for the "Open detail page" button next to the load ID chip.
+  const router = useRouter();
   // Driver-pay visibility — Dispatcher and Maintenance roles don't
   // get to see what we're paying drivers. The input is removed from
   // the financial section's field list (and from the relay per-leg
@@ -4884,35 +4887,57 @@ export default function EventModal() {
                   const ev = events.find(e => e.id === modalEventId);
                   if (!ev?.internalLoadId) return null;
                   return (
-                    <Tooltip content={loadIdCopied ? 'Copied!' : 'Click to copy load ID'}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const idStr = String(ev.internalLoadId);
-                          if (navigator.clipboard?.writeText) {
-                            void navigator.clipboard.writeText(idStr);
-                          }
-                          setLoadIdCopied(true);
-                          setTimeout(() => setLoadIdCopied(false), 1500);
-                        }}
-                        className="flex items-center gap-1 transition-colors"
-                        style={{
-                          fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
-                          padding: '2px 8px', borderRadius: 8,
-                          background: loadIdCopied ? '#dcfce7' : `${headerColor}20`,
-                          color: loadIdCopied ? '#15803d' : headerColor,
-                          border: `1px solid ${loadIdCopied ? '#86efac' : `${headerColor}40`}`,
-                          fontVariantNumeric: 'tabular-nums', cursor: 'pointer',
-                        }}
-                        onMouseEnter={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}30`; }}
-                        onMouseLeave={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}20`; }}
-                      >
-                        #{ev.internalLoadId}
-                        {loadIdCopied
-                          ? <CheckCircle2 size={10} />
-                          : <Copy size={10} style={{ opacity: 0.7 }} />}
-                      </button>
-                    </Tooltip>
+                    <>
+                      <Tooltip content={loadIdCopied ? 'Copied!' : 'Click to copy load ID'}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const idStr = String(ev.internalLoadId);
+                            if (navigator.clipboard?.writeText) {
+                              void navigator.clipboard.writeText(idStr);
+                            }
+                            setLoadIdCopied(true);
+                            setTimeout(() => setLoadIdCopied(false), 1500);
+                          }}
+                          className="flex items-center gap-1 transition-colors"
+                          style={{
+                            fontSize: 10, fontWeight: 700, letterSpacing: '0.05em',
+                            padding: '2px 8px', borderRadius: 8,
+                            background: loadIdCopied ? '#dcfce7' : `${headerColor}20`,
+                            color: loadIdCopied ? '#15803d' : headerColor,
+                            border: `1px solid ${loadIdCopied ? '#86efac' : `${headerColor}40`}`,
+                            fontVariantNumeric: 'tabular-nums', cursor: 'pointer',
+                          }}
+                          onMouseEnter={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}30`; }}
+                          onMouseLeave={e => { if (!loadIdCopied) e.currentTarget.style.background = `${headerColor}20`; }}
+                        >
+                          #{ev.internalLoadId}
+                          {loadIdCopied
+                            ? <CheckCircle2 size={10} />
+                            : <Copy size={10} style={{ opacity: 0.7 }} />}
+                        </button>
+                      </Tooltip>
+                      {ev.loadId && (
+                        <Tooltip content="Open load detail page">
+                          <button
+                            type="button"
+                            onClick={() => { router.push(`/loads/${ev.loadId}`); }}
+                            className="flex items-center justify-center transition-colors"
+                            style={{
+                              width: 22, height: 22, borderRadius: 6,
+                              background: `${headerColor}20`,
+                              color: headerColor,
+                              border: `1px solid ${headerColor}40`,
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.background = `${headerColor}30`; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = `${headerColor}20`; }}
+                          >
+                            <ExternalLink size={11} />
+                          </button>
+                        </Tooltip>
+                      )}
+                    </>
                   );
                 })()}
                 {(isPickupLeg || isDeliveryLeg) && (
