@@ -28,7 +28,7 @@ import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
   CheckCircle2, Plus, Clock, Copy, RotateCcw, Calendar as CalendarIcon,
-  Info, Pin, X, Star, Lock,
+  Info, Pin, X, Star, Lock, ClipboardCheck, FolderOpen,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -46,6 +46,8 @@ import {
 } from '@/components/forms/EventModalForm';
 import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
+import ReviewQueue from '@/components/closeout/ReviewQueue';
+import { LoadDocsPreviewModal } from '@/components/closeout/LoadDocsPreviewModal';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
 import { LOAD_ACCENT_BG, LOAD_ACCENT_BORDER } from '@/lib/loadAccent';
 import {
@@ -55,7 +57,7 @@ import {
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
-import type { Load, Invoice, Customer, InternalNote } from '@fleetcal/types';
+import type { Load, Invoice, Customer, InternalNote, LoadStatus } from '@fleetcal/types';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -154,6 +156,8 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  const [reviewQueueOpen, setReviewQueueOpen] = useState(false);
+  const [docsModalOpen, setDocsModalOpen] = useState(false);
 
   // Editable draft. Only fields the user has touched land here — we
   // overlay it on top of the canonical fetched load when rendering,
@@ -342,34 +346,21 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
       window.alert(`Priority change failed: ${(e as Error)?.message ?? 'Unknown error'}`);
     }
   }
-  async function setBillingStatus(next: NonNullable<Load['billingStatus']>) {
-    if (!primaryLeg?.loadId) return;
-    const current = primaryLeg.billingStatus ?? 'pending';
-    if (current === next) return;
-    // Map status target → closeout action. "flag" requires a reason;
-    // we default to 'other' since this control is a quick-switch, not a
-    // structured flag dialog. Dispatchers can refine the reason from
-    // the closeout flow.
-    type Action = Parameters<typeof railway.updateLoadCloseout>[1]['action'];
-    let action: Action;
-    let flagReason: 'other' | undefined;
-    if (next === 'verified')        action = 'verify';
-    else if (next === 'on_hold')  { action = 'flag'; flagReason = 'other'; }
-    else if (next === 'invoiced')   action = 'mark_invoiced';
-    else if (next === 'paid')       action = 'mark_paid';
-    else if (next === 'pending') {
-      // Coming out of a flag goes through clear_flag; coming back from
-      // invoiced/paid uses reopen. Either route lands on 'pending'.
-      action = current === 'on_hold' ? 'clear_flag' : 'reopen';
-    }
-    else return;
+  async function setEventStatus(next: LoadStatus) {
+    if (!primaryLeg?.id) return;
+    if ((primaryLeg.status ?? 'scheduled') === next) return;
     try {
-      useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
-      await railway.updateLoadCloseout(primaryLeg.loadId, {
-        action,
-        actorName: currentUserName,
-        ...(flagReason ? { flagReason } : {}),
-      });
+      if (primaryLeg.loadId) {
+        useCalendarStore.getState().markLoadSelfWrite(primaryLeg.loadId);
+      }
+      // events.status is the lifecycle source-of-truth. PATCH both legs
+      // on a relay load so the chips and reports stay aligned — a relay
+      // with one leg in en_route and the other still scheduled would
+      // confuse downstream views.
+      await railway.updateEvent(primaryLeg.id, { status: next });
+      if (partnerLeg?.id) {
+        await railway.updateEvent(partnerLeg.id, { status: next });
+      }
       bumpLoadEditTick();
       await refresh({ silent: true });
     } catch (e) {
@@ -468,28 +459,27 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
               </button>
             </>
           )}
-          {/* Priority star + Billing status select — both flip
-              immediately via the closeout endpoint (not the Save draft)
-              since they're single-click lifecycle actions, not field
-              edits. Priority writes to BOTH legs' events so a relay
-              load can't end up with one leg flagged and the other not. */}
+          {/* Review opens the closeout review panel — same UI the
+              calendar surfaces via the "Review" button in the load
+              modal. Resolves to the pickup leg before launch so the
+              meta + relay-partner lookup line up. */}
           <button
             type="button"
-            onClick={() => void flipPriority()}
-            title={primaryLeg.priority ? 'Clear priority' : 'Mark priority'}
-            className="px-2 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
-            style={{
-              background: primaryLeg.priority ? '#fef3c7' : 'var(--gc-surface)',
-              border: `1px solid ${primaryLeg.priority ? '#fcd34d' : 'var(--gc-border)'}`,
-              color: primaryLeg.priority ? '#b45309' : 'var(--gc-text-3)',
-            }}>
-            <Star size={13}
-              style={{ fill: primaryLeg.priority ? '#f59e0b' : 'none' }} />
+            onClick={() => setReviewQueueOpen(true)}
+            className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
+            <ClipboardCheck size={12} /> Review
           </button>
-          <ToolbarStatusSelect
-            value={primaryLeg.billingStatus ?? 'pending'}
-            onChange={(next) => void setBillingStatus(next)}
-          />
+          {/* Manage Documents opens the same docs-preview modal the
+              accounting screen uses — left list of attached docs with
+              per-doc include checkboxes, right viewer pane. */}
+          <button
+            type="button"
+            onClick={() => setDocsModalOpen(true)}
+            className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
+            <FolderOpen size={12} /> Manage Documents
+          </button>
           {/* Locked-field click hint. Surfaces in-line with the toolbar
               so the prompt is always next to the View in Calendar pill
               the dispatcher needs to click next. Auto-dismisses after
@@ -543,6 +533,8 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                 onCreateBroker={setPendingNewBroker}
                 onChangePartner={patchPartnerDraft}
                 onClickLocked={flashLockedHint}
+                onPriorityToggle={() => void flipPriority()}
+                onStatusChange={(next) => void setEventStatus(next)}
                 currentUserName={currentUserName}
                 calendarTimezone={calendarTimezone}
                 onChange={patchDraft}
@@ -590,6 +582,38 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           initialBrokerId={customerProfileId}
           onClose={() => setCustomerProfileId(null)} />
       )}
+      {/* Closeout review panel. Loads is just our primary leg — same
+          pattern EventModal uses. Resolves to the pickup leg implicitly
+          since `primaryLeg` is already that one. */}
+      {reviewQueueOpen && (
+        <ReviewQueue
+          loads={[primaryLeg]}
+          zIndex={250}
+          onClose={() => setReviewQueueOpen(false)}
+          onLoadResolved={async () => {
+            await refresh({ silent: true });
+            bumpLoadEditTick();
+          }}
+        />
+      )}
+      {/* Manage Documents — the LoadDocsPreviewModal shared with the
+          accounting page. Only mount when there's a real load id since
+          the modal's first action is fetching docs by load id. */}
+      {docsModalOpen && primaryLeg.loadId && (
+        <LoadDocsPreviewModal
+          load={{
+            loadId: primaryLeg.loadId,
+            loadNum: primaryLeg.loadNum,
+            rateConPdf: primaryLeg.rateConPdf,
+          }}
+          onClose={() => setDocsModalOpen(false)}
+          onSaved={async () => {
+            await refresh({ silent: true });
+            bumpLoadEditTick();
+            setDocsModalOpen(false);
+          }}
+        />
+      )}
       {/* NewBrokerReviewModal — appears when the CustomerCombobox
           "Add &lt;name&gt;" affordance fires for a name that doesn't
           match any existing customer. On confirm we create the row,
@@ -620,7 +644,7 @@ function LoadFormPane({
   primary, partner, customerById, assets, drivers, customers,
   sectionOrder, fieldSettings,
   driverPayPct, onOpenCustomerProfile, onCreateBroker, onChangePartner,
-  onClickLocked,
+  onClickLocked, onPriorityToggle, onStatusChange,
   currentUserName, calendarTimezone, onChange,
 }: {
   primary: Load;
@@ -645,6 +669,12 @@ function LoadFormPane({
   /** Click on a locked (calendar-only) field. Parent flashes a top-of-
    *  page banner pointing the dispatcher at the View in Calendar pill. */
   onClickLocked: () => void;
+  /** Flip primary.priority. Persists immediately via the closeout
+   *  endpoint, which covers both legs of a relay. */
+  onPriorityToggle: () => void;
+  /** Change the load's lifecycle status. PATCHes events.status (both
+   *  legs on a relay) and refreshes the page. */
+  onStatusChange: (next: LoadStatus) => void;
   currentUserName: string;
   calendarTimezone: string;
   /** Patch into the draft. Each call merges into the page-level draft;
@@ -925,42 +955,38 @@ function LoadFormPane({
         </Field>
       );
     }
-    // Ref numbers — locked. Render the same chip-badge widget the modal
-    // uses but wrap it in a click-capturing overlay so any interaction
-    // (×-remove, copy, add) bounces the dispatcher to the calendar.
+    // Ref numbers — display the shared chip-badge widget but keep ONLY
+    // the inline Copy buttons functional. Edits (× remove, Add row,
+    // typing) bounce the dispatcher to the calendar. We do this with a
+    // click-capture handler that walks up to the nearest button and
+    // checks its title — RefNumsField's copy buttons have `title="Copy"`
+    // so we let those clicks through while every other interaction
+    // fires the lock hint.
     if (field.id === 'refNums') {
       const refs = primary.refNums ?? [];
       return (
         <Field label={field.label}>
           <div
             onClickCapture={(e) => {
-              // The shared RefNumsField has its own copy buttons. We
-              // keep those working (they're a pure side-channel), but
-              // any click that lands on an input, ×, or Add fires the
-              // lock hint. Detect by tagName.
-              const t = e.target as HTMLElement;
-              const tag = t.tagName.toLowerCase();
-              if (tag === 'input' || tag === 'textarea') {
-                onClickLocked();
-              }
+              const target = e.target as HTMLElement | null;
+              const btn = target?.closest('button');
+              const isCopyBtn = btn?.getAttribute('title') === 'Copy';
+              if (isCopyBtn) return; // let the Copy button do its work
+              // Anything else — including the inputs in the Add row,
+              // the × confirm-remove, and the preset chips — is locked.
+              e.preventDefault();
+              e.stopPropagation();
+              onClickLocked();
             }}
-            style={{ position: 'relative' }}>
-            <div style={{ pointerEvents: 'none', opacity: 0.85 }}>
-              <RefNumsField
-                value={refs}
-                onChange={() => { /* locked */ }}
-                headerColor={LOAD_ACCENT}
-                chipBg={LOAD_ACCENT_BG}
-                chipBorder={LOAD_ACCENT_BORDER}
-              />
-            </div>
-            {/* Catch-all overlay for clicks anywhere in the field area
-                so the dispatcher gets the lock hint even if their click
-                misses an input. pointerEvents: none on the child means
-                the wrapper receives the click first. */}
-            <div
-              onClick={onClickLocked}
-              style={{ position: 'absolute', inset: 0, cursor: 'not-allowed' }} />
+            style={{ cursor: 'not-allowed' }}>
+            <RefNumsField
+              value={refs}
+              onChange={() => { /* locked — onChange is gated by the
+                                  click-capture above */ }}
+              headerColor={LOAD_ACCENT}
+              chipBg={LOAD_ACCENT_BG}
+              chipBorder={LOAD_ACCENT_BORDER}
+            />
           </div>
         </Field>
       );
@@ -1244,22 +1270,47 @@ function LoadFormPane({
 
       {/* Title row — identical look to EventModal's title input.
           Source is load.title (the event title — both relay legs share
-          the same one). The bottom border uses LOAD_ACCENT. */}
-      <input
-        type="text"
-        value={primary.title ?? ''}
-        readOnly
-        placeholder="No title"
-        onMouseDown={onClickLocked}
-        className="w-full bg-transparent outline-none font-medium"
-        style={{
-          fontSize: 22,
-          borderBottom: `2px solid ${LOAD_ACCENT}`,
-          paddingBottom: 8,
-          color: 'var(--gc-text-1)',
-          cursor: 'not-allowed',
-        }}
-      />
+          the same one). The bottom border uses LOAD_ACCENT.
+
+          Priority star + lifecycle Status select live in the right
+          slot of this row so they read as load metadata, not page
+          controls. Both flip immediately via their respective
+          endpoints (no Save draft) since they're single-click
+          actions, not field edits. */}
+      <div
+        className="w-full flex items-center gap-2"
+        style={{ borderBottom: `2px solid ${LOAD_ACCENT}`, paddingBottom: 8 }}>
+        <input
+          type="text"
+          value={primary.title ?? ''}
+          readOnly
+          placeholder="No title"
+          onMouseDown={onClickLocked}
+          className="flex-1 bg-transparent outline-none font-medium"
+          style={{
+            fontSize: 22,
+            color: 'var(--gc-text-1)',
+            cursor: 'not-allowed',
+          }}
+        />
+        <button
+          type="button"
+          onClick={onPriorityToggle}
+          title={primary.priority ? 'Clear priority' : 'Mark priority'}
+          className="px-2 py-1.5 rounded-lg inline-flex items-center transition-colors flex-shrink-0"
+          style={{
+            background: primary.priority ? '#fef3c7' : 'var(--gc-surface)',
+            border: `1px solid ${primary.priority ? '#fcd34d' : 'var(--gc-border)'}`,
+            color: primary.priority ? '#b45309' : 'var(--gc-text-3)',
+          }}>
+          <Star size={14}
+            style={{ fill: primary.priority ? '#f59e0b' : 'none' }} />
+        </button>
+        <TitleStatusSelect
+          value={primary.status ?? 'scheduled'}
+          onChange={onStatusChange}
+        />
+      </div>
 
       {/* ── Assignment (always rendered first, above the user-ordered
           sections — matches EventModal's pinning of driver/asset above
@@ -1841,20 +1892,30 @@ function BillingPill({ billingStatus }: { billingStatus?: string }) {
  * underlying API actions for each transition are handled by the
  * parent's setBillingStatus(); this is render-only otherwise.
  */
-function ToolbarStatusSelect({
+/**
+ * Title-row load-status select. Same colored-pill + hidden-native-
+ * select pattern as the calendar modal's status control. Palette
+ * mirrors EventModal's STATUSES so the two surfaces share a visual
+ * vocabulary for the lifecycle stages.
+ */
+function TitleStatusSelect({
   value, onChange,
 }: {
-  value: NonNullable<Load['billingStatus']>;
-  onChange: (next: NonNullable<Load['billingStatus']>) => void;
+  value: LoadStatus;
+  onChange: (next: LoadStatus) => void;
 }) {
-  const palette: Record<NonNullable<Load['billingStatus']>, { bg: string; fg: string; border: string; label: string }> = {
-    pending:  { bg: '#f1f5f9', fg: '#475569', border: '#cbd5e1', label: 'Pending' },
-    verified: { bg: '#ede9fe', fg: '#5b21b6', border: '#ddd6fe', label: 'Released' },
-    invoiced: { bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe', label: 'Invoiced' },
-    paid:     { bg: '#dcfce7', fg: '#166534', border: '#86efac', label: 'Paid' },
-    on_hold:  { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca', label: 'Flagged' },
+  const palette: Record<LoadStatus, { bg: string; fg: string; border: string; label: string }> = {
+    scheduled:  { bg: '#e8f0fe', fg: '#1a73e8', border: '#bcd0fb', label: 'Scheduled' },
+    assigned:   { bg: '#ede9fe', fg: '#5b21b6', border: '#ddd6fe', label: 'Assigned' },
+    dispatched: { bg: '#e8f0fe', fg: '#1558d6', border: '#bcd0fb', label: 'Dispatched' },
+    en_route:   { bg: '#fef3e2', fg: '#e37400', border: '#fcd34d', label: 'En Route' },
+    picked_up:  { bg: '#f3e5f5', fg: '#7b1fa2', border: '#e1bee7', label: 'Picked Up' },
+    delivered:  { bg: '#e6f4ea', fg: '#188038', border: '#a8d5b3', label: 'Delivered' },
+    cancelled:  { bg: '#fce8e6', fg: '#d93025', border: '#f4c5c0', label: 'Cancelled' },
+    tonu:       { bg: '#fef3c7', fg: '#92400e', border: '#fcd34d', label: 'TONU' },
+    problem:    { bg: '#ffedd5', fg: '#c2410c', border: '#fdba74', label: 'Problem' },
   };
-  const p = palette[value] ?? palette.pending;
+  const p = palette[value] ?? palette.scheduled;
   return (
     <div style={{ position: 'relative', display: 'inline-flex' }}>
       <span className="text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
@@ -1866,7 +1927,7 @@ function ToolbarStatusSelect({
       </span>
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value as NonNullable<Load['billingStatus']>)}
+        onChange={(e) => onChange(e.target.value as LoadStatus)}
         style={{
           position: 'absolute', inset: 0, width: '100%', height: '100%',
           opacity: 0, cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none',
