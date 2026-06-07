@@ -25,7 +25,7 @@
  * the redirect chain (sign-up → create-org → here → calendar).
  */
 import Link from 'next/link';
-import { PricingTable } from '@clerk/nextjs';
+import { PricingTable, SignOutButton } from '@clerk/nextjs';
 
 const PLAN_LABELS: Record<string, string> = {
   owner_op: 'Owner Op',
@@ -49,8 +49,20 @@ export default async function PickPlanPage({
             <span className="text-sys-blue">FLEET</span>
             <span className="text-sys-orange">CAL</span>
           </Link>
-          <div className="font-mono text-[11px] uppercase text-sys-muted" style={{ letterSpacing: '0.12em' }}>
-            Step 3 of 3 · Pick a plan
+          <div className="flex items-center gap-6">
+            <div className="hidden md:block font-mono text-[11px] uppercase text-sys-muted" style={{ letterSpacing: '0.12em' }}>
+              Step 3 of 3 · Pick a plan
+            </div>
+            {/* Escape hatch — user is mid-funnel but not trapped. They can
+                sign out and bounce back to the marketing landing any time. */}
+            <SignOutButton redirectUrl="/">
+              <button
+                type="button"
+                className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
+              >
+                Sign out
+              </button>
+            </SignOutButton>
           </div>
         </div>
       </nav>

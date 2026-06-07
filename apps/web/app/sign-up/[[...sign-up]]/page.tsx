@@ -13,6 +13,8 @@
  * visual reassurance that their click landed.
  */
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { auth } from '@clerk/nextjs/server';
 import { SignUp } from '@clerk/nextjs';
 import { Check } from 'lucide-react';
 
@@ -35,6 +37,14 @@ export default async function SignUpPage({
   searchParams: Promise<{ plan?: string }>;
 }) {
   const params = await searchParams;
+
+  // Already signed in + has an org → they're past the sign-up funnel,
+  // send them straight to the dashboard. Avoids dead-state pages.
+  const { userId, orgId } = await auth();
+  if (userId && orgId) redirect('/calendar');
+  // Signed in but no org → SignUp's internal create-org step will fire;
+  // that's the expected branch.
+
   const plan = isPlanKey(params.plan) ? PLAN_META[params.plan] : null;
   // Funnel chain: sign-up → /onboarding/pick-plan?plan=…
   //

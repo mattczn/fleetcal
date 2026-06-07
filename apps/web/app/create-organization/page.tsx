@@ -20,6 +20,8 @@
  *                    → /onboarding/pick-plan?plan=growth
  *                    → /calendar
  */
+import { redirect } from 'next/navigation';
+import { auth } from '@clerk/nextjs/server';
 import { CreateOrganization } from '@clerk/nextjs';
 
 export default async function CreateOrganizationPage({
@@ -27,6 +29,10 @@ export default async function CreateOrganizationPage({
 }: {
   searchParams: Promise<{ plan?: string }>;
 }) {
+  // Already in an org → no point showing a create-org form. Bounce.
+  const { orgId } = await auth();
+  if (orgId) redirect('/calendar');
+
   const params = await searchParams;
   const afterCreateOrganizationUrl = params.plan
     ? `/onboarding/pick-plan?plan=${encodeURIComponent(params.plan)}`

@@ -6,24 +6,37 @@
  * simplified version of the landing's nav.
  */
 import Link from 'next/link';
+import { auth } from '@clerk/nextjs/server';
 import PricingCards from '@/components/marketing/PricingCards';
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const { userId } = await auth();
+  const signedIn = !!userId;
   return (
     <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
-      {/* Slim nav — just wordmark + back link, no full landing nav */}
+      {/* Slim nav — wordmark + auth-aware link */}
       <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
         <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
           <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
             <span className="text-sys-blue">FLEET</span>
             <span className="text-sys-orange">CAL</span>
           </Link>
-          <Link
-            href="/sign-in"
-            className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
-          >
-            Sign in
-          </Link>
+          {signedIn ? (
+            <Link
+              href="/calendar"
+              className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
+              style={{ borderRadius: 0 }}
+            >
+              Open FleetCal →
+            </Link>
+          ) : (
+            <Link
+              href="/sign-in"
+              className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
+            >
+              Sign in
+            </Link>
+          )}
         </div>
       </nav>
 

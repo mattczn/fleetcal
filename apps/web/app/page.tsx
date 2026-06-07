@@ -1,16 +1,16 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
 import PricingCards from '@/components/marketing/PricingCards';
 
 /**
  * Marketing landing page at `/`.
  *
- * Signed-in users with an org get bounced straight to /calendar — the
- * landing exists purely for prospects and for the first paint after a
- * sign-out. Signed-in-but-no-org users go to /create-organization so
- * they can finish onboarding (mirrors what middleware does for all
- * other private routes).
+ * Viewable by EVERYONE — signed-out, signed-in-no-org, signed-in-with-org.
+ * Previously force-redirected signed-in users to /calendar which made
+ * every "back to home" link in the funnel useless; users felt trapped
+ * once they started onboarding. Now signed-in users see the same
+ * landing with their CTAs adapted to "Open FleetCal →" instead of
+ * "Try for free".
  *
  * Design language mirrors systematica-site:
  *   - DM Serif Display headlines, DM Sans body, IBM Plex Mono labels
@@ -23,21 +23,20 @@ import PricingCards from '@/components/marketing/PricingCards';
  * dark-mode preference (the visual identity is light-by-design).
  */
 export default async function HomePage() {
-  const { userId, orgId } = await auth();
-  if (userId && orgId)  redirect('/calendar');
-  if (userId && !orgId) redirect('/create-organization');
+  const { userId } = await auth();
+  const signedIn = !!userId;
 
   return (
     <div
       className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg"
       style={{ scrollBehavior: 'smooth' }}
     >
-      <Nav />
-      <Hero />
+      <Nav signedIn={signedIn} />
+      <Hero signedIn={signedIn} />
       <Features />
       <Pricing />
       <BuiltBy />
-      <FinalCta />
+      <FinalCta signedIn={signedIn} />
       <Footer />
     </div>
   );
@@ -45,7 +44,7 @@ export default async function HomePage() {
 
 // ── Sub-sections ────────────────────────────────────────────────────────
 
-function Nav() {
+function Nav({ signedIn }: { signedIn: boolean }) {
   return (
     <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
       <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
@@ -56,21 +55,36 @@ function Nav() {
         <div className="flex items-center gap-8">
           <a href="#features"  className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Features</a>
           <a href="#pricing"   className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Pricing</a>
-          <Link href="/sign-in" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Sign in</Link>
-          <Link
-            href="/sign-up"
-            className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
-            style={{ borderRadius: 0 }}
-          >
-            Try for free
-          </Link>
+          {signedIn ? (
+            // Signed-in: single primary "Open FleetCal →" button. No
+            // sign-in link (they're already signed in) and no "Try for
+            // free" (they've already tried).
+            <Link
+              href="/calendar"
+              className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
+              style={{ borderRadius: 0 }}
+            >
+              Open FleetCal →
+            </Link>
+          ) : (
+            <>
+              <Link href="/sign-in" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Sign in</Link>
+              <Link
+                href="/sign-up"
+                className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
+                style={{ borderRadius: 0 }}
+              >
+                Try for free
+              </Link>
+            </>
+          )}
         </div>
       </div>
     </nav>
   );
 }
 
-function Hero() {
+function Hero({ signedIn }: { signedIn: boolean }) {
   return (
     <section className="border-b border-sys-line">
       <div className="max-w-6xl mx-auto px-8 md:px-12 py-32 md:py-40">
@@ -94,11 +108,11 @@ function Hero() {
           </div>
           <div className="flex flex-wrap items-center gap-6">
             <Link
-              href="/sign-up"
+              href={signedIn ? '/calendar' : '/sign-up'}
               className="inline-flex items-center bg-sys-blue text-white font-semibold text-[15px] px-8 py-4 hover:bg-sys-blue-hover transition-colors"
               style={{ borderRadius: 0 }}
             >
-              Try for free →
+              {signedIn ? 'Open FleetCal →' : 'Try for free →'}
             </Link>
             <a href="#pricing" className="font-sys font-semibold text-[15px] text-sys-blue hover:underline">
               See pricing →
@@ -235,7 +249,7 @@ function BuiltBy() {
   );
 }
 
-function FinalCta() {
+function FinalCta({ signedIn }: { signedIn: boolean }) {
   return (
     <section className="bg-sys-blue text-white border-b border-sys-blue">
       <div className="max-w-6xl mx-auto px-8 md:px-12 py-32 text-center">
@@ -247,14 +261,16 @@ function FinalCta() {
           <span className="text-white/70">actually fits how you dispatch.</span>
         </h2>
         <p className="font-sys text-[17px] md:text-[18px] leading-[1.6] text-white/80 mb-10 max-w-xl mx-auto">
-          14 days. No card. No sales call. Sign up and you&apos;re in.
+          {signedIn
+            ? 'Pick up where you left off.'
+            : '14 days free. No sales call. Sign up and you’re in.'}
         </p>
         <Link
-          href="/sign-up"
+          href={signedIn ? '/calendar' : '/sign-up'}
           className="inline-flex items-center bg-white text-sys-blue font-semibold text-[15px] px-10 py-4 hover:bg-sys-blue-light transition-colors"
           style={{ borderRadius: 0 }}
         >
-          Try for free →
+          {signedIn ? 'Open FleetCal →' : 'Try for free →'}
         </Link>
       </div>
     </section>
