@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { auth } from '@clerk/nextjs/server';
-import { PricingTable } from '@clerk/nextjs';
+import PricingCards from '@/components/marketing/PricingCards';
 
 /**
  * Marketing landing page at `/`.
@@ -176,11 +176,10 @@ function Pricing() {
           Cancel any time — no annual lock-in, no per-driver surcharges.
         </p>
 
-        {/* Clerk's PricingTable. for="organization" tells it to read the
-            B2B plan list (Owner Op / Growth / Fleet) instead of B2C. */}
-        <div className="-mx-2">
-          <PricingTable for="organization" />
-        </div>
+        {/* Custom Systematica-style pricing cards. Clerk's built-in
+            <PricingTable /> is sparse for signed-out visitors and clashes
+            with the zero-radius aesthetic — see PricingCards docstring. */}
+        <PricingCards />
 
         <div className="mt-16 pt-8 border-t border-sys-line text-center">
           <p className="font-sys text-[14px] text-sys-muted">
