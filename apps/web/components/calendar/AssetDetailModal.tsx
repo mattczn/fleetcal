@@ -29,6 +29,7 @@ import { X, MapPin, Loader2, ChevronLeft, ChevronRight, ExternalLink, Truck, Gau
 import type { Asset } from '@/lib/types';
 import type { MotiveLocation } from '@/app/api/motive/locations/route';
 import { railway, type MovementCard } from '@/lib/railway';
+import { useModules } from '@/lib/useModules';
 import { clusterMovements, extractCity, type MovementCluster } from '@/lib/clusterMovements';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { loadGoogleMaps, MAP_ID } from '@/lib/googleMaps';
@@ -137,6 +138,10 @@ function makeDotMarker(color: string, label: string): HTMLDivElement {
 }
 
 export default function AssetDetailModal({ asset, location, onClose, initialMotivePeriodId }: Props) {
+  // Gate the Timeline link on the org's performance module so orgs
+  // without the module don't see a chip that leads to a 403.
+  const { enabled: moduleEnabled } = useModules();
+  const performanceEnabled = moduleEnabled('performance');
   const overlayRef        = useRef<HTMLDivElement>(null);
   const mapContainer      = useRef<HTMLDivElement>(null);
   const mapRef            = useRef<google.maps.Map | null>(null);
@@ -460,16 +465,20 @@ export default function AssetDetailModal({ asset, location, onClose, initialMoti
               )}
               {/* Quick link to the new asset timeline (per-day events vs
                   movements side-by-side). Opens in a new tab so the
-                  current modal context isn't disrupted. */}
-              <a
-                href={`/timeline?assetId=${asset.id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ml-1 flex items-center gap-1"
-                style={{ background: 'var(--gc-blue-tint)', color: 'var(--gc-blue)' }}
-              >
-                Timeline <ExternalLink size={10} />
-              </a>
+                  current modal context isn't disrupted. Gated on the
+                  performance module since /timeline gates on the same
+                  flag — without it the chip would land users on a 403. */}
+              {performanceEnabled && (
+                <a
+                  href={`/timeline?assetId=${asset.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ml-1 flex items-center gap-1"
+                  style={{ background: 'var(--gc-blue-tint)', color: 'var(--gc-blue)' }}
+                >
+                  Timeline <ExternalLink size={10} />
+                </a>
+              )}
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-full transition-colors" style={{ color: 'var(--gc-text-3)' }}

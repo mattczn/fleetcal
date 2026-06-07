@@ -22,7 +22,12 @@ function TimelinePageInner() {
   const assetId = param ? Number(param) : null;
 
   return (
-    <RequireCap cap="loads.view">
+    // Gated on `performance` because the timeline is the deep-dive
+    // surface the Performance hub links into (/performance → click
+    // an asset row → /timeline?assetId=…). Orgs without the
+    // performance module shouldn't be able to reach it via direct
+    // URL or via the AssetDetailModal link.
+    <RequireCap cap="loads.view" module="performance">
       <DataLoader />
       <AssetTimelineView assetId={Number.isFinite(assetId) ? assetId : null} />
       <EventModal />
