@@ -498,7 +498,13 @@ async function buildSnapshot(
     orderDate:      undefined,
     pickupDate:     isoDayToDisplay(isoDay(firstStart)),
     deliveredDate:  isoDayToDisplay(isoDay(lastEnd)),
-    loadNumber:     String(load.internal_load_id),
+    // Prefer the broker-supplied load number on the invoice — that's
+    // the reference the customer uses on their side. Fall back to
+    // internal_load_id when the broker # is missing so the cell
+    // never blanks out. The invoice number at the top of the doc
+    // already carries our internal id (+ optional prefix), so we
+    // don't duplicate it here.
+    loadNumber:     load.load_num?.trim() || String(load.internal_load_id),
 
     stops:          stopsForSnapshot,
     lineItems,
