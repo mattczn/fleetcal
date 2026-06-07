@@ -938,10 +938,15 @@ export default function CalendarToolbar() {
               elements: {
                 rootBox: 'flex items-center',
                 organizationSwitcherTrigger: 'flex items-center p-0',
-                // Hide the org name text — show avatar only
-                organizationPreviewMainIdentifier: { display: 'none' },
-                organizationPreviewSecondaryIdentifier: { display: 'none' },
-                organizationPreviewAvatarContainer: { margin: 0 },
+                // Hide the org name TEXT ONLY ON THE TRIGGER (the
+                // small avatar button on the toolbar). The __variant
+                // suffix scopes the rule to that descriptor —
+                // without it, Clerk applies the rule globally and
+                // also blanks the active-org row inside the popover
+                // dropdown, leaving just a logo with no name.
+                organizationPreviewMainIdentifier__organizationSwitcherTrigger: { display: 'none' },
+                organizationPreviewSecondaryIdentifier__organizationSwitcherTrigger: { display: 'none' },
+                organizationPreviewAvatarContainer__organizationSwitcherTrigger: { margin: 0 },
                 organizationSwitcherTriggerIcon: { display: 'none' },
               },
             }}
