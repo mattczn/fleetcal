@@ -33,7 +33,10 @@ export default function PricingPage() {
           </p>
         </div>
 
-        <PricingTable />
+        {/* for="organization": required for B2B plans. Without it the
+            table defaults to user-scoped (B2C) plans and finds nothing,
+            since you created org plans in the Clerk dashboard. */}
+        <PricingTable for="organization" />
 
         <div className="mt-16 text-center text-sm" style={{ color: 'var(--gc-text-3)' }}>
           Running a fleet larger than 14 trucks?{' '}
