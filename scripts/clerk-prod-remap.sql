@@ -284,22 +284,10 @@ WHERE e.audit_log IS NOT NULL
   AND jsonb_typeof(e.audit_log) = 'array'
   AND e.audit_log @? '$[*] ? (@.userId != null || @.changedById != null)';
 
-UPDATE events e
-SET driver_history = (
-  SELECT jsonb_agg(
-    CASE
-      WHEN m.prod_user_id IS NOT NULL
-        THEN entry || jsonb_build_object('changedById', m.prod_user_id)
-      ELSE entry
-    END
-    ORDER BY ord
-  )
-  FROM jsonb_array_elements(e.driver_history) WITH ORDINALITY AS t(entry, ord)
-  LEFT JOIN clerk_user_map m ON m.dev_user_id = entry->>'changedById'
-)
-WHERE e.driver_history IS NOT NULL
-  AND jsonb_typeof(e.driver_history) = 'array'
-  AND e.driver_history @? '$[*] ? (@.changedById != null)';
+-- events.driver_history removed — column doesn't exist in live schema
+-- (preflight confirmed). The audit-of-migrations had it as a planned
+-- column that never landed. Skip silently — events.audit_log above
+-- already captures every driver assignment change.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- VERIFICATION
