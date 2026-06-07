@@ -2016,11 +2016,11 @@ interface EventModalProps {
 }
 export default function EventModal({ embedded = false }: EventModalProps = {}) {
   const {
-    assets, events, drivers, driverPrefs, driverPrefsSecondary, currentDate,
+    assets, events, deletedEvents, drivers, driverPrefs, driverPrefsSecondary, currentDate,
     modalOpen, modalMode, modalEventId, modalDefaults, modalShowMap, modalConflict, clearModalConflict,
     prefillWorkOrderLinkIds,
     refetchEvent, refetchingEventIds,
-    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, closeModal,
+    addEvent, updateEvent, removeEvent, cancelEventKeepLoad, restoreEvent, closeModal,
     openEditModal, openCreateModal,
     createRelayPair, splitToRelay, saveRelayBoth, removeRelay,
     fieldSettings, sectionOrder, promptInstructions, promptVariables,
@@ -2087,7 +2087,17 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
   // get an error back. To genuinely walk one back: void the
   // invoice first, billing_status drops back to 'pending', then
   // cancel is offered again.
-  const cancelLockedEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+  // Unified event lookup: searches the active events list first, then
+  // falls back to trash. Lets the modal render a deleted load with its
+  // metadata intact so the dispatcher can reinstate from the modal
+  // without a separate "trash detail" surface. Trash events are
+  // read-only — save handlers etc. early-return when the event is in
+  // deletedEvents (status='cancelled' + isInTrash gates that).
+  const findEvent = (id: string | undefined): import('@/lib/types').CalendarEvent | undefined => {
+    if (!id) return undefined;
+    return events.find(e => e.id === id) ?? deletedEvents.find(e => e.id === id);
+  };
+  const cancelLockedEv = findEvent(modalEventId);
   const cancelLocked = !!cancelLockedEv?.billingStatus && cancelLockedEv.billingStatus !== 'pending';
   // ── Read-only gate for this modal ────────────────────────────────
   // Maintenance opens a revenue load → has loads.view but not
@@ -2372,7 +2382,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
   // round-trip on every modal open.
   useEffect(() => {
     if (!modalEventId || !orgId) return;
-    const ev = events.find(e => e.id === modalEventId);
+    const ev = findEvent(modalEventId);
     if (!ev?.loadId) return; // documents are load-scoped
     const isRelayLeg = !!ev.relayRole; // 'pickup' or 'delivery'
     if (!isRelayLeg && !showPdfViewer) return;
@@ -2449,7 +2459,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
 
     // Stored on the load — ask the API for a signed URL (or pass-through
     // for legacy data: URLs stored before the storage migration).
-    const ev = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+    const ev = modalEventId ? findEvent(modalEventId) : undefined;
     if (!ev?.loadId) { setPdfObjectUrl(''); return () => { cancelled = true; }; }
     setPdfObjectUrl(''); // clear stale URL while re-fetching
     import('@/lib/railway').then(({ railway }) => railway.getRateConUrl(ev.loadId!))
@@ -2543,7 +2553,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
   // analytics.
   useEffect(() => {
     if (!isEdit || !modalEventId) return;
-    const ev = events.find(e => e.id === modalEventId);
+    const ev = findEvent(modalEventId);
     if (!ev) return;
     const stored = ev.loadedMiles ?? null;
     // Computed null + column has stale value → clear it. Cast to any
@@ -2670,7 +2680,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
     setPrevDriverPay(null);
 
     if (isEdit && modalEventId) {
-      const ev = events.find(e => e.id === modalEventId);
+      const ev = findEvent(modalEventId);
       if (!ev) return;
       setTitle(ev.title);
       setAssetId(ev.assetId);
@@ -2910,7 +2920,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
     // Already attempted recovery for this event in this session —
     // accept whatever state the cache is in, don't loop.
     if (refetchedEventIdsRef.current.has(modalEventId)) return;
-    const ev = events.find(e => e.id === modalEventId);
+    const ev = findEvent(modalEventId);
     // Don't stack refetches on top of an in-flight one.
     if (refetchingEventIds.has(modalEventId)) return;
     // Case A: event missing from the local cache entirely. Happens
@@ -2924,7 +2934,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
     if (!ev) {
       refetchedEventIdsRef.current.add(modalEventId);
       void refetchEvent(modalEventId).then(() => {
-        const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+        const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId) ?? useCalendarStore.getState().deletedEvents.find(e => e.id === modalEventId);
         if (fresh) reinitForm(fresh);
       });
       return;
@@ -2935,7 +2945,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
     if ((ev.stops?.length ?? 0) > 0) return;
     refetchedEventIdsRef.current.add(modalEventId);
     void refetchEvent(modalEventId).then(() => {
-      const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+      const fresh = useCalendarStore.getState().events.find(e => e.id === modalEventId) ?? useCalendarStore.getState().deletedEvents.find(e => e.id === modalEventId);
       if (fresh) reinitForm(fresh);
     });
   }, [modalOpen, modalEventId, events]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3346,7 +3356,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
       if (!relayStop?.apptStart) return;
       const rgId = crypto.randomUUID();
       const delivEndDate = deliveryLegStart.split('T')[0] > endDate ? deliveryLegStart.split('T')[0] : endDate;
-      const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+      const existingEv = isEdit && modalEventId ? findEvent(modalEventId) : undefined;
       // Pre-resolve display names so the audit entry survives later
       // customer/trailer deletes — same pattern as the non-relay
       // path below. See doSave for the rationale.
@@ -3414,7 +3424,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
 
     } else {
       const newDriverName = driverName || undefined;
-      const existingEv = isEdit && modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+      const existingEv = isEdit && modalEventId ? findEvent(modalEventId) : undefined;
       // Resolve display names for the audit's ID-typed fields so the
       // history panel can render readable text later without needing
       // to refetch customers / trailers. Lookups use the current
@@ -3608,7 +3618,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
     } else {
       // Single-leg load: zero rate on the load record before the
       // event row is deleted so the preserved load reads as cancelled.
-      const evNow = events.find(e => e.id === modalEventId);
+      const evNow = findEvent(modalEventId);
       if (evNow?.loadId) {
         const loadId = evNow.loadId;
         // Suppress the realtime echo of this load write so the
@@ -3655,10 +3665,17 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
     return null;
   }, [auditLog]);
   const isRemovedEventCancelled = lastCancelEntry?.mode === 'remove-event';
+  // True when the modal was opened against an event in the trash
+  // (deletedEvents). Drives a different Reinstate path that calls
+  // the store's restoreEvent (which routes through restoreLoad
+  // server-side) rather than the audit-log replay used for cancelled-
+  // but-still-active loads.
+  const isInTrash = !!(modalEventId && deletedEvents.some(e => e.id === modalEventId));
   // The combined "this load is cancelled" gate: a 'status'-mode cancel
   // shows status='cancelled' on the row; a 'remove-event'-mode cancel
-  // only shows up via the audit log.
-  const isCancelled = status === 'cancelled' || isRemovedEventCancelled;
+  // only shows up via the audit log; isInTrash covers the "Move to
+  // Recently Deleted" path which lives in a separate store list.
+  const isCancelled = status === 'cancelled' || isRemovedEventCancelled || isInTrash;
 
   // Flip a cancelled load back to its previous status. Pulls prev rate
   // + miles from the most recent loadCancelled audit entry so a misclick
@@ -3667,6 +3684,16 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
   // /v1/events/:id/restore before updating client state.
   const handleReinstate = async () => {
     if (!modalEventId) return;
+    // Trash-mode reinstate: the load was permanently deleted via
+    // "Move to Recently Deleted." Route through the store's
+    // restoreEvent which handles both client list movement
+    // (deletedEvents → events) AND server-side restoreLoad. No
+    // audit-log replay needed since the full row was preserved.
+    if (isInTrash) {
+      restoreEvent(modalEventId);
+      closeModal();
+      return;
+    }
     // remove-event mode needs the server-side un-delete first; without
     // this the event row stays soft-deleted in the DB even though the
     // local store thinks it's active again.
@@ -3723,7 +3750,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
   const handleRelayRemove = () => {
     if (!confirmRelayRemove) { setConfirmRelayRemove(true); return; }
     if (modalEventId) {
-      const existingEv = events.find(e => e.id === modalEventId);
+      const existingEv = findEvent(modalEventId);
       const entry: LoadAuditEntry = { changedAt: new Date().toISOString(), changedByName: currentUserName, relayRemoved: true };
       const nextAuditLog = existingEv ? appendAuditEntry(auditLog, entry) : [entry];
       removeRelay(modalEventId, nextAuditLog);
@@ -4735,7 +4762,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                           const blob = await res.blob();
                           const objectUrl = URL.createObjectURL(blob);
                           const safeNum = String(
-                            (events.find(e => e.id === modalEventId)?.loadNum)
+                            (findEvent(modalEventId)?.loadNum)
                             ?? (fieldValues['loadNum'] ?? '')
                           ).replace(/[^A-Za-z0-9_-]/g, '');
                           const a = document.createElement('a');
@@ -4851,12 +4878,12 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                 onSignedUrlError={refreshSelectedDocUrl}
                 headerColor={headerColor}
                 loadId={(() => {
-                  const ev = events.find(e => e.id === modalEventId);
+                  const ev = findEvent(modalEventId);
                   return ev?.loadId;
                 })()}
                 onChange={async () => {
                   // Re-fetch the docs list after add/delete.
-                  const ev = events.find(e => e.id === modalEventId);
+                  const ev = findEvent(modalEventId);
                   if (!ev?.loadId || !orgId) return;
                   const { fetchLoadDocuments } = await import('@/lib/db');
                   const fresh = await fetchLoadDocuments(ev.loadId, orgId);
@@ -4917,7 +4944,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
             <div className="flex items-center gap-2">
               <button type="button"
                 onClick={() => {
-                  const ev = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+                  const ev = useCalendarStore.getState().events.find(e => e.id === modalEventId) ?? useCalendarStore.getState().deletedEvents.find(e => e.id === modalEventId);
                   if (ev) reinitForm(ev);
                   clearModalConflict();
                 }}
@@ -4951,7 +4978,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                   {isBatch ? `Create Load ${batchIndex + 1} of ${batchItems.length}` : isEdit ? (eventKind === 'non_revenue' ? 'Edit Event' : 'Edit Load') : (eventKind === 'non_revenue' ? 'New Event' : 'New Load')}
                 </div>
                 {isEdit && (() => {
-                  const ev = events.find(e => e.id === modalEventId);
+                  const ev = findEvent(modalEventId);
                   if (!ev?.internalLoadId) return null;
                   return (
                     <>
@@ -4989,15 +5016,14 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                           <button
                             type="button"
                             onClick={() => {
-                              // Close the modal before navigating so the page
-                              // mounts cleanly and (more importantly) re-opens
-                              // the edit form for the same load without two
-                              // modal instances racing. The detail page's
-                              // mount effect calls openEditModal(eventId) so
-                              // editing resumes immediately on the other side.
-                              const targetLoadId = ev.loadId;
+                              // Close the modal before navigating so the
+                              // page mounts cleanly. Slug is the
+                              // internal_load_id (the "#10761" the
+                              // dispatcher already knows) so the URL is
+                              // human-readable: /loads/10761.
+                              const targetId = ev.internalLoadId;
                               closeModal();
-                              router.push(`/loads/${targetLoadId}`);
+                              router.push(`/loads/${targetId}`);
                             }}
                             className="flex items-center justify-center transition-colors"
                             style={{
@@ -5082,7 +5108,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                         // After the refetch lands, re-seed the form from the
                         // freshly cached event so the modal reflects the
                         // newly populated stops without forcing a close+reopen.
-                        const ev = useCalendarStore.getState().events.find(e => e.id === modalEventId);
+                        const ev = useCalendarStore.getState().events.find(e => e.id === modalEventId) ?? useCalendarStore.getState().deletedEvents.find(e => e.id === modalEventId);
                         if (ev) reinitForm(ev);
                       });
                     }}
@@ -5160,7 +5186,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
               // "Add Docs" even when a POD existed, because the array
               // was still empty. `loadDocuments` is used as a fallback
               // for the rare case `documentCounts` is missing.
-              const evCur = events.find(e => e.id === modalEventId);
+              const evCur = findEvent(modalEventId);
               const countsTotal = evCur?.documentCounts
                 ? Object.entries(evCur.documentCounts)
                     .filter(([k]) => k !== 'rate_con')
@@ -5334,7 +5360,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
               </div>
               <div className="flex-1 flex items-center justify-end gap-2">
                 {eventKind === 'revenue' && isEdit && (() => {
-                  const ev = events.find(e => e.id === modalEventId);
+                  const ev = findEvent(modalEventId);
                   if (!ev) return null;
                   const bs = ev.billingStatus;
                   const bsTint = (() => {
@@ -5598,7 +5624,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                 {(() => {
                   const sel = findDriverByName(driverName) ?? null;
                   const showSummaryBtn = eventKind === 'revenue' && isEdit;
-                  const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+                  const currentEv = modalEventId ? findEvent(modalEventId) : undefined;
                   const showNotify = driverAppEnabled && eventKind === 'revenue' && isEdit && !!sel?.id && !!modalEventId;
                   if (!sel?.phone && !showSummaryBtn && !showNotify) return null;
                   // Per-kind ack state — drives which buttons in the
@@ -5888,7 +5914,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                                 }
                               </span>
                               {(() => {
-                                const currentEv = events.find(e => e.id === modalEventId);
+                                const currentEv = findEvent(modalEventId);
                                 if (!currentEv?.loadId) return null;
                                 const handoffPhotos = loadDocuments
                                   .filter(d => d.kind === 'relay_handoff')
@@ -6075,7 +6101,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                           </div>
                           {(() => {
                             const relayStop = stops.find(s => s.type === 'relay');
-                            const currentEv = events.find(e => e.id === modalEventId);
+                            const currentEv = findEvent(modalEventId);
                             const handoffPhotos = currentEv?.loadId
                               ? loadDocuments
                                   .filter(d => d.kind === 'relay_handoff')
@@ -6123,7 +6149,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
                               with the driver-app RelayTrailerLocation
                               removal. Re-enable by uncommenting. */}
                           {/* {(() => {
-                            const currentEv = events.find(e => e.id === modalEventId);
+                            const currentEv = findEvent(modalEventId);
                             if (currentEv?.trailerDropoffLat == null) return null;
                             return (
                               <TrailerLocationCard
@@ -6404,7 +6430,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
 
           {/* Check Calls — only when load row exists */}
           {isEdit && (() => {
-            const ev = events.find(e => e.id === modalEventId);
+            const ev = findEvent(modalEventId);
             if (!ev?.loadId) return null;
             return (
               <CheckCallsSection
@@ -6417,7 +6443,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
 
           {/* Audit history — edit mode only */}
           {isEdit && (() => {
-            const ev = events.find(e => e.id === modalEventId);
+            const ev = findEvent(modalEventId);
             if (!ev) return null;
             const hasHistory = auditLog.length > 0;
             if (!ev.createdByName && !hasHistory) return null;
@@ -6715,7 +6741,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
             driver group chats. Hidden by default; toggled via the
             "Driver Summary" button in the toolbar. */}
         {showDriverSummary && isEdit && (() => {
-          const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+          const currentEv = modalEventId ? findEvent(modalEventId) : undefined;
           const summaryEvent = {
             title,
             start: startDate && startTime ? `${startDate}T${startTime}` : undefined,
@@ -6806,25 +6832,6 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
               </div>
             </button>
 
-            <button type="button" onClick={handleCancelRemoveEvent}
-              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
-              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <div className="flex items-center justify-center flex-shrink-0 rounded-lg mt-0.5"
-                style={{ width: 32, height: 32, background: '#d97706', color: '#fff' }}>
-                <Trash2 size={15} />
-              </div>
-              <div className="flex-1">
-                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
-                  Remove from calendar (keep load record)
-                </div>
-                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-2)' }}>
-                  Event disappears, but the load stays searchable in accounting / history. Marked as "Removed from Calendar" so you can reinstate later.
-                </div>
-              </div>
-            </button>
-
             <button type="button" onClick={handleCancelPermanent}
               className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
               style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
@@ -6860,88 +6867,21 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
       </div>
     )}
 
-    {/* Remove dialog — shown when a cancelled load needs to come off
-        the board. Two paths: keep the load record (event-only delete)
-        or send the whole thing to the Trash bin. */}
+    {/* Remove confirm — shown when a cancelled load needs to come off
+        the board. The "keep load record" path was removed (we now
+        only support Mark Cancelled + Move to Recently Deleted), so
+        this collapsed to a single confirm. */}
     {removeDialogOpen && (
-      <div className="fixed inset-0 flex items-center justify-center px-4"
-        style={{ background: 'rgba(0,0,0,0.5)', zIndex: 240 }}
-        onMouseDown={e => { if (e.target === e.currentTarget) setRemoveDialogOpen(false); }}>
-        <div className="rounded-2xl flex flex-col w-full"
-          style={{
-            maxWidth:   480,
-            background: 'var(--gc-surface)',
-            boxShadow:  '0 16px 48px rgba(0,0,0,0.25)',
-            border:     '1px solid var(--gc-border)',
-            overflow:   'hidden',
-          }}>
-          {/* Header */}
-          <div className="flex items-start gap-3 px-5 pt-5 pb-3">
-            <div className="flex items-center justify-center flex-shrink-0 rounded-full"
-              style={{ width: 36, height: 36, background: '#fce8e6', color: '#d93025' }}>
-              <Trash2 size={18} />
-            </div>
-            <div className="flex-1">
-              <div className="text-[16px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
-                Remove this load?
-              </div>
-            </div>
-          </div>
-
-          {/* Two action rows */}
-          <div className="flex flex-col gap-2 px-5 pb-2">
-            <button type="button" onClick={() => { handleCancelRemoveEvent(); setRemoveDialogOpen(false); }}
-              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
-              style={{ border: '1px solid var(--gc-border)', background: 'var(--gc-surface)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
-                style={{ width: 28, height: 28, background: '#fef3c7', color: '#92400e' }}>
-                <Trash2 size={14} />
-              </div>
-              <div className="flex-1">
-                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
-                  Remove from calendar (keep load record)
-                </div>
-                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                  Event disappears, but the load stays searchable in accounting / history.
-                </div>
-              </div>
-            </button>
-
-            <button type="button" onClick={() => { handleCancelPermanent(); setRemoveDialogOpen(false); }}
-              className="flex items-start gap-3 text-left px-4 py-3 rounded-lg transition-colors"
-              style={{ border: '1px solid #f4c7c3', background: '#fdecea' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#fadcd9')}
-              onMouseLeave={e => (e.currentTarget.style.background = '#fdecea')}>
-              <div className="flex items-center justify-center flex-shrink-0 rounded-full mt-0.5"
-                style={{ width: 28, height: 28, background: '#fce8e6', color: '#d93025' }}>
-                <AlertCircle size={14} />
-              </div>
-              <div className="flex-1">
-                <div className="text-[13px] font-extrabold" style={{ color: 'var(--gc-text-1)' }}>
-                  Move to Recently Deleted
-                </div>
-                <div className="text-[12px] mt-0.5" style={{ color: 'var(--gc-text-3)' }}>
-                  Removes the event and the load record. Restorable from Trash for 30 days.
-                </div>
-              </div>
-            </button>
-          </div>
-
-          {/* Footer — exit only */}
-          <div className="flex items-center justify-end gap-2 px-5 py-4 mt-2"
-            style={{ borderTop: '1px solid var(--gc-border-light)', background: 'var(--gc-bg)' }}>
-            <button type="button" onClick={() => setRemoveDialogOpen(false)}
-              className="text-[13px] font-bold px-4 py-2 rounded-lg transition-colors"
-              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-1)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'var(--gc-surface)')}>
-              Never mind
-            </button>
-          </div>
-        </div>
-      </div>
+      <ConfirmDialog
+        title="Move to Recently Deleted?"
+        message="Removes the event and the load record. Restorable from Trash for 30 days."
+        confirmLabel="Move to Recently Deleted"
+        cancelLabel="Never mind"
+        destructive
+        zIndex={240}
+        onCancel={() => setRemoveDialogOpen(false)}
+        onConfirm={() => { handleCancelPermanent(); setRemoveDialogOpen(false); }}
+      />
     )}
 
     {/* Closeout review panel launched from the load modal. Resolves
@@ -6953,7 +6893,7 @@ export default function EventModal({ embedded = false }: EventModalProps = {}) {
         billing status pill reflects the new state without a full
         page refresh. */}
     {reviewQueueOpen && (() => {
-      const currentEv = modalEventId ? events.find(e => e.id === modalEventId) : undefined;
+      const currentEv = modalEventId ? findEvent(modalEventId) : undefined;
       if (!currentEv) return null;
       const reviewLoad: CalendarEvent =
         currentEv.relayRole === 'delivery' && currentEv.relayGroupId

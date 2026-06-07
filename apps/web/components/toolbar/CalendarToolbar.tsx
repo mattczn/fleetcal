@@ -549,16 +549,25 @@ export default function CalendarToolbar() {
                   const days  = daysUntilPurge(ev.deletedAt);
                   return (
                     <div key={ev.id}
-                      className="flex items-center gap-3 px-4 py-2.5"
-                      style={{ borderBottom: '1px solid var(--gc-border-light)' }}>
+                      className="flex items-center gap-3 px-4 py-2.5 transition-colors"
+                      style={{ borderBottom: '1px solid var(--gc-border-light)' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--gc-hover)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                       <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: asset?.color ?? '#9aa0a6' }} />
-                      <div className="flex-1 min-w-0">
+                      {/* Title block is a button — clicking opens the
+                          load modal against the deleted event so the
+                          dispatcher can review + Reinstate from the
+                          modal's footer. Restore/Purge icons on the
+                          right stay as one-click shortcuts. */}
+                      <button type="button"
+                        onClick={() => { setTrashOpen(false); useCalendarStore.getState().openEditModal(ev.id); }}
+                        className="flex-1 min-w-0 text-left bg-transparent border-0 cursor-pointer">
                         <div className="text-sm font-bold truncate" style={{ color: 'var(--gc-text-1)' }}>{ev.title}</div>
                         <div className="text-[11px] flex items-center gap-1.5" style={{ color: 'var(--gc-text-3)' }}>
                           <span>{eventDateLabel(ev.start)}{ev.loadNum ? ` · #${ev.loadNum}` : ''}</span>
                           <span style={{ color: days <= 5 ? '#d93025' : 'var(--gc-text-3)' }}>· {days}d left</span>
                         </div>
-                      </div>
+                      </button>
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button onClick={() => handleRestore(ev.id, ev.start)}
                           className="p-1.5 rounded-full transition-colors" title="Restore"
