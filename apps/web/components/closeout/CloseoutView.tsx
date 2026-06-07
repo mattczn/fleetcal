@@ -165,6 +165,15 @@ export default function CloseoutView() {
   // released view is a history surface for dispatchers WITHOUT
   // accounting access, so we don't pre-aggregate billing $ on it.
   const [bucketLoadValue, setBucketLoadValue] = useState<Record<Tab, number>>({ all: 0, recent: 0, flagged: 0, released: 0 });
+  // Per-bucket loading state. The global `loading` flag below only
+  // tracks the active tab, so without this a user clicking a
+  // not-yet-primed tile would see "0" with no indication that the
+  // count is still on the wire. Mirrors /accounting's bucketLoading.
+  const [bucketLoading, setBucketLoading] = useState<Set<Tab>>(new Set());
+  // Counts-priming flag. Tracked separately from bucketLoading so a
+  // count-refresh finishing first doesn't clobber an in-flight active-
+  // tab table fetch. Tiles show their spinner when either signal is on.
+  const [countsPriming, setCountsPriming] = useState(false);
 
   // Search across all loads in the current tab (not just the page on
   // screen). Live input lives in `searchInput`; the debounced value
@@ -238,6 +247,12 @@ export default function CloseoutView() {
   const fetchAndCache = useMemo(() => async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
     setError(null);
+    setBucketLoading(prev => {
+      if (prev.has(tab)) return prev;
+      const next = new Set(prev);
+      next.add(tab);
+      return next;
+    });
     try {
       // Pull the whole bucket so OpsTable's filter chips (Customer /
       // Driver / Delivered) operate across every load, not just the
@@ -260,6 +275,12 @@ export default function CloseoutView() {
       setError((err as Error).message ?? 'Failed to load queue');
     } finally {
       setLoading(false);
+      setBucketLoading(prev => {
+        if (!prev.has(tab)) return prev;
+        const next = new Set(prev);
+        next.delete(tab);
+        return next;
+      });
     }
   }, [tab, searchQuery, mergeEvents]);
 
@@ -278,6 +299,10 @@ export default function CloseoutView() {
   // payload). Called on mount + after every mutation so the inactive
   // tile's count doesn't get stale.
   async function refreshBucketTotals() {
+    // Flag every tile as priming for the duration of the count fetch
+    // so tiles that haven't been clicked yet still show "…loading"
+    // instead of "0".
+    setCountsPriming(true);
     try {
       const nowTz = naiveNowInTz(calendarTimezone);
       const [a, rc, f, rl] = await Promise.all([
@@ -300,6 +325,9 @@ export default function CloseoutView() {
         released: 0,
       });
     } catch { /* best-effort */ }
+    finally {
+      setCountsPriming(false);
+    }
   }
 
   // Render cached data on tab/page/search change, then refresh in the
@@ -1114,6 +1142,7 @@ export default function CloseoutView() {
               const active = tab === b.value;
               const count = bucketTotals[b.value];
               const value = bucketLoadValue[b.value];
+              const isPriming = countsPriming || bucketLoading.has(b.value);
               const Icon =
                 b.value === 'recent'   ? Clock :
                 b.value === 'flagged'  ? Flag  :
@@ -1142,7 +1171,11 @@ export default function CloseoutView() {
                     <Tooltip content={b.formula} placement="bottom">
                       <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
                     </Tooltip>
-                    <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
+                    {isPriming ? (
+                      <Loader2 size={13} className="ml-auto animate-spin" style={{ color: b.tint }} />
+                    ) : (
+                      <span className="ml-auto text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{count.toLocaleString()}</span>
+                    )}
                   </div>
                   <div
                     className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-1.5 text-[12px] tabular-nums transition-all`}

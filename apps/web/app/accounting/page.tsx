@@ -292,6 +292,13 @@ function AccountingPageInner() {
   // bucket-switch effect from re-fetching per-bucket slices we've
   // already pulled via the "load everything" path.
   const everythingLoaded = useRef(false);
+  // Per-bucket loading state. Without this the page only knows about a
+  // global cold-start spinner — switching to a not-yet-primed bucket
+  // would fall through the "table empty" gate and render the "no
+  // loads" empty state while data is actually still on the wire. Held
+  // in a Set so concurrent primes of different buckets don't trample
+  // each other.
+  const [bucketLoading, setBucketLoading] = useState<Set<Bucket>>(new Set());
 
   /** Per-bucket prioritized fetch. Cold-start path — pulls only what
    *  the active bucket needs (small payload, fast paint), then kicks
@@ -300,6 +307,14 @@ function AccountingPageInner() {
   async function primeBucket(b: Bucket) {
     if (!orgId) return;
     setError(null);
+    setBucketLoading(prev => {
+      // Skip a re-set when the bucket is already marked — keeps the
+      // Set identity stable for memoized consumers.
+      if (prev.has(b)) return prev;
+      const next = new Set(prev);
+      next.add(b);
+      return next;
+    });
     const slice = fetchSliceForBucket(b);
     try {
       const [loadsRes, invoicesRes] = await Promise.all([
@@ -321,6 +336,13 @@ function AccountingPageInner() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load accounting data');
       setLoading(false);
+    } finally {
+      setBucketLoading(prev => {
+        if (!prev.has(b)) return prev;
+        const next = new Set(prev);
+        next.delete(b);
+        return next;
+      });
     }
   }
 
@@ -1311,6 +1333,11 @@ function AccountingPageInner() {
               const active = bucket === b.key;
               const s = stats[b.key];
               const Icon = b.icon;
+              // Per-bucket priming spinner. Shown on any bucket tile
+              // whose slice is currently on the wire, so the operator
+              // sees inactive buckets are still loading too — not just
+              // the one they're sitting on.
+              const isPriming = bucketLoading.has(b.key);
               return (
                 <button key={b.key}
                   onClick={() => setBucket(b.key)}
@@ -1328,7 +1355,11 @@ function AccountingPageInner() {
                     <Tooltip content={b.formula} placement="bottom">
                       <Info size={11} style={{ color: 'var(--gc-text-3)', opacity: 0.6, cursor: 'help' }} />
                     </Tooltip>
-                    <span className="ml-auto text-[15px] lg:text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
+                    {isPriming ? (
+                      <Loader2 size={13} className="ml-auto animate-spin" style={{ color: b.tint }} />
+                    ) : (
+                      <span className="ml-auto text-[15px] lg:text-[16px] font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>{s.count.toLocaleString()}</span>
+                    )}
                   </div>
                   <div
                     className={`${tilesCompact ? 'hidden' : 'hidden lg:block'} mt-1.5 text-[12px] tabular-nums transition-all`}
@@ -1396,10 +1427,18 @@ function AccountingPageInner() {
                   // internalLoadId — guard belt-and-braces.
                   if (r.load.internalLoadId != null) router.push(`/loads/${r.load.internalLoadId}`);
                 }}
-                /* loading is gated on "table is empty" — once any row
-                   has rendered, never paint the skeleton again. Prevents
-                   the table-blank flash on View / Refresh / mutations. */
-                loading={loading && loads.length === 0}
+                /* Show the spinner whenever EITHER the global cold-start
+                   is in flight or the ACTIVE bucket is being primed,
+                   gated on the visible row count being zero so a
+                   background re-fetch (Refresh / loadEditTick / merge)
+                   doesn't blank an already-populated table. The
+                   bucket-aware half is what catches "user clicked
+                   queued before it was primed — show Loading…, not
+                   No loads." */
+                loading={
+                  (loading || bucketLoading.has(bucket))
+                  && rowsForBucket.length === 0
+                }
                 priorityKey={r => !!r.load.pickupPriority}
                 columnPicker
                 columnReorder
