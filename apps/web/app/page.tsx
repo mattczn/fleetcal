@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { auth } from '@clerk/nextjs/server';
 import PricingCards from '@/components/marketing/PricingCards';
+import SmoothScrollLink from '@/components/marketing/SmoothScrollLink';
 
 /**
  * Marketing landing page at `/`.
@@ -53,8 +54,8 @@ function Nav({ signedIn }: { signedIn: boolean }) {
           <span className="text-sys-orange">CAL</span>
         </Link>
         <div className="flex items-center gap-8">
-          <a href="#features"  className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Features</a>
-          <a href="#pricing"   className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Pricing</a>
+          <SmoothScrollLink to="features" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Features</SmoothScrollLink>
+          <SmoothScrollLink to="pricing"  className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Pricing</SmoothScrollLink>
           {signedIn ? (
             // Signed-in: single primary "Open FleetCal →" button. No
             // sign-in link (they're already signed in) and no "Try for
@@ -114,9 +115,9 @@ function Hero({ signedIn }: { signedIn: boolean }) {
             >
               {signedIn ? 'Open FleetCal →' : 'Try for free →'}
             </Link>
-            <a href="#pricing" className="font-sys font-semibold text-[15px] text-sys-blue hover:underline">
+            <SmoothScrollLink to="pricing" className="font-sys font-semibold text-[15px] text-sys-blue hover:underline">
               See pricing →
-            </a>
+            </SmoothScrollLink>
           </div>
         </div>
       </div>
