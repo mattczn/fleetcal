@@ -35,6 +35,12 @@ export interface DirectoryDetailHandle {
 interface Props {
   /** Which tab to open on initially. */
   initial: DirectoryTab;
+  /** Deep-link from the global search dropdown — only the id matching
+   *  the chosen tab is consulted. */
+  initialAssetId?:    number;
+  initialTrailerId?:  number;
+  initialBrokerId?:   string;
+  initialLocationId?: string;
   onClose: () => void;
 }
 
@@ -46,7 +52,7 @@ const TAB_META: Record<DirectoryTab, { label: string; icon: typeof Truck }> = {
   locations: { label: 'Locations', icon: MapPin },
 };
 
-export default function DirectoryModal({ initial, onClose }: Props) {
+export default function DirectoryModal({ initial, initialAssetId, initialTrailerId, initialBrokerId, initialLocationId, onClose }: Props) {
   const [tab, setTab] = useState<DirectoryTab>(initial);
   const [showUnsaved, setShowUnsaved] = useState(false);
   const [saving, setSaving]           = useState(false);
@@ -199,11 +205,11 @@ export default function DirectoryModal({ initial, onClose }: Props) {
 
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === 'trucks'    && <AssetsModal        ref={trucksRef}    embedded onClose={onClose} />}
+          {tab === 'trucks'    && <AssetsModal        ref={trucksRef}    embedded onClose={onClose} initialAssetId={initialAssetId} />}
           {tab === 'drivers'   && <DriversModal       ref={driversRef}   embedded onClose={onClose} />}
-          {tab === 'trailers'  && trailersOn && <TrailersModal ref={trailersRef} embedded onClose={onClose} />}
-          {tab === 'customers' && <BrokerProfileModal ref={customersRef} embedded onClose={onClose} />}
-          {tab === 'locations' && <SavedLocationsDirectoryBody />}
+          {tab === 'trailers'  && trailersOn && <TrailersModal ref={trailersRef} embedded onClose={onClose} initialTrailerId={initialTrailerId} />}
+          {tab === 'customers' && <BrokerProfileModal ref={customersRef} embedded onClose={onClose} initialBrokerId={initialBrokerId} />}
+          {tab === 'locations' && <SavedLocationsDirectoryBody initialLocationId={initialLocationId} />}
         </div>
       </div>
     </div>

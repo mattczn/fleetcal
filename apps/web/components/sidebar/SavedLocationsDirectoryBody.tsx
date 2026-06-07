@@ -44,23 +44,36 @@ const P_INPUT: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-export default function SavedLocationsDirectoryBody() {
+interface Props {
+  /** Deep-link from the global search dropdown. When provided, this
+   *  location is pre-selected on mount instead of the first one. */
+  initialLocationId?: string;
+}
+
+export default function SavedLocationsDirectoryBody({ initialLocationId }: Props = {}) {
   const { savedLocations, fetchSavedLocations, addSavedLocation, updateSavedLocation, removeSavedLocation } = useCalendarStore();
   const { can } = usePermissions();
   const canDelete = can('savedLocations.delete');
 
   // `selected` is either an id (editing existing) or null (adding new).
-  // We initialize to the first location when the list loads so the
-  // detail pane isn't empty.
-  const [selected, setSelected] = useState<string | null>(null);
+  // We initialize to either the deep-linked id (from global search) or
+  // the first location when the list loads, so the detail pane isn't
+  // empty.
+  const [selected, setSelected] = useState<string | null>(initialLocationId ?? null);
   const [adding, setAdding]     = useState(false);
 
   useEffect(() => { void fetchSavedLocations(); }, [fetchSavedLocations]);
 
   useEffect(() => {
     if (selected || adding) return;
+    // Prefer the deep-linked id if it matches a fetched location;
+    // otherwise fall back to the first row.
+    if (initialLocationId && savedLocations.some(l => l.id === initialLocationId)) {
+      setSelected(initialLocationId);
+      return;
+    }
     if (savedLocations.length > 0) setSelected(savedLocations[0].id);
-  }, [savedLocations, selected, adding]);
+  }, [savedLocations, selected, adding, initialLocationId]);
 
   const selectedLoc = selected ? savedLocations.find(l => l.id === selected) ?? null : null;
 

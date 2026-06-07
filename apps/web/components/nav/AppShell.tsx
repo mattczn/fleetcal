@@ -21,10 +21,22 @@
  * Calendar keeps its own layout — see /calendar/page.tsx. The shell
  * is opt-in: pages that want it wrap their content with <AppShell>,
  * pages that don't (like calendar) just don't.
+ *
+ * Global directory mount: AppShell owns one DirectoryModal instance
+ * driven by GlobalDirectoryContext so the AppTopBar search results
+ * (and any future quick-action) can open it without each page
+ * re-mounting one. Calendar mounts its own via AssetSidebar.
  */
 
+import { useCallback, useMemo, useState } from 'react';
 import AppSidebar from './AppSidebar';
 import AppTopBar from './AppTopBar';
+import DirectoryModal from '@/components/sidebar/DirectoryModal';
+import {
+  GlobalDirectoryContext,
+  type GlobalDirectoryContextValue,
+  type GlobalDirectoryRequest,
+} from '@/lib/useGlobalDirectory';
 
 interface Props {
   title?: string;
@@ -44,6 +56,21 @@ interface Props {
 }
 
 export default function AppShell({ title, icon, rightSlot, children, noPageScroll }: Props) {
+  // Directory deep-link state — populated by openDirectory(); cleared
+  // on close. We store the entire request so DirectoryModal gets
+  // initial tab + the right initial*Id without us caring which kind.
+  const [directoryReq, setDirectoryReq] = useState<GlobalDirectoryRequest | null>(null);
+
+  const openDirectory = useCallback((req: GlobalDirectoryRequest) => {
+    setDirectoryReq(req);
+  }, []);
+  const closeDirectory = useCallback(() => setDirectoryReq(null), []);
+
+  const ctx = useMemo<GlobalDirectoryContextValue>(
+    () => ({ openDirectory }),
+    [openDirectory],
+  );
+
   // `w-full h-full flex-1` is intentionally redundant — `w-full` handles
   // the block-parent case, `flex-1 min-w-0` handles the flex-parent
   // case. Some of the management page.tsx wrappers wrap us in a
@@ -52,18 +79,30 @@ export default function AppShell({ title, icon, rightSlot, children, noPageScrol
   // expands us. Belt + braces so neither case can compress the body
   // back into the "ton of whitespace on the right" layout the user hit.
   return (
-    <div
-      className="flex flex-1 min-w-0 w-full h-full overflow-hidden"
-      style={{ background: 'var(--gc-bg)' }}>
-      <AppSidebar />
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <AppTopBar title={title} icon={icon} rightSlot={rightSlot} />
-        <main
-          className={`flex-1 min-h-0 ${noPageScroll ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}
-          style={{ background: 'var(--gc-bg)' }}>
-          {children}
-        </main>
+    <GlobalDirectoryContext.Provider value={ctx}>
+      <div
+        className="flex flex-1 min-w-0 w-full h-full overflow-hidden"
+        style={{ background: 'var(--gc-bg)' }}>
+        <AppSidebar />
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <AppTopBar title={title} icon={icon} rightSlot={rightSlot} />
+          <main
+            className={`flex-1 min-h-0 ${noPageScroll ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}
+            style={{ background: 'var(--gc-bg)' }}>
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+      {directoryReq && (
+        <DirectoryModal
+          initial={directoryReq.tab}
+          initialAssetId={directoryReq.initialAssetId}
+          initialTrailerId={directoryReq.initialTrailerId}
+          initialBrokerId={directoryReq.initialBrokerId}
+          initialLocationId={directoryReq.initialLocationId}
+          onClose={closeDirectory}
+        />
+      )}
+    </GlobalDirectoryContext.Provider>
   );
 }
