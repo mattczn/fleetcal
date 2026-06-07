@@ -79,7 +79,7 @@ CREATE TEMP TABLE clerk_user_map (
 -- TODO: replace REPLACE_WITH_PROD_USER_ID below with Matt's actual
 -- prod_user_id once he accepts the prod Curzon Clerk invite.
 INSERT INTO clerk_user_map (dev_user_id, prod_user_id, display_name) VALUES
-  ('user_3Cgz7uSjL0IX359kSOh0PRIHq3b', 'REPLACE_WITH_PROD_USER_ID', 'Matt Curzon');
+  ('user_3Cgz7uSjL0IX359kSOh0PRIHq3b', 'user_3Ck09Ww5VndOsCfmGBOIhExpoiM', 'Matt Curzon');
 
 -- Bail out if any prod_user_id placeholder is still present — protects
 -- against accidentally running a half-finished mapping where some
