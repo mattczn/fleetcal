@@ -15,39 +15,39 @@
  *   - Adding a role later is a single matrix edit. Adding a new
  *     destructive action is a single capability addition.
  *
- * Roles map 1:1 to Clerk's org role slugs (`org:owner`, `org:admin`,
- * `org:dispatcher`, `org:maintenance`). The Clerk dashboard owns
- * membership / invitations; this module owns "what can this role
- * actually do." Owner is Clerk's built-in creator role; admin /
- * dispatcher / maintenance must be added as custom roles in the Clerk
- * dashboard (see /docs/permissions-setup.md).
+ * Roles map to Clerk's org role slugs. We use exactly TWO roles:
+ *   - `org:admin`  — Clerk's built-in admin (also covers org creator)
+ *   - `dispatcher` — comes through as Clerk's built-in `org:member`
+ *                    (renamed "Dispatcher" in the Clerk dashboard if
+ *                    desired; parseClerkRole maps `member → dispatcher`
+ *                    either way)
+ *
+ * Why only 2 roles: Clerk's free tier doesn't allow custom roles in
+ * production. We use Clerk's built-ins (admin + member) and treat
+ * member as our dispatcher. If we ever upgrade to a paid Clerk plan,
+ * additional roles (e.g. maintenance, accountant) get added back here
+ * AND created in the Clerk dashboard with matching `org:<slug>` keys.
  */
 
 // ── Role taxonomy ────────────────────────────────────────────────────────
 
-export type OrgRole = "owner" | "admin" | "dispatcher" | "maintenance";
+export type OrgRole = "admin" | "dispatcher";
 
 export const ORG_ROLES: readonly OrgRole[] = [
-  "owner",
   "admin",
   "dispatcher",
-  "maintenance",
 ] as const;
 
 /** Display labels (singular). Used in UI dropdowns / badges. */
 export const ORG_ROLE_LABEL: Record<OrgRole, string> = {
-  owner:       "Owner",
-  admin:       "Admin",
-  dispatcher:  "Dispatcher",
-  maintenance: "Maintenance",
+  admin:      "Admin",
+  dispatcher: "Dispatcher",
 };
 
 /** Short description shown next to the label in pickers. */
 export const ORG_ROLE_BLURB: Record<OrgRole, string> = {
-  owner:       "Full control. Can transfer or delete the organization.",
-  admin:       "Full operational + billing access. Manages members and settings.",
-  dispatcher:  "Day-to-day operations. Creates and edits loads; cannot finalize billing or change org settings.",
-  maintenance: "Read-only calendar. Full access to Maintenance and Fuel.",
+  admin:      "Full operational + billing access. Manages members and settings.",
+  dispatcher: "Day-to-day operations. Creates and edits loads; cannot finalize billing or change org settings.",
 };
 
 /**
@@ -55,10 +55,8 @@ export const ORG_ROLE_BLURB: Record<OrgRole, string> = {
  * capability checks (those go through the explicit matrix below).
  */
 export const ROLE_RANK: Record<OrgRole, number> = {
-  maintenance: 0,
-  dispatcher:  1,
-  admin:       2,
-  owner:       3,
+  dispatcher: 0,
+  admin:      1,
 };
 
 /** True if `role` outranks or equals `min`. */
@@ -164,9 +162,9 @@ export type Capability =
 
 // ── Capability matrix ────────────────────────────────────────────────────
 //
-// Anything not in a role's list is forbidden. Owner and admin both
-// receive every capability so a typo in this list can't accidentally
-// lock the owner out of a screen they need.
+// Anything not in a role's list is forbidden. Admin receives every
+// capability so a typo in this list can't accidentally lock them out
+// of a screen they need.
 
 const ALL_CAPS: Capability[] = [
   "org.settings.edit", "org.members.manage",
@@ -187,7 +185,6 @@ const ALL_CAPS: Capability[] = [
 ];
 
 export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
-  owner: new Set(ALL_CAPS),
   admin: new Set(ALL_CAPS),
 
   // Dispatcher: day-to-day operations. Reads everything operations-
@@ -195,7 +192,10 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
   // BUT — no destructive deletes, no payroll/accounting, no org
   // settings or member management, no dashboard (those KPIs include
   // revenue / driver-pay numbers we don't want at this tier), and
-  // driver pay is hidden.
+  // driver pay is hidden. Maintenance + fuel are included so a
+  // dispatcher can manage repair holds and fuel-up entries without
+  // needing a separate role (we dropped the dedicated maintenance role
+  // when consolidating to Clerk free-tier's 2 built-in slugs).
   dispatcher: new Set<Capability>([
     "loads.view", "loads.create", "loads.edit", "loads.view_price", "loads.view_rate_con",
     "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
@@ -209,18 +209,6 @@ export const ROLE_CAPABILITIES: Record<OrgRole, ReadonlySet<Capability>> = {
     "maintenance.access", "maintenance.edit",
     "fuel.access", "fuel.edit",
     "reports.access",
-  ]),
-
-  // Maintenance: stripped-down nav. Sees the calendar, can't touch
-  // revenue loads, but CAN create / edit / delete non-revenue events
-  // (maintenance blocks, repair holds, asset out-of-service windows).
-  // Plus full access to Maintenance + Fuel modules.
-  maintenance: new Set<Capability>([
-    "loads.view",
-    "nonRevenueEvents.create", "nonRevenueEvents.edit", "nonRevenueEvents.delete",
-    "customers.view", "drivers.view", "trailers.view", "assets.view",
-    "maintenance.access", "maintenance.edit",
-    "fuel.access", "fuel.edit",
   ]),
 };
 
@@ -358,19 +346,27 @@ export const CAPABILITY_CATALOG: CapabilityInfo[] = [
 ];
 
 /**
- * Maps the raw Clerk role slug ("org:dispatcher") to our typed role
- * ("dispatcher"). Returns undefined for unrecognized slugs so callers
- * can fall through to "no permission" cleanly.
+ * Maps the raw Clerk role slug (e.g. `org:admin`, `org:member`,
+ * `org:dispatcher`) to our typed role. Returns undefined for
+ * unrecognized slugs so callers can fall through to "no permission"
+ * cleanly.
+ *
+ * Slug handling:
+ *   - `admin`               → admin
+ *   - `creator` / `owner`   → admin (Clerk's org-creator legacy slugs)
+ *   - `dispatcher`          → dispatcher (if a custom role got created)
+ *   - `member`              → dispatcher (Clerk free tier default;
+ *                             we treat the built-in member role as our
+ *                             dispatcher even if it wasn't renamed)
+ *   - anything else         → undefined (denied)
  */
 export function parseClerkRole(slug: string | null | undefined): OrgRole | undefined {
   if (!slug) return undefined;
   const stripped = slug.startsWith("org:") ? slug.slice(4) : slug;
-  if ((ORG_ROLES as readonly string[]).includes(stripped)) return stripped as OrgRole;
-  // Clerk's built-in admin slug. Map to our admin so existing orgs
-  // (where everyone is org:admin or org:member) don't lock out.
-  if (stripped === "admin") return "admin";
-  // Treat anyone else (member, custom, etc.) as dispatcher — same
-  // baseline as before this feature shipped.
-  if (stripped === "member") return "dispatcher";
+  if (stripped === "admin")      return "admin";
+  if (stripped === "creator")    return "admin";  // some Clerk instances use this for the org creator
+  if (stripped === "owner")      return "admin";  // legacy slug from when we had an owner role
+  if (stripped === "dispatcher") return "dispatcher";
+  if (stripped === "member")     return "dispatcher";  // Clerk's built-in member role = our dispatcher
   return undefined;
 }

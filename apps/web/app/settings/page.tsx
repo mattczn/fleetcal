@@ -649,7 +649,7 @@ function RolePermissionsPanel() {
   };
 
   const toggle = (role: OrgRole, cap: Capability) => {
-    if (role === 'owner') return; // owner column is read-only
+    if (role === 'admin') return; // admin column is read-only — admin always has everything
     const current = cellValue(role, cap);
     setDraft(prev => {
       const next: RoleOverrides = { ...prev };
@@ -735,7 +735,7 @@ function RolePermissionsPanel() {
       }}>
         {/* Header row — white background, bold black labels */}
         <div className="grid items-stretch" style={{
-          gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
+          gridTemplateColumns: 'minmax(280px, 2fr) repeat(2, 1fr)',
           background: '#fff',
           borderBottom: `2px solid ${SETTINGS_COLORS.text}`,
         }}>
@@ -748,7 +748,7 @@ function RolePermissionsPanel() {
               <div className="text-[15px] font-extrabold" style={{ color: SETTINGS_COLORS.text }}>
                 {ORG_ROLE_LABEL[role]}
               </div>
-              {role !== 'owner' && (
+              {role !== 'admin' && (
                 <button type="button" onClick={() => resetRole(role)}
                   disabled={!draft[role]}
                   title="Reset this role to defaults"
@@ -778,7 +778,7 @@ function RolePermissionsPanel() {
             </div>
             {grouped[groupName].map(item => (
               <div key={item.cap} className="grid items-center" style={{
-                gridTemplateColumns: 'minmax(280px, 2fr) repeat(4, 1fr)',
+                gridTemplateColumns: 'minmax(280px, 2fr) repeat(2, 1fr)',
                 borderTop: `1px solid ${SETTINGS_COLORS.border}`,
                 background: '#fff',
               }}>
@@ -791,7 +791,7 @@ function RolePermissionsPanel() {
                 {ORG_ROLES.map(role => {
                   const value     = cellValue(role, item.cap);
                   const overridden = isOverridden(role, item.cap);
-                  const isOwner   = role === 'owner';
+                  const isAdmin   = role === 'admin';
                   // Saturated, high-contrast palette:
                   //   value=true,  overridden=false → solid green   (default-grant)
                   //   value=true,  overridden=true  → solid green + blue dot
@@ -812,15 +812,15 @@ function RolePermissionsPanel() {
                       style={{ borderLeft: '1px solid #e5e7eb' }}>
                       <button type="button"
                         onClick={() => toggle(role, item.cap)}
-                        disabled={isOwner}
+                        disabled={isAdmin}
                         title={overridden ? 'Overridden — click to revert to default' : 'Click to override'}
                         className="relative inline-flex items-center justify-center transition-all"
                         style={{
                           width: 26, height: 26, borderRadius: 6,
                           border: `1.5px solid ${borderColor}`,
                           background: bg,
-                          cursor: isOwner ? 'not-allowed' : 'pointer',
-                          opacity: isOwner ? 0.55 : 1,
+                          cursor: isAdmin ? 'not-allowed' : 'pointer',
+                          opacity: isAdmin ? 0.55 : 1,
                           boxShadow: value || overridden ? '0 1px 2px rgba(0,0,0,0.12)' : 'none',
                         }}>
                         {value
@@ -4837,13 +4837,13 @@ function ResetDemoButton() {
   const resetOnboarding = useOnboardingStore(s => s.resetOnboarding);
   const [busy, setBusy] = useState(false);
 
-  // Owner-only — this action wipes every asset, driver, and event in
-  // the org. Admins and dispatchers shouldn't be able to nuke prod
-  // data even by accident. The API endpoint also rechecks the role
-  // server-side (defense in depth) so a curl bypass still 403s.
+  // Admin-only — this action wipes every asset, driver, and event in
+  // the org. Dispatchers shouldn't be able to nuke prod data even by
+  // accident. The API endpoint also rechecks the role server-side
+  // (defense in depth) so a curl bypass still 403s.
   const { role, isLoading: permsLoading } = usePermissions();
   if (permsLoading) return null;
-  if (role !== 'owner') return null;
+  if (role !== 'admin') return null;
 
   const handleReset = async () => {
     if (!confirm('Delete all assets, events, and drivers for this org and re-enter demo mode?')) return;
