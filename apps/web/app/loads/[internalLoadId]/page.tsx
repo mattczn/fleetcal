@@ -48,6 +48,7 @@ import {
 import { CustomerCombobox } from '@/components/forms/CustomerCombobox';
 import { NewBrokerReviewModal } from '@/components/calendar/NewBrokerReviewModal';
 import ReviewQueue from '@/components/closeout/ReviewQueue';
+import { LoadDocsPreviewModal } from '@/components/closeout/LoadDocsPreviewModal';
 import { InvoiceSummaryModal, BatchSendDialog } from '@/components/invoicing/BatchInvoiceModals';
 import type { LoadSummary } from '@fleetcal/types/api';
 import FinalizedPayBanner from '@/components/payroll/FinalizedPayBanner';
@@ -599,16 +600,6 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
             <ClipboardCheck size={12} /> Review
           </button>
-          {/* Manage Documents opens the same docs-preview modal the
-              accounting screen uses — left list of attached docs with
-              per-doc include checkboxes, right viewer pane. */}
-          <button
-            type="button"
-            onClick={() => setDocsModalOpen(true)}
-            className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
-            style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
-            <FolderOpen size={12} /> Manage Documents
-          </button>
           {/* Locked-field click hint. Surfaces in-line with the toolbar
               so the prompt is always next to the View in Calendar pill
               the dispatcher needs to click next. Auto-dismisses after
@@ -747,23 +738,37 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           initialBrokerId={customerProfileId}
           onClose={() => setCustomerProfileId(null)} />
       )}
-      {/* Closeout review panel. Mounts for either "Review" or "Manage
-          Documents" — when the dispatcher clicked Manage Documents we
-          autoOpenManageDocs so the DocSelectionDialog pops on mount
-          and they land inside the doc manager directly; the review
-          chrome stays underneath in case they close the dialog. */}
-      {(reviewQueueOpen || docsModalOpen) && (
+      {/* Closeout review panel — triggered by the Pending state's
+          "Review Paperwork to Release" button. */}
+      {reviewQueueOpen && (
         <ReviewQueue
           loads={[primaryLeg]}
           zIndex={250}
-          autoOpenManageDocs={docsModalOpen}
-          onClose={() => {
-            setReviewQueueOpen(false);
-            setDocsModalOpen(false);
-          }}
+          onClose={() => setReviewQueueOpen(false)}
           onLoadResolved={async () => {
             await refresh({ silent: true });
             bumpLoadEditTick();
+          }}
+        />
+      )}
+      {/* Invoice-packet docs picker. Same modal accounting opens from
+          its "Docs" button in the Released bucket — two-pane viewer
+          with per-doc include checkboxes. Lifted out of the closeout
+          ReviewQueue's manage-docs dialog because that flow is for
+          uploading + classifying docs, not for picking which ones
+          ride the invoice packet. */}
+      {docsModalOpen && primaryLeg.loadId && (
+        <LoadDocsPreviewModal
+          load={{
+            loadId:     primaryLeg.loadId,
+            loadNum:    primaryLeg.loadNum,
+            rateConPdf: primaryLeg.rateConPdf,
+          }}
+          onClose={() => setDocsModalOpen(false)}
+          onSaved={async () => {
+            setDocsModalOpen(false);
+            bumpLoadEditTick();
+            await refresh({ silent: true });
           }}
         />
       )}
