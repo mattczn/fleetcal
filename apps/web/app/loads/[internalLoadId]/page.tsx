@@ -4,9 +4,11 @@
  * /loads/[internalLoadId] — single-load detail page.
  *
  * Visually mirrors EventModal's form pane field-for-field. Same
- * Field wrapper, same input styling (border, padding, font-size that
- * tracks --ui-scale), same StyledSelect for dropdowns, same section
- * dividers, same title-input look.
+ * Field wrapper, same input styling (border, padding, font-size),
+ * same StyledSelect for dropdowns, same section dividers, same
+ * title-input look. Unlike EventModal we pin --ui-scale to 1 — the
+ * detail page has room to breathe, so it shouldn't inflate with the
+ * calendar card text setting.
  *
  * What's missing vs EventModal (deliberately): event start/end
  * timestamps, revenue / non-revenue tags, map and docs toggles,
@@ -169,7 +171,6 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const addCustomer = useCalendarStore(s => s.addCustomer);
   const assets = useCalendarStore(s => s.assets);
   const drivers = useCalendarStore(s => s.drivers);
-  const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const calendarTimezone = useCalendarStore(s => s.calendarTimezone);
   const driverPayPct = useCalendarStore(s => s.driverPayPct);
   const loadEditTick = useCalendarStore(s => s.loadEditTick);
@@ -649,10 +650,14 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           {/* Left — load fields, modal-styled */}
           <div className="rounded-xl flex flex-col overflow-hidden"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', gridRow: '1 / 3' }}>
-            {/* ui-scale-scope: inherits Settings → Appearance → "Calendar
-                card text" sizing, exactly like EventModal does. */}
+            {/* Pin --ui-scale to 1 so the form fields stay at their
+                base size. EventModal inherits cardFontScale because it
+                lives inside a dense calendar grid where matching that
+                density matters; the load detail page has acres of
+                room, so cranking the card setting just made the fields
+                feel oversized. */}
             <div className="ui-scale-scope"
-              style={{ ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}>
+              style={{ ['--ui-scale' as keyof React.CSSProperties]: 1 } as React.CSSProperties}>
               <LoadFormPane
                 primary={effective ?? primaryLeg}
                 partner={effectivePartner ?? partnerLeg}
