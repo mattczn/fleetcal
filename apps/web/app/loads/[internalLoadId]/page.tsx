@@ -32,6 +32,8 @@ import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
 import RealtimeSync from '@/components/RealtimeSync';
 import RouteMapPanel from '@/components/calendar/RouteMapPanel';
+import StopsSection from '@/components/calendar/StopsSection';
+import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import RequireCap from '@/components/auth/RequireCap';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
 import { StyledSelect } from '@/components/ui/StyledSelect';
@@ -46,7 +48,7 @@ import {
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
-import type { Load, Invoice, Stop } from '@fleetcal/types';
+import type { Load, Invoice } from '@fleetcal/types';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -59,15 +61,6 @@ function fmtShortDate(iso: string | undefined | null): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function fmtStopWindow(s: Stop): string {
-  if (!s.apptStart) return '';
-  const d = new Date(s.apptStart);
-  if (isNaN(d.getTime())) return '';
-  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-  return `${date} · ${time}`;
 }
 
 interface PageProps {
@@ -102,6 +95,9 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 
   const [legs, setLegs] = useState<Load[] | null>(null);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
+  // Customer profile modal — opened by the "View customer profile"
+  // button inside the broker field. null = closed.
+  const [customerProfileId, setCustomerProfileId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
@@ -228,6 +224,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
                   customers={customers}
                   sectionOrder={sectionOrder}
                   fieldSettings={fieldSettings}
+                  onOpenCustomerProfile={setCustomerProfileId}
                 />
               </fieldset>
             </div>
@@ -268,6 +265,11 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
         <InvoiceDetailModal invoiceId={invoice.id}
           onClose={() => setInvoiceModalOpen(false)} />
       )}
+      {customerProfileId && (
+        <BrokerProfileModal
+          initialBrokerId={customerProfileId}
+          onClose={() => setCustomerProfileId(null)} />
+      )}
     </AppShell>
   );
 }
@@ -276,6 +278,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
 
 function LoadFormPane({
   primary, partner, customerById, assets, drivers, customers, sectionOrder, fieldSettings,
+  onOpenCustomerProfile,
 }: {
   primary: Load;
   partner: Load | undefined;
@@ -285,16 +288,21 @@ function LoadFormPane({
   customers: { name: string; aliases?: string[] }[];
   sectionOrder: FieldSection[];
   fieldSettings: Record<string, boolean>;
+  onOpenCustomerProfile: (customerId: string) => void;
 }) {
   const iStyle = inputStyle();
   const focusH = focusColor(LOAD_ACCENT);
 
   // ── Derived values ──────────────────────────────────────────────────
-  const customerLabel = primary.customerId
-    ? customerById.get(primary.customerId)?.name
+  // Linked customer is keyed off the FK, not text equality — same
+  // approach EventModal uses. Avoids the "shows linked but the
+  // customer_id is NULL" bug where the badge would light up just
+  // because the broker text happened to match a customer name.
+  const linkedCustomer = primary.customerId
+    ? customerById.get(primary.customerId)
     : undefined;
   const brokerDisplay = displayBrokerName(
-    customerLabel ?? primary.broker ?? '',
+    linkedCustomer?.name ?? primary.broker ?? '',
     customers as Parameters<typeof displayBrokerName>[1],
   );
 
@@ -412,24 +420,33 @@ function LoadFormPane({
     );
   }
 
-  // The 'locations' section is special — it renders our stops list
-  // (StopsSection's load-page equivalent), not the generic field grid.
+  // The 'locations' section mounts the real StopsSection from the
+  // calendar modal so the load page renders the IDENTICAL widget:
+  // header with loaded-mi + $/mi + Map Route badges, drag-handled
+  // stop cards with the type select, time-zone label, facility +
+  // address inputs with the geocode check, the Appt / Window / FCFS
+  // pill set, and the date + time pickers. The surrounding
+  // <fieldset disabled> on the page blocks edits — the interactive
+  // controls render the same, they just don't fire.
   function renderSection(section: FieldSection, first: boolean) {
     if (section === 'locations') {
+      const loadedMiles = primary.loadedMiles ?? null;
+      const rpm = loadedMiles && loadedMiles > 0 && primary.loadPrice != null
+        ? primary.loadPrice / loadedMiles
+        : null;
       return (
-        <ModalSection key={section} title="Stops" first={first}>
-          {primary.stops.length === 0 ? (
-            <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
-              No stops added.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {primary.stops.map((s, i) => (
-                <StopCard key={s.id} stop={s} index={i + 1} accent={LOAD_ACCENT} />
-              ))}
-            </div>
-          )}
-        </ModalSection>
+        <div key={section}
+          style={first ? {} : { borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
+          <StopsSection
+            stops={primary.stops}
+            onChange={() => { /* read-only on the detail page */ }}
+            headerColor={LOAD_ACCENT}
+            onMapRoute={() => { /* page already shows the map on the right */ }}
+            loadedMiles={loadedMiles}
+            loadPrice={primary.loadPrice ?? null}
+            ratePerMile={rpm}
+          />
+        </div>
       );
     }
 
@@ -593,68 +610,6 @@ function LoadFormPane({
           above (already rendered with first=true), so none of these
           take the `first` flag — they all draw the upper divider. */}
       {finalOrder.map(section => renderSection(section, false))}
-    </div>
-  );
-}
-
-// ─── Stop card ──────────────────────────────────────────────────────────
-//
-// Visual structure mirrors StopsSection's per-stop block: rounded card,
-// accent left border, numbered chip, facility/address text stack, plus
-// a Geocoded badge that turns red when lat/lng haven't landed.
-
-function StopCard({ stop, index, accent }: {
-  stop: Stop;
-  index: number;
-  accent: string;
-}) {
-  const hasGeo = stop.lat != null && stop.lng != null;
-  return (
-    <div
-      className="rounded-lg px-3 py-2.5 flex items-start gap-3"
-      style={{
-        background: 'var(--gc-bg)',
-        border: '1px solid var(--gc-border)',
-        borderLeft: `3px solid ${accent}`,
-      }}>
-      <div
-        className="flex items-center justify-center rounded-full font-extrabold tabular-nums shrink-0"
-        style={{
-          width: 22, height: 22,
-          background: accent, color: '#fff',
-          fontSize: 11,
-        }}>
-        {index}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-semibold truncate" style={{ color: 'var(--gc-text-1)', fontSize: 13 }}>
-            {stop.facilityName ?? stop.address ?? '(no address)'}
-          </span>
-          <span className="font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-            style={{
-              fontSize: 9.5,
-              background: hasGeo ? '#dcfce7' : '#fef2f2',
-              color:      hasGeo ? '#166534' : '#991b1b',
-              border:     `1px solid ${hasGeo ? '#86efac' : '#fecaca'}`,
-            }}
-            title={hasGeo
-              ? `Lat ${stop.lat?.toFixed(4)}, Lng ${stop.lng?.toFixed(4)}`
-              : 'No coordinates — geocode pending'}>
-            {hasGeo ? 'Geocoded' : 'No geo'}
-          </span>
-        </div>
-        {stop.address && stop.facilityName && (
-          <div className="truncate" style={{ color: 'var(--gc-text-3)', fontSize: 11.5, marginTop: 2 }}>
-            {stop.address}
-          </div>
-        )}
-        {stop.apptStart && (
-          <div className="tabular-nums" style={{ color: 'var(--gc-text-3)', fontSize: 11.5, marginTop: 2 }}>
-            {fmtStopWindow(stop)}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
