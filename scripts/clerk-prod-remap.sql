@@ -169,36 +169,32 @@ END $$;
 -- ─────────────────────────────────────────────────────────────────────────
 -- USER_ID TEXT COLUMNS — Clerk user IDs stored as plain text
 -- ─────────────────────────────────────────────────────────────────────────
--- One UPDATE per column. The JOIN against clerk_user_map means rows whose
--- user_id isn't in the map are LEFT UNCHANGED.
+-- The 4 columns below are the AUTHORITATIVE set from the preflight
+-- discovery query that scanned every public.* text column for values
+-- starting with 'user_'. The migration audit had originally guessed
+-- ~11 columns but the live DB only stores Clerk user_ids in these 4 —
+-- the others either don't exist (load_documents.uploaded_by was
+-- replaced by driver-only uploaded_by_driver_id) or only hold
+-- non-Clerk values like 'driver:N' / 'motive_sync' / NULL.
 --
 -- Edge cases:
---   - Some columns store EITHER a clerk user_id OR a synthetic prefix
---     like 'driver:123'. The map only contains user_xxx values, so those
---     non-matching synthetic IDs naturally stay put.
---   - Some columns are nullable; the JOIN handles that — null user_ids
---     don't match any map row.
-
-UPDATE asset_documents SET uploaded_by = m.prod_user_id
-  FROM clerk_user_map m WHERE asset_documents.uploaded_by = m.dev_user_id;
-
-UPDATE load_documents SET uploaded_by = m.prod_user_id
-  FROM clerk_user_map m WHERE load_documents.uploaded_by = m.dev_user_id;
-
-UPDATE driver_documents SET uploaded_by = m.prod_user_id
-  FROM clerk_user_map m WHERE driver_documents.uploaded_by = m.dev_user_id;
-
-UPDATE maintenance_action_items SET created_by = m.prod_user_id
-  FROM clerk_user_map m WHERE maintenance_action_items.created_by = m.dev_user_id;
-
-UPDATE fuel_reports SET submitted_by = m.prod_user_id
-  FROM clerk_user_map m WHERE fuel_reports.submitted_by = m.dev_user_id;
+--   - The JOIN against clerk_user_map means rows whose user_id isn't in
+--     the map are LEFT UNCHANGED (verification at the end flags any
+--     leftover dev user_ids so missing mappings get caught).
+--   - Synthetic prefix values like 'driver:123' or 'motive_sync' don't
+--     start with 'user_' so they wouldn't match the JOIN anyway.
 
 UPDATE fuel_transactions SET matched_by = m.prod_user_id
   FROM clerk_user_map m WHERE fuel_transactions.matched_by = m.dev_user_id;
 
-UPDATE maintenance_action_item_photos SET uploaded_by_dispatcher_user_id = m.prod_user_id
-  FROM clerk_user_map m WHERE maintenance_action_item_photos.uploaded_by_dispatcher_user_id = m.dev_user_id;
+UPDATE maintenance_action_items SET created_by = m.prod_user_id
+  FROM clerk_user_map m WHERE maintenance_action_items.created_by = m.dev_user_id;
+
+UPDATE cost_analysis_reports SET created_by = m.prod_user_id
+  FROM clerk_user_map m WHERE cost_analysis_reports.created_by = m.dev_user_id;
+
+UPDATE movement_links SET source_user = m.prod_user_id
+  FROM clerk_user_map m WHERE movement_links.source_user = m.dev_user_id;
 
 UPDATE cost_analysis_reports SET created_by = m.prod_user_id
   FROM clerk_user_map m WHERE cost_analysis_reports.created_by = m.dev_user_id;
