@@ -1,15 +1,24 @@
 /**
- * /create-organization — step 2 of the onboarding funnel.
+ * /create-organization — fallback for the org-less signed-in edge case.
  *
- * Reached after sign-up (and via middleware redirect for signed-in
- * users without an org). Threads the ?plan= param onward to
- * /onboarding/pick-plan so the marketing-CTA plan choice survives the
- * full funnel:
+ * The happy-path onboarding funnel SKIPS this page entirely because
+ * Clerk's <SignUp /> component already includes an internal "Set up
+ * your organization" step (which renders inside our /sign-up page
+ * layout). Going through /create-organization on top of that would
+ * show the user a SECOND, identical-looking org-creation form.
  *
- *   /sign-up?plan=growth
- *     → /create-organization?plan=growth     ← THIS PAGE
- *     → /onboarding/pick-plan?plan=growth
- *     → /calendar
+ * This page still exists for the case where middleware redirects a
+ * signed-in user with no orgId — e.g. they deleted their org or
+ * signed in via a partial-state session. In that case they need an
+ * org before they can hit any private route.
+ *
+ * Happy-path funnel: /sign-up?plan=growth (with internal org-create step)
+ *                    → /onboarding/pick-plan?plan=growth
+ *                    → /calendar
+ *
+ * Fallback funnel:   /create-organization?plan=growth     ← THIS PAGE
+ *                    → /onboarding/pick-plan?plan=growth
+ *                    → /calendar
  */
 import { CreateOrganization } from '@clerk/nextjs';
 

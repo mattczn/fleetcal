@@ -36,12 +36,22 @@ export default async function SignUpPage({
 }) {
   const params = await searchParams;
   const plan = isPlanKey(params.plan) ? PLAN_META[params.plan] : null;
-  // Funnel chain: sign-up → /create-organization?plan=… → /onboarding/pick-plan?plan=…
-  // Preserves the marketing-CTA plan choice through Clerk's org creation
-  // step so the final Subscribe button highlights the right tier.
+  // Funnel chain: sign-up → /onboarding/pick-plan?plan=…
+  //
+  // We intentionally SKIP /create-organization on the SignUp happy path
+  // because Clerk's <SignUp /> component already includes an internal
+  // "Set up your organization" step after email/password capture (it
+  // renders inside this same /sign-up page so it picks up our marketing
+  // wrapper). By the time the user reaches afterSignUpUrl they already
+  // have an org. Routing through /create-organization would render a
+  // SECOND, identical-looking org-creation form on top of the first.
+  //
+  // The /create-organization route still exists as a fallback for the
+  // middleware-redirect case (signed-in user with no org somehow), but
+  // the SignUp funnel never touches it.
   const afterSignUpUrl = params.plan
-    ? `/create-organization?plan=${encodeURIComponent(params.plan)}`
-    : '/create-organization';
+    ? `/onboarding/pick-plan?plan=${encodeURIComponent(params.plan)}`
+    : '/onboarding/pick-plan';
 
   return (
     <div className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg">
