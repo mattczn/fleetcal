@@ -4958,7 +4958,17 @@ export default function EventModal() {
                         <Tooltip content="Open load detail page">
                           <button
                             type="button"
-                            onClick={() => { router.push(`/loads/${ev.loadId}`); }}
+                            onClick={() => {
+                              // Close the modal before navigating so the page
+                              // mounts cleanly and (more importantly) re-opens
+                              // the edit form for the same load without two
+                              // modal instances racing. The detail page's
+                              // mount effect calls openEditModal(eventId) so
+                              // editing resumes immediately on the other side.
+                              const targetLoadId = ev.loadId;
+                              closeModal();
+                              router.push(`/loads/${targetLoadId}`);
+                            }}
                             className="flex items-center justify-center transition-colors"
                             style={{
                               width: 22, height: 22, borderRadius: 6,

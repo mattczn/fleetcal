@@ -174,6 +174,20 @@ function LoadDetailPage({ loadId }: { loadId: string }) {
     customers,
   );
 
+  // Auto-open EventModal on first paint so the page immediately drops
+  // the dispatcher into the editing surface they already know (same
+  // fields, same date/time pickers, same accessorials editor, same
+  // stops editor with geocode validation, same font-size scaling).
+  // Closing the modal leaves them on the page showing the saved state
+  // alongside the map + billing cards.
+  const [autoOpenedFor, setAutoOpenedFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!primaryLeg?.id) return;
+    if (autoOpenedFor === primaryLeg.id) return;
+    openEditModal(primaryLeg.id);
+    setAutoOpenedFor(primaryLeg.id);
+  }, [primaryLeg?.id, autoOpenedFor, openEditModal]);
+
   // ── Inline edit handlers ────────────────────────────────────────────
   //
   // Each field manages its own local edit state so a stale write
@@ -239,7 +253,7 @@ function LoadDetailPage({ loadId }: { loadId: string }) {
           <button onClick={() => openEditModal(primaryLeg.id)}
             className="text-[12px] font-semibold px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors text-white"
             style={{ background: 'var(--gc-blue)' }}>
-            <Pencil size={12} /> Edit in modal
+            <Pencil size={12} /> Reopen editor
           </button>
         </div>
 
