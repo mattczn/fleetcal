@@ -2224,6 +2224,13 @@ function InvoicingPanel() {
   // those when invoice settings haven't been written yet, so the
   // dispatcher doesn't have to retype info that already exists.
   const { organization: clerkOrg } = useOrganization();
+  // invoicing_advanced gates the Advanced section entirely. MVP orgs
+  // ship with the default flag = false → the expand-trigger doesn't
+  // render and they're nudged through the simplified form only.
+  // Curzon (pre-launch org) has the key ABSENT from their flags,
+  // which isModuleEnabled treats as ON, so nothing changes for them.
+  const { enabled: moduleEnabled } = useModules();
+  const advancedAllowed = moduleEnabled('invoicing_advanced');
   const [loading, setLoading] = useState(true);
   const [saving,  setSaving]  = useState(false);
   const [saved,   setSaved]   = useState(false);
@@ -2509,9 +2516,13 @@ function InvoicingPanel() {
         </FieldRow>
       </Card>
 
-      {/* Advanced — collapsed by default. Lets MVP users get to a
-          working invoice without scrolling past a wall of optional
-          fields, while preserving every existing power-user knob. */}
+      {/* Advanced — module-gated AND collapsed by default. MVP orgs
+          (invoicing_advanced=false) don't see this section at all;
+          their saved values for these fields are preserved server-
+          side and still consumed by the invoice render path, just
+          not editable from the UI. Power-tier orgs see the expand
+          trigger and can flip each field. */}
+      {advancedAllowed && (
       <div className="rounded-2xl"
         style={{ border: '1px solid var(--gc-border-light)', background: 'var(--gc-surface)' }}>
         <button type="button" onClick={() => setAdvancedOpen(v => !v)}
@@ -2601,6 +2612,7 @@ function InvoicingPanel() {
           </div>
         )}
       </div>
+      )}
 
         {/* Save bar */}
         <div className="flex items-center gap-3">

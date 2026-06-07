@@ -47,7 +47,8 @@ export type OrgModule =
   | "custom_documents"   // gates document-type customization in settings
   | "team_roles"         // gates multi-role / multi-dispatcher team management (Settings → Dispatchers + Role Permissions). OFF for MVP — every team member is an owner/admin to keep onboarding simple.
   | "trailer_categories" // gates the per-trailer Category field (Swing/Roll Up/Reefer/Flat Bed/Other). Off for MVP — most 1-14 truck carriers have a uniform fleet (all dry vans), so the category dropdown is noise. Curzon flips on for their mixed fleet.
-  | "relay_advanced";    // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
+  | "relay_advanced"     // gates relay handoff photo documentation (basic relay logic stays in StopsSection)
+  | "invoicing_advanced"; // gates the Advanced section in Settings → Invoicing (custom From-address, remit-to instructions, invoice-number prefix, footer notes, email template overrides). OFF for MVP — defaults work end-to-end. Carriers that want a custom invoice template or a verified domain flip this on per-org.
 
 export const ORG_MODULES: readonly OrgModule[] = [
   "closeout",
@@ -64,6 +65,7 @@ export const ORG_MODULES: readonly OrgModule[] = [
   "team_roles",
   "trailer_categories",
   "relay_advanced",
+  "invoicing_advanced",
 ] as const;
 
 /** Display labels (singular). Used in Settings → Modules toggles
@@ -83,6 +85,7 @@ export const ORG_MODULE_LABEL: Record<OrgModule, string> = {
   team_roles:         "Multi-role team management",
   trailer_categories: "Trailer categories",
   relay_advanced:     "Relay handoff documentation",
+  invoicing_advanced: "Advanced invoicing",
 };
 
 /** Short description for the Settings → Modules toggle UI. */
@@ -101,6 +104,7 @@ export const ORG_MODULE_BLURB: Record<OrgModule, string> = {
   team_roles:         "Manage multi-role teams with distinct dispatcher accounts + customize per-role permissions. Without this, every team member is an admin.",
   trailer_categories: "Per-trailer category labels (Swing, Roll Up, Reefer, Flat Bed, Other). Useful for mixed fleets; most uniform-fleet carriers can leave this off.",
   relay_advanced:     "Photo upload + handoff documentation for relay-leg pickups (basic relay routing is included in core).",
+  invoicing_advanced: "Advanced invoice template tweaks — custom From-address (own verified domain), remit-to block, invoice-number prefix, footer notes, outbound email template overrides. Defaults work end-to-end without this.",
 };
 
 // ── Check API ─────────────────────────────────────────────────────
@@ -141,7 +145,7 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   | "closeout" | "accounting" | "fuel" | "payroll" | "maintenance"
   | "motive_integration" | "trailers" | "performance" | "driver_app"
   | "dispatch_board" | "custom_documents" | "team_roles"
-  | "trailer_categories" | "relay_advanced"
+  | "trailer_categories" | "relay_advanced" | "invoicing_advanced"
 >> = {
   // Pre-launch core modules
   // - closeout / accounting / payroll: core to the rate-con-to-paid
@@ -172,4 +176,11 @@ export const MVP_LAUNCH_DEFAULTS: Required<Pick<OrgModuleFlags,
   // fleets like Curzon flip this on per-org from Settings → Modules.
   trailer_categories: false,
   relay_advanced:     false,
+  // Invoicing advanced: OFF for MVP. The defaults (companyName +
+  // billing address + contact + net-30 terms + platform From-address)
+  // produce a sendable invoice end-to-end. Carriers that want a
+  // custom remit-to block, an invoice-number prefix, custom email
+  // templates, or their own verified From-domain flip this on
+  // per-org from Settings → Modules.
+  invoicing_advanced: false,
 };
