@@ -27,7 +27,8 @@ import { useAuth, useUser } from '@clerk/nextjs';
 import {
   ArrowLeft, Truck, Loader2, Receipt, MapPin,
   ExternalLink as ExternalLinkIcon, Eye, FileCheck2,
-  CheckCircle2, Plus, Clock, Copy, RotateCcw,
+  CheckCircle2, Plus, Clock, Copy, RotateCcw, Calendar as CalendarIcon,
+  Info,
 } from 'lucide-react';
 import AppShell from '@/components/nav/AppShell';
 import DataLoader from '@/components/DataLoader';
@@ -298,7 +299,16 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     );
   }
 
-  const headerTitle = `Load #${primaryLeg.internalLoadId ?? internalLoadId}`;
+  // Title pairs the system-assigned internal id with the broker-supplied
+  // load number when there is one — that's the dispatcher's primary
+  // search key in real conversations ("the 3096735 from XPO"), even
+  // though the URL slug stays on internal id for stability.
+  const internalIdLabel = primaryLeg.internalLoadId ?? internalLoadId;
+  const brokerLoadNum = (primaryLeg.loadNum ?? '').trim();
+  const headerTitle = brokerLoadNum
+    ? `Load #${internalIdLabel} · ${brokerLoadNum}`
+    : `Load #${internalIdLabel}`;
+  const isRelay = !!partnerLeg;
 
   return (
     <AppShell title={headerTitle} icon={Truck} noPageScroll>
@@ -313,6 +323,47 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
             <ArrowLeft size={12} /> Back
           </button>
+          {/* Calendar nav. For a solo load there's just one event so we
+              show a single "View in Calendar" pill. For relays we surface
+              both legs, since each owns its own driver/asset/stops and
+              the dispatcher might want to jump to either. Buttons stash
+              the target event-id in the calendar store (openEditModal)
+              then route to "/" so the modal opens on first paint. */}
+          {!isRelay && (
+            <button
+              onClick={() => {
+                useCalendarStore.getState().openEditModal(primaryLeg.id);
+                router.push('/');
+              }}
+              className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+              style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', color: 'var(--gc-text-2)' }}>
+              <CalendarIcon size={12} /> View in Calendar
+            </button>
+          )}
+          {isRelay && (
+            <>
+              <button
+                onClick={() => {
+                  // Pickup leg = primary in our load model — that's the
+                  // leg the URL slug lands on. Open it directly.
+                  useCalendarStore.getState().openEditModal(primaryLeg.id);
+                  router.push('/');
+                }}
+                className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+                style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', color: '#6d28d9' }}>
+                <CalendarIcon size={12} /> View Pickup Leg
+              </button>
+              <button
+                onClick={() => {
+                  useCalendarStore.getState().openEditModal(partnerLeg!.id);
+                  router.push('/');
+                }}
+                className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
+                style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', color: '#6d28d9' }}>
+                <CalendarIcon size={12} /> View Delivery Leg
+              </button>
+            </>
+          )}
           <div className="flex-1" />
           {isDirty && (
             <>
@@ -779,6 +830,41 @@ function LoadFormPane({
       return (
         <div key={section}
           style={first ? {} : { borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
+          {/* Relay block sits directly above the locations section so
+              the dispatcher reads "pickup leg → relay handoff →
+              delivery leg" in physical order. Purple-on-lavender to
+              match the calendar's relay color. Fields are read-only
+              because the relay pair is driven by both legs' events;
+              editing here would split the source of truth — the inline
+              note points dispatch back to the calendar instead. */}
+          {partner && (
+            <div className="mb-5 p-4 rounded-xl"
+              style={{ background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[11px] font-bold uppercase tracking-wider"
+                  style={{ color: '#6d28d9' }}>
+                  Relay — Delivery Leg
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px]"
+                  style={{ color: '#6d28d9' }}>
+                  <Info size={11} />
+                  Edit relay legs in the calendar
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Delivery Driver">
+                  <input type="text" value={partner.driverName ?? ''} readOnly
+                    placeholder="Unassigned"
+                    style={{ ...iStyle, borderColor: '#ddd6fe' }} />
+                </Field>
+                <Field label="Delivery Truck">
+                  <input type="text" value={truckLabel(assetById.get(partner.assetId))} readOnly
+                    placeholder="—"
+                    style={{ ...iStyle, borderColor: '#ddd6fe' }} />
+                </Field>
+              </div>
+            </div>
+          )}
           <StopsSection
             stops={primary.stops}
             onChange={(stops) => onChange({ stops })}
@@ -868,13 +954,13 @@ function LoadFormPane({
 
       {/* ── Assignment (always rendered first, above the user-ordered
           sections — matches EventModal's pinning of driver/asset above
-          the load info). Driver phone chip sits below the driver field
-          when we have one; + Internal Note lives at the bottom of the
-          assignment block. */}
+          the load info). On relay loads the labels switch to "Pickup
+          Driver / Pickup Truck" so the relay block below can carry the
+          delivery pair without ambiguity. */}
       <ModalSection title="Assignment" first>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <Field label="Driver">
+            <Field label={partner ? 'Pickup Driver' : 'Driver'}>
               <StyledSelect
                 value={primary.driverName ?? ''}
                 onChange={() => { /* read-only on detail page */ }}
@@ -895,7 +981,7 @@ function LoadFormPane({
               <DriverPhoneCopy phone={primaryDriver.phone} />
             )}
           </div>
-          <Field label="Truck">
+          <Field label={partner ? 'Pickup Truck' : 'Truck'}>
             <StyledSelect
               value={String(primary.assetId ?? '')}
               onChange={() => { /* read-only */ }}
@@ -908,22 +994,6 @@ function LoadFormPane({
             </StyledSelect>
           </Field>
         </div>
-
-        {/* Relay: second driver/truck pair below the primary one. */}
-        {partner && (
-          <div className="grid grid-cols-2 gap-4 mt-4">
-            <Field label="Delivery driver (relay)">
-              <input type="text" value={partner.driverName ?? ''} readOnly
-                placeholder="Unassigned"
-                style={iStyle} onFocus={focusH} onBlur={blurColor} />
-            </Field>
-            <Field label="Delivery truck (relay)">
-              <input type="text" value={truckLabel(assetById.get(partner.assetId))} readOnly
-                placeholder="—"
-                style={iStyle} onFocus={focusH} onBlur={blurColor} />
-            </Field>
-          </div>
-        )}
 
         {/* + Internal Note button — matches EventModal placement
             (immediately under the driver/truck block, above the rest
