@@ -3,24 +3,21 @@
 /**
  * /loads/[internalLoadId] — single-load detail page.
  *
- * Load-centric (NOT event-centric):
- *   We fetch the load by its org-scoped internal_load_id (the "#10761"
- *   the dispatcher already knows) and display load-table fields.
- *   Event-level concepts — pickup/delivery start/end timestamps, the
- *   revenue / non-revenue distinction, per-event Map / Docs toggles,
- *   the "view load details" affordance — don't belong on this surface
- *   and are explicitly excluded.
+ * Visually mirrors EventModal's form pane field-for-field. Same
+ * Field wrapper, same input styling (border, padding, font-size that
+ * tracks --ui-scale), same StyledSelect for dropdowns, same section
+ * dividers, same title-input look.
+ *
+ * What's missing vs EventModal (deliberately): event start/end
+ * timestamps, revenue / non-revenue tags, map and docs toggles,
+ * "view load details" affordance. Those concepts belong on the
+ * event surface, not on a load page.
  *
  * Layout:
  *   ┌─ Top toolbar ──────────────────────────────────────────────────┐
- *   ├─ Left card (load details) ───┬─ Top-right (route map) ────────┤
- *   │                              ├─ Bottom-right (billing) ──────┤
- *   └──────────────────────────────┴───────────────────────────────┘
- *
- * Cross-page sync:
- *   Subscribes to loadEditTick so edits made anywhere else in the app
- *   (EventModal saves, invoice mutations, etc.) refetch the load
- *   silently.
+ *   ├─ Left card (load fields, modal-styled) ─┬─ Top-right (map) ───┤
+ *   │                                         ├─ Bottom-right (bill)┤
+ *   └─────────────────────────────────────────┴────────────────────┘
  */
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react';
@@ -37,12 +34,20 @@ import RealtimeSync from '@/components/RealtimeSync';
 import RouteMapPanel from '@/components/calendar/RouteMapPanel';
 import RequireCap from '@/components/auth/RequireCap';
 import { InvoiceDetailModal } from '@/components/invoicing/InvoiceDetailModal';
+import { StyledSelect } from '@/components/ui/StyledSelect';
+import {
+  inputStyle, focusColor, blurColor, Field, ModalSection,
+} from '@/components/forms/EventModalForm';
 import { railway } from '@/lib/railway';
 import { useCalendarStore } from '@/store/useCalendarStore';
 import { displayBrokerName } from '@/lib/customerMatch';
 import type { Load, Invoice, Stop } from '@fleetcal/types';
 
 const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+/** Same accent the calendar uses for revenue loads. Hard-coded here
+ *  because the load page isn't tied to a single truck's color. */
+const LOAD_ACCENT = '#1a73e8';
 
 function fmtShortDate(iso: string | undefined | null): string {
   if (!iso) return '—';
@@ -65,7 +70,6 @@ interface PageProps {
 }
 
 export default function LoadDetailPageRoute({ params }: PageProps) {
-  // Next 15 hands params as a Promise — unwrap with React's `use`.
   const { internalLoadId } = use(params);
   return (
     <RequireCap cap="loads.view">
@@ -76,25 +80,21 @@ export default function LoadDetailPageRoute({ params }: PageProps) {
   );
 }
 
-// ─── Page body ──────────────────────────────────────────────────────────
-
 function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   const router = useRouter();
   const { isLoaded: authLoaded, isSignedIn } = useAuth();
   const customers = useCalendarStore(s => s.customers);
   const assets = useCalendarStore(s => s.assets);
+  const drivers = useCalendarStore(s => s.drivers);
+  const cardFontScale = useCalendarStore(s => s.cardFontScale);
   const loadEditTick = useCalendarStore(s => s.loadEditTick);
 
   const [legs, setLegs] = useState<Load[] | null>(null);
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
 
-  // Validate slug + fetch the load by internal_load_id. The API endpoint
-  // does the uuid lookup server-side; from the client's perspective
-  // it's a single round trip keyed by the human-readable number.
   const internalIdNum = useMemo(() => {
     const n = Number.parseInt(internalLoadId, 10);
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -116,15 +116,9 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
         return;
       }
       setLegs(loadRes.loads);
-      // Active invoice — best-effort lookup. Released loads with no
-      // invoice yet are the common case, not an error. Need the
-      // load's uuid (loadId) to filter.
       try {
         const loadId = loadRes.loads[0]?.loadId;
-        if (!loadId) {
-          setInvoice(null);
-          return;
-        }
+        if (!loadId) { setInvoice(null); return; }
         const invRes = await railway.listInvoices({ loadId });
         const nonVoid = invRes.invoices
           .filter(i => i.status !== 'void')
@@ -146,16 +140,12 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
     void refresh();
   }, [authLoaded, isSignedIn, refresh]);
 
-  // Cross-page sync: refetch silently after any mutation elsewhere.
   useEffect(() => {
     if (loadEditTick === 0) return;
     void refresh({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadEditTick]);
 
-  // Primary leg = pickup-role (or single leg). Relay loads come back
-  // with two legs; we treat the pickup as canonical for load-level
-  // fields and merge driver/truck info from both for display.
   const primaryLeg = useMemo<Load | undefined>(() => {
     if (!legs?.length) return undefined;
     return legs.find(l => l.relayRole === 'pickup' || !l.relayRole) ?? legs[0];
@@ -166,7 +156,6 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   }, [legs, primaryLeg]);
 
   const customerById = useMemo(() => new Map(customers.map(c => [c.id, c])), [customers]);
-  const assetById = useMemo(() => new Map(assets.map(a => [a.id, a])), [assets]);
 
   if (!authLoaded || !isSignedIn || (loading && !legs)) {
     return (
@@ -198,7 +187,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   return (
     <AppShell title={headerTitle} icon={Truck} noPageScroll>
       <div className="flex-1 flex flex-col min-h-0 px-6 pt-5 pb-2 gap-3 overflow-hidden">
-        {/* ── Top toolbar ──────────────────────────────────────── */}
+        {/* Top toolbar */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <button onClick={() => router.back()}
             className="text-[12px] font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-colors"
@@ -208,20 +197,27 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
           <div className="flex-1" />
         </div>
 
-        {/* ── Main grid ───────────────────────────────────────── */}
         <div className="flex-1 min-h-0 grid gap-3"
           style={{ gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1.4fr) minmax(0, 1fr)' }}>
 
-          {/* Left — load detail fields */}
+          {/* Left — load fields, modal-styled */}
           <div className="rounded-xl flex flex-col min-h-0 overflow-hidden"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)', gridRow: '1 / 3' }}>
-            <LoadDetailsCard
-              primary={primaryLeg}
-              partner={partnerLeg}
-              customerById={customerById}
-              assetById={assetById}
-              customers={customers}
-            />
+            {/* ui-scale-scope: inherits Settings → Appearance → "Calendar
+                card text" sizing, exactly like EventModal does. */}
+            <div className="ui-scale-scope flex-1 min-h-0 overflow-y-auto"
+              style={{ ['--ui-scale' as keyof React.CSSProperties]: cardFontScale ?? 1 } as React.CSSProperties}>
+              <fieldset disabled style={{ border: 'none', padding: 0, margin: 0, minWidth: 0 }}>
+                <LoadFormPane
+                  primary={primaryLeg}
+                  partner={partnerLeg}
+                  customerById={customerById}
+                  assets={assets}
+                  drivers={drivers}
+                  customers={customers}
+                />
+              </fieldset>
+            </div>
           </div>
 
           {/* Top-right — route map */}
@@ -243,7 +239,7 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
             )}
           </div>
 
-          {/* Bottom-right — billing (status + actions all live here) */}
+          {/* Bottom-right — billing */}
           <div className="rounded-xl flex flex-col min-h-0 overflow-hidden"
             style={{ background: 'var(--gc-surface)', border: '1px solid var(--gc-border)' }}>
             <BillingCard
@@ -263,17 +259,22 @@ function LoadDetailPage({ internalLoadId }: { internalLoadId: string }) {
   );
 }
 
-// ─── Left card — load-level fields only ─────────────────────────────────
+// ─── Left card — modal-styled form ──────────────────────────────────────
 
-function LoadDetailsCard({
-  primary, partner, customerById, assetById, customers,
+function LoadFormPane({
+  primary, partner, customerById, assets, drivers, customers,
 }: {
   primary: Load;
   partner: Load | undefined;
   customerById: Map<string, { id: string; name: string }>;
-  assetById: Map<number, { id: number; name?: string | null; unit?: string | null }>;
+  assets: { id: number; name?: string | null; unit?: string | null }[];
+  drivers: { id?: number; name?: string; firstName?: string; lastName?: string }[];
   customers: { name: string; aliases?: string[] }[];
 }) {
+  const iStyle = inputStyle();
+  const focusH = focusColor(LOAD_ACCENT);
+
+  // ── Derived values ──────────────────────────────────────────────────
   const customerLabel = primary.customerId
     ? customerById.get(primary.customerId)?.name
     : undefined;
@@ -282,153 +283,182 @@ function LoadDetailsCard({
     customers as Parameters<typeof displayBrokerName>[1],
   );
 
-  const truckLabel = (a?: { name?: string | null; unit?: string | null }) => {
-    if (!a) return '';
-    return `${a.name ?? ''}${a.unit ? ` #${a.unit}` : ''}`.trim();
-  };
-  const primaryTruck = truckLabel(assetById.get(primary.assetId));
-  const partnerTruck = partner ? truckLabel(assetById.get(partner.assetId)) : '';
-  // Drivers + trucks aggregated from the leg(s) — these are event-table
-  // joins, but we surface them here because the load page is the
-  // operator's "who's hauling this" answer. NOT the same as event
-  // start/end times, which are out of scope for this page.
-  const drivers = [primary.driverName, partner?.driverName].filter(Boolean) as string[];
-  const trucks = [primaryTruck, partnerTruck].filter(Boolean);
+  const assetById = new Map(assets.map(a => [a.id, a]));
+  const truckLabel = (a?: { name?: string | null; unit?: string | null }) =>
+    a ? `${a.name ?? ''}${a.unit ? ` #${a.unit}` : ''}`.trim() : '';
 
-  // Accent color used for the title underline + section accents.
-  // EventModal pulls this from the assigned truck. Loads can have
-  // multiple legs with different trucks; the accent is purely visual,
-  // so we stick to a stable load-themed blue rather than chasing the
-  // pickup leg's truck colour.
-  const LOAD_ACCENT = 'var(--gc-blue)';
+  const primaryTruckLabel = truckLabel(assetById.get(primary.assetId));
+  const partnerTruckLabel = partner ? truckLabel(assetById.get(partner.assetId)) : '';
 
+  // ── Render ──────────────────────────────────────────────────────────
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto">
-      {/* Form pane padding mirrors EventModal: px-8 py-6 with vertical
-          rhythm at space-y-5. Don't change these without lining them
-          up against EventModal — the visual parity is the whole point. */}
-      <div className="px-8 py-6 space-y-5">
+    <div className="px-8 py-6 space-y-5">
 
-        {/* Title row — same look as EventModal's title input:
-            22px, headerColor underline, mb spacing. We use a static
-            <div> instead of an <input> because there's no event title
-            to edit on a load page. Falls back gracefully when the load
-            has no broker. */}
-        <div>
-          <div
-            className="w-full bg-transparent font-medium"
-            style={{
-              fontSize: 22,
-              borderBottom: `2px solid ${LOAD_ACCENT}`,
-              paddingBottom: 8,
-              color: brokerDisplay ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-            }}
-          >
-            {brokerDisplay || 'No broker'}
-          </div>
+      {/* Title row — same look as EventModal's title input.
+          Static text styled to read like the input it would have been
+          on the event surface. Underline uses LOAD_ACCENT. */}
+      <input
+        type="text"
+        value={brokerDisplay || ''}
+        readOnly
+        placeholder="No broker"
+        className="w-full bg-transparent outline-none font-medium"
+        style={{
+          fontSize: 22,
+          borderBottom: `2px solid ${LOAD_ACCENT}`,
+          paddingBottom: 8,
+          color: 'var(--gc-text-1)',
+          cursor: 'default',
+        }}
+      />
+
+      {/* ── Assignment ── */}
+      <ModalSection title="Assignment" first>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Driver">
+            <StyledSelect
+              value={primary.driverName ?? ''}
+              onChange={() => { /* read-only on detail page */ }}
+              style={{ ...iStyle, cursor: 'pointer' }}
+              onFocus={focusH} onBlur={blurColor}>
+              <option value="">— No driver —</option>
+              {primary.driverName && (
+                <option value={primary.driverName}>{primary.driverName}</option>
+              )}
+              {drivers.map(d => {
+                const name = d.name ?? `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim();
+                if (!name || name === primary.driverName) return null;
+                return <option key={d.id ?? name} value={name}>{name}</option>;
+              })}
+            </StyledSelect>
+          </Field>
+          <Field label="Truck">
+            <StyledSelect
+              value={String(primary.assetId ?? '')}
+              onChange={() => { /* read-only */ }}
+              style={{ ...iStyle, cursor: 'pointer' }}
+              onFocus={focusH} onBlur={blurColor}>
+              <option value="">— No truck —</option>
+              {assets.map(a => (
+                <option key={a.id} value={String(a.id)}>{truckLabel(a)}</option>
+              ))}
+            </StyledSelect>
+          </Field>
         </div>
 
-        {/* ── Assignment ── */}
-        <ModalSection title="Assignment" first>
-          <div className="grid grid-cols-2 gap-4">
-            <ModalField label="Driver(s)">
-              <ReadValue placeholder="Unassigned">
-                {drivers.length ? drivers.join(' / ') : ''}
-              </ReadValue>
-            </ModalField>
-            <ModalField label="Truck(s)">
-              <ReadValue placeholder="—">
-                {trucks.length ? trucks.join(' / ') : ''}
-              </ReadValue>
-            </ModalField>
-          </div>
+        {partner && (
           <div className="grid grid-cols-2 gap-4 mt-4">
-            <ModalField label="Trailer">
-              <ReadValue placeholder="—">{primary.trailerType ?? ''}</ReadValue>
-            </ModalField>
-            <ModalField label="Dispatcher">
-              <ReadValue placeholder="—">{primary.dispatcher ?? ''}</ReadValue>
-            </ModalField>
+            <Field label="Delivery driver (relay)">
+              <input type="text" value={partner.driverName ?? ''} readOnly
+                placeholder="Unassigned"
+                style={iStyle} onFocus={focusH} onBlur={blurColor} />
+            </Field>
+            <Field label="Delivery truck (relay)">
+              <input type="text" value={partnerTruckLabel} readOnly
+                placeholder="—"
+                style={iStyle} onFocus={focusH} onBlur={blurColor} />
+            </Field>
           </div>
-        </ModalSection>
+        )}
 
-        {/* ── Load (broker # + cargo) ── */}
-        <ModalSection title="Load">
-          <div className="grid grid-cols-2 gap-4">
-            <ModalField label="Broker load #">
-              <ReadValue placeholder="None">{primary.loadNum ?? ''}</ReadValue>
-            </ModalField>
-            <ModalField label="Commodity">
-              <ReadValue placeholder="—">{primary.commodity ?? ''}</ReadValue>
-            </ModalField>
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <Field label="Trailer type">
+            <input type="text" value={primary.trailerType ?? ''} readOnly
+              placeholder="—"
+              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+          </Field>
+          <Field label="Dispatcher">
+            <input type="text" value={primary.dispatcher ?? ''} readOnly
+              placeholder="—"
+              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+          </Field>
+        </div>
+      </ModalSection>
+
+      {/* ── Load info ── */}
+      <ModalSection title="Load">
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Broker load #">
+            <input type="text" value={primary.loadNum ?? ''} readOnly
+              placeholder="None"
+              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+          </Field>
+          <Field label="Commodity">
+            <input type="text" value={primary.commodity ?? ''} readOnly
+              placeholder="—"
+              style={iStyle} onFocus={focusH} onBlur={blurColor} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <Field label="Weight (lb)">
+            <input type="text"
+              value={primary.weight != null ? primary.weight.toLocaleString() : ''}
+              readOnly placeholder="—"
+              style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+              onFocus={focusH} onBlur={blurColor} />
+          </Field>
+          <div />
+        </div>
+      </ModalSection>
+
+      {/* ── Reference numbers ── */}
+      <ModalSection title="Reference numbers">
+        {primary.refNums && primary.refNums.length > 0 ? (
+          <div className="space-y-3">
+            {primary.refNums.map((r, i) => (
+              <div key={i} className="grid grid-cols-2 gap-4">
+                <Field label={r.label || `Ref ${i + 1}`}>
+                  <input type="text" value={r.value} readOnly
+                    style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+                    onFocus={focusH} onBlur={blurColor} />
+                </Field>
+                <div />
+              </div>
+            ))}
           </div>
-          <div className="grid grid-cols-2 gap-4 mt-4">
-            <ModalField label="Weight">
-              <ReadValue placeholder="—">
-                {primary.weight != null ? `${primary.weight.toLocaleString()} lb` : ''}
-              </ReadValue>
-            </ModalField>
-            <div />
+        ) : (
+          <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
+            None.
           </div>
-        </ModalSection>
+        )}
+      </ModalSection>
 
-        {/* ── Reference numbers ── */}
-        <ModalSection title="Reference numbers">
-          {primary.refNums && primary.refNums.length > 0 ? (
-            <div className="space-y-2">
-              {primary.refNums.map((r, i) => (
-                <div key={i} className="grid grid-cols-2 gap-4">
-                  <ModalField label={r.label || 'Ref'}>
-                    <ReadValue placeholder="—">{r.value}</ReadValue>
-                  </ModalField>
-                  <div />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>None.</div>
-          )}
-        </ModalSection>
-
-        {/* ── Stops ── */}
-        <ModalSection title="Stops">
-          {primary.stops.length === 0 ? (
-            <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>No stops added.</div>
-          ) : (
-            <div className="space-y-3">
-              {primary.stops.map((s, i) => (
-                <ModalStopCard key={s.id} stop={s} index={i + 1} accent={LOAD_ACCENT} />
-              ))}
-            </div>
-          )}
-        </ModalSection>
-
-        {/* ── Financial ── */}
-        <ModalSection title="Financial">
-          <div className="grid grid-cols-2 gap-4">
-            <ModalField label="Linehaul">
-              <ReadValue placeholder="—">
-                {primary.loadPrice != null ? moneyFmt.format(primary.loadPrice) : ''}
-              </ReadValue>
-            </ModalField>
-            {primary.totalBillable != null && primary.totalBillable !== primary.loadPrice ? (
-              <ModalField label="Total billable">
-                <ReadValue placeholder="—" emphasize>
-                  {moneyFmt.format(primary.totalBillable)}
-                </ReadValue>
-              </ModalField>
-            ) : <div />}
+      {/* ── Stops ── */}
+      <ModalSection title="Stops">
+        {primary.stops.length === 0 ? (
+          <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
+            No stops added.
           </div>
+        ) : (
+          <div className="space-y-2">
+            {primary.stops.map((s, i) => (
+              <StopCard key={s.id} stop={s} index={i + 1} accent={LOAD_ACCENT} />
+            ))}
+          </div>
+        )}
+      </ModalSection>
 
-          {/* Accessorials block — mirrors EventModal's accessorial list
-              styling: each line is its own row with category + amount. */}
-          <div className="mt-4">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <label className="text-[11px] font-semibold uppercase tracking-wider"
-                style={{ color: 'var(--gc-text-3)' }}>
-                Accessorials
-              </label>
-            </div>
+      {/* ── Financial ── */}
+      <ModalSection title="Financial">
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Linehaul">
+            <input type="text"
+              value={primary.loadPrice != null ? moneyFmt.format(primary.loadPrice) : ''}
+              readOnly placeholder="—"
+              style={{ ...iStyle, fontVariantNumeric: 'tabular-nums' }}
+              onFocus={focusH} onBlur={blurColor} />
+          </Field>
+          <Field label="Total billable">
+            <input type="text"
+              value={primary.totalBillable != null ? moneyFmt.format(primary.totalBillable) : ''}
+              readOnly placeholder="—"
+              style={{ ...iStyle, fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}
+              onFocus={focusH} onBlur={blurColor} />
+          </Field>
+        </div>
+
+        <div className="mt-4">
+          <Field label="Accessorials">
             {primary.accessorials && primary.accessorials.length > 0 ? (
               <div className="space-y-1.5">
                 {primary.accessorials.map((a, i) => (
@@ -452,99 +482,35 @@ function LoadDetailsCard({
                 ))}
               </div>
             ) : (
-              <div className="text-[12.5px]" style={{ color: 'var(--gc-text-3)' }}>None.</div>
+              <div style={{ ...iStyle, color: 'var(--gc-text-3)', display: 'flex', alignItems: 'center' }}>
+                None.
+              </div>
             )}
-          </div>
-        </ModalSection>
+          </Field>
+        </div>
+      </ModalSection>
 
-        {/* ── Notes ── */}
-        <ModalSection title="Notes">
-          <div
-            className="text-[13px] whitespace-pre-wrap break-words rounded-lg px-3 py-2.5"
-            style={{
-              background: 'var(--gc-bg)',
-              border: '1px solid var(--gc-border)',
-              color: primary.notes ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-              minHeight: 72,
-            }}>
-            {primary.notes || 'No notes.'}
-          </div>
-        </ModalSection>
-      </div>
+      {/* ── Notes ── */}
+      <ModalSection title="Notes">
+        <textarea
+          value={primary.notes ?? ''}
+          readOnly placeholder="No notes."
+          rows={4}
+          style={{ ...iStyle, resize: 'none', fontFamily: 'inherit', minHeight: 88 }}
+          onFocus={focusH} onBlur={blurColor}
+        />
+      </ModalSection>
     </div>
   );
 }
 
-// ─── EventModal-styled primitives ───────────────────────────────────────
+// ─── Stop card ──────────────────────────────────────────────────────────
 //
-// Visual parity with components/calendar/EventModal.tsx. Don't drift
-// these typography choices independently — if the modal changes, mirror
-// it here so the two surfaces keep feeling like the same surface.
+// Visual structure mirrors StopsSection's per-stop block: rounded card,
+// accent left border, numbered chip, facility/address text stack, plus
+// a Geocoded badge that turns red when lat/lng haven't landed.
 
-function ModalSection({ title, first, children }: {
-  title: string;
-  first?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={first ? {} : { borderTop: '1px solid var(--gc-border-light)', paddingTop: 20 }}>
-      <div className="text-[11px] font-bold uppercase tracking-wider mb-4"
-        style={{ color: 'var(--gc-text-3)' }}>
-        {title}
-      </div>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function ModalField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <label className="text-[11px] font-semibold uppercase tracking-wider"
-          style={{ color: 'var(--gc-text-3)' }}>
-          {label}
-        </label>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/** Input-shaped read-only value, styled to match EventModal's text
- *  inputs: bottom border that turns accent on focus (we leave it neutral
- *  here since it's read-only for now). Placeholder shows when empty. */
-function ReadValue({
-  children, placeholder, emphasize,
-}: {
-  children: React.ReactNode;
-  placeholder?: string;
-  emphasize?: boolean;
-}) {
-  const display = (typeof children === 'string' && children.trim() === '') ? null : children;
-  return (
-    <div
-      className="w-full bg-transparent"
-      style={{
-        fontSize: emphasize ? 15 : 14,
-        fontWeight: emphasize ? 700 : 500,
-        borderBottom: '1px solid var(--gc-border)',
-        paddingBottom: 6,
-        paddingTop: 2,
-        color: display != null ? 'var(--gc-text-1)' : 'var(--gc-text-3)',
-        minHeight: 24,
-        fontVariantNumeric: 'tabular-nums',
-      }}
-    >
-      {display ?? placeholder ?? '—'}
-    </div>
-  );
-}
-
-/** Stop card — mimics the per-stop block style in EventModal's stops
- *  section: rounded card, accent-tinted left border, stop number, name,
- *  address, appt window, and a Geocoded badge when lat/lng land. */
-function ModalStopCard({ stop, index, accent }: {
+function StopCard({ stop, index, accent }: {
   stop: Stop;
   index: number;
   accent: string;
@@ -559,10 +525,11 @@ function ModalStopCard({ stop, index, accent }: {
         borderLeft: `3px solid ${accent}`,
       }}>
       <div
-        className="flex items-center justify-center rounded-full text-[11px] font-extrabold tabular-nums shrink-0"
+        className="flex items-center justify-center rounded-full font-extrabold tabular-nums shrink-0"
         style={{
           width: 22, height: 22,
           background: accent, color: '#fff',
+          fontSize: 11,
         }}>
         {index}
       </div>
@@ -571,8 +538,9 @@ function ModalStopCard({ stop, index, accent }: {
           <span className="font-semibold truncate" style={{ color: 'var(--gc-text-1)', fontSize: 13 }}>
             {stop.facilityName ?? stop.address ?? '(no address)'}
           </span>
-          <span className="text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+          <span className="font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
             style={{
+              fontSize: 9.5,
               background: hasGeo ? '#dcfce7' : '#fef2f2',
               color:      hasGeo ? '#166534' : '#991b1b',
               border:     `1px solid ${hasGeo ? '#86efac' : '#fecaca'}`,
@@ -584,12 +552,12 @@ function ModalStopCard({ stop, index, accent }: {
           </span>
         </div>
         {stop.address && stop.facilityName && (
-          <div className="text-[11.5px] truncate" style={{ color: 'var(--gc-text-3)', marginTop: 2 }}>
+          <div className="truncate" style={{ color: 'var(--gc-text-3)', fontSize: 11.5, marginTop: 2 }}>
             {stop.address}
           </div>
         )}
         {stop.apptStart && (
-          <div className="text-[11.5px] tabular-nums" style={{ color: 'var(--gc-text-3)', marginTop: 2 }}>
+          <div className="tabular-nums" style={{ color: 'var(--gc-text-3)', fontSize: 11.5, marginTop: 2 }}>
             {fmtStopWindow(stop)}
           </div>
         )}
@@ -599,10 +567,6 @@ function ModalStopCard({ stop, index, accent }: {
 }
 
 // ─── Billing card (bottom right) ────────────────────────────────────────
-//
-// All billing affordances live here: status pill, invoice number/total,
-// View invoice packet, Open in Paperwork (review queue), Open in Billing.
-// Nothing billing-related belongs in the toolbar or the load detail card.
 
 function BillingCard({ load, invoice, onViewInvoice }: {
   load: Load;
@@ -610,10 +574,6 @@ function BillingCard({ load, invoice, onViewInvoice }: {
   onViewInvoice: () => void;
 }) {
   const status = load.billingStatus ?? 'pending';
-  // Paperwork's review queue is event-keyed via the /closeout route +
-  // tab; deep-linking to a single load isn't exposed yet, so we send
-  // operators to Paperwork's All bucket where they can search. When a
-  // load is paid, the review queue is no longer useful — drop it.
   const showReviewQueueLink = status === 'pending' || status === 'verified' || status === 'invoiced';
 
   return (
@@ -666,7 +626,6 @@ function BillingCard({ load, invoice, onViewInvoice }: {
           </div>
         )}
 
-        {/* Action buttons — all billing-related navigation lives here */}
         <div className="space-y-1.5 pt-1">
           {invoice && (
             <button onClick={onViewInvoice}
