@@ -66,8 +66,8 @@ export default async function PricingPage() {
                 maxWidth:   620,
               }}
             >
-              14-day free trial on every plan. Cancel any time —
-              no annual lock-in, no per-driver surcharges.
+              14-day free trial on every plan. Cancel any time. No
+              annual lock-in, no per-driver surcharges.
             </p>
           </Reveal>
         </div>

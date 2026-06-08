@@ -274,7 +274,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 letterSpacing: '-0.022em',
               }}
             >
-              Your whole dispatch desk on{' '}
+              Your entire dispatch desk on{' '}
               <span style={{ color: 'var(--gc-blue)' }}>one calendar.</span>
             </h1>
           </Reveal>
@@ -289,7 +289,7 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
               }}
             >
               Drop a rate-con PDF. Dispatch the load. Verify the POD. Send the invoice.
-              Pay the driver. Every step where it should be — all in one platform.
+              Pay the driver. Every step where it should be. All in one platform.
             </p>
           </Reveal>
           <Reveal delay={180}>
@@ -492,7 +492,7 @@ interface Feature {
 const FEATURES: ReadonlyArray<Feature> = [
   { n: '01', Icon: Truck,    color: '#1a73e8', light: '#e8f0fe', title: 'Your whole fleet, one screen', body: 'Every truck gets its own column and color. See availability at a glance, then drag-and-drop to reassign loads when plans change.' },
   { n: '02', Icon: FileText, color: '#7c3aed', light: '#f3e8fd', title: 'Drop the rate con, go dispatch', body: 'Upload a rate con and AI extracts pickup, delivery, pay, and instructions automatically. Review, confirm, dispatch.', ai: true },
-  { n: '03', Icon: MapPin,   color: '#1e8e3e', light: '#e6f4ea', title: 'Everything for the load, in one place', body: 'Geocoded P&D locations, mapped route, rate con viewer, and POD upload — all in the load detail. No tab switching.' },
+  { n: '03', Icon: MapPin,   color: '#1e8e3e', light: '#e6f4ea', title: 'Everything for the load, in one place', body: 'Geocoded P&D locations, mapped route, rate con viewer, and POD upload. All in the load detail. No tab switching.' },
   { n: '04', Icon: Receipt,  color: '#f97316', light: '#fef0e6', title: 'Close out loads fast', body: 'POD on one side, rate con on the other. Review the paperwork side-by-side and submit for billing in seconds.' },
   { n: '05', Icon: Send,     color: '#7c3aed', light: '#f3e8fd', title: 'Get paid faster', body: 'Send invoices one at a time or in bulk. AI reads customer-specific billing instructions from the rate con so nothing gets rejected.', ai: true },
   { n: '06', Icon: Wallet,   color: '#1e8e3e', light: '#e6f4ea', title: 'Payroll without the headache', body: 'Driver events auto-populate the weekly payroll page. Set default rates, make adjustments, close it out every Friday.' },
@@ -609,7 +609,7 @@ function Features() {
             Built by a carrier, <span style={{ color: 'var(--gc-blue)' }}>for carriers.</span>
           </SectionTitle>
           <SectionSub>
-            Everything a small fleet needs to dispatch, verify, invoice, and pay — in one
+            Everything a small fleet needs to dispatch, verify, invoice, and pay. In one
             focused tool. No bloat, no enterprise pricing.
           </SectionSub>
         </Reveal>
@@ -740,7 +740,7 @@ function HowItWorks() {
             One flow,{' '}
             <span style={{ color: 'var(--gc-blue)' }}>start to finish.</span>
           </SectionTitle>
-          <SectionSub>The same path every load takes — without a single spreadsheet or re-keyed number.</SectionSub>
+          <SectionSub>The same path every load takes, without a single spreadsheet or re-keyed number.</SectionSub>
         </Reveal>
         <div
           className="grid gap-6 sm:gap-5 mt-10 sm:mt-12 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
@@ -850,7 +850,7 @@ function Story() {
             <p>
               Every feature exists because someone yelled across the dispatch office for
               it. No design committee, no UX consultancy, no &ldquo;competitive feature
-              parity&rdquo; spreadsheet driving the roadmap — just the actual work of
+              parity&rdquo; spreadsheet driving the roadmap. Just the actual work of
               running freight.
             </p>
             <p
@@ -876,10 +876,10 @@ function Story() {
 
 const FAQS = [
   { q: 'Is there a per-driver or per-seat fee?',       a: 'Never. You pay one flat monthly price based on your truck count. Add as many dispatchers, drivers, and office staff as you need at no extra cost.' },
-  { q: 'How does the free trial work?',                a: "Every plan starts with a 14-day free trial. Pick a plan, add your card, and you're set up — you won't be charged until day 15, and you can cancel any time before then in the app." },
+  { q: 'How does the free trial work?',                a: "Every plan starts with a 14-day free trial. Pick a plan, add your card, and you're set up. You won't be charged until day 15, and you can cancel any time before then in the app." },
   { q: 'Can I bring my existing loads and customers over?', a: "Yes. You can import your current loads, customers, drivers, and equipment so you're not starting from an empty calendar on day one." },
-  { q: 'Who is FleetCal built for?',                   a: 'Small to mid-size carriers running roughly 1–14 trucks — owner-operators acting as their own dispatcher up through fleets where dispatch is its own department.' },
-  { q: 'What if I grow past 14 trucks?',               a: "Reach out to sales and we'll set you up with a plan sized to your fleet. The product is the same — only the truck cap changes." },
+  { q: 'Who is FleetCal built for?',                   a: 'Small to mid-size carriers running roughly 1–14 trucks. From owner-operators acting as their own dispatcher up through fleets where dispatch is its own department.' },
+  { q: 'What if I grow past 14 trucks?',               a: "Reach out to sales and we'll set you up with a plan sized to your fleet. The product is the same. Only the truck cap changes." },
 ] as const;
 
 function Faq() {
