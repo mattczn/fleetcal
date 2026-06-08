@@ -41,15 +41,16 @@ interface ContactSalesBody {
   loadedAt?:    number;   // ms epoch from the client; gate at >2s
 }
 
-/** Map fleet-size bucket → the recommended plan tier. Sales reads this
- *  first so they know which conversation to lead with. */
+/** Map fleet-size label → the recommended plan tier. Sales reads this
+ *  first so they know which conversation to lead with. Wizard sends
+ *  the human label ("1 to 4") not a value code. */
 function recommendPlan(fleetSize: string | undefined): string {
   switch (fleetSize) {
-    case "1-4":   return "Owner Op  ($99/mo · 1–4 trucks)";
-    case "5-9":   return "Growth    ($149/mo · 5–9 trucks)";
-    case "10-14": return "Fleet     ($199/mo · 10–14 trucks)";
-    case "15+":   return "Custom    (15+ trucks · sales-led)";
-    default:      return "(unknown — fleet size not provided)";
+    case "1 to 4":     return "Owner Op  ($99/mo · 1–4 trucks)";
+    case "5 to 9":     return "Growth    ($149/mo · 5–9 trucks)";
+    case "10 to 14":   return "Fleet     ($199/mo · 10–14 trucks)";
+    case "15 or more": return "Custom    (15+ trucks · sales-led)";
+    default:           return "(unknown — fleet size not provided)";
   }
 }
 
@@ -138,7 +139,7 @@ contactSales.post("/", async (c) => {
         <tr><td style="padding:6px 12px 6px 0;color:#5f6368;vertical-align:top;">Fleet size</td><td style="padding:6px 0;">${esc(fleetSize) || "—"}</td></tr>
         <tr><td style="padding:6px 12px 6px 0;color:#5f6368;vertical-align:top;">Using today</td><td style="padding:6px 0;">${esc(currentTool) || "—"}</td></tr>
         <tr><td style="padding:6px 12px 6px 0;color:#5f6368;vertical-align:top;">Primary freight</td><td style="padding:6px 0;">${esc(freightType) || "—"}</td></tr>
-        <tr><td style="padding:6px 12px 6px 0;color:#5f6368;vertical-align:top;">Biggest pain</td><td style="padding:6px 0;">${esc(topPain) || "—"}</td></tr>
+        <tr><td style="padding:6px 12px 6px 0;color:#5f6368;vertical-align:top;">Pain points</td><td style="padding:6px 0;">${esc(topPain) || "—"}</td></tr>
       </table>
 
       ${message
@@ -164,7 +165,7 @@ contactSales.post("/", async (c) => {
     `Fleet size:      ${fleetSize   || "—"}\n` +
     `Using today:     ${currentTool || "—"}\n` +
     `Primary freight: ${freightType || "—"}\n` +
-    `Biggest pain:    ${topPain     || "—"}\n` +
+    `Pain points:     ${topPain     || "—"}\n` +
     (message ? `\nAnything else:\n${message}\n` : "");
 
   const resend = new Resend(env.resendApiKey);

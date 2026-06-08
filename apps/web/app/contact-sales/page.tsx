@@ -26,6 +26,9 @@ interface ChoiceQuestion {
   key:     'fleetSize' | 'currentTool' | 'freightType' | 'topPain';
   prompt:  string;
   sub:     string;
+  /** When true the user can tick multiple boxes and has to click Next
+   *  to advance. Single-select questions auto-advance on the tap. */
+  multi?:  boolean;
   options: ReadonlyArray<{ value: string; label: string; hint?: string }>;
 }
 
@@ -73,8 +76,9 @@ const QUESTIONS: ReadonlyArray<ChoiceQuestion> = [
   {
     kind:   'choice',
     key:    'topPain',
-    prompt: "What's the biggest pain right now?",
-    sub:    'Pick the one that costs you the most hours each week.',
+    prompt: 'Where does it hurt right now?',
+    sub:    'Pick everything that costs you hours each week. We hear most fleets tick more than one.',
+    multi:  true,
     options: [
       { value: 'dispatch',   label: 'Dispatch chaos' },
       { value: 'invoicing',  label: 'Slow invoicing' },
@@ -123,9 +127,17 @@ export default function ContactSalesPage() {
   const isContactStep = step === QUESTIONS.length;
   const currentQ      = isChoiceStep ? QUESTIONS[step] : null;
 
-  // For the choice steps, what's currently selected (used to render the
-  // ring around the chosen tile).
+  // For the choice steps, what's currently selected. Single-select
+  // questions store one value; multi-select stores a comma-separated
+  // string ("dispatch,invoicing") that we split for the active check.
   const selectedForStep = currentQ ? form[currentQ.key] : '';
+  const selectedValues  = selectedForStep ? selectedForStep.split(',') : [];
+  function isSelected(value: string): boolean {
+    if (!currentQ) return false;
+    return currentQ.multi
+      ? selectedValues.includes(value)
+      : selectedForStep === value;
+  }
 
   // Computed recommended plan label so we can echo it back on the
   // contact-info step ("Looks like Growth fits — we'll lead with that").
@@ -141,10 +153,27 @@ export default function ContactSalesPage() {
 
   function pickChoice(value: string) {
     if (!currentQ) return;
+    if (currentQ.multi) {
+      // Toggle in/out of the comma-separated list. Don't auto-advance;
+      // the user might want to tick more than one box. They click the
+      // Continue button at the bottom when they're done.
+      setForm(prev => {
+        const prevList = prev[currentQ.key] ? prev[currentQ.key].split(',') : [];
+        const nextList = prevList.includes(value)
+          ? prevList.filter(v => v !== value)
+          : [...prevList, value];
+        return { ...prev, [currentQ.key]: nextList.join(',') };
+      });
+      return;
+    }
     setForm(prev => ({ ...prev, [currentQ.key]: value }));
-    // Auto-advance after a tiny delay so the user sees the selected ring
-    // light up before the step transition.
+    // Single-select: auto-advance after a tiny delay so the user sees
+    // the selected ring light up before the step transition.
     setTimeout(() => setStep(s => Math.min(s + 1, QUESTIONS.length)), 180);
+  }
+
+  function next() {
+    setStep(s => Math.min(s + 1, QUESTIONS.length));
   }
 
   function back() {
@@ -167,11 +196,32 @@ export default function ContactSalesPage() {
 
     setBusy(true);
     try {
+      // Convert internal values → human labels for the email. The form
+      // state stores codes ("1-4", "spreadsheets") for the
+      // recommendation switch + multi-select dedupe, but the inbox
+      // wants something readable ("1 to 4", "Spreadsheets"). For multi-
+      // select, split the comma-separated list and join the labels with
+      // a comma + space.
+      const labeled = QUESTIONS.reduce<Record<string, string>>((acc, q) => {
+        const raw = form[q.key];
+        if (!raw) return acc;
+        if (q.multi) {
+          const labels = raw.split(',').map(v =>
+            q.options.find(o => o.value === v)?.label ?? v,
+          );
+          acc[q.key] = labels.join(', ');
+        } else {
+          acc[q.key] = q.options.find(o => o.value === raw)?.label ?? raw;
+        }
+        return acc;
+      }, {});
+
       const res = await fetch(`${API_BASE}/v1/contact-sales`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
+          ...labeled,
           website:  honeypotRef.current?.value ?? '',
           loadedAt,
         }),
@@ -221,7 +271,7 @@ export default function ContactSalesPage() {
                 fontWeight: 800, fontSize: 'clamp(30px, 4vw, 44px)',
                 lineHeight: 1.08, margin: '12px 0 0', letterSpacing: '-0.022em',
               }}>
-                A few quick questions{' '}
+                A few quick questions<br className="hidden lg:inline" />{' '}
                 <span style={{ color: 'var(--gc-blue)' }}>before we hop on a call.</span>
               </h1>
               <p style={{ fontSize: 16.5, lineHeight: 1.6, color: '#5f6368', margin: '14px auto 0', maxWidth: 540 }}>
@@ -279,7 +329,7 @@ export default function ContactSalesPage() {
                 </p>
                 <div className="grid gap-3" style={{ gridTemplateColumns: '1fr' }}>
                   {currentQ.options.map(opt => {
-                    const active = selectedForStep === opt.value;
+                    const active = isSelected(opt.value);
                     return (
                       <button
                         key={opt.value}
@@ -301,8 +351,13 @@ export default function ContactSalesPage() {
                         }}
                       >
                         <span className="flex items-center gap-3">
+                          {/* Square indicator on multi-select questions
+                              (looks like a real checkbox) and a circle on
+                              single-select (radio affordance). Same
+                              filled-blue treatment when active. */}
                           <span style={{
-                            width:        20, height: 20, borderRadius: 999,
+                            width:        20, height: 20,
+                            borderRadius: currentQ.multi ? 5 : 999,
                             border:       active ? 'none' : '2px solid #dadce0',
                             background:   active ? 'var(--gc-blue)' : 'transparent',
                             display:      'inline-flex',
@@ -323,6 +378,34 @@ export default function ContactSalesPage() {
                     );
                   })}
                 </div>
+                {/* Multi-select needs an explicit Continue — auto-advance
+                    would skip out before the user finishes ticking
+                    boxes. Disabled until they pick at least one. */}
+                {currentQ.multi && (
+                  <div className="flex justify-end mt-6">
+                    <button
+                      type="button"
+                      onClick={next}
+                      disabled={selectedValues.length === 0}
+                      className="font-display inline-flex items-center justify-center"
+                      style={{
+                        background:    'var(--gc-blue)',
+                        color:         '#fff',
+                        fontWeight:    600,
+                        fontSize:      15,
+                        padding:       '12px 22px',
+                        borderRadius:  999,
+                        border:        'none',
+                        cursor:        selectedValues.length === 0 ? 'default' : 'pointer',
+                        opacity:       selectedValues.length === 0 ? 0.5 : 1,
+                        transition:    'opacity .15s',
+                        gap:           8,
+                      }}
+                    >
+                      Continue <ArrowRight size={15} />
+                    </button>
+                  </div>
+                )}
               </div>
             ) : isContactStep ? (
               <ContactStep
