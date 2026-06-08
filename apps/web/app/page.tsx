@@ -353,24 +353,35 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
 
         <Reveal delay={140}>
           <div style={{ position: 'relative' }}>
-            <Frame url="app.fleetcal.com/loads/ai">
+            <Frame url="fleetcal.app/calendar">
               {/* Hero screencast — dispatcher dragging a rate-con PDF
                   onto the calendar and FleetCal's AI extracts the
-                  customer, rate, stops, and times. autoPlay requires
-                  muted + playsInline (mobile Safari rule). Loop so the
-                  visual stays alive while a visitor scrolls past.
-                  preload="metadata" keeps initial page weight low —
-                  the browser only fetches enough to render the first
-                  frame until the user scrolls into view. */}
+                  customer, rate, stops, and times.
+                    - autoPlay requires muted + playsInline (mobile
+                      Safari rule).
+                    - aspectRatio forces the element to reserve vertical
+                      space BEFORE the video's metadata loads. Without
+                      this, height:auto evaluates to 0 on first paint
+                      and the frame renders empty. Source is 1848×1080
+                      ≈ 1.711:1.
+                    - preload="auto" because this is the hero — we want
+                      the first frame painted ASAP, not after a network
+                      round-trip when the element enters the viewport. */}
               <video
                 src="/rateconai.mp4"
                 autoPlay
                 muted
                 loop
                 playsInline
-                preload="metadata"
+                preload="auto"
                 aria-label="AI parsing a rate confirmation PDF into a load"
-                style={{ width: '100%', height: 'auto', display: 'block' }}
+                style={{
+                  width:       '100%',
+                  height:      'auto',
+                  aspectRatio: '1848 / 1080',
+                  display:     'block',
+                  background:  '#f8f9fa',
+                }}
               />
             </Frame>
             {/* Floating "Delivered" chip — top-right */}
