@@ -72,10 +72,10 @@ function Nav({ state }: { state: AuthCta }) {
           <Image
             src="/logo-horizontal.png"
             alt="FleetCal"
-            width={280}
-            height={58}
+            width={220}
+            height={48}
             priority
-            style={{ height: 58, width: 'auto', objectFit: 'contain' }}
+            style={{ height: 48, width: 'auto', objectFit: 'contain' }}
           />
         </Link>
         <div className="flex items-center gap-8">
@@ -303,9 +303,9 @@ function Footer() {
           <Image
             src="/logo-horizontal.png"
             alt="FleetCal"
-            width={220}
-            height={52}
-            style={{ height: 52, width: 'auto', objectFit: 'contain' }}
+            width={190}
+            height={42}
+            style={{ height: 42, width: 'auto', objectFit: 'contain' }}
           />
         </Link>
         <div className="font-sys text-[12px] uppercase text-sys-muted" style={{ letterSpacing: '0.12em' }}>

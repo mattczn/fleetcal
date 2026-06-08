@@ -135,10 +135,10 @@ export default function AssetSidebar() {
           <Image
             src="/logo-horizontal.png"
             alt="FleetCal"
-            width={260}
-            height={58}
+            width={220}
+            height={48}
             priority
-            style={{ objectFit: 'contain', height: 58, width: 'auto' }}
+            style={{ objectFit: 'contain', height: 48, width: 'auto' }}
           />
         </div>
 
