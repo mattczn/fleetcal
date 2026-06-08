@@ -274,7 +274,8 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
                 letterSpacing: '-0.022em',
               }}
             >
-              Your entire dispatch desk on{' '}
+              Your entire<br className="hidden lg:inline" />{' '}
+              dispatch desk on<br className="hidden lg:inline" />{' '}
               <span style={{ color: 'var(--gc-blue)' }}>one calendar.</span>
             </h1>
           </Reveal>
