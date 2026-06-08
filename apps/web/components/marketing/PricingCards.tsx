@@ -1,161 +1,235 @@
+'use client';
+
 /**
- * PricingCards — Systematica-style 3-tier pricing grid.
+ * PricingCards — Google Workspace–style 3-tier pricing grid.
  *
- * Rendered on both `/` (embedded in the landing) and `/pricing`
- * (standalone). Each card has:
- *   - Colored top banner with tier name (mono uppercase)
- *   - Big serif price + truck-range subtext
- *   - Square-bullet feature list (cumulative — Growth includes Owner Op,
- *     Fleet includes Growth)
- *   - Solid blue "Start free trial" CTA routing to /sign-up
+ * Rewritten from the prior Systematica zero-radius look:
+ *   - rounded-3xl cards w/ soft elevation
+ *   - segmented Monthly / Annual (-17%) toggle above the grid
+ *   - "Growth" is the popular tier — 2px blue ring + lifted, plus
+ *     "Most popular" pill in the top-right corner
+ *   - Tonal CTA (blue-light) on non-popular, primary pill on popular
+ *   - Green-light check circles in front of every feature row
  *
- * Why we don't use Clerk's <PricingTable />: it has minimal UI for
- * signed-out viewers (no per-plan feature lists, no CTA buttons that
- * make sense before sign-up), and its rounded-corner styling clashes
- * with the Systematica zero-radius aesthetic. Once a user signs up
- * we can switch them to Clerk's hosted checkout via the post-signup
- * flow, but the public-facing pricing surface stays custom.
+ * Annual price = round(monthly * 10 / 12) (i.e. 2 months free) —
+ * Owner Op 99 → 83, Growth 149 → 124, Fleet 199 → 166.
+ *
+ * The post-signup flow still routes to Clerk's hosted checkout via
+ * `/sign-up?plan=${key}`. The toggle is purely a marketing surface;
+ * actual billing terms are negotiated there.
  */
 import Link from 'next/link';
+import { useState } from 'react';
+import { Check } from 'lucide-react';
 
 interface PricingTier {
-  key: 'owner_op' | 'growth' | 'fleet';
-  name: string;
-  price: number;
-  trucks: string;
-  blurb: string;
-  accent: 'orange' | 'green' | 'teal';
+  key:     'owner_op' | 'growth' | 'fleet';
+  name:    string;
+  price:   number;
+  trucks:  string;
+  blurb:   string;
+  /** CSS color string — tier eyebrow uses this. */
+  accent:  string;
   popular?: boolean;
-  features: string[];
 }
 
-// All three tiers ship the same feature set. The only knob that scales
-// with price is the truck cap. This list is the canonical feature list
-// shown identically on every card — edit here and all three update.
 const SHARED_FEATURES = [
-  'AI Rate-Con Parser',
-  'Truck Dispatch Calendar',
-  'Driver Payroll',
-  'Custom Reports',
-  'Paperwork Verification',
-  'Billing and Invoicing',
+  'AI rate-con parser',
+  'Truck dispatch calendar',
+  'Driver payroll',
+  'Custom reports',
+  'Paperwork verification',
+  'Billing & invoicing',
   '… and more',
 ] as const;
 
-const TIERS: PricingTier[] = [
-  {
-    key:    'owner_op',
-    name:   'Owner Op',
-    price:  99,
-    trucks: '1–4 trucks',
-    blurb:  'For the owner-op who is also the dispatcher.',
-    accent: 'orange',
-    features: [...SHARED_FEATURES],
-  },
-  {
-    key:    'growth',
-    name:   'Growth',
-    price:  149,
-    trucks: '5–9 trucks',
-    blurb:  'When you have hired your first dispatcher.',
-    accent: 'green',
-    popular: true,
-    features: [...SHARED_FEATURES],
-  },
-  {
-    key:    'fleet',
-    name:   'Fleet',
-    price:  199,
-    trucks: '10–14 trucks',
-    blurb:  'When dispatch is its own department.',
-    accent: 'teal',
-    features: [...SHARED_FEATURES],
-  },
+const TIERS: readonly PricingTier[] = [
+  { key: 'owner_op', name: 'Owner Op', price: 99,  trucks: '1–4 trucks',   blurb: 'For the owner-op who is also the dispatcher.', accent: '#f97316' },
+  { key: 'growth',   name: 'Growth',   price: 149, trucks: '5–9 trucks',   blurb: 'When you have hired your first dispatcher.',   accent: '#1e8e3e', popular: true },
+  { key: 'fleet',    name: 'Fleet',    price: 199, trucks: '10–14 trucks', blurb: 'When dispatch is its own department.',          accent: '#0891b2' },
 ];
 
-const ACCENT_BG = {
-  orange: '#F47316',
-  green:  '#16A34A',
-  teal:   '#0891B2',
-} as const;
-
 export default function PricingCards() {
+  const [annual, setAnnual] = useState(false);
+
   return (
     <div>
-      <div className="grid md:grid-cols-3 gap-px bg-sys-line">
-        {TIERS.map((tier) => (
-          <PricingCard key={tier.key} tier={tier} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PricingCard({ tier }: { tier: PricingTier }) {
-  return (
-    <div
-      className="bg-white flex flex-col"
-      style={{ borderRadius: 0, position: 'relative' }}
-    >
-      {tier.popular && (
+      {/* Monthly / Annual segmented toggle */}
+      <div className="flex justify-center" style={{ marginTop: 12 }}>
         <div
-          className="absolute top-0 right-0 font-mono font-bold text-[10px] uppercase text-white px-3 py-1"
+          className="inline-flex font-display"
           style={{
-            background: '#111827',
-            letterSpacing: '0.15em',
-            borderRadius: 0,
-            transform: 'translateY(-50%)',
+            background:   'var(--gc-bg)',
+            borderRadius: 999,
+            padding:      5,
+            gap:          4,
+            border:       '1px solid #e8eaed',
           }}
         >
-          Most popular
+          {[
+            { label: 'Monthly',            value: false },
+            { label: 'Annual · save 17%',  value: true  },
+          ].map(opt => {
+            const isActive = annual === opt.value;
+            return (
+              <button
+                type="button"
+                key={String(opt.value)}
+                onClick={() => setAnnual(opt.value)}
+                style={{
+                  border:     'none',
+                  cursor:     'pointer',
+                  borderRadius: 999,
+                  padding:    '9px 20px',
+                  fontSize:   14,
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  background: isActive ? '#fff' : 'transparent',
+                  color:      isActive ? '#1967d2' : '#5f6368',
+                  boxShadow:  isActive ? 'var(--shadow-1)' : 'none',
+                  transition: 'all .2s',
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
         </div>
-      )}
-
-      {/* Colored banner — tier name */}
-      <div
-        className="font-mono font-bold text-[11px] uppercase text-white px-8 py-3"
-        style={{ background: ACCENT_BG[tier.accent], letterSpacing: '0.12em' }}
-      >
-        {tier.name}
       </div>
 
-      {/* Body */}
-      <div className="px-8 py-10 flex-1 flex flex-col">
-        {/* Price */}
-        <div className="mb-2 flex items-baseline gap-2">
-          <span className="font-display text-[56px] leading-none tracking-tight text-sys-primary">
-            ${tier.price}
-          </span>
-          <span className="font-sys text-[15px] text-sys-muted">/ month</span>
-        </div>
-        <div className="font-sys font-semibold text-[14px] text-sys-primary mb-4">
-          {tier.trucks}
-        </div>
-        <p className="font-sys text-[14px] leading-[1.6] text-sys-muted mb-8">
-          {tier.blurb}
-        </p>
-
-        {/* CTA — pin near top of body for visual rhythm */}
-        <Link
-          href={`/sign-up?plan=${tier.key}`}
-          className="inline-flex items-center justify-center bg-sys-blue text-white font-semibold text-[14px] px-6 py-3 hover:bg-sys-blue-hover transition-colors mb-10"
-          style={{ borderRadius: 0 }}
-        >
-          Try for free →
-        </Link>
-
-        {/* Feature list — fills remaining space */}
-        <ul className="space-y-3 mt-auto">
-          {tier.features.map((f, i) => (
-            <li
-              key={i}
-              className="flex items-start gap-3 font-sys text-[14px] leading-[1.5] text-sys-primary"
+      {/* Cards grid */}
+      <div
+        className="mt-11 grid gap-6 items-start"
+        style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}
+      >
+        {TIERS.map(tier => {
+          const shown = annual ? Math.round(tier.price * 10 / 12) : tier.price;
+          return (
+            <div
+              key={tier.key}
+              style={{
+                position:      'relative',
+                background:    '#fff',
+                borderRadius:  24,
+                border:        tier.popular ? '2px solid var(--gc-blue)' : '1px solid #e8eaed',
+                boxShadow:     tier.popular ? 'var(--shadow-soft)' : 'none',
+                transform:     tier.popular ? 'translateY(-8px)' : 'none',
+                overflow:      'hidden',
+                height:        '100%',
+                display:       'flex',
+                flexDirection: 'column',
+              }}
             >
-              <span className="w-1.5 h-1.5 bg-sys-muted mt-2 flex-shrink-0" />
-              <span>{f}</span>
-            </li>
-          ))}
-        </ul>
+              {tier.popular && (
+                <div
+                  className="font-display"
+                  style={{
+                    position:       'absolute',
+                    top:            18,
+                    right:          18,
+                    whiteSpace:     'nowrap',
+                    fontSize:       11,
+                    fontWeight:     700,
+                    letterSpacing:  '0.08em',
+                    textTransform:  'uppercase',
+                    color:          '#fff',
+                    background:     'var(--gc-blue)',
+                    padding:        '5px 12px',
+                    borderRadius:   999,
+                  }}
+                >
+                  Most popular
+                </div>
+              )}
+
+              <div style={{ padding: '36px 34px 0' }}>
+                <span
+                  className="font-mono"
+                  style={{
+                    fontSize:       12,
+                    fontWeight:     600,
+                    letterSpacing:  '0.1em',
+                    textTransform:  'uppercase',
+                    color:          tier.accent,
+                  }}
+                >
+                  {tier.name}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 16 }}>
+                  <span className="font-display" style={{ fontWeight: 800, fontSize: 56, lineHeight: 1, color: '#202124' }}>
+                    ${shown}
+                  </span>
+                  <span style={{ fontSize: 15, color: '#5f6368' }}>/ mo</span>
+                </div>
+                <div style={{ fontSize: 13, color: '#5f6368', height: 18, marginTop: 4 }}>
+                  {annual ? 'billed annually' : 'billed monthly'}
+                </div>
+                <div className="font-display" style={{ fontWeight: 700, fontSize: 15, marginTop: 14, color: '#202124' }}>
+                  {tier.trucks}
+                </div>
+                <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#5f6368', margin: '8px 0 24px' }}>
+                  {tier.blurb}
+                </p>
+                <Link
+                  href={`/sign-up?plan=${tier.key}`}
+                  className="font-display"
+                  style={{
+                    display:        'flex',
+                    alignItems:     'center',
+                    justifyContent: 'center',
+                    width:          '100%',
+                    padding:        '14px 22px',
+                    borderRadius:   999,
+                    fontSize:       15,
+                    fontWeight:     600,
+                    textDecoration: 'none',
+                    background:     tier.popular ? 'var(--gc-blue)' : 'var(--gc-blue-light)',
+                    color:          tier.popular ? '#fff' : '#1967d2',
+                    boxShadow:      tier.popular ? 'var(--shadow-1)' : 'none',
+                    transition:     'background .2s, box-shadow .2s',
+                  }}
+                >
+                  Start free trial
+                </Link>
+              </div>
+
+              <div style={{ padding: '28px 34px 36px', marginTop: 4 }}>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 13 }}>
+                  {SHARED_FEATURES.map(f => (
+                    <li
+                      key={f}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 14.5, color: '#3c4043' }}
+                    >
+                      <span
+                        style={{
+                          width:        20,
+                          height:       20,
+                          borderRadius: 999,
+                          background:   '#e6f4ea',
+                          display:      'grid',
+                          placeItems:   'center',
+                          flex:         'none',
+                        }}
+                      >
+                        <Check size={12} strokeWidth={3} style={{ color: '#1e8e3e' }} />
+                      </span>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="text-center" style={{ marginTop: 44 }}>
+        <p style={{ fontSize: 15, color: '#5f6368' }}>
+          Running a fleet larger than 14 trucks?{' '}
+          <Link href="mailto:matt@curzontrucking.com" style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none' }}>
+            Contact sales →
+          </Link>
+        </p>
       </div>
     </div>
   );

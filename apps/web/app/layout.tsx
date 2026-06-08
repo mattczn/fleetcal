@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import { ClerkProvider } from '@clerk/nextjs';
-import { Plus_Jakarta_Sans, DM_Serif_Display, DM_Sans, IBM_Plex_Mono } from 'next/font/google';
+import { Plus_Jakarta_Sans, Figtree, Hanken_Grotesk, IBM_Plex_Mono } from 'next/font/google';
 import ThemeProvider from '@/components/ThemeProvider';
 import { RailwayClientProvider } from '@/components/RailwayClientProvider';
 import { clerkAppearance } from '@/lib/clerkAppearance';
@@ -17,16 +17,20 @@ const font = Plus_Jakarta_Sans({
 // Marketing landing fonts — `/`, `/pricing`. Dashboard pages keep
 // Plus Jakarta Sans (via body fontFamily). The marketing pages opt in
 // by setting `font-display`, `font-sys`, or `font-mono` on their root.
-const dmSerif = DM_Serif_Display({
+//
+// Figtree (display / headings) + Hanken Grotesk (body) shifted from
+// the prior DM Serif + DM Sans pair as part of the Google-Workspace
+// look refresh — friendlier geometric sans pairing, closer to the
+// Google Sans family the dashboard already evokes.
+const figtree = Figtree({
   subsets: ['latin'],
-  variable: '--font-dm-serif',
-  weight:   ['400'],
-  style:    ['normal', 'italic'],
+  variable: '--font-figtree',
+  weight:   ['400', '500', '600', '700', '800', '900'],
   display:  'swap',
 });
-const dmSans = DM_Sans({
+const hanken = Hanken_Grotesk({
   subsets: ['latin'],
-  variable: '--font-dm-sans',
+  variable: '--font-hanken',
   weight:   ['400', '500', '600', '700'],
   display:  'swap',
 });
@@ -93,7 +97,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <html
         lang="en"
         data-theme={theme}
-        className={`${font.variable} ${dmSerif.variable} ${dmSans.variable} ${ibmMono.variable} h-full`}
+        className={`${font.variable} ${figtree.variable} ${hanken.variable} ${ibmMono.variable} h-full`}
         suppressHydrationWarning
       >
         <head>

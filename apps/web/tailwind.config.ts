@@ -18,29 +18,34 @@ const config: Config = {
         brand:  colors.brand,
         gc:     colors.gc,
         status: colors.status,
-        // Marketing landing palette (`sys.*`) — mirrors systematica-site
-        // so the / page can use the same typography + color blocks. Kept
-        // separate from `gc.*` (dashboard tokens) so the calendar UI
-        // doesn't accidentally pick these up.
+        // Marketing landing palette (`sys.*`) — Google Workspace look.
+        // Mirrors the dashboard's `--gc-*` Google Calendar palette so
+        // marketing and product share one color identity. Kept
+        // separate from `gc.*` so the calendar UI doesn't accidentally
+        // pick these up.
         sys: {
           bg:             '#ffffff',
-          surface:        '#F5F7FF',
-          line:           '#E0E5F2',
-          primary:        '#111827',
-          muted:          '#6B7280',
-          blue:           '#1B5EE4',
-          'blue-light':   '#EEF3FD',
-          'blue-hover':   '#1549C4',
-          orange:         '#F47316',
-          'orange-light': '#FFF4EB',
-          green:          '#16A34A',
-          'green-light':  '#F0FDF4',
-          purple:         '#7C3AED',
-          'purple-light': '#F5F3FF',
-          teal:           '#0891B2',
-          'teal-light':   '#ECFEFF',
-          amber:          '#D97706',
-          'amber-light':  '#FFFBEB',
+          surface:        '#f8f9fa',
+          line:           '#dadce0',
+          'line-light':   '#e8eaed',
+          primary:        '#202124',
+          'text-2':       '#3c4043',
+          muted:          '#5f6368',
+          blue:           '#1a73e8',
+          'blue-light':   '#e8f0fe',
+          'blue-hover':   '#1765cc',
+          'blue-text':    '#1967d2',
+          'blue-deep':    '#0b57d0',
+          red:            '#ea4335',
+          orange:         '#f97316',
+          'orange-light': '#fef0e6',
+          green:          '#1e8e3e',
+          'green-light':  '#e6f4ea',
+          purple:         '#7c3aed',
+          'purple-light': '#f3e8fd',
+          teal:           '#0891b2',
+          'teal-light':   '#e0f7fa',
+          amber:          '#f9ab00',
         },
       },
       fontFamily: {
@@ -49,8 +54,11 @@ const config: Config = {
         semibold: typography.fontFamily.semibold,
         bold:     typography.fontFamily.bold,
         // Marketing landing fonts — set via CSS variables in layout.tsx.
-        display: ['var(--font-dm-serif)', 'Georgia', 'serif'],
-        sys:     ['var(--font-dm-sans)',  'system-ui', 'sans-serif'],
+        // Figtree (display/headings) + Hanken Grotesk (body/UI) form the
+        // Google-Workspace pairing; IBM Plex Mono stays the eyebrow/mono
+        // label face.
+        display: ['var(--font-figtree)', 'system-ui', 'sans-serif'],
+        sys:     ['var(--font-hanken)',  'system-ui', 'sans-serif'],
         mono:    ['var(--font-ibm-mono)', '"Courier New"', 'monospace'],
       },
       letterSpacing: {
