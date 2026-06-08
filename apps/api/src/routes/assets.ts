@@ -139,16 +139,16 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
     }
     const current = activeCount ?? 0;
     if (current >= tier.maxTrucks) {
-      // Two phrasings: one for orgs on a real tier ("you hit the cap,
-      // upgrade"), one for orgs with no resolvable plan ("we couldn't
-      // verify your plan, contact support"). The 'none' case usually
-      // means a fresh signup whose Clerk billing feature hasn't fully
-      // propagated, OR a plan whose feature slug doesn't match our
-      // expected `*_tier` keys. Either way the user can't fix it by
-      // upgrading — they need support.
+      // Two phrasings: one for orgs on a real tier, one for orgs
+      // with no resolvable plan (Clerk billing feature didn't
+      // propagate or slug mismatch). Both call out the THREE ways
+      // to make room: upgrade, contact sales, or retire/delete an
+      // existing truck — the third one is the cheapest path for a
+      // customer who's just rotating equipment, so we surface it
+      // first in the "real tier" message.
       const detail = tier.tier === "none"
-        ? `You've hit your truck limit. We couldn't verify your subscription — contact support to increase capacity.`
-        : `You've hit the truck limit for your plan (${current} of ${tier.maxTrucks}). Upgrade your plan or contact sales to increase capacity.`;
+        ? `You've hit your truck limit. Retire or delete an existing truck to free a slot, or contact support to increase capacity.`
+        : `You've hit the truck limit for your plan (${current} of ${tier.maxTrucks}). Retire or delete an existing truck to free a slot, or upgrade your plan / contact sales to raise the cap.`;
       return c.json({
         error:  "tier_cap_exceeded",
         detail,

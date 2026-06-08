@@ -392,17 +392,23 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
               </div>
             </div>
 
-            {/* Tier-cap banner — shows the user's current usage vs cap
-                whenever the org is at/over the cap. Three copy paths:
-                  - upgradeable tier (owner_op, growth): "Upgrade to
-                    add more" + /pricing link
-                  - top tier (fleet): "Contact sales to raise the cap"
+            {/* Tier-cap banner — shows the user's current usage vs
+                cap whenever the org is at/over the cap. The cap is
+                on TRUCKS ACTIVE TODAY: retired trucks stay in the
+                directory for history but don't count, so the
+                cheapest way to make room is usually to retire one
+                that's no longer in service. We lead with that path
+                in every copy variant so dispatchers know it's an
+                option before they think about money.
+                  - upgradeable tier (owner_op, growth): retire OR
+                    upgrade
+                  - top tier (fleet): retire OR contact sales
                   - no resolvable plan (tier === 'none', usually a
-                    Clerk feature-flag misconfig): "Contact support"
-                The server returns matching copy on 402, so even if
-                this banner doesn't fire pre-emptively for any reason
-                (e.g. a brand-new org whose hook hasn't hydrated yet),
-                the server denial lands in `tierError` and renders. */}
+                    Clerk feature-flag misconfig): retire OR contact
+                    support
+                The server returns matching copy on 402; the
+                `tierError` slot shows whichever message the server
+                sent verbatim when present. */}
             {(capBlocked || tierError) && (
               <div className="mx-3 mt-2 rounded-lg px-3 py-2 text-[11px] leading-snug"
                 style={{
@@ -413,18 +419,21 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                 <div className="font-bold">
                   {tier === 'none'
                     ? `Truck limit reached`
-                    : `${tierLabel} plan — ${currentTrucks} of ${maxTrucks} trucks used`}
+                    : `${tierLabel} plan — ${currentTrucks} of ${maxTrucks} active trucks`}
                 </div>
                 <div className="mt-0.5">
                   {tierError ?? (
-                    tier === 'none' ? (
-                      <>We couldn&apos;t verify your subscription. Contact support to increase capacity.</>
-                    ) : upsellTier ? (
-                      <>Upgrade your plan or contact sales to increase capacity.{' '}
-                        <Link href="/pricing" className="underline font-semibold">View plans →</Link></>
-                    ) : (
-                      <>You&apos;re on the highest standard tier. Contact sales to raise the cap.</>
-                    )
+                    <>
+                      <strong>Retire</strong> or delete an existing truck to free a slot
+                      {tier === 'none' ? (
+                        <>, or contact support to increase capacity.</>
+                      ) : upsellTier ? (
+                        <>, or upgrade your plan to raise the cap.{' '}
+                          <Link href="/pricing" className="underline font-semibold">View plans →</Link></>
+                      ) : (
+                        <>, or contact sales to raise the cap.</>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

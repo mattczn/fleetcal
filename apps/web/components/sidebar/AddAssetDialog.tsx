@@ -94,20 +94,20 @@ export default function AddAssetDialog({ onClose }: { onClose: () => void }) {
                 <div className="font-semibold">
                   {tier === 'none'
                     ? 'Truck limit reached.'
-                    : `${tierLabel} plan limit reached — ${currentTrucks} of ${maxTrucks} trucks used.`}
+                    : `${tierLabel} plan — ${currentTrucks} of ${maxTrucks} active trucks.`}
                 </div>
                 <div className="mt-1">
+                  <strong>Retire</strong> or delete an existing truck to free a slot
                   {tier === 'none' ? (
-                    <>We couldn&apos;t verify your subscription. Contact support to increase capacity.</>
+                    <>, or contact support to increase capacity.</>
                   ) : upsellTier ? (
-                    <>
-                      Upgrade your plan or contact sales to increase capacity.{' '}
+                    <>, or upgrade your plan to raise the cap.{' '}
                       <Link href="/pricing" onClick={onClose} className="font-semibold underline">
                         View plans →
                       </Link>
                     </>
                   ) : (
-                    <>You&apos;re on the highest standard tier. Contact sales to raise the cap.</>
+                    <>, or contact sales to raise the cap.</>
                   )}
                 </div>
               </div>
