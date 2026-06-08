@@ -219,10 +219,20 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
   return (
     <section
       id="top"
+      // Fills the viewport below the 68px nav on standard laptop /
+      // desktop screens so the hero acts as a true "above the fold"
+      // panel and the scroll-down indicator the screenshot/video
+      // shows actually has something below it. `min-height` (not
+      // height) so taller content on small viewports still expands
+      // gracefully instead of clipping. Flex column centers the
+      // grid vertically when the viewport is taller than the
+      // content needs.
+      className="flex flex-col justify-center"
       style={{
         background:    'radial-gradient(ellipse 70% 90% at 88% 0%, #e8f0fe 0%, #fff 60%)',
         paddingTop:    72,
         paddingBottom: 84,
+        minHeight:     'calc(100vh - 68px)',
       }}
     >
       <div
@@ -993,10 +1003,27 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
 }
 
 function Footer() {
+  // Each link below must resolve to a real destination — either an
+  // existing route (verified against app/), a real on-page anchor,
+  // or a working mailto. Pre-cleanup the footer carried four
+  // dead/duplicate links (Built by carriers→#story duplicated Why
+  // FleetCal, Careers→#story had no careers page, Help center was
+  // just a relabelled mailto, System status went to #). Those are
+  // removed rather than left as decoration.
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
-    ['Product', [['Features', '#features'], ['How it works', '#how'], ['Pricing', '#pricing']]],
-    ['Company', [['Why FleetCal', '#story'], ['Built by carriers', '#story'], ['Contact sales', 'mailto:hello@fleetcal.app'], ['Careers', '#story']]],
-    ['Support', [['Help center', 'mailto:hello@fleetcal.app'], ['Sign in', '/sign-in'], ['System status', '#'], ['Contact us', 'mailto:hello@fleetcal.app']]],
+    ['Product', [
+      ['Features',     '#features'],
+      ['How it works', '#how'],
+      ['Pricing',      '#pricing'],
+    ]],
+    ['Company', [
+      ['Why FleetCal',  '#story'],
+      ['Contact sales', 'mailto:hello@fleetcal.app'],
+    ]],
+    ['Account', [
+      ['Sign in', '/sign-in'],
+      ['Sign up', '/sign-up'],
+    ]],
   ];
   return (
     <footer style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed' }}>
