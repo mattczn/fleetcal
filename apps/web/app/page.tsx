@@ -904,7 +904,7 @@ function Faq() {
           <SectionSub>
             Still not sure?{' '}
             <Link
-              href="mailto:matt@curzontrucking.com"
+              href="mailto:hello@fleetcal.app"
               style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none' }}
             >
               Talk to a human →
@@ -1015,8 +1015,8 @@ function FinalCta({ cta }: { cta: { href: string; label: string } }) {
 function Footer() {
   const cols: ReadonlyArray<[string, ReadonlyArray<[string, string]>]> = [
     ['Product', [['Features', '#features'], ['How it works', '#how'], ['Pricing', '#pricing'], ['Mobile app', '#features']]],
-    ['Company', [['Why FleetCal', '#story'], ['Built by carriers', '#story'], ['Contact sales', 'mailto:matt@curzontrucking.com'], ['Careers', '#story']]],
-    ['Support', [['Help center', 'mailto:matt@curzontrucking.com'], ['Sign in', '/sign-in'], ['System status', '#'], ['Contact us', 'mailto:matt@curzontrucking.com']]],
+    ['Company', [['Why FleetCal', '#story'], ['Built by carriers', '#story'], ['Contact sales', 'mailto:hello@fleetcal.app'], ['Careers', '#story']]],
+    ['Support', [['Help center', 'mailto:hello@fleetcal.app'], ['Sign in', '/sign-in'], ['System status', '#'], ['Contact us', 'mailto:hello@fleetcal.app']]],
   ];
   return (
     <footer style={{ background: '#f8f9fa', borderTop: '1px solid #e8eaed' }}>

@@ -264,7 +264,7 @@ export default function UpgradePlanDialog({ onClose }: { onClose: () => void }) 
           >
             Need more than 14 trucks or a custom arrangement?{' '}
             <a
-              href="mailto:matt@curzontrucking.com?subject=FleetCal%20custom%20plan"
+              href="mailto:hello@fleetcal.app?subject=FleetCal%20custom%20plan"
               className="font-semibold underline"
               style={{ color: 'var(--gc-blue)' }}
             >

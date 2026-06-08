@@ -116,7 +116,7 @@ export default async function PricingPage() {
           <div className="flex gap-6 font-display" style={{ fontSize: 14, color: '#5f6368' }}>
             <Link href="/sign-in" className="hover:text-[#1967d2] transition-colors">Sign in</Link>
             <Link href="/sign-up" className="hover:text-[#1967d2] transition-colors">Sign up</Link>
-            <Link href="mailto:matt@curzontrucking.com" className="hover:text-[#1967d2] transition-colors">Contact</Link>
+            <Link href="mailto:hello@fleetcal.app" className="hover:text-[#1967d2] transition-colors">Contact</Link>
           </div>
         </div>
       </footer>

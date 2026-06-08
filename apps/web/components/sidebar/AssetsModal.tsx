@@ -467,11 +467,11 @@ function AssetsModal({ onClose, initialAssetId, embedded }, modalRef) {
                   type="button"
                   onClick={() => {
                     if (tier === 'none') {
-                      window.location.href = 'mailto:matt@curzontrucking.com?subject=FleetCal%20subscription%20help';
+                      window.location.href = 'mailto:hello@fleetcal.app?subject=FleetCal%20subscription%20help';
                     } else if (upsellTier) {
                       setUpgradeOpen(true);
                     } else {
-                      window.location.href = 'mailto:matt@curzontrucking.com?subject=FleetCal%20fleet%20expansion';
+                      window.location.href = 'mailto:hello@fleetcal.app?subject=FleetCal%20fleet%20expansion';
                     }
                   }}
                   className="w-full mt-2.5 text-[12px] font-bold rounded-lg transition-colors"

@@ -274,7 +274,7 @@ export default function PricingCards() {
       <div className="text-center" style={{ marginTop: 44 }}>
         <p style={{ fontSize: 15, color: '#5f6368' }}>
           Running a fleet larger than 14 trucks?{' '}
-          <Link href="mailto:matt@curzontrucking.com" style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none' }}>
+          <Link href="mailto:hello@fleetcal.app" style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none' }}>
             Contact sales →
           </Link>
         </p>
