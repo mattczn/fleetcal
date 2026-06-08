@@ -164,10 +164,10 @@ export default function UpgradePlanDialog({ onClose }: { onClose: () => void }) 
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className="w-full max-w-[720px] flex flex-col"
+        className="w-full max-w-[860px] flex flex-col"
         style={{
           background:    'var(--gc-surface)',
-          borderRadius:  16,
+          borderRadius:  20,
           boxShadow:     'var(--shadow-3)',
           marginTop:     32,
           marginBottom:  32,
@@ -225,7 +225,6 @@ export default function UpgradePlanDialog({ onClose }: { onClose: () => void }) 
               plans={visiblePlans}
               period={period}
               setPeriod={setPeriod}
-              currentRank={currentRank}
               onPick={pickPlan}
             />
           )}
@@ -281,13 +280,12 @@ export default function UpgradePlanDialog({ onClose }: { onClose: () => void }) 
 /* ── Plan-select step ───────────────────────────────────────────── */
 
 function PlanSelectStep({
-  isLoading, plans, period, setPeriod, currentRank, onPick,
+  isLoading, plans, period, setPeriod, onPick,
 }: {
   isLoading: boolean;
   plans: any[];
   period: Period;
   setPeriod: (p: Period) => void;
-  currentRank: number;
   onPick: (plan: any) => void;
 }) {
   if (isLoading) {
@@ -314,12 +312,29 @@ function PlanSelectStep({
     );
   }
 
+  // Pick a grid that NATURALLY centers a single card and tiles
+  // multiple cards. We previously used `grid-cols-2` even for a
+  // single plan, which dumped the lone card into the left column —
+  // looked broken at narrow widths. The conditional layout fixes
+  // that without needing flex-wrap hacks.
+  const gridClass =
+    plans.length === 1 ? 'grid grid-cols-1 max-w-[420px] mx-auto'
+    : plans.length === 2 ? 'grid grid-cols-1 sm:grid-cols-2'
+    : 'grid grid-cols-1 sm:grid-cols-3';
+
+  // Highlight the top tier when multiple are visible — it's the
+  // "Most capacity" pick. With a single card the highlight is
+  // distracting (there's nothing to compare against), so we skip
+  // the badge in that case.
+  const topRank = Math.max(...plans.map(getPlanTierRank));
+
   return (
     <>
-      {/* Monthly / Annual toggle. Annual is the default + recommended
-          path (cheaper effective rate + matches what carriers prefer
-          for tax reasons). */}
-      <div className="flex justify-center mb-5">
+      {/* Section heading + period toggle.
+          The toggle gets more weight than before — bigger touch
+          targets, "Save ~17%" hint on the Annual side so the
+          incentive is legible. */}
+      <div className="flex flex-col items-center mb-7">
         <div
           className="inline-flex rounded-full p-1"
           style={{ background: 'var(--gc-bg)', border: '1px solid var(--gc-border-light)' }}
@@ -328,7 +343,7 @@ function PlanSelectStep({
             <button
               key={p}
               onClick={() => setPeriod(p)}
-              className="px-4 py-1.5 text-[12px] font-semibold rounded-full transition-colors"
+              className="px-5 py-2 text-[13px] font-semibold rounded-full transition-colors flex items-center gap-1.5"
               style={{
                 background: period === p ? 'var(--gc-surface)' : 'transparent',
                 color:      period === p ? 'var(--gc-text-1)'  : 'var(--gc-text-3)',
@@ -336,12 +351,23 @@ function PlanSelectStep({
               }}
             >
               {p === 'month' ? 'Monthly' : 'Annual'}
+              {p === 'annual' && (
+                <span
+                  className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                  style={{
+                    background: period === 'annual' ? 'var(--gc-blue-soft, #dbeafe)' : 'transparent',
+                    color:      period === 'annual' ? 'var(--gc-blue)' : 'var(--gc-text-3)',
+                  }}
+                >
+                  SAVE 17%
+                </span>
+              )}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className={`${gridClass} gap-5`}>
         {plans.map((plan: any) => {
           const trucks = getPlanTruckCount(plan);
           // Pick the right BillingMoneyAmount based on the toggle.
@@ -351,58 +377,115 @@ function PlanSelectStep({
           const amt = period === 'annual'
             ? (plan.annualMonthlyFee ?? plan.fee)
             : plan.fee;
+          const isTop = plans.length > 1 && getPlanTierRank(plan) === topRank;
 
           return (
-            <button
+            <div
               key={plan.id}
-              onClick={() => onPick(plan)}
-              className="flex flex-col items-start text-left rounded-xl p-4 transition-colors"
+              className="relative flex flex-col rounded-2xl overflow-hidden transition-all"
               style={{
                 background: 'var(--gc-surface)',
-                border:     '1px solid var(--gc-border-light)',
-                boxShadow:  'var(--shadow-1)',
-              }}
-              onMouseOver={e => {
-                e.currentTarget.style.borderColor = 'var(--gc-blue)';
-                e.currentTarget.style.boxShadow   = 'var(--shadow-2)';
-              }}
-              onMouseOut={e => {
-                e.currentTarget.style.borderColor = 'var(--gc-border-light)';
-                e.currentTarget.style.boxShadow   = 'var(--shadow-1)';
+                border:     isTop ? '1.5px solid var(--gc-blue)' : '1px solid var(--gc-border-light)',
+                boxShadow:  isTop ? '0 8px 24px rgba(37, 99, 235, 0.12)' : 'var(--shadow-1)',
               }}
             >
-              <div className="text-[14px] font-semibold mb-1" style={{ color: 'var(--gc-text-1)' }}>
-                {plan.name}
-              </div>
-
-              {trucks != null && (
-                <div className="text-[12px] mb-2" style={{ color: 'var(--gc-text-3)' }}>
-                  Up to {trucks} active trucks
+              {/* Top-tier ribbon — only when comparing multiple. */}
+              {isTop && (
+                <div
+                  className="absolute top-3 right-3 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full"
+                  style={{ background: 'var(--gc-blue)', color: '#fff' }}
+                >
+                  Most capacity
                 </div>
               )}
 
-              <div className="flex items-baseline gap-1 mb-3">
-                <div className="text-[22px] font-bold" style={{ color: 'var(--gc-text-1)' }}>
-                  {amt ? `${amt.currencySymbol}${amt.amountFormatted}` : '—'}
+              <div className="p-7 flex flex-col gap-5 flex-1">
+                {/* Plan name */}
+                <div>
+                  <div className="text-[20px] font-bold tracking-tight" style={{ color: 'var(--gc-text-1)' }}>
+                    {plan.name}
+                  </div>
+                  <div className="text-[12px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                    For growing fleets
+                  </div>
                 </div>
-                <div className="text-[11px]" style={{ color: 'var(--gc-text-3)' }}>
-                  {amt ? '/month' : ''}
+
+                {/* Hero capacity number — this is the actual
+                    differentiator between tiers, so it gets the
+                    biggest typographic moment on the card. */}
+                {trucks != null && (
+                  <div className="flex items-baseline gap-2">
+                    <div className="text-[44px] font-bold leading-none tracking-tight" style={{ color: 'var(--gc-text-1)' }}>
+                      {trucks}
+                    </div>
+                    <div className="text-[13px]" style={{ color: 'var(--gc-text-3)' }}>
+                      active trucks
+                    </div>
+                  </div>
+                )}
+
+                {/* Feature list */}
+                <ul className="flex flex-col gap-2.5 text-[13px]" style={{ color: 'var(--gc-text-2)' }}>
+                  <li className="flex items-start gap-2.5">
+                    <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
+                    <span>Unlimited drivers, loads &amp; stops</span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
+                    <span>AI rate-con parsing + driver mobile app</span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
+                    <span>Motive ELD sync, accounting &amp; invoicing</span>
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    <Check size={16} style={{ color: 'var(--gc-blue)', flexShrink: 0, marginTop: 2 }} />
+                    <span>Asset timeline + AI cost analysis</span>
+                  </li>
+                </ul>
+
+                {/* Price block sits near the CTA so the dollar
+                    amount reads as the "cost of this button". */}
+                <div className="mt-auto flex flex-col gap-3 pt-2">
+                  <div>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-[16px] font-semibold" style={{ color: 'var(--gc-text-2)' }}>
+                        {amt?.currencySymbol}
+                      </span>
+                      <span className="text-[32px] font-bold leading-none" style={{ color: 'var(--gc-text-1)' }}>
+                        {amt?.amountFormatted ?? '—'}
+                      </span>
+                      <span className="text-[13px] ml-1" style={{ color: 'var(--gc-text-3)' }}>
+                        /month
+                      </span>
+                    </div>
+                    <div className="text-[11px] mt-1" style={{ color: 'var(--gc-text-3)' }}>
+                      {period === 'annual' ? 'Billed annually' : 'Billed monthly'}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => onPick(plan)}
+                    className="w-full py-3 rounded-xl text-[14px] font-semibold transition-all"
+                    style={{
+                      background: 'var(--gc-blue)',
+                      color:      '#fff',
+                      boxShadow:  '0 4px 12px rgba(37, 99, 235, 0.25)',
+                    }}
+                    onMouseOver={e => {
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 8px 20px rgba(37, 99, 235, 0.35)';
+                    }}
+                    onMouseOut={e => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(37, 99, 235, 0.25)';
+                    }}
+                  >
+                    Upgrade to {plan.name}
+                  </button>
                 </div>
               </div>
-
-              {period === 'annual' && (
-                <div className="text-[11px] mb-3" style={{ color: 'var(--gc-text-3)' }}>
-                  Billed annually
-                </div>
-              )}
-
-              <div
-                className="w-full text-center text-[13px] font-semibold py-2 rounded-lg"
-                style={{ background: 'var(--gc-blue)', color: '#fff' }}
-              >
-                Switch to this plan
-              </div>
-            </button>
+            </div>
           );
         })}
       </div>
