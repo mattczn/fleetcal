@@ -912,7 +912,7 @@ function Faq() {
           <SectionSub>
             Still not sure?{' '}
             <Link
-              href="mailto:hello@fleetcal.app"
+              href="/contact-sales"
               style={{ color: '#1967d2', fontWeight: 600, textDecoration: 'none' }}
             >
               Talk to a human →
@@ -1036,7 +1036,7 @@ function Footer() {
     ]],
     ['Company', [
       ['Why FleetCal',  '#story'],
-      ['Contact sales', 'mailto:hello@fleetcal.app'],
+      ['Contact sales', '/contact-sales'],
     ]],
     ['Account', [
       ['Sign in', '/sign-in'],

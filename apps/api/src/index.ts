@@ -54,6 +54,7 @@ import timelineRoute from "./routes/timeline.js";
 import fleetRoute from "./routes/fleet.js";
 import costAnalysisRoute from "./routes/cost-analysis.js";
 import capacityRoute from "./routes/capacity.js";
+import contactSalesRoute from "./routes/contact-sales.js";
 import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIngest.js";
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
@@ -167,6 +168,11 @@ app.get("/v1/health", (c) => {
 // Public broker capacity endpoint — fed to curzontrucking.com /capacity.
 // Aggregate counts only, no PII. Optional CAPACITY_API_KEY gate.
 app.route("/v1/capacity", capacityRoute);
+
+// Public lead intake — fleetcal.app/contact-sales wizard POSTs here,
+// the route emails CONTACT_SALES_TO (defaults to hello@fleetcal.app)
+// via Resend. Honeypot + time-gate stops drive-by spam.
+app.route("/v1/contact-sales", contactSalesRoute);
 
 // ── Authenticated routes ────────────────────────────────────────────────
 
