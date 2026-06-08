@@ -58,6 +58,7 @@ import { syncIncrementalAllOrgs, snapshotOdometersAllOrgs } from "./lib/motiveIn
 import { sweepAutoDeliver } from "./lib/autoDeliverSweep.js";
 import { runConfirmReminders } from "./jobs/confirmReminders.js";
 import { runAiUsageSweep } from "./jobs/aiUsageSweep.js";
+import { trackCronRun } from "./lib/cronRun.js";
 import { runFuelAutoMatchSweep } from "./jobs/fuelAutoMatchSweep.js";
 import pkg from "../package.json" with { type: "json" };
 
@@ -298,22 +299,20 @@ serve(
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const SWEEP_STARTUP_DELAY_MS = 30_000;    // wait for app to settle
 console.log(`[auto-deliver-sweep] scheduled: startup in ${SWEEP_STARTUP_DELAY_MS / 1000}s, then every ${SWEEP_INTERVAL_MS / 60000}min`);
-setTimeout(() => {
-  console.log("[auto-deliver-sweep] running startup pass…");
-  void sweepAutoDeliver()
-    .then((r) => console.log(`[auto-deliver-sweep] startup pass done: swept=${r.swept}`))
-    .catch((err) => {
-      console.error("[auto-deliver-sweep] startup run failed:", err);
+async function fireAutoDeliverSweep(label: string): Promise<void> {
+  console.log(`[auto-deliver-sweep] running ${label}…`);
+  try {
+    await trackCronRun("auto-deliver-sweep", async () => {
+      const r = await sweepAutoDeliver();
+      console.log(`[auto-deliver-sweep] ${label} done: swept=${r.swept}`);
+      return { meta: { swept: r.swept } };
     });
-}, SWEEP_STARTUP_DELAY_MS).unref();
-setInterval(() => {
-  console.log("[auto-deliver-sweep] running hourly pass…");
-  void sweepAutoDeliver()
-    .then((r) => console.log(`[auto-deliver-sweep] hourly pass done: swept=${r.swept}`))
-    .catch((err) => {
-      console.error("[auto-deliver-sweep] hourly run failed:", err);
-    });
-}, SWEEP_INTERVAL_MS).unref();
+  } catch (err) {
+    console.error(`[auto-deliver-sweep] ${label} failed:`, err);
+  }
+}
+setTimeout(() => void fireAutoDeliverSweep("startup pass"), SWEEP_STARTUP_DELAY_MS).unref();
+setInterval(() => void fireAutoDeliverSweep("hourly pass"), SWEEP_INTERVAL_MS).unref();
 
 // ── In-process driver-notification cron ─────────────────────────────────
 //
@@ -334,9 +333,10 @@ setInterval(() => {
 const CONFIRM_REMINDERS_INTERVAL_MS = 15 * 60 * 1000;
 const CONFIRM_REMINDERS_STARTUP_DELAY_MS = 45_000; // wait for app to settle
 console.log(`[confirm-reminders] scheduled: startup in ${CONFIRM_REMINDERS_STARTUP_DELAY_MS / 1000}s, then every ${CONFIRM_REMINDERS_INTERVAL_MS / 60000}min`);
-function fireConfirmReminders(label: string) {
-  void runConfirmReminders()
-    .then((r) => {
+async function fireConfirmReminders(label: string): Promise<void> {
+  try {
+    await trackCronRun("confirm-reminders", async () => {
+      const r = await runConfirmReminders();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const e = r.evening    as any;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -349,13 +349,14 @@ function fireConfirmReminders(label: string) {
         `prePickup{sent=${p.sent ?? 0},matched=${p.matched ?? 0},eligible=${p.eligible ?? 0},suppressed=${p.suppressed ?? 0}} ` +
         `missingPod{sent=${m.sent ?? 0},matched=${m.matched ?? 0},eligible=${m.eligible ?? 0},suppressed=${m.suppressed ?? 0}}`,
       );
-    })
-    .catch((err) => {
-      console.error(`[confirm-reminders] ${label} run failed:`, err);
+      return { meta: { evening: e, prePickup: p, missingPod: m } };
     });
+  } catch (err) {
+    console.error(`[confirm-reminders] ${label} run failed:`, err);
+  }
 }
-setTimeout(() => fireConfirmReminders("startup pass"), CONFIRM_REMINDERS_STARTUP_DELAY_MS).unref();
-setInterval(() => fireConfirmReminders("tick"), CONFIRM_REMINDERS_INTERVAL_MS).unref();
+setTimeout(() => void fireConfirmReminders("startup pass"), CONFIRM_REMINDERS_STARTUP_DELAY_MS).unref();
+setInterval(() => void fireConfirmReminders("tick"), CONFIRM_REMINDERS_INTERVAL_MS).unref();
 
 // ── Motive driving-periods incremental sync ─────────────────────────────
 //
@@ -372,11 +373,15 @@ const MOTIVE_SYNC_STARTUP_DELAY = Number(process.env.MOTIVE_SYNC_STARTUP_DELAY_M
 
 async function fireMovementsSync(label: string): Promise<void> {
   try {
-    const results = await syncIncrementalAllOrgs();
-    if (results.length > 0) {
-      const total = results.reduce((sum, r) => sum + r.rowsUpserted, 0);
-      console.log(`[api] movements sync (${label}): ${results.length} org(s), ${total} rows`);
-    }
+    await trackCronRun("motive-sync", async () => {
+      const results = await syncIncrementalAllOrgs();
+      if (results.length > 0) {
+        const total = results.reduce((sum, r) => sum + r.rowsUpserted, 0);
+        console.log(`[api] movements sync (${label}): ${results.length} org(s), ${total} rows`);
+        return { meta: { orgs: results.length, rowsUpserted: total } };
+      }
+      return { meta: { orgs: 0, rowsUpserted: 0 } };
+    });
   } catch (err) {
     console.error("[api] movements sync failed:", err);
   }
@@ -401,12 +406,15 @@ const ODOMETER_STARTUP_DELAY_MS  = Number(process.env.ODOMETER_STARTUP_DELAY_MS 
 
 async function fireOdometerSnapshot(label: string): Promise<void> {
   try {
-    const results = await snapshotOdometersAllOrgs();
-    const inserted = results.reduce((s, r) => s + r.rowsInserted, 0);
-    const skipped  = results.reduce((s, r) => s + r.rowsSkipped,  0);
-    if (inserted > 0 || results.length > 0) {
-      console.log(`[api] odometer snapshot (${label}): ${results.length} org(s), ${inserted} inserted, ${skipped} skipped (already had today)`);
-    }
+    await trackCronRun("odometer-snapshot", async () => {
+      const results = await snapshotOdometersAllOrgs();
+      const inserted = results.reduce((s, r) => s + r.rowsInserted, 0);
+      const skipped  = results.reduce((s, r) => s + r.rowsSkipped,  0);
+      if (inserted > 0 || results.length > 0) {
+        console.log(`[api] odometer snapshot (${label}): ${results.length} org(s), ${inserted} inserted, ${skipped} skipped (already had today)`);
+      }
+      return { meta: { orgs: results.length, inserted, skipped } };
+    });
   } catch (err) {
     console.error("[api] odometer snapshot failed:", err);
   }
@@ -444,15 +452,18 @@ const FUEL_AUTO_MATCH_STARTUP_DELAY  = Number(process.env.FUEL_AUTO_MATCH_STARTU
 
 async function fireFuelAutoMatch(label: string): Promise<void> {
   try {
-    const result = await runFuelAutoMatchSweep();
-    if (result.scanned > 0 || result.matched > 0) {
-      console.log(
-        `[fuel auto-match] ${label}: scanned=${result.scanned}, matched=${result.matched}` +
-        (Object.keys(result.byOrg).length > 1
-          ? ` (${Object.entries(result.byOrg).map(([org, b]) => `${org}: ${b.matched}/${b.scanned}`).join(', ')})`
-          : ''),
-      );
-    }
+    await trackCronRun("fuel-auto-match", async () => {
+      const result = await runFuelAutoMatchSweep();
+      if (result.scanned > 0 || result.matched > 0) {
+        console.log(
+          `[fuel auto-match] ${label}: scanned=${result.scanned}, matched=${result.matched}` +
+          (Object.keys(result.byOrg).length > 1
+            ? ` (${Object.entries(result.byOrg).map(([org, b]) => `${org}: ${b.matched}/${b.scanned}`).join(', ')})`
+            : ''),
+        );
+      }
+      return { meta: { scanned: result.scanned, matched: result.matched, byOrg: result.byOrg } };
+    });
   } catch (err) {
     console.error(`[fuel auto-match] ${label} failed:`, err);
   }
@@ -480,11 +491,14 @@ const AI_USAGE_SWEEP_INTERVAL_MS   = Number(process.env.AI_USAGE_SWEEP_INTERVAL_
 const AI_USAGE_SWEEP_STARTUP_DELAY = Number(process.env.AI_USAGE_SWEEP_STARTUP_DELAY ?? 5 * 60 * 1000);
 async function fireAiUsageSweep(label: string): Promise<void> {
   try {
-    const r = await runAiUsageSweep();
-    console.log(
-      `[ai-usage-sweep] ${label}: flagged=${r.flaggedCount}/${r.totalOrgsSeen}, emailSent=${r.emailSent}`
-      + (r.emailError ? ` (email error: ${r.emailError})` : "")
-    );
+    await trackCronRun("ai-usage-sweep", async () => {
+      const r = await runAiUsageSweep();
+      console.log(
+        `[ai-usage-sweep] ${label}: flagged=${r.flaggedCount}/${r.totalOrgsSeen}, emailSent=${r.emailSent}`
+        + (r.emailError ? ` (email error: ${r.emailError})` : "")
+      );
+      return { meta: { flagged: r.flaggedCount, total: r.totalOrgsSeen, emailSent: r.emailSent, emailError: r.emailError } };
+    });
   } catch (err) {
     console.error(`[ai-usage-sweep] ${label} failed:`, err);
   }
