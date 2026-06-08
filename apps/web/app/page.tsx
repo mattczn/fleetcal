@@ -24,28 +24,46 @@ import SmoothScrollLink from '@/components/marketing/SmoothScrollLink';
  * dark-mode preference (the visual identity is light-by-design).
  */
 export default async function HomePage() {
-  const { userId } = await auth();
-  const signedIn = !!userId;
+  const { userId, orgId } = await auth();
+  // Three states the CTAs need to handle:
+  //   - signed-out → "Try for free" → /sign-up
+  //   - signed-in-no-org → "Continue setup" → /sign-up (Clerk resumes
+  //     at the choose-organization step). This is the "I bailed mid-
+  //     signup" state — without the special CTA, "Open FleetCal" would
+  //     bounce off the orgless-protected-route middleware right back
+  //     to /create-organization, re-trapping the user.
+  //   - signed-in-with-org → "Open FleetCal" → /calendar
+  const state: AuthCta = !userId ? 'out' : !orgId ? 'mid-signup' : 'in';
 
   return (
     <div
       className="h-full overflow-y-auto font-sys text-sys-primary bg-sys-bg"
       style={{ scrollBehavior: 'smooth' }}
     >
-      <Nav signedIn={signedIn} />
-      <Hero signedIn={signedIn} />
+      <Nav state={state} />
+      <Hero state={state} />
       <Features />
       <Pricing />
       <BuiltBy />
-      <FinalCta signedIn={signedIn} />
+      <FinalCta state={state} />
       <Footer />
     </div>
   );
 }
 
+type AuthCta = 'out' | 'mid-signup' | 'in';
+
+/** Resolves the marketing CTA href + label for the given auth state. */
+function ctaFor(state: AuthCta): { href: string; label: string } {
+  if (state === 'in')         return { href: '/calendar', label: 'Open FleetCal →' };
+  if (state === 'mid-signup') return { href: '/sign-up',  label: 'Continue setup →' };
+  return                              { href: '/sign-up',  label: 'Try for free →' };
+}
+
 // ── Sub-sections ────────────────────────────────────────────────────────
 
-function Nav({ signedIn }: { signedIn: boolean }) {
+function Nav({ state }: { state: AuthCta }) {
+  const cta = ctaFor(state);
   return (
     <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
       <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
@@ -56,36 +74,25 @@ function Nav({ signedIn }: { signedIn: boolean }) {
         <div className="flex items-center gap-8">
           <SmoothScrollLink to="features" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Features</SmoothScrollLink>
           <SmoothScrollLink to="pricing"  className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Pricing</SmoothScrollLink>
-          {signedIn ? (
-            // Signed-in: single primary "Open FleetCal →" button. No
-            // sign-in link (they're already signed in) and no "Try for
-            // free" (they've already tried).
-            <Link
-              href="/calendar"
-              className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
-              style={{ borderRadius: 0 }}
-            >
-              Open FleetCal →
-            </Link>
-          ) : (
-            <>
-              <Link href="/sign-in" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Sign in</Link>
-              <Link
-                href="/sign-up"
-                className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
-                style={{ borderRadius: 0 }}
-              >
-                Try for free
-              </Link>
-            </>
+          {state === 'out' && (
+            <Link href="/sign-in" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Sign in</Link>
           )}
+          <Link
+            href={cta.href}
+            className="bg-sys-blue text-white font-semibold text-[13px] px-5 py-2 hover:bg-sys-blue-hover transition-colors"
+            style={{ borderRadius: 0 }}
+          >
+            {/* Nav button trims the trailing arrow for compactness */}
+            {cta.label.replace(' →', '')}
+          </Link>
         </div>
       </div>
     </nav>
   );
 }
 
-function Hero({ signedIn }: { signedIn: boolean }) {
+function Hero({ state }: { state: AuthCta }) {
+  const cta = ctaFor(state);
   return (
     <section className="border-b border-sys-line">
       <div className="max-w-6xl mx-auto px-8 md:px-12 py-32 md:py-40">
@@ -109,11 +116,11 @@ function Hero({ signedIn }: { signedIn: boolean }) {
           </div>
           <div className="flex flex-wrap items-center gap-6">
             <Link
-              href={signedIn ? '/calendar' : '/sign-up'}
+              href={cta.href}
               className="inline-flex items-center bg-sys-blue text-white font-semibold text-[15px] px-8 py-4 hover:bg-sys-blue-hover transition-colors"
               style={{ borderRadius: 0 }}
             >
-              {signedIn ? 'Open FleetCal →' : 'Try for free →'}
+              {cta.label}
             </Link>
             <SmoothScrollLink to="pricing" className="font-sys font-semibold text-[15px] text-sys-blue hover:underline">
               See pricing →
@@ -250,7 +257,12 @@ function BuiltBy() {
   );
 }
 
-function FinalCta({ signedIn }: { signedIn: boolean }) {
+function FinalCta({ state }: { state: AuthCta }) {
+  const cta = ctaFor(state);
+  const sub =
+    state === 'in'         ? 'Pick up where you left off.' :
+    state === 'mid-signup' ? 'Finish the setup you started.' :
+                             '14 days free. No sales call. Sign up and you’re in.';
   return (
     <section className="bg-sys-blue text-white border-b border-sys-blue">
       <div className="max-w-6xl mx-auto px-8 md:px-12 py-32 text-center">
@@ -262,16 +274,14 @@ function FinalCta({ signedIn }: { signedIn: boolean }) {
           <span className="text-white/70">actually fits how you dispatch.</span>
         </h2>
         <p className="font-sys text-[17px] md:text-[18px] leading-[1.6] text-white/80 mb-10 max-w-xl mx-auto">
-          {signedIn
-            ? 'Pick up where you left off.'
-            : '14 days free. No sales call. Sign up and you’re in.'}
+          {sub}
         </p>
         <Link
-          href={signedIn ? '/calendar' : '/sign-up'}
+          href={cta.href}
           className="inline-flex items-center bg-white text-sys-blue font-semibold text-[15px] px-10 py-4 hover:bg-sys-blue-light transition-colors"
           style={{ borderRadius: 0 }}
         >
-          {signedIn ? 'Open FleetCal →' : 'Try for free →'}
+          {cta.label}
         </Link>
       </div>
     </section>

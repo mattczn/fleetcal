@@ -79,23 +79,36 @@ export default async function SignUpPage({
             <span className="text-sys-blue">FLEET</span>
             <span className="text-sys-orange">CAL</span>
           </Link>
-          {partiallySignedIn ? (
-            <SignOutButton redirectUrl="/">
-              <button
-                type="button"
-                className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
-              >
-                Cancel &amp; sign out
-              </button>
-            </SignOutButton>
-          ) : (
+          {/* Primary escape — single, obvious "back to home" link. The
+              partially-signed-in user wants OUT of the flow; whether
+              they keep their Clerk session is irrelevant to that
+              decision. If they want to resume later they just visit
+              /sign-up again. */}
+          <div className="flex items-center gap-6">
             <Link
-              href="/sign-in"
+              href="/"
               className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
             >
-              Already have an account? <span className="text-sys-blue font-semibold">Sign in</span>
+              ← Back to home
             </Link>
-          )}
+            {partiallySignedIn ? (
+              <SignOutButton redirectUrl="/">
+                <button
+                  type="button"
+                  className="font-sys text-[12px] text-sys-muted hover:text-sys-primary transition-colors"
+                >
+                  Sign out
+                </button>
+              </SignOutButton>
+            ) : (
+              <Link
+                href="/sign-in"
+                className="hidden md:inline font-sys text-[12px] text-sys-muted hover:text-sys-primary transition-colors"
+              >
+                Already have an account? <span className="text-sys-blue font-semibold">Sign in</span>
+              </Link>
+            )}
+          </div>
         </div>
       </nav>
 

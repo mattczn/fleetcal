@@ -53,14 +53,22 @@ export default async function CreateOrganizationPage({
             <span className="text-sys-blue">FLEET</span>
             <span className="text-sys-orange">CAL</span>
           </Link>
-          <SignOutButton redirectUrl="/">
-            <button
-              type="button"
+          <div className="flex items-center gap-6">
+            <Link
+              href="/"
               className="font-sys font-medium text-[13px] text-sys-muted hover:text-sys-primary transition-colors"
             >
-              Cancel &amp; sign out
-            </button>
-          </SignOutButton>
+              ← Back to home
+            </Link>
+            <SignOutButton redirectUrl="/">
+              <button
+                type="button"
+                className="font-sys text-[12px] text-sys-muted hover:text-sys-primary transition-colors"
+              >
+                Sign out
+              </button>
+            </SignOutButton>
+          </div>
         </div>
       </nav>
 
