@@ -179,19 +179,19 @@ export default function AppSidebar() {
           <Image
             src="/logo-square.png"
             alt="FleetCal"
-            width={40}
-            height={40}
+            width={52}
+            height={52}
             priority
-            style={{ borderRadius: 7 }}
+            style={{ borderRadius: 9 }}
           />
         ) : (
           <Image
             src="/logo-horizontal.png"
             alt="FleetCal"
-            width={240}
-            height={52}
+            width={260}
+            height={58}
             priority
-            style={{ objectFit: 'contain', height: 52, width: 'auto' }}
+            style={{ objectFit: 'contain', height: 58, width: 'auto' }}
           />
         )}
       </div>
