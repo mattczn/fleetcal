@@ -1,32 +1,27 @@
+/**
+ * Minimal middleware — protect non-public routes only.
+ *
+ * REGRESSED from the tier-check version because that was 500'ing for
+ * every user including team members. Priority: get the site back up.
+ * Tier enforcement will be re-added in a follow-up after verifying the
+ * Clerk-side calls work without crashing in production.
+ *
+ * Current behavior:
+ *   - Public routes (/, /sign-in, /sign-up, /create-organization,
+ *     /pricing, /onboarding) → no auth required, pass through.
+ *   - Everything else → require userId; redirect to /sign-in if absent.
+ *   - All Clerk-side calls wrapped in try/catch and fall through on
+ *     error — middleware NEVER 500s.
+ *
+ * Notes:
+ *   - No tier check (was the source of the crash).
+ *   - No org check (relied on the same code path).
+ *   - Client-side guards in AppShell / page components still enforce
+ *     useOrgTier limits at the UI level.
+ */
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
-import { isInternalOrg } from '@/lib/internalOrg'
 
-// Public routes — visible without auth.
 const isPublicRoute = createRouteMatcher([
-  '/',
-  '/sign-in(.*)',
-  '/sign-up(.*)',
-  '/create-organization(.*)',
-  '/pricing(.*)',
-])
-
-// Routes that signed-in users without an org may still reach. Without
-// this, a fresh signup without an org_id would be in a permanent
-// redirect loop trying to access protected content.
-const isOrgFreeRoute = createRouteMatcher([
-  '/',
-  '/sign-in(.*)',
-  '/sign-up(.*)',
-  '/create-organization(.*)',
-  '/pricing(.*)',
-  '/settings(.*)',
-])
-
-// Routes a customer org without a paid tier can still reach — needed
-// so they can REACH the pick-plan / billing surface to subscribe.
-// Everything else (calendar, drivers, loads, etc.) is blocked until
-// a tier feature lands on their session.
-const isTierFreeRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
@@ -38,62 +33,16 @@ const isTierFreeRoute = createRouteMatcher([
 export default clerkMiddleware(async (auth, request) => {
   if (isPublicRoute(request)) return
 
-  // The ENTIRE protected-route flow is wrapped in one try/catch. The
-  // priority of this middleware is "never 500" — a thrown error here
-  // shows the user a Vercel error page with NO recovery path, which is
-  // strictly worse than letting them through to client-side checks
-  // (useOrgTier, usePermissions, etc.) which surface the right CTA.
-  //
-  // The previous incarnation called `auth.protect()` outside the
-  // try/catch and crashed on certain session shapes (overlapping
-  // cookies during a Google account-switch). All Clerk-side calls now
-  // live inside the try block.
   try {
-    const authObj = await auth()
-    const userId = authObj.userId
-    const orgId  = authObj.orgId
-
-    // Not signed in → send to sign-in page (replaces auth.protect()).
+    const { userId } = await auth()
     if (!userId) {
-      const url = new URL('/sign-in', request.url)
-      return Response.redirect(url)
-    }
-
-    // Signed in but no org → push them to org creation (unless they're
-    // already on a route that handles the no-org case).
-    if (!orgId && !isOrgFreeRoute(request)) {
-      return Response.redirect(new URL('/create-organization', request.url))
-    }
-
-    // Tier gate — non-internal customer orgs must have a paid tier
-    // feature on their session. The has() call is bound to authObj
-    // (not destructured) to keep its `this` intact.
-    if (orgId && !isInternalOrg(orgId) && !isTierFreeRoute(request)) {
-      let hasTier = false
-      try {
-        hasTier =
-          authObj.has({ feature: 'fleet_tier' }) ||
-          authObj.has({ feature: 'growth_tier' }) ||
-          authObj.has({ feature: 'owner_op_tier' })
-      } catch (err) {
-        // Inner catch so a flaky tier lookup falls through to "let
-        // them in" rather than killing the request. Client-side
-        // useOrgTier hook will surface the upgrade banner on next
-        // render if they truly have no tier.
-        console.error('[middleware] has(feature) failed:', err)
-        hasTier = true
-      }
-      if (!hasTier) {
-        return Response.redirect(new URL('/onboarding/pick-plan', request.url))
-      }
+      return Response.redirect(new URL('/sign-in', request.url))
     }
   } catch (err) {
-    // Last-resort net. Any unhandled Clerk-side error (account-switch
-    // race, expired token, network blip to Clerk's verification API,
-    // etc.) lets the request fall through to the page, which will
-    // re-attempt auth on the client. We log so Vercel function logs
-    // capture the cause.
-    console.error('[middleware] failed, allowing request through:', err)
+    // Last-resort net. Anything thrown by Clerk's auth() falls through
+    // to the page, which will re-attempt auth on the client. We log so
+    // Vercel function logs surface the cause.
+    console.error('[middleware] auth check failed, allowing through:', err)
   }
 })
 
