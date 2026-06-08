@@ -6069,9 +6069,11 @@ export default function EventModal() {
                     );
                   })()}
 
-                  {/* Non-relay finalized banner — sits below the
-                      financial section so the dispatcher sees it
-                      regardless of which row driverPay rendered in. */}
+                  {/* Non-relay finalized banner — visually aligned under
+                      the Driver Pay column (right side of the 2-col
+                      financial grid). An empty left cell + the banner
+                      in the right cell mirrors the relay layout where
+                      each side has its own banner under its pay field. */}
                   {section === 'financial' && !isRelayContext && canViewDriverPay && (() => {
                     const dpRaw = fieldValues['driverPay'];
                     const dpNum = typeof dpRaw === 'number'
@@ -6080,7 +6082,8 @@ export default function EventModal() {
                         ? parseFloat(dpRaw)
                         : null;
                     return (
-                      <div className="mt-3">
+                      <div className="mt-1.5 grid grid-cols-2 gap-3">
+                        <div />
                         <FinalizedPayBanner
                           driverName={driverName}
                           pickupIso={startDate}
