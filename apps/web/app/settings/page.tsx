@@ -3,9 +3,10 @@
 import { useRef, useState, useEffect, useMemo } from 'react';
 import { parseTimeInput, todayDateKeyInTz } from '@/lib/time-utils';
 import { useOrganization, OrganizationProfile } from '@clerk/nextjs';
-import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock } from 'lucide-react';
+import { ArrowLeft, GripVertical, LayoutList, Bot, ChevronDown, ChevronUp, Globe, Sun, Moon, Monitor, Plus, Pencil, Trash2, Check, X, Truck, Plug, Loader2, Layers, RefreshCw, MapPin, Users, Smartphone, FileText, Sparkles, UserCog, Shield, RotateCcw, Lock, ShieldCheck, ExternalLink } from 'lucide-react';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
+import { useIsSuperAdmin } from '@/lib/useIsSuperAdmin';
 import { isInternalOrg } from '@/lib/internalOrg';
 import {
   CAPABILITY_CATALOG,
@@ -4834,6 +4835,11 @@ export default function SettingsPage() {
   const [active, setActive] = useState<NavItem>('appearance');
   const { can, isLoading: permsLoading } = usePermissions();
   const { enabled: moduleEnabled } = useModules();
+  // Super-admin status. `null` = still checking — we render nothing.
+  // `false` (most users) = hide the FleetCal Admin section entirely.
+  // Cached at module scope by useIsSuperAdmin so panel switches
+  // don't re-hit /api/admin/me.
+  const isSuperAdmin = useIsSuperAdmin();
   // Active org_id — needed for the internal-org gate that hides the
   // Modules nav entry from customer orgs. The Modules panel only makes
   // sense for our dogfooding orgs where we want to toggle product
@@ -4941,6 +4947,38 @@ export default function SettingsPage() {
                 })}
               </div>
             ))}
+
+            {/* FleetCal Admin — super-admin only. The /admin pages
+                live OUTSIDE the settings panel (they have their own
+                AppShell), so this renders as a single anchor link
+                rather than a setActive() switch. Hidden entirely
+                for everyone else; even the section header doesn't
+                appear so non-admins never see hints that the
+                surface exists. */}
+            {isSuperAdmin === true && (
+              <div className="mb-5">
+                <div className="px-3 pb-2 text-[12px] font-extrabold uppercase tracking-wider" style={{ color: SETTINGS_COLORS.text }}>
+                  FleetCal
+                </div>
+                <a href="/admin"
+                  className="w-full flex items-center gap-3 text-[14px] transition-colors"
+                  style={{
+                    padding:      '9px 14px',
+                    marginBottom: 2,
+                    borderRadius: 999,
+                    color:        SETTINGS_COLORS.text,
+                    background:   'transparent',
+                    fontWeight:   600,
+                    textDecoration: 'none',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = SETTINGS_COLORS.sectionBandBg; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                  <ShieldCheck size={15} />
+                  Admin
+                  <ExternalLink size={11} style={{ marginLeft: 'auto', opacity: 0.5 }} />
+                </a>
+              </div>
+            )}
           </div>
 
         </nav>
