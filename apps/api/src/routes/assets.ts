@@ -25,7 +25,7 @@ import {
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
-import { getOrgTier, applyActiveTodayFilter } from "../lib/orgTier.js";
+import { getOrgTier, applyActiveCapFilter } from "../lib/orgTier.js";
 
 const assets = new Hono<{ Variables: AuthVariables }>();
 
@@ -110,24 +110,19 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
   // banner, but it's not a security gate — a motivated user could
   // open DevTools and curl past it. This block is the actual gate.
   //
-  // Count ACTIVE assets — anything with active_to NULL or > today
-  // (matches the client's filter so a retired truck doesn't take
-  // up a paid seat). Compare to the org's tier cap, return 402 if
-  // they'd exceed it.
+  // Count non-retired trucks (active_to IS NULL). Compare to the
+  // org's tier cap, return 402 if they'd exceed it.
+  //
+  // Why active_to IS NULL and NOT "active today" — see the long
+  // explainer in orgTier.ts/applyActiveCapFilter. tl;dr: removing
+  // the date from the predicate kills the server-UTC / client-
+  // local race condition that was causing "client shows 8/9 but
+  // server rejects" mismatches every evening.
   //
   // Unrestricted tier (Curzon + internal orgs) short-circuits the
   // count entirely so we don't add latency to dogfooding flows.
   const tier = await getOrgTier(orgId);
   if (Number.isFinite(tier.maxTrucks)) {
-    const todayKey = todayUtcDateKey();
-    // The rule is: how many trucks are active AT THIS INSTANT?
-    // applyActiveTodayFilter encodes the exact same predicate as
-    // lib/lifecycle.ts isActiveOn so the count matches what the
-    // calendar shows. A retired truck (active_to in the past) and
-    // a future-start truck (active_from in the future) both DON'T
-    // count — the customer can keep them as history without
-    // consuming a paid seat.
-    //
     // `.neq("type", "Unassigned")` excludes the calendar's virtual
     // Unassigned column — it's a UI surface for unrouted events,
     // not a real truck, and shouldn't burn a paid seat.
@@ -136,7 +131,7 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
       .select("*", { count: "exact", head: true })
       .eq("org_id", orgId)
       .neq("type", "Unassigned");
-    const { count: activeCount, error: countErr } = await applyActiveTodayFilter(baseQ, todayKey);
+    const { count: activeCount, error: countErr } = await applyActiveCapFilter(baseQ);
     if (countErr) {
       console.error("[POST /v1/assets] tier cap count failed:", countErr);
       // Fail closed — if we can't count, we can't safely allow.

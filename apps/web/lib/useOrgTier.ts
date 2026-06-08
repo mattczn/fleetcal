@@ -36,7 +36,6 @@ import { useMemo } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { useCalendarStore } from "@/store/useCalendarStore";
 import { isInternalOrg } from "@/lib/internalOrg";
-import { isActiveOn, dateKeyOf } from "@/lib/lifecycle";
 
 export type OrgTier = "owner_op" | "growth" | "fleet" | "unrestricted" | "none";
 
@@ -121,27 +120,38 @@ export function useOrgTier(): OrgTierApi {
     // (redirected to /onboarding/pick-plan). The UI consumers still
     // need to know about this state to render upgrade banners cleanly.
 
-    // Count trucks ACTIVE AS OF TODAY — uses the same isActiveOn
-    // predicate the calendar grid does, so this number matches what
-    // the dispatcher actually sees on the schedule. A truck retired
-    // with activeTo = today is ACTIVE today (last day of service)
-    // and DOES count; one retired yesterday doesn't. Same for
-    // activeFrom — a future-start truck (e.g. scheduled to onboard
-    // next week) doesn't consume a seat until it goes live.
+    // Cap rule: count trucks where `activeTo` is null — i.e. not
+    // retired. Deliberately ignoring `activeFrom`. The previous
+    // rule (isActiveOn with both bounds) was over-engineered:
     //
-    // The Unassigned row is a virtual asset the calendar adds to
-    // surface unrouted events as their own column — it's a UI
-    // affordance, not a truck. EXCLUDE it from the cap so a
-    // dispatcher's Unassigned column doesn't burn a paid seat.
+    //  - It introduced a server/client tz disagreement window
+    //    every night (server uses UTC `today`, client uses local
+    //    `today`). At certain hours, the server would still see a
+    //    truck retired earlier in the day as "active today" while
+    //    the client showed it as inactive — same DB, two different
+    //    counts. The user retires a truck, client says 8/9, server
+    //    rejects with 9 of 9.
+    //  - It didn't actually enforce the "max N active on the
+    //    calendar at any point in time" rule anyway, because a
+    //    new truck back-dated to Jan 1 silently creates a
+    //    historical overlap window the cap check can't see.
+    //  - It made the dispatcher's mental model worse, not better
+    //    ("why is a truck I retired three days ago still counting
+    //    against my limit if its retire date was last week?").
     //
-    // Customers can keep ANY number of retired/future-scheduled
-    // trucks as history without consuming paid capacity — only the
-    // instantaneous active count matters.
-    const today = dateKeyOf(new Date());
+    // The new rule reads exactly how a dispatcher would describe
+    // it: "how many trucks do I currently have in service?" Retire
+    // one, free a slot, immediately. No tz games, no calendar-
+    // overlap arithmetic. Back-dating a truck for reporting is
+    // orthogonal — it doesn't consume an extra seat retroactively
+    // because the seat count is RIGHT-NOW only.
+    //
+    // The Unassigned row is a virtual asset the calendar adds for
+    // unrouted events; not a real truck, doesn't burn a seat.
     const currentTrucks = assets.filter(a =>
       a.type !== 'Unassigned' &&
       a.name !== 'Unassigned' &&
-      isActiveOn(a, today)
+      a.activeTo == null
     ).length;
 
     return {

@@ -45,27 +45,49 @@ export interface OrgTierInfo {
 }
 
 /**
- * The single rule for "is this truck active right now":
+ * The single rule for "does this truck consume a paid seat":
  *
- *   activeFrom <= todayKey AND (activeTo IS NULL OR activeTo >= todayKey)
+ *   active_to IS NULL
  *
- * Matches apps/web/lib/lifecycle.ts isActiveOn. Both ends are
- * INCLUSIVE — a truck retired with activeTo = today still counts
- * as active today (it's the last day of service). Same for
- * activeFrom = today (first day of service).
+ * i.e. "not retired." Mirrors the client useOrgTier rule. We
+ * deliberately ignore `active_from` (and any "today" date) for
+ * three reasons:
+ *
+ *   1. Date-free → no server/client tz disagreement window. The
+ *      previous rule used `today` on both sides, but server-UTC
+ *      and client-local diverged for ~6 hours every night, so
+ *      a Mountain-time dispatcher could see 8/9 while the server
+ *      still saw 9/9 (last truck retired today UTC vs. yesterday
+ *      local). Removing the date kills the race entirely.
+ *
+ *   2. Matches how dispatchers describe the cap: "how many trucks
+ *      do I have in service right now?" Retire one, slot opens.
+ *      No mental gymnastics about retire dates or activeFrom.
+ *
+ *   3. Back-dating a new truck for historical reporting (a
+ *      Curzon-specific habit — every new asset is created with
+ *      activeFrom = 2026-01-01 so it shows up in YTD reports)
+ *      no longer triggers a phantom overlap with retired trucks.
+ *      The seat count is the instantaneous "currently held"
+ *      number; what dates the truck claims for reporting is
+ *      orthogonal.
  *
  * Apply via Supabase query builders:
  *
  *   const q = supabase.from("assets").select(...).eq("org_id", orgId);
- *   applyActiveTodayFilter(q, todayKey);
- *
- * The two `.lte`/`.or` calls match the isActiveOn logic exactly.
+ *   applyActiveCapFilter(q);
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function applyActiveTodayFilter(q: any, todayKey: string): any {
-  return q
-    .lte("active_from", todayKey)
-    .or(`active_to.is.null,active_to.gte.${todayKey}`);
+export function applyActiveCapFilter(q: any): any {
+  return q.is("active_to", null);
+}
+
+/** @deprecated kept for any caller still importing the old name.
+ *  Forwards to the new rule (ignores todayKey). Delete once no
+ *  callers remain. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+export function applyActiveTodayFilter(q: any, _todayKey: string): any {
+  return applyActiveCapFilter(q);
 }
 
 /** Cap per tier. Mirrors TIER_TRUCK_CAP in apps/web/lib/useOrgTier.ts —
