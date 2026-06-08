@@ -99,6 +99,7 @@ export default function AppShell({ title, icon, rightSlot, children, noPageScrol
           initialDriverId={directoryReq.initialDriverId}
           initialAssetId={directoryReq.initialAssetId}
           initialTrailerId={directoryReq.initialTrailerId}
+          initialDispatcherId={directoryReq.initialDispatcherId}
           initialBrokerId={directoryReq.initialBrokerId}
           initialLocationId={directoryReq.initialLocationId}
           onClose={closeDirectory}

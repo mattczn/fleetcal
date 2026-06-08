@@ -11,7 +11,7 @@ import { useModules } from '@/lib/useModules';
 import DirectoryModal, { type DirectoryTab } from './DirectoryModal';
 import MiniCalendar from './MiniCalendar';
 import type { Capability, OrgModule } from '@fleetcal/types';
-import { ChevronRight, ChevronDown, Building2, MapPin } from 'lucide-react';
+import { ChevronRight, ChevronDown, Building2, MapPin, Headset } from 'lucide-react';
 
 export default function AssetSidebar() {
   // The truck/asset list itself has moved to the right-hand TruckFleetPanel
@@ -235,13 +235,14 @@ export default function AssetSidebar() {
           </button>
           {manageOpen && (
             <div className="pl-3 space-y-0.5">
-              <SubNavButton icon={Users}     label="Drivers"   onClick={() => openDirectory('drivers')} />
-              <SubNavButton icon={Truck}     label="Trucks"    onClick={() => openDirectory('trucks')} />
+              <SubNavButton icon={Users}     label="Drivers"     onClick={() => openDirectory('drivers')} />
+              <SubNavButton icon={Truck}     label="Trucks"      onClick={() => openDirectory('trucks')} />
               {trailersOn && (
-                <SubNavButton icon={Container} label="Trailers" onClick={() => openDirectory('trailers')} />
+                <SubNavButton icon={Container} label="Trailers"  onClick={() => openDirectory('trailers')} />
               )}
-              <SubNavButton icon={Building2} label="Customers" onClick={() => openDirectory('customers')} />
-              <SubNavButton icon={MapPin}    label="Locations" onClick={() => openDirectory('locations')} />
+              <SubNavButton icon={Headset}   label="Dispatchers" onClick={() => openDirectory('dispatchers')} />
+              <SubNavButton icon={Building2} label="Customers"   onClick={() => openDirectory('customers')} />
+              <SubNavButton icon={MapPin}    label="Locations"   onClick={() => openDirectory('locations')} />
             </div>
           )}
           <Link

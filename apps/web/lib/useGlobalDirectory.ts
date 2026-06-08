@@ -14,11 +14,12 @@ import type { DirectoryTab } from '@/components/sidebar/DirectoryModal';
 export interface GlobalDirectoryRequest {
   tab: DirectoryTab;
   /** Only the id matching the chosen tab is consulted by DirectoryModal. */
-  initialDriverId?:   number;
-  initialAssetId?:    number;
-  initialTrailerId?:  number;
-  initialBrokerId?:   string;
-  initialLocationId?: string;
+  initialDriverId?:     number;
+  initialAssetId?:      number;
+  initialTrailerId?:    number;
+  initialDispatcherId?: number;
+  initialBrokerId?:     string;
+  initialLocationId?:   string;
 }
 
 export interface GlobalDirectoryContextValue {

@@ -16,15 +16,16 @@
  */
 
 import { useRef, useState } from 'react';
-import { X, Truck, Container, Users, Building2, MapPin } from 'lucide-react';
+import { X, Truck, Container, Users, Building2, MapPin, Headset } from 'lucide-react';
 import AssetsModal from './AssetsModal';
 import TrailersModal from './TrailersModal';
 import DriversModal from './DriversModal';
+import DispatchersModal from './DispatchersModal';
 import BrokerProfileModal from '@/components/brokers/BrokerProfileModal';
 import SavedLocationsDirectoryBody from './SavedLocationsDirectoryBody';
 import { useModules } from '@/lib/useModules';
 
-export type DirectoryTab = 'drivers' | 'trucks' | 'trailers' | 'customers' | 'locations';
+export type DirectoryTab = 'drivers' | 'trucks' | 'trailers' | 'dispatchers' | 'customers' | 'locations';
 
 export interface DirectoryDetailHandle {
   isDirty: () => boolean;
@@ -37,23 +38,25 @@ interface Props {
   initial: DirectoryTab;
   /** Deep-link from the global search dropdown — only the id matching
    *  the chosen tab is consulted. */
-  initialDriverId?:   number;
-  initialAssetId?:    number;
-  initialTrailerId?:  number;
-  initialBrokerId?:   string;
-  initialLocationId?: string;
+  initialDriverId?:     number;
+  initialAssetId?:      number;
+  initialTrailerId?:    number;
+  initialDispatcherId?: number;
+  initialBrokerId?:     string;
+  initialLocationId?:   string;
   onClose: () => void;
 }
 
 const TAB_META: Record<DirectoryTab, { label: string; icon: typeof Truck }> = {
-  drivers:   { label: 'Drivers',   icon: Users },
-  trucks:    { label: 'Trucks',    icon: Truck },
-  trailers:  { label: 'Trailers',  icon: Container },
-  customers: { label: 'Customers', icon: Building2 },
-  locations: { label: 'Locations', icon: MapPin },
+  drivers:     { label: 'Drivers',     icon: Users },
+  trucks:      { label: 'Trucks',      icon: Truck },
+  trailers:    { label: 'Trailers',    icon: Container },
+  dispatchers: { label: 'Dispatchers', icon: Headset },
+  customers:   { label: 'Customers',   icon: Building2 },
+  locations:   { label: 'Locations',   icon: MapPin },
 };
 
-export default function DirectoryModal({ initial, initialDriverId, initialAssetId, initialTrailerId, initialBrokerId, initialLocationId, onClose }: Props) {
+export default function DirectoryModal({ initial, initialDriverId, initialAssetId, initialTrailerId, initialDispatcherId, initialBrokerId, initialLocationId, onClose }: Props) {
   const [tab, setTab] = useState<DirectoryTab>(initial);
   const [showUnsaved, setShowUnsaved] = useState(false);
   const [saving, setSaving]           = useState(false);
@@ -66,16 +69,18 @@ export default function DirectoryModal({ initial, initialDriverId, initialAssetI
   // Embedded refs — Trucks + Customers track dirty state via their
   // imperative handles; Drivers + Trailers auto-save so their
   // handles are no-ops. Locations is still transitional.
-  const trucksRef    = useRef<DirectoryDetailHandle>(null);
-  const driversRef   = useRef<DirectoryDetailHandle>(null);
-  const trailersRef  = useRef<DirectoryDetailHandle>(null);
-  const customersRef = useRef<DirectoryDetailHandle>(null);
+  const trucksRef      = useRef<DirectoryDetailHandle>(null);
+  const driversRef     = useRef<DirectoryDetailHandle>(null);
+  const trailersRef    = useRef<DirectoryDetailHandle>(null);
+  const dispatchersRef = useRef<DirectoryDetailHandle>(null);
+  const customersRef   = useRef<DirectoryDetailHandle>(null);
 
   const currentRef = (): DirectoryDetailHandle | null => {
-    if (tab === 'trucks')    return trucksRef.current;
-    if (tab === 'drivers')   return driversRef.current;
-    if (tab === 'trailers')  return trailersRef.current;
-    if (tab === 'customers') return customersRef.current;
+    if (tab === 'trucks')      return trucksRef.current;
+    if (tab === 'drivers')     return driversRef.current;
+    if (tab === 'trailers')    return trailersRef.current;
+    if (tab === 'dispatchers') return dispatchersRef.current;
+    if (tab === 'customers')   return customersRef.current;
     return null;
   };
 
@@ -123,6 +128,7 @@ export default function DirectoryModal({ initial, initialDriverId, initialAssetI
     'drivers',
     'trucks',
     ...(trailersOn ? (['trailers'] as DirectoryTab[]) : []),
+    'dispatchers',
     'customers',
     'locations',
   ];
@@ -206,11 +212,12 @@ export default function DirectoryModal({ initial, initialDriverId, initialAssetI
 
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === 'trucks'    && <AssetsModal        ref={trucksRef}    embedded onClose={onClose} initialAssetId={initialAssetId} />}
-          {tab === 'drivers'   && <DriversModal       ref={driversRef}   embedded onClose={onClose} initialDriverId={initialDriverId} />}
-          {tab === 'trailers'  && trailersOn && <TrailersModal ref={trailersRef} embedded onClose={onClose} initialTrailerId={initialTrailerId} />}
-          {tab === 'customers' && <BrokerProfileModal ref={customersRef} embedded onClose={onClose} initialBrokerId={initialBrokerId} />}
-          {tab === 'locations' && <SavedLocationsDirectoryBody initialLocationId={initialLocationId} />}
+          {tab === 'trucks'      && <AssetsModal        ref={trucksRef}      embedded onClose={onClose} initialAssetId={initialAssetId} />}
+          {tab === 'drivers'     && <DriversModal       ref={driversRef}     embedded onClose={onClose} initialDriverId={initialDriverId} />}
+          {tab === 'trailers'    && trailersOn && <TrailersModal ref={trailersRef} embedded onClose={onClose} initialTrailerId={initialTrailerId} />}
+          {tab === 'dispatchers' && <DispatchersModal   ref={dispatchersRef} embedded onClose={onClose} initialDispatcherId={initialDispatcherId} />}
+          {tab === 'customers'   && <BrokerProfileModal ref={customersRef}   embedded onClose={onClose} initialBrokerId={initialBrokerId} />}
+          {tab === 'locations'   && <SavedLocationsDirectoryBody initialLocationId={initialLocationId} />}
         </div>
       </div>
     </div>
