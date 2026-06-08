@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { auth } from '@clerk/nextjs/server';
 import PricingCards from '@/components/marketing/PricingCards';
 import SmoothScrollLink from '@/components/marketing/SmoothScrollLink';
@@ -67,9 +68,15 @@ function Nav({ state }: { state: AuthCta }) {
   return (
     <nav className="sticky top-0 z-50 h-16 bg-sys-bg border-b border-sys-line">
       <div className="h-full max-w-6xl mx-auto px-8 md:px-12 flex items-center justify-between">
-        <Link href="/" className="font-mono font-bold text-[15px] uppercase" style={{ letterSpacing: '0.2em' }}>
-          <span className="text-sys-blue">FLEET</span>
-          <span className="text-sys-orange">CAL</span>
+        <Link href="/" className="flex items-center" aria-label="FleetCal home">
+          <Image
+            src="/logo-horizontal.png"
+            alt="FleetCal"
+            width={200}
+            height={44}
+            priority
+            style={{ height: 44, width: 'auto', objectFit: 'contain' }}
+          />
         </Link>
         <div className="flex items-center gap-8">
           <SmoothScrollLink to="features" className="hidden md:inline text-[13px] font-medium text-sys-muted hover:text-sys-primary transition-colors">Features</SmoothScrollLink>
@@ -292,9 +299,14 @@ function Footer() {
   return (
     <footer className="bg-sys-bg">
       <div className="max-w-6xl mx-auto px-8 md:px-12 py-12 flex flex-wrap items-center justify-between gap-4">
-        <Link href="/" className="font-mono font-bold text-[14px] uppercase" style={{ letterSpacing: '0.2em' }}>
-          <span className="text-sys-blue">FLEET</span>
-          <span className="text-sys-orange">CAL</span>
+        <Link href="/" className="flex items-center" aria-label="FleetCal home">
+          <Image
+            src="/logo-horizontal.png"
+            alt="FleetCal"
+            width={160}
+            height={36}
+            style={{ height: 36, width: 'auto', objectFit: 'contain' }}
+          />
         </Link>
         <div className="font-sys text-[12px] uppercase text-sys-muted" style={{ letterSpacing: '0.12em' }}>
           © {new Date().getFullYear()} · Built in Salt Lake City
