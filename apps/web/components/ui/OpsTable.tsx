@@ -948,6 +948,13 @@ export function OpsTable<T>({
           // not the document, and never overlaps the toolbar / page
           // chrome. No-op when bulkBarMode !== 'floating'.
           position: 'relative',
+          // Flex column + flex:1 body wrapper (below) so the sticky
+          // bulk bar always pins to the bottom of the card — not the
+          // bottom of the rows. Without this, a short result set
+          // (rows < card height) left the bar floating at its
+          // natural flow position and the negative-margin trick
+          // pulled it over the last row.
+          ...(bulkBarMode === 'floating' ? { display: 'flex', flexDirection: 'column' as const } : {}),
         }}>
         {/* Header row */}
         <div
@@ -1065,7 +1072,17 @@ export function OpsTable<T>({
           })}
         </div>
 
-        {/* Body */}
+        {/* Body. Wrapped in a flex:1 spacer so that — together with the
+            flex column on the card above — the sticky bulk bar always
+            sits at the bottom of the card. Without flex:1, a short
+            result set (rows < card height) left the bar at its natural
+            flow position right after the last row. paddingBottom in
+            floating-bar mode reserves space so the last row can scroll
+            ABOVE the bar instead of being permanently obscured by it. */}
+        <div
+          style={{
+            ...(bulkBarMode === 'floating' ? { flex: '1 0 auto', minWidth: 'max-content', paddingBottom: 72 } : {}),
+          }}>
         {loading ? (
           <div className="flex items-center justify-center py-16">
             <div className="text-[12px]" style={{ color: 'var(--gc-text-3)' }}>Loading…</div>
@@ -1245,6 +1262,7 @@ export function OpsTable<T>({
             );
           })
         )}
+        </div>
 
         {/* Floating bulk-action bar — Billing/Paperwork redesign.
             Anchored to the card so it sticks at the bottom of the
@@ -1266,7 +1284,6 @@ export function OpsTable<T>({
               bottom: 16,
               left: 0,
               right: 0,
-              marginTop: -56,
               zIndex: 30,
               pointerEvents: 'none',
               padding: '0 12px',
