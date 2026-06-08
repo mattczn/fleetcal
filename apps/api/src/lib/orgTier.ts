@@ -44,6 +44,30 @@ export interface OrgTierInfo {
   maxTrucks: number;
 }
 
+/**
+ * The single rule for "is this truck active right now":
+ *
+ *   activeFrom <= todayKey AND (activeTo IS NULL OR activeTo >= todayKey)
+ *
+ * Matches apps/web/lib/lifecycle.ts isActiveOn. Both ends are
+ * INCLUSIVE — a truck retired with activeTo = today still counts
+ * as active today (it's the last day of service). Same for
+ * activeFrom = today (first day of service).
+ *
+ * Apply via Supabase query builders:
+ *
+ *   const q = supabase.from("assets").select(...).eq("org_id", orgId);
+ *   applyActiveTodayFilter(q, todayKey);
+ *
+ * The two `.lte`/`.or` calls match the isActiveOn logic exactly.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyActiveTodayFilter(q: any, todayKey: string): any {
+  return q
+    .lte("active_from", todayKey)
+    .or(`active_to.is.null,active_to.gte.${todayKey}`);
+}
+
 /** Cap per tier. Mirrors TIER_TRUCK_CAP in apps/web/lib/useOrgTier.ts —
  *  bump both files together if you renegotiate pricing. */
 const TIER_TRUCK_CAP: Record<"owner_op" | "growth" | "fleet", number> = {

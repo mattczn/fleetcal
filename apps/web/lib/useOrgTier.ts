@@ -36,6 +36,7 @@ import { useMemo } from "react";
 import { useAuth, useOrganization } from "@clerk/nextjs";
 import { useCalendarStore } from "@/store/useCalendarStore";
 import { isInternalOrg } from "@/lib/internalOrg";
+import { isActiveOn, dateKeyOf } from "@/lib/lifecycle";
 
 export type OrgTier = "owner_op" | "growth" | "fleet" | "unrestricted" | "none";
 
@@ -120,14 +121,19 @@ export function useOrgTier(): OrgTierApi {
     // (redirected to /onboarding/pick-plan). The UI consumers still
     // need to know about this state to render upgrade banners cleanly.
 
-    // Count active trucks — anything with no activeTo, or activeTo
-    // strictly after today. Retired trucks (activeTo in the past) don't
-    // count toward the cap so customers can replace a retired truck
-    // without a paid upgrade.
-    const today = new Date().toISOString().slice(0, 10);
-    const currentTrucks = assets.filter(
-      (a) => !a.activeTo || a.activeTo > today,
-    ).length;
+    // Count trucks ACTIVE AS OF TODAY — uses the same isActiveOn
+    // predicate the calendar grid does, so this number matches what
+    // the dispatcher actually sees on the schedule. A truck retired
+    // with activeTo = today is ACTIVE today (last day of service)
+    // and DOES count; one retired yesterday doesn't. Same for
+    // activeFrom — a future-start truck (e.g. scheduled to onboard
+    // next week) doesn't consume a seat until it goes live.
+    //
+    // Customers can keep ANY number of retired/future-scheduled
+    // trucks as history without consuming paid capacity — only the
+    // instantaneous active count matters.
+    const today = dateKeyOf(new Date());
+    const currentTrucks = assets.filter(a => isActiveOn(a, today)).length;
 
     return {
       tier,

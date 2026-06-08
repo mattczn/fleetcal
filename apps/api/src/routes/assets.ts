@@ -25,7 +25,7 @@ import {
 import { supabase } from "../lib/supabase.js";
 import type { AuthVariables } from "../middleware/clerk.js";
 import { requireCapability } from "../middleware/require.js";
-import { getOrgTier } from "../lib/orgTier.js";
+import { getOrgTier, applyActiveTodayFilter } from "../lib/orgTier.js";
 
 const assets = new Hono<{ Variables: AuthVariables }>();
 
@@ -120,11 +120,18 @@ assets.post("/", requireCapability("assets.create"), async (c) => {
   const tier = await getOrgTier(orgId);
   if (Number.isFinite(tier.maxTrucks)) {
     const todayKey = todayUtcDateKey();
-    const { count: activeCount, error: countErr } = await supabase
+    // The rule is: how many trucks are active AT THIS INSTANT?
+    // applyActiveTodayFilter encodes the exact same predicate as
+    // lib/lifecycle.ts isActiveOn so the count matches what the
+    // calendar shows. A retired truck (active_to in the past) and
+    // a future-start truck (active_from in the future) both DON'T
+    // count — the customer can keep them as history without
+    // consuming a paid seat.
+    const baseQ = supabase
       .from("assets")
       .select("*", { count: "exact", head: true })
-      .eq("org_id", orgId)
-      .or(`active_to.is.null,active_to.gt.${todayKey}`);
+      .eq("org_id", orgId);
+    const { count: activeCount, error: countErr } = await applyActiveTodayFilter(baseQ, todayKey);
     if (countErr) {
       console.error("[POST /v1/assets] tier cap count failed:", countErr);
       // Fail closed — if we can't count, we can't safely allow.

@@ -29,7 +29,25 @@ interface LoadRow {
 }
 
 interface TruckRow {
-  org_id: string;
+  org_id:      string;
+  active_from: string | null;
+  active_to:   string | null;
+}
+
+/** Today as YYYY-MM-DD (UTC). Matches apps/api/src/lib/orgTier
+ *  + apps/web/lib/lifecycle so the count here agrees with the
+ *  billing-cap count enforced by POST /v1/assets. */
+function todayKeyUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Mirrors apps/web/lib/lifecycle isActiveOn:
+ *    active_from <= today AND (active_to IS NULL OR active_to >= today)
+ *  Future-scheduled and already-retired trucks do NOT count. */
+function isActiveTodayRow(t: TruckRow, today: string): boolean {
+  const from = t.active_from ?? '0000-01-01';
+  const to   = t.active_to   ?? '9999-12-31';
+  return from <= today && today <= to;
 }
 
 // Feature-flag → tier-label mapping. Mirrors useOrgTier on the
@@ -131,19 +149,27 @@ export async function GET() {
 
   const db = getSupabaseServer();
 
-  // ── Loads + active trucks, in parallel ────────────────────────
-  // Loads drive the 30d activity columns. Trucks are a cross-org
-  // count of every non-hidden asset row — this is the same "active
-  // truck" definition the billing cap enforces (see useOrgTier).
+  // ── Loads + trucks, in parallel ──────────────────────────────
+  // Loads drive the 30d activity columns. Trucks are counted by
+  // the SAME "active right now" rule the billing cap enforces:
+  //
+  //     active_from <= today AND (active_to IS NULL OR active_to >= today)
+  //
+  // A truck retired yesterday OR scheduled to start tomorrow does
+  // not count — matches lib/lifecycle.ts isActiveOn so the
+  // dashboard number agrees with the calendar and with the cap.
+  // We pull active_from + active_to and filter in memory rather
+  // than letting PostgREST .or() do it — the predicate's a hair
+  // more readable here and the cross-org sweep is small.
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const todayKey = todayKeyUtc();
   const [loadsRes, trucksRes] = await Promise.all([
     db.from('loads')
       .select('org_id, total_billable, created_at, verified_at')
       .gte('created_at', thirtyDaysAgo)
       .limit(5000),
     db.from('assets')
-      .select('org_id')
-      .eq('hidden', false)
+      .select('org_id, active_from, active_to')
       .limit(50_000),
   ]);
   if (loadsRes.error) {
@@ -157,6 +183,7 @@ export async function GET() {
   const trucks = (trucksRes.data ?? []) as TruckRow[];
   const truckCountByOrg = new Map<string, number>();
   for (const t of trucks) {
+    if (!isActiveTodayRow(t, todayKey)) continue;
     truckCountByOrg.set(t.org_id, (truckCountByOrg.get(t.org_id) ?? 0) + 1);
   }
 
