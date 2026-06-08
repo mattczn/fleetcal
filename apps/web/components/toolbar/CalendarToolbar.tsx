@@ -18,7 +18,9 @@ import type { CalendarEvent } from '@/lib/types';
 
 function formatToolbarDate(d: Date, viewMode: 'day' | 'week'): string {
   if (viewMode === 'day') {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    // Day-of-week prefix ("Mon, Jun 8, 2026") for at-a-glance context
+    // — dispatchers think in DOW more than month-day.
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
   }
   // Week range — built manually to avoid ICU quirks with partial date options
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -280,7 +282,7 @@ export default function CalendarToolbar() {
             background: 'transparent',
             padding: '4px 8px',
             fontSize: 20,
-            fontWeight: 400,
+            fontWeight: 700,
             letterSpacing: '-0.2px',
             color: 'var(--gc-text-1)',
           }}
