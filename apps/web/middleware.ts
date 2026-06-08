@@ -46,9 +46,15 @@ export default clerkMiddleware(async (auth, request) => {
   }
 })
 
+// Matcher excludes static assets so Vercel's CDN serves them directly
+// without our middleware running. Media extensions (mp4, webm, mp3,
+// etc.) MUST be in this list — otherwise a <video src="/foo.mp4">
+// request hits the middleware, fails Clerk's auth check, and returns
+// 500 to the browser. The video plays fine when fetched directly via
+// URL (different cache path) but breaks when the page embeds it.
 export const config = {
   matcher: [
-    '/((?!_next|[^?]*\\.(?:html?|css|m?js(?!on)|jinja2|txt|xml|png|jpg|jpeg|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|pdf)).*)',
+    '/((?!_next|[^?]*\\.(?:html?|css|m?js(?!on)|jinja2|txt|xml|png|jpg|jpeg|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|pdf|mp4|m4v|webm|ogg|ogv|mp3|m4a|wav)).*)',
     '/(api|trpc)(.*)',
   ],
 }
