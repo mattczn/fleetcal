@@ -245,6 +245,19 @@ export interface OpsTableProps<T> {
     selectedRows: T[];
     clearSelection: () => void;
   }) => ReactNode;
+  /** Where to render the bulk-actions slot when selection is active.
+   *   - 'inline' (default): inside the toolbar, replacing the right
+   *     side of the filter chip row.
+   *   - 'floating': as a centered, dark, floating bar at the bottom
+   *     of the table viewport (Billing/Paperwork redesign). Survives
+   *     the table's horizontal scroll. On phones it wraps and pins
+   *     to the bottom 10px gutters via the responsive pass. */
+  bulkBarMode?: 'inline' | 'floating';
+  /** Optional summary node rendered between "{n} selected" and the
+   *  action buttons in the floating bulk bar — usually a `$` total
+   *  the page computes from selectedRows. Ignored when
+   *  `bulkBarMode === 'inline'`. */
+  bulkBarSummary?: (rows: T[]) => ReactNode;
   /** Called whenever the selected-id set changes. Caller may use this
    *  to react in real time (badges elsewhere on the page). */
   onSelectionChange?: (selectedIds: string[]) => void;
@@ -306,6 +319,8 @@ export function OpsTable<T>({
   persistKey,
   selectable = false,
   bulkActions,
+  bulkBarMode = 'inline',
+  bulkBarSummary,
   onSelectionChange,
   paginated = true,
   footerSummary,
@@ -883,7 +898,7 @@ export function OpsTable<T>({
             </button>
           )}
           <div className="flex-1" />
-          {selectionActive && bulkActions && (
+          {selectionActive && bulkActions && bulkBarMode === 'inline' && (
             <div className="flex items-center gap-2.5">
               <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
                 {selectedIds.size} selected
@@ -927,6 +942,12 @@ export function OpsTable<T>({
           border: '1px solid var(--gc-border-light)',
           overflow: fillHeight ? 'auto' : undefined,
           overflowX: fillHeight ? undefined : 'auto',
+          // `position: relative` anchors the floating bulk bar
+          // (rendered as an absolutely-positioned child below). The
+          // bar sits inside the card so it scrolls with the page,
+          // not the document, and never overlaps the toolbar / page
+          // chrome. No-op when bulkBarMode !== 'floating'.
+          position: 'relative',
         }}>
         {/* Header row */}
         <div
@@ -1223,6 +1244,79 @@ export function OpsTable<T>({
               </div>
             );
           })
+        )}
+
+        {/* Floating bulk-action bar — Billing/Paperwork redesign.
+            Anchored to the card so it sticks at the bottom of the
+            visible table viewport, not the document. Centered with
+            `--shadow-soft` elevation. Dark surface (`#202124`) +
+            white text. Hidden by default (`bulkBarMode === 'inline'`,
+            for non-bulk consumers like Equipment / Fuel).
+            Sub-680px responsive: pins to 10px gutters + wraps. */}
+        {selectionActive && bulkActions && bulkBarMode === 'floating' && (
+          // Sticky wrapper hugs the bottom edge of the scrolling card
+          // (16px gutter). It's a full-width, pointer-events:none row
+          // so clicks pass through to the table; only the inner chip
+          // is interactive. The chip is centered with `margin: 0
+          // auto` on a `width: fit-content` block.
+          <div
+            className="ops-floating-bulkbar-wrap"
+            style={{
+              position: 'sticky',
+              bottom: 16,
+              left: 0,
+              right: 0,
+              marginTop: -56,
+              zIndex: 30,
+              pointerEvents: 'none',
+              padding: '0 12px',
+            }}>
+            <div
+              className="ops-floating-bulkbar"
+              style={{
+                pointerEvents: 'auto',
+                margin: '0 auto',
+                width: 'fit-content',
+                maxWidth: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '10px 12px 10px 18px',
+                background: '#202124',
+                color: '#fff',
+                borderRadius: 14,
+                boxShadow: 'var(--shadow-soft)',
+                flexWrap: 'wrap',
+              }}>
+              <span className="text-[13px] font-bold tabular-nums">
+                {selectedIds.size} selected
+              </span>
+              {bulkBarSummary && (
+                <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: 600 }}>
+                  {bulkBarSummary(selectedRows)}
+                </span>
+              )}
+              <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.15)' }} />
+              <div className="flex items-center gap-2 flex-wrap">
+                {bulkActions({ selectedIds: Array.from(selectedIds), selectedRows, clearSelection })}
+              </div>
+              <button
+                type="button"
+                onClick={clearSelection}
+                aria-label="Clear selection"
+                title="Clear selection"
+                className="inline-flex items-center justify-center transition-colors"
+                style={{
+                  width: 28, height: 28, borderRadius: 8,
+                  background: 'transparent', color: 'rgba(255,255,255,0.7)',
+                  border: 'none', cursor: 'pointer',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; (e.currentTarget as HTMLElement).style.color = '#fff'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)'; }}>
+                ✕
+              </button>
+            </div>
+          </div>
         )}
 
       </div>

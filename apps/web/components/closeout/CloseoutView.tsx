@@ -1426,6 +1426,23 @@ export default function CloseoutView() {
                   else if (scrollTop < 8 && tilesCompact) setTilesCompact(false);
                 }}
                 emptyLabel={searchQuery ? `No ${tab} loads match "${searchQuery}".` : `No ${tab} loads.`}
+                // Floating dark bulk bar — Billing/Paperwork redesign.
+                // The bar pins to the bottom of the table viewport and
+                // wraps to inline-flex on phones via the responsive
+                // pass.
+                bulkBarMode="floating"
+                bulkBarSummary={rows => {
+                  // $ total mirrors the bucket-tile math (totalBillable
+                  // → loadPrice fallback). Hidden on the Released
+                  // history bucket where billing aggregates are
+                  // role-gated to /accounting.
+                  if (tab === 'released') return null;
+                  const total = rows.reduce(
+                    (s, r) => s + ((r.totalBillable ?? r.loadPrice ?? 0)),
+                    0
+                  );
+                  return `· ${moneyFmt.format(total)}`;
+                }}
                 bulkActions={({ selectedIds: ids, clearSelection }) => (
                   <div className="flex items-center gap-2">
                     <button type="button"

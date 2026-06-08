@@ -1599,6 +1599,20 @@ function AccountingPageInner() {
                 emptyLabel={search.trim() !== ''
                   ? `No rows match "${search.trim()}".`
                   : 'No loads in this bucket.'}
+                // Floating dark bulk bar per the Billing/Paperwork
+                // redesign — pins to the bottom of the table
+                // viewport when one or more rows are selected.
+                bulkBarMode="floating"
+                bulkBarSummary={rows => {
+                  // Sum of Total Billable across selected rows.
+                  // Mirrors the bucket-tile `$` math so the bar
+                  // and the tile read the same. Skip on the Paid
+                  // bucket where the post-paid total isn't the
+                  // interesting number.
+                  if (bucket === 'paid') return null;
+                  const total = rows.reduce((s, r) => s + (r.load.totalBillable ?? r.load.loadPrice ?? 0), 0);
+                  return `· ${moneyFmt.format(total)}`;
+                }}
                 bulkActions={!canSelect ? undefined : ({ clearSelection }) => (
                   <div className="flex items-center gap-2">
                     {bucket === 'released' && (
