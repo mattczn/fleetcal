@@ -172,26 +172,26 @@ export default function AppSidebar() {
       <div
         className="flex items-center px-3"
         style={{
-          height: 56,
+          height: 64,
           borderBottom: '1px solid var(--gc-border-light)',
         }}>
         {collapsed ? (
           <Image
             src="/logo-square.png"
             alt="FleetCal"
-            width={32}
-            height={32}
+            width={40}
+            height={40}
             priority
-            style={{ borderRadius: 6 }}
+            style={{ borderRadius: 7 }}
           />
         ) : (
           <Image
             src="/logo-horizontal.png"
             alt="FleetCal"
-            width={140}
-            height={40}
+            width={240}
+            height={52}
             priority
-            style={{ objectFit: 'contain', height: 40, width: 'auto' }}
+            style={{ objectFit: 'contain', height: 52, width: 'auto' }}
           />
         )}
       </div>
