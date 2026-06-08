@@ -1000,6 +1000,13 @@ export function OpsTable<T>({
                   height: '100%',
                   display: 'flex',
                   alignItems: 'center',
+                  // Mirror the row's sticky-right shadow so the
+                  // pinned action column reads as one continuous
+                  // sticky cap (header + body).
+                  boxShadow:
+                    col.pinned === 'right' && stickyStyle.position === 'sticky' && (stickyStyle.right ?? 0) === 0
+                      ? '-6px 0 8px -6px rgba(0,0,0,0.12)'
+                      : undefined,
                 }}>
                 <button
                   type="button"
@@ -1181,6 +1188,18 @@ export function OpsTable<T>({
                         zIndex: stickyStyle.position === 'sticky' ? 1 : 0,
                         paddingLeft: idx === 0 && !selectable ? 16 : 0,
                         paddingRight: idx === visibleColumns.length - 1 ? 16 : 12,
+                        // Faint shadow on the leading edge of a
+                        // sticky-RIGHT cell (matches the Billing/
+                        // Paperwork handoff). Visually separates the
+                        // pinned action column from the scrolling
+                        // data when the table is wider than the
+                        // viewport. Only on the outermost right cell
+                        // — inner right-pinned cells (if any) are
+                        // covered by the next outer one.
+                        boxShadow:
+                          col.pinned === 'right' && stickyStyle.position === 'sticky' && (stickyStyle.right ?? 0) === 0
+                            ? '-6px 0 8px -6px rgba(0,0,0,0.12)'
+                            : undefined,
                         // Horizontal alignment of the cell's content
                         // mirrors the header — without this the flex
                         // wrapper defaulted to flex-start (left), so
