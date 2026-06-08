@@ -1995,40 +1995,83 @@ export default function ReviewQueue({ loads, startIndex = 0, onClose, onLoadReso
                 return (
                   <Tooltip
                     content={
-                      <div style={{ minWidth: 240, maxWidth: 320 }}>
-                        <div className="text-[11px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--gc-text-3)' }}>
+                      // Tooltip surface is dark (rgba(32,33,36,0.95)) and
+                      // capped at maxWidth: 280 by the shared component —
+                      // styles below are white-on-dark + size-to-content
+                      // (no fixed minWidth fighting the cap). Built-in
+                      // viewport clamping (Tooltip.tsx line 51) keeps
+                      // the bubble from falling off either edge.
+                      <div style={{ width: '100%' }}>
+                        <div className="font-bold uppercase mb-2"
+                          style={{ fontSize: 10.5, letterSpacing: '0.09em', color: 'rgba(255,255,255,0.6)' }}>
                           Accessorials · {accs.length}
                         </div>
-                        <ul className="space-y-1.5">
+                        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                           {accs.map((a, i) => {
                             const status = (a as { status?: string }).status;
                             return (
-                              <li key={i} className="flex items-start justify-between gap-3 text-[12.5px]">
-                                <span className="min-w-0 flex-1" style={{ color: 'var(--gc-text-1)' }}>
-                                  <span className="font-semibold">{ACCESSORIAL_LABEL[a.category] ?? a.category}</span>
+                              <li key={i} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                                <span style={{ minWidth: 0, flex: 1, color: '#fff' }}>
+                                  <span style={{ fontWeight: 600, fontSize: 12.5, display: 'block' }}>
+                                    {ACCESSORIAL_LABEL[a.category] ?? a.category}
+                                  </span>
                                   {a.description && (
-                                    <span className="block" style={{ color: 'var(--gc-text-3)', fontSize: 11.5, marginTop: 1 }}>
+                                    <span style={{ display: 'block', color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 1, fontWeight: 500, lineHeight: 1.35 }}>
                                       {a.description}
                                     </span>
                                   )}
+                                  {status && (
+                                    // AccessorialStatusPill has its own
+                                    // light-mode palette and would lose
+                                    // contrast here — replace with a
+                                    // translucent-white outline pill so
+                                    // the status reads but doesn't fight
+                                    // the dark bg. Subtle by design.
+                                    <span style={{
+                                      display:       'inline-block',
+                                      marginTop:     4,
+                                      fontSize:      9.5,
+                                      fontWeight:    700,
+                                      letterSpacing: '0.06em',
+                                      textTransform: 'uppercase',
+                                      color:         'rgba(255,255,255,0.92)',
+                                      background:    'rgba(255,255,255,0.12)',
+                                      border:        '1px solid rgba(255,255,255,0.25)',
+                                      padding:       '1px 7px',
+                                      borderRadius:  999,
+                                    }}>
+                                      {status}
+                                    </span>
+                                  )}
                                 </span>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  {status && <AccessorialStatusPill status={status} />}
-                                  <span className="font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
-                                    {a.amount != null ? moneyFmt.format(a.amount) : '—'}
-                                  </span>
-                                </div>
+                                <span style={{
+                                  fontWeight:        700,
+                                  fontSize:          12.5,
+                                  color:             '#fff',
+                                  fontVariantNumeric:'tabular-nums',
+                                  whiteSpace:        'nowrap',
+                                  flex:              'none',
+                                }}>
+                                  {a.amount != null ? moneyFmt.format(a.amount) : '—'}
+                                </span>
                               </li>
                             );
                           })}
                         </ul>
                         {hasAny$ && accs.length > 1 && (
-                          <div className="flex items-center justify-between gap-3 mt-2.5 pt-2 text-[12px]"
-                               style={{ borderTop: '1px solid var(--gc-border-light)' }}>
-                            <span className="font-bold uppercase tracking-wider" style={{ color: 'var(--gc-text-3)', fontSize: 10.5 }}>
+                          <div style={{
+                            display:        'flex',
+                            alignItems:     'center',
+                            justifyContent: 'space-between',
+                            gap:            10,
+                            marginTop:      10,
+                            paddingTop:     8,
+                            borderTop:      '1px solid rgba(255,255,255,0.15)',
+                          }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>
                               Total
                             </span>
-                            <span className="font-bold tabular-nums" style={{ color: 'var(--gc-text-1)' }}>
+                            <span style={{ fontWeight: 700, fontSize: 12.5, color: '#fff', fontVariantNumeric: 'tabular-nums' }}>
                               {moneyFmt.format(total)}
                             </span>
                           </div>
