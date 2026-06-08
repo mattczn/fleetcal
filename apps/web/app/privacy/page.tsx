@@ -26,7 +26,7 @@ export const metadata = {
 
 const EFFECTIVE_DATE = 'June 8, 2026';
 const LEGAL_ENTITY   = 'Systematica Solutions LLC';
-const STATE          = 'Utah';
+const STATE          = 'Florida';
 const CONTACT_EMAIL  = 'hello@fleetcal.app';
 
 type AuthCta = 'out' | 'mid-signup' | 'in';
