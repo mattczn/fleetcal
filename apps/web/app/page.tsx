@@ -6,6 +6,7 @@ import PricingCards from '@/components/marketing/PricingCards';
 import MarketingNav from '@/components/marketing/MarketingNav';
 import FaqAccordion from '@/components/marketing/FaqAccordion';
 import Reveal from '@/components/marketing/Reveal';
+import HeroVideo from '@/components/marketing/HeroVideo';
 
 /**
  * Marketing landing page at `/`.
@@ -356,32 +357,16 @@ function Hero({ cta }: { cta: { href: string; label: string } }) {
             <Frame url="fleetcal.app/calendar">
               {/* Hero screencast — dispatcher dragging a rate-con PDF
                   onto the calendar and FleetCal's AI extracts the
-                  customer, rate, stops, and times.
-                    - autoPlay requires muted + playsInline (mobile
-                      Safari rule).
-                    - aspectRatio forces the element to reserve vertical
-                      space BEFORE the video's metadata loads. Without
-                      this, height:auto evaluates to 0 on first paint
-                      and the frame renders empty. Source is 1848×1080
-                      ≈ 1.711:1.
-                    - preload="auto" because this is the hero — we want
-                      the first frame painted ASAP, not after a network
-                      round-trip when the element enters the viewport. */}
-              <video
+                  customer, rate, stops, and times. HeroVideo (client
+                  component) handles the imperative .play() call after
+                  mount to dodge the React `autoPlay` + `muted`
+                  attribute-order race that leaves the video paused on
+                  first frame. See its docstring for details. */}
+              <HeroVideo
                 src="/rateconai.mp4"
-                autoPlay
-                muted
-                loop
-                playsInline
-                preload="auto"
-                aria-label="AI parsing a rate confirmation PDF into a load"
-                style={{
-                  width:       '100%',
-                  height:      'auto',
-                  aspectRatio: '1848 / 1080',
-                  display:     'block',
-                  background:  '#f8f9fa',
-                }}
+                width={1848}
+                height={1080}
+                ariaLabel="AI parsing a rate confirmation PDF into a load"
               />
             </Frame>
             {/* Floating "Delivered" chip — top-right */}
