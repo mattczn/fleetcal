@@ -3,8 +3,8 @@
 import { useState, useRef } from 'react';
 import { Plus, Layers, Truck, Users, Container, Menu, Settings, BarChart2, LayoutDashboard, FileCheck2, Receipt, Package, Gauge } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { useOrganization } from '@clerk/nextjs';
 import { useCalendarStore, BatchItem } from '@/store/useCalendarStore';
 import { usePermissions } from '@/lib/usePermissions';
 import { useModules } from '@/lib/useModules';
@@ -22,7 +22,6 @@ export default function AssetSidebar() {
   // the doorway into the directory modals. (Category filter chips
   // moved into the truck tray alongside the truck list itself.)
   const { openCreateModal, sidebarOpen, toggleSidebar, startBatch, setBatchParseState, clearBatch, fieldSettings, promptInstructions, promptVariables, cardFontScale } = useCalendarStore();
-  const { organization } = useOrganization();
   // Single unified directory entry point — collapses the old 3-button
   // "Manage trucks / drivers / trailers" group into one expandable
   // "Manage Assets" with 5 children (Drivers, Trucks, Trailers,
@@ -128,18 +127,19 @@ export default function AssetSidebar() {
           >
             <Menu size={20} />
           </button>
-          <div className="flex items-center gap-2">
-            {organization?.imageUrl
-              ? <img src={organization.imageUrl} alt="" className="w-8 h-8 rounded-lg shrink-0 object-cover" />
-              : <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[11px] font-bold shrink-0" style={{ background: 'var(--gc-blue)' }}>D</div>
-            }
-            <span
-              className="text-[20px] font-normal tracking-tight whitespace-nowrap"
-              style={{ color: 'var(--gc-text-2)', letterSpacing: '-0.3px' }}
-            >
-              Dispatch
-            </span>
-          </div>
+          {/* FleetCal wordmark — replaces the older "org image +
+              Dispatch" composition. App context (dispatch vs billing
+              vs paperwork) is already conveyed by the URL + left-rail
+              nav, so reserving the prime corner real estate for the
+              brand mark is cleaner. */}
+          <Image
+            src="/logo-horizontal.png"
+            alt="FleetCal"
+            width={180}
+            height={44}
+            priority
+            style={{ objectFit: 'contain', height: 44, width: 'auto' }}
+          />
         </div>
 
         {/* New Load / Batch Import split button */}
