@@ -5,32 +5,47 @@
  *
  * Rewritten from the prior Systematica zero-radius look:
  *   - rounded-3xl cards w/ soft elevation
- *   - segmented Monthly / Annual (-17%) toggle above the grid
+ *   - segmented Monthly / Annual (save up to 20%) toggle above the grid
  *   - "Growth" is the popular tier — 2px blue ring + lifted, plus
  *     "Most popular" pill in the top-right corner
  *   - Tonal CTA (blue-light) on non-popular, primary pill on popular
  *   - Green-light check circles in front of every feature row
  *
- * Annual price = round(monthly * 10 / 12) (i.e. 2 months free) —
- * Owner Op 99 → 83, Growth 149 → 124, Fleet 199 → 166.
+ * Prices mirror the values configured in Clerk Billing (Production
+ * instance, Configure → Billing → Plans). If those change, update
+ * the TIERS constant below so the displayed numbers stay in sync
+ * with what the user is actually charged at checkout:
  *
- * The post-signup flow still routes to Clerk's hosted checkout via
- * `/sign-up?plan=${key}`. The toggle is purely a marketing surface;
- * actual billing terms are negotiated there.
+ *   Owner Op  monthly $99    · annual $948/yr   ($79/mo  · save $240/yr / 20%)
+ *   Growth    monthly $149   · annual $1,548/yr ($129/mo · save $240/yr / 13%)
+ *   Fleet     monthly $199   · annual $2,028/yr ($169/mo · save $360/yr / 15%)
+ *
+ * The post-signup flow routes to Clerk's hosted checkout via
+ * `/sign-up?plan=${key}`. The toggle is a marketing surface; actual
+ * billing terms are confirmed at Clerk's PricingTable in
+ * /onboarding/pick-plan.
  */
 import Link from 'next/link';
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 
 interface PricingTier {
-  key:     'owner_op' | 'growth' | 'fleet';
-  name:    string;
-  price:   number;
-  trucks:  string;
-  blurb:   string;
+  key:           'owner_op' | 'growth' | 'fleet';
+  name:          string;
+  /** Monthly billing rate. Matches Clerk's "Monthly base fee". */
+  monthlyPrice:  number;
+  /** Effective per-month rate when billed annually. Display only —
+   *  the actual charge is `annualTotal` once a year. */
+  annualMonthly: number;
+  /** Annual total Clerk charges once for the year. Matches Clerk's
+   *  "Annual base fee". Shown in the "billed annually · $X /yr"
+   *  sub-line so customers know exactly what hits their card. */
+  annualTotal:   number;
+  trucks:        string;
+  blurb:         string;
   /** CSS color string — tier eyebrow uses this. */
-  accent:  string;
-  popular?: boolean;
+  accent:        string;
+  popular?:      boolean;
 }
 
 const SHARED_FEATURES = [
@@ -44,9 +59,37 @@ const SHARED_FEATURES = [
 ] as const;
 
 const TIERS: readonly PricingTier[] = [
-  { key: 'owner_op', name: 'Owner Op', price: 99,  trucks: '1–4 trucks',   blurb: 'For the owner-op who is also the dispatcher.', accent: '#f97316' },
-  { key: 'growth',   name: 'Growth',   price: 149, trucks: '5–9 trucks',   blurb: 'When you have hired your first dispatcher.',   accent: '#1e8e3e', popular: true },
-  { key: 'fleet',    name: 'Fleet',    price: 199, trucks: '10–14 trucks', blurb: 'When dispatch is its own department.',          accent: '#0891b2' },
+  {
+    key:           'owner_op',
+    name:          'Owner Op',
+    monthlyPrice:  99,
+    annualMonthly: 79,
+    annualTotal:   948,
+    trucks:        '1–4 trucks',
+    blurb:         'For the owner-op who is also the dispatcher.',
+    accent:        '#f97316',
+  },
+  {
+    key:           'growth',
+    name:          'Growth',
+    monthlyPrice:  149,
+    annualMonthly: 129,
+    annualTotal:   1548,
+    trucks:        '5–9 trucks',
+    blurb:         'When you have hired your first dispatcher.',
+    accent:        '#1e8e3e',
+    popular:       true,
+  },
+  {
+    key:           'fleet',
+    name:          'Fleet',
+    monthlyPrice:  199,
+    annualMonthly: 169,
+    annualTotal:   2028,
+    trucks:        '10–14 trucks',
+    blurb:         'When dispatch is its own department.',
+    accent:        '#0891b2',
+  },
 ];
 
 export default function PricingCards() {
@@ -67,8 +110,8 @@ export default function PricingCards() {
           }}
         >
           {[
-            { label: 'Monthly',            value: false },
-            { label: 'Annual · save 17%',  value: true  },
+            { label: 'Monthly',                  value: false },
+            { label: 'Annual · save up to 20%',  value: true  },
           ].map(opt => {
             const isActive = annual === opt.value;
             return (
@@ -103,7 +146,10 @@ export default function PricingCards() {
         style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}
       >
         {TIERS.map(tier => {
-          const shown = annual ? Math.round(tier.price * 10 / 12) : tier.price;
+          const shown = annual ? tier.annualMonthly : tier.monthlyPrice;
+          const billedLine = annual
+            ? `billed $${tier.annualTotal.toLocaleString('en-US')} / yr`
+            : 'billed monthly';
           return (
             <div
               key={tier.key}
@@ -162,7 +208,7 @@ export default function PricingCards() {
                   <span style={{ fontSize: 15, color: '#5f6368' }}>/ mo</span>
                 </div>
                 <div style={{ fontSize: 13, color: '#5f6368', height: 18, marginTop: 4 }}>
-                  {annual ? 'billed annually' : 'billed monthly'}
+                  {billedLine}
                 </div>
                 <div className="font-display" style={{ fontWeight: 700, fontSize: 15, marginTop: 14, color: '#202124' }}>
                   {tier.trucks}
